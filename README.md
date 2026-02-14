@@ -1,2 +1,39 @@
 # windmill-service
-Open Source Windmill Service
+
+Workflow orchestration service wrapping Windmill. Translates internal DAG format to Windmill OpenFlow, manages workflow lifecycle, and tracks executions.
+
+## Setup
+
+```bash
+npm install
+cp .env.example .env  # fill in values
+npm run dev
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `WINDMILL_BASE_URL` | Windmill instance URL |
+| `WINDMILL_API_TOKEN` | Windmill Bearer token |
+| `WINDMILL_WORKSPACE` | Windmill workspace (default: `prod`) |
+| `WINDMILL_SERVICE_DATABASE_URL` | Neon Postgres connection string |
+| `WINDMILL_SERVICE_API_KEY` | API key for service-to-service auth |
+| `PORT` | HTTP port (default: `3000`) |
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check (DB + Windmill) |
+| POST | `/workflows` | Create a workflow |
+| GET | `/workflows?orgId=X` | List workflows |
+| GET | `/workflows/:id` | Get a workflow |
+| PUT | `/workflows/:id` | Update a workflow |
+| DELETE | `/workflows/:id` | Soft delete a workflow |
+| POST | `/workflows/:id/validate` | Validate DAG |
+| POST | `/workflows/:id/execute` | Execute a workflow |
+| GET | `/workflow-runs/:id` | Get run status |
+| GET | `/workflow-runs` | List runs |
+| POST | `/workflow-runs/:id/cancel` | Cancel a run |
+| GET | `/openapi.json` | OpenAPI spec |
