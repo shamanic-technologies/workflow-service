@@ -137,14 +137,14 @@ export class WindmillClient {
 
 let _client: WindmillClient | null = null;
 
-export function getWindmillClient(): WindmillClient {
+export function getWindmillClient(): WindmillClient | null {
   if (!_client) {
-    const baseUrl = process.env.WINDMILL_BASE_URL;
-    const token = process.env.WINDMILL_API_TOKEN;
+    const baseUrl = process.env.WINDMILL_SERVICE_URL;
+    const token = process.env.WINDMILL_SERVICE_API_KEY;
     const workspace = process.env.WINDMILL_WORKSPACE;
 
     if (!baseUrl || !token) {
-      throw new Error("WINDMILL_BASE_URL and WINDMILL_API_TOKEN are required");
+      return null;
     }
 
     _client = new WindmillClient({ baseUrl, token, workspace });

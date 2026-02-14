@@ -43,19 +43,20 @@ router.post("/workflows", requireApiKey, async (req, res) => {
     const openFlow = dagToOpenFlow(dag, body.name);
     const flowPath = generateFlowPath(body.orgId, body.name);
 
-    // Push to Windmill
-    try {
-      const client = getWindmillClient();
-      await client.createFlow({
-        path: flowPath,
-        summary: body.name,
-        description: body.description,
-        value: openFlow.value,
-        schema: openFlow.schema,
-      });
-    } catch (err) {
-      console.error("[workflows] Failed to create flow in Windmill:", err);
-      // Continue — store in DB even if Windmill push fails
+    // Push to Windmill (if configured)
+    const client = getWindmillClient();
+    if (client) {
+      try {
+        await client.createFlow({
+          path: flowPath,
+          summary: body.name,
+          description: body.description,
+          value: openFlow.value,
+          schema: openFlow.schema,
+        });
+      } catch (err) {
+        console.error("[workflows] Failed to create flow in Windmill:", err);
+      }
     }
 
     // Store in DB
@@ -180,18 +181,20 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       const openFlow = dagToOpenFlow(dag, flowName);
 
       if (existing.windmillFlowPath) {
-        try {
-          const client = getWindmillClient();
-          await client.updateFlow(existing.windmillFlowPath, {
-            summary: flowName,
-            value: openFlow.value,
-            schema: openFlow.schema,
-          });
-        } catch (err) {
-          console.error(
-            "[workflows] Failed to update flow in Windmill:",
-            err
-          );
+        const client = getWindmillClient();
+        if (client) {
+          try {
+            await client.updateFlow(existing.windmillFlowPath, {
+              summary: flowName,
+              value: openFlow.value,
+              schema: openFlow.schema,
+            });
+          } catch (err) {
+            console.error(
+              "[workflows] Failed to update flow in Windmill:",
+              err
+            );
+          }
         }
       }
     }
@@ -226,16 +229,18 @@ router.delete("/workflows/:id", requireApiKey, async (req, res) => {
       return;
     }
 
-    // Delete from Windmill
+    // Delete from Windmill (if configured)
     if (existing.windmillFlowPath) {
-      try {
-        const client = getWindmillClient();
-        await client.deleteFlow(existing.windmillFlowPath);
-      } catch (err) {
-        console.error(
-          "[workflows] Failed to delete flow in Windmill:",
-          err
-        );
+      const client = getWindmillClient();
+      if (client) {
+        try {
+          await client.deleteFlow(existing.windmillFlowPath);
+        } catch (err) {
+          console.error(
+            "[workflows] Failed to delete flow in Windmill:",
+            err
+          );
+        }
       }
     }
 

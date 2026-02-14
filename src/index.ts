@@ -34,10 +34,14 @@ if (process.env.NODE_ENV !== "test") {
       await migrate(db, { migrationsFolder: "./drizzle" });
       console.log("Migrations complete");
 
-      // Start job poller
+      // Start job poller (only if Windmill is configured)
       const windmillClient = getWindmillClient();
-      const poller = new JobPoller(db, windmillClient, workflowRuns);
-      poller.start();
+      if (windmillClient) {
+        const poller = new JobPoller(db, windmillClient, workflowRuns);
+        poller.start();
+      } else {
+        console.log("Windmill not configured (WINDMILL_SERVICE_URL / WINDMILL_SERVICE_API_KEY missing) — job poller disabled");
+      }
 
       app.listen(Number(PORT), "::", () => {
         console.log(`windmill-service running on port ${PORT}`);
