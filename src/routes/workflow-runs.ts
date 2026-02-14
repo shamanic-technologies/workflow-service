@@ -41,18 +41,20 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
 
     // Run in Windmill
     let windmillJobId: string | null = null;
-    try {
-      const client = getWindmillClient();
-      windmillJobId = await client.runFlow(
-        workflow.windmillFlowPath,
-        body.inputs ?? {}
-      );
-    } catch (err) {
-      console.error("[workflow-runs] Failed to run flow in Windmill:", err);
-      res
-        .status(502)
-        .json({ error: "Failed to start workflow in Windmill" });
-      return;
+    const client = getWindmillClient();
+    if (client) {
+      try {
+        windmillJobId = await client.runFlow(
+          workflow.windmillFlowPath,
+          body.inputs ?? {}
+        );
+      } catch (err) {
+        console.error("[workflow-runs] Failed to run flow in Windmill:", err);
+        res
+          .status(502)
+          .json({ error: "Failed to start workflow in Windmill" });
+        return;
+      }
     }
 
     // Create workflow run in DB
@@ -96,13 +98,14 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
     }
 
     // If still active, poll Windmill for latest status
+    const pollClient = getWindmillClient();
     if (
+      pollClient &&
       (run.status === "queued" || run.status === "running") &&
       run.windmillJobId
     ) {
       try {
-        const client = getWindmillClient();
-        const job = await client.getJob(run.windmillJobId);
+        const job = await pollClient.getJob(run.windmillJobId);
 
         if (!job.running) {
           const success = job.success ?? false;
@@ -202,11 +205,13 @@ router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
 
     // Cancel in Windmill
     if (run.windmillJobId) {
-      try {
-        const client = getWindmillClient();
-        await client.cancelJob(run.windmillJobId, "Cancelled by user");
-      } catch (err) {
-        console.error("[workflow-runs] Failed to cancel Windmill job:", err);
+      const cancelClient = getWindmillClient();
+      if (cancelClient) {
+        try {
+          await cancelClient.cancelJob(run.windmillJobId, "Cancelled by user");
+        } catch (err) {
+          console.error("[workflow-runs] Failed to cancel Windmill job:", err);
+        }
       }
     }
 

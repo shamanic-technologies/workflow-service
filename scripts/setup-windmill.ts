@@ -6,12 +6,12 @@ import { NODE_TYPE_REGISTRY } from "../src/lib/node-type-registry.js";
 const NODES_DIR = join(import.meta.dirname ?? ".", "nodes");
 
 async function main() {
-  const baseUrl = process.env.WINDMILL_BASE_URL;
-  const token = process.env.WINDMILL_API_TOKEN;
+  const baseUrl = process.env.WINDMILL_SERVICE_URL;
+  const token = process.env.WINDMILL_SERVICE_API_KEY;
   const workspace = process.env.WINDMILL_WORKSPACE ?? "prod";
 
   if (!baseUrl || !token) {
-    console.error("WINDMILL_BASE_URL and WINDMILL_API_TOKEN are required");
+    console.error("WINDMILL_SERVICE_URL and WINDMILL_SERVICE_API_KEY are required");
     process.exit(1);
   }
 

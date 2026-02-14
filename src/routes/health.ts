@@ -14,15 +14,19 @@ router.get("/health", async (_req, res) => {
     checks.db = "disconnected";
   }
 
-  try {
-    const ok = await getWindmillClient().healthCheck();
-    checks.windmill = ok ? "connected" : "disconnected";
-  } catch {
-    checks.windmill = "disconnected";
+  const client = getWindmillClient();
+  if (client) {
+    try {
+      const ok = await client.healthCheck();
+      checks.windmill = ok ? "connected" : "disconnected";
+    } catch {
+      checks.windmill = "disconnected";
+    }
+  } else {
+    checks.windmill = "not_configured";
   }
 
-  const allOk =
-    checks.db === "connected" && checks.windmill === "connected";
+  const allOk = checks.db === "connected";
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "ok" : "degraded",
