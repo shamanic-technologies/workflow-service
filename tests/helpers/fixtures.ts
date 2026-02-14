@@ -1,0 +1,142 @@
+import type { DAG } from "../../src/lib/dag-validator.js";
+
+export const VALID_LINEAR_DAG: DAG = {
+  nodes: [
+    {
+      id: "lead-search",
+      type: "lead-service",
+      config: { source: "apollo" },
+    },
+    {
+      id: "email-gen",
+      type: "content-generation",
+      config: { contentType: "cold-email" },
+      inputMapping: {
+        leadData: "$ref:lead-search.output.lead",
+        clientData: "$ref:flow_input.brandIntel",
+      },
+    },
+    {
+      id: "email-send",
+      type: "outbound-sending",
+      config: { channel: "email", sendType: "broadcast" },
+      inputMapping: {
+        toEmail: "$ref:email-gen.output.email",
+        subject: "$ref:email-gen.output.subject",
+        bodyHtml: "$ref:email-gen.output.bodyHtml",
+      },
+    },
+  ],
+  edges: [
+    { from: "lead-search", to: "email-gen" },
+    { from: "email-gen", to: "email-send" },
+  ],
+};
+
+export const DAG_WITH_CYCLE: DAG = {
+  nodes: [
+    { id: "a", type: "lead-service" },
+    { id: "b", type: "content-generation" },
+    { id: "c", type: "outbound-sending" },
+  ],
+  edges: [
+    { from: "a", to: "b" },
+    { from: "b", to: "c" },
+    { from: "c", to: "a" },
+  ],
+};
+
+export const DAG_WITH_UNKNOWN_TYPE: DAG = {
+  nodes: [{ id: "x", type: "unknown-service" }],
+  edges: [],
+};
+
+export const DAG_WITH_BAD_EDGE: DAG = {
+  nodes: [{ id: "a", type: "lead-service" }],
+  edges: [{ from: "a", to: "nonexistent" }],
+};
+
+export const DAG_WITH_BAD_REF: DAG = {
+  nodes: [
+    { id: "a", type: "lead-service" },
+    {
+      id: "b",
+      type: "content-generation",
+      inputMapping: { data: "$ref:nonexistent.output.field" },
+    },
+  ],
+  edges: [{ from: "a", to: "b" }],
+};
+
+export const DAG_WITH_DUPLICATE_IDS: DAG = {
+  nodes: [
+    { id: "a", type: "lead-service" },
+    { id: "a", type: "content-generation" },
+  ],
+  edges: [],
+};
+
+export const DAG_NO_ENTRY_NODE: DAG = {
+  nodes: [
+    { id: "a", type: "lead-service" },
+    { id: "b", type: "content-generation" },
+  ],
+  edges: [
+    { from: "a", to: "b" },
+    { from: "b", to: "a" },
+  ],
+};
+
+export const DAG_WITH_WAIT: DAG = {
+  nodes: [
+    { id: "step1", type: "lead-service" },
+    { id: "pause", type: "wait", config: { seconds: 30 } },
+    { id: "step2", type: "outbound-sending" },
+  ],
+  edges: [
+    { from: "step1", to: "pause" },
+    { from: "pause", to: "step2" },
+  ],
+};
+
+export const DAG_WITH_CONDITION: DAG = {
+  nodes: [
+    { id: "check", type: "condition" },
+    { id: "branch-a", type: "lifecycle-emails" },
+    { id: "branch-b", type: "outbound-sending" },
+  ],
+  edges: [
+    { from: "check", to: "branch-a", condition: "results.check.score > 50" },
+    { from: "check", to: "branch-b", condition: "results.check.score <= 50" },
+  ],
+};
+
+export const DAG_WITH_FOREACH: DAG = {
+  nodes: [
+    {
+      id: "loop",
+      type: "for-each",
+      config: { iterator: "flow_input.contacts", parallel: false },
+    },
+    { id: "send", type: "lifecycle-emails" },
+  ],
+  edges: [{ from: "loop", to: "send" }],
+};
+
+export const POLARITY_WELCOME_DAG: DAG = {
+  nodes: [
+    {
+      id: "send-welcome",
+      type: "lifecycle-emails",
+      config: {
+        appId: "polaritycourse",
+        eventType: "webinar-registration-welcome",
+      },
+      inputMapping: {
+        recipientEmail: "$ref:flow_input.email",
+        metadata: "$ref:flow_input.contactData",
+      },
+    },
+  ],
+  edges: [],
+};

@@ -1,0 +1,183 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { VALID_LINEAR_DAG, DAG_WITH_UNKNOWN_TYPE } from "../helpers/fixtures.js";
+
+// Mock DB
+const mockDbRows: Record<string, unknown>[] = [];
+
+vi.mock("../../src/db/index.js", () => ({
+  db: {
+    insert: () => ({
+      values: (row: Record<string, unknown>) => {
+        const newRow = {
+          id: "wf-" + Math.random().toString(36).slice(2, 10),
+          ...row,
+          windmillWorkspace: row.windmillWorkspace ?? "prod",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        mockDbRows.push(newRow);
+        return {
+          returning: () => Promise.resolve([newRow]),
+        };
+      },
+    }),
+    select: () => ({
+      from: () => ({
+        where: (condition?: unknown) => {
+          // Return matching rows or all
+          return Promise.resolve(
+            mockDbRows.filter((r) => r.status !== "deleted")
+          );
+        },
+      }),
+    }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => ({
+        where: () => {
+          const row = mockDbRows[mockDbRows.length - 1];
+          if (row) Object.assign(row, values);
+          return {
+            returning: () => Promise.resolve([{ ...row, ...values }]),
+          };
+        },
+      }),
+    }),
+  },
+  sql: {
+    end: () => Promise.resolve(),
+  },
+}));
+
+// Mock Windmill client
+vi.mock("../../src/lib/windmill-client.js", () => ({
+  getWindmillClient: () => ({
+    createFlow: vi.fn().mockResolvedValue("f/workflows/test/flow"),
+    updateFlow: vi.fn().mockResolvedValue(undefined),
+    deleteFlow: vi.fn().mockResolvedValue(undefined),
+    getFlow: vi.fn().mockResolvedValue({ path: "f/workflows/test/flow" }),
+    healthCheck: vi.fn().mockResolvedValue(true),
+  }),
+  WindmillClient: vi.fn(),
+  resetWindmillClient: vi.fn(),
+}));
+
+import supertest from "supertest";
+import app from "../../src/index.js";
+
+const request = supertest(app);
+const AUTH = { "x-api-key": "test-api-key" };
+
+describe("POST /workflows", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+  });
+
+  it("creates a workflow with valid DAG", async () => {
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({
+        orgId: "org-1",
+        name: "Test Flow",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.name).toBe("Test Flow");
+    expect(res.body.orgId).toBe("org-1");
+    expect(res.body.status).toBe("active");
+    expect(res.body.windmillFlowPath).toContain("f/workflows/org-1/");
+  });
+
+  it("rejects an invalid DAG", async () => {
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({
+        orgId: "org-1",
+        name: "Bad Flow",
+        dag: DAG_WITH_UNKNOWN_TYPE,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid DAG");
+    expect(res.body.details).toBeDefined();
+  });
+
+  it("requires authentication", async () => {
+    const res = await request.post("/workflows").send({
+      orgId: "org-1",
+      name: "No Auth",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("validates request body with Zod", async () => {
+    const res = await request.post("/workflows").set(AUTH).send({
+      // Missing required fields
+      name: "Incomplete",
+    });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /workflows", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+  });
+
+  it("requires orgId parameter", async () => {
+    const res = await request.get("/workflows").set(AUTH);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("orgId");
+  });
+
+  it("returns workflows for orgId", async () => {
+    mockDbRows.push({
+      id: "wf-1",
+      orgId: "org-1",
+      name: "Flow 1",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ orgId: "org-1" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toBeDefined();
+  });
+});
+
+describe("POST /workflows/:id/validate", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+  });
+
+  it("validates the DAG of an existing workflow", async () => {
+    mockDbRows.push({
+      id: "wf-1",
+      orgId: "org-1",
+      name: "Flow 1",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .post("/workflows/wf-1/validate")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(true);
+  });
+});
