@@ -11,6 +11,10 @@ import {
   DAG_WITH_WAIT,
   DAG_WITH_CONDITION,
   DAG_WITH_FOREACH,
+  DAG_WITH_STRIPE_NODES,
+  DAG_WITH_CLIENT_NODES,
+  DAG_WITH_LIFECYCLE_EMAIL_SEND,
+  DAG_WITH_MIXED_DOT_NOTATION,
   POLARITY_WELCOME_DAG,
 } from "../helpers/fixtures.js";
 
@@ -77,6 +81,30 @@ describe("validateDAG", () => {
     expect(
       result.errors.some((e) => e.message.includes("Duplicate node ID"))
     ).toBe(true);
+  });
+
+  it("accepts a DAG with stripe dot-notation node types", () => {
+    const result = validateDAG(DAG_WITH_STRIPE_NODES);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a DAG with client dot-notation node types", () => {
+    const result = validateDAG(DAG_WITH_CLIENT_NODES);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a DAG with lifecycle-email.send node type", () => {
+    const result = validateDAG(DAG_WITH_LIFECYCLE_EMAIL_SEND);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a DAG mixing dot-notation and app.* node types", () => {
+    const result = validateDAG(DAG_WITH_MIXED_DOT_NOTATION);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
   });
 
   it("rejects a DAG with no entry node (all cycled)", () => {

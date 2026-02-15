@@ -123,6 +123,101 @@ export const DAG_WITH_FOREACH: DAG = {
   edges: [{ from: "loop", to: "send" }],
 };
 
+export const DAG_WITH_STRIPE_NODES: DAG = {
+  nodes: [
+    {
+      id: "create-product",
+      type: "stripe.createProduct",
+      config: { name: "Test Product" },
+    },
+    {
+      id: "create-price",
+      type: "stripe.createPrice",
+      config: { unitAmountInCents: 1999 },
+      inputMapping: {
+        productId: "$ref:create-product.output.productId",
+      },
+    },
+    {
+      id: "create-checkout",
+      type: "stripe.createCheckout",
+      config: { successUrl: "https://example.com/success", cancelUrl: "https://example.com/cancel" },
+      inputMapping: {
+        priceId: "$ref:create-price.output.priceId",
+      },
+    },
+  ],
+  edges: [
+    { from: "create-product", to: "create-price" },
+    { from: "create-price", to: "create-checkout" },
+  ],
+};
+
+export const DAG_WITH_CLIENT_NODES: DAG = {
+  nodes: [
+    {
+      id: "create-user",
+      type: "client.createUser",
+      config: { appId: "test-app", email: "test@example.com" },
+    },
+    {
+      id: "list-users",
+      type: "client.getUsers",
+      config: { appId: "test-app" },
+    },
+    {
+      id: "update-user",
+      type: "client.updateUser",
+      config: { firstName: "Updated" },
+      inputMapping: {
+        userId: "$ref:create-user.output.user.id",
+      },
+    },
+  ],
+  edges: [
+    { from: "create-user", to: "list-users" },
+    { from: "list-users", to: "update-user" },
+  ],
+};
+
+export const DAG_WITH_LIFECYCLE_EMAIL_SEND: DAG = {
+  nodes: [
+    {
+      id: "send-email",
+      type: "lifecycle-email.send",
+      config: { appId: "test-app", eventType: "welcome" },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_MIXED_DOT_NOTATION: DAG = {
+  nodes: [
+    {
+      id: "create-user",
+      type: "client.createUser",
+      config: { appId: "test-app", email: "user@example.com" },
+    },
+    {
+      id: "send-welcome",
+      type: "lifecycle-email.send",
+      config: { appId: "test-app", eventType: "welcome" },
+      inputMapping: {
+        recipientEmail: "$ref:create-user.output.user.email",
+      },
+    },
+    {
+      id: "resolve-product",
+      type: "app.resolveProduct",
+      config: { productKey: "welcome-offer" },
+    },
+  ],
+  edges: [
+    { from: "create-user", to: "send-welcome" },
+    { from: "create-user", to: "resolve-product" },
+  ],
+};
+
 export const POLARITY_WELCOME_DAG: DAG = {
   nodes: [
     {
