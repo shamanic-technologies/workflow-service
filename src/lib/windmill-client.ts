@@ -139,9 +139,9 @@ let _client: WindmillClient | null = null;
 
 export function getWindmillClient(): WindmillClient | null {
   if (!_client) {
-    const baseUrl = process.env.WINDMILL_SERVICE_URL;
-    const token = process.env.WINDMILL_SERVICE_API_KEY;
-    const workspace = process.env.WINDMILL_WORKSPACE;
+    const baseUrl = process.env.WINDMILL_SERVER_URL;
+    const token = process.env.WINDMILL_SERVER_API_KEY;
+    const workspace = process.env.WINDMILL_SERVER_WORKSPACE;
 
     if (!baseUrl || !token) {
       return null;
