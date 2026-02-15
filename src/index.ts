@@ -40,7 +40,7 @@ if (process.env.NODE_ENV !== "test") {
         const poller = new JobPoller(db, windmillClient, workflowRuns);
         poller.start();
       } else {
-        console.log("Windmill not configured (WINDMILL_SERVICE_URL / WINDMILL_SERVICE_API_KEY missing) — job poller disabled");
+        console.log("Windmill not configured (WINDMILL_SERVER_URL / WINDMILL_SERVER_API_KEY missing) — job poller disabled");
       }
 
       app.listen(Number(PORT), "::", () => {
