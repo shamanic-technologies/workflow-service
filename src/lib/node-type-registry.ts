@@ -12,7 +12,30 @@ export const NODE_TYPE_REGISTRY: Record<string, string | null> = {
   "lifecycle-emails": "f/nodes/lifecycle_emails",
   "client-service": "f/nodes/client_service",
 
-  // Mocked services (not yet deployed)
+  // Stripe service (dot notation)
+  "stripe.createProduct": "f/nodes/stripe_create_product",
+  "stripe.getProduct": "f/nodes/stripe_get_product",
+  "stripe.createPrice": "f/nodes/stripe_create_price",
+  "stripe.getPricesByProduct": "f/nodes/stripe_get_prices_by_product",
+  "stripe.createCoupon": "f/nodes/stripe_create_coupon",
+  "stripe.getCoupon": "f/nodes/stripe_get_coupon",
+  "stripe.createCheckout": "f/nodes/stripe_create_checkout",
+  "stripe.getStats": "f/nodes/stripe_get_stats",
+
+  // Client service (dot notation)
+  "client.createUser": "f/nodes/client_create_user",
+  "client.updateUser": "f/nodes/client_update_user",
+  "client.getUsers": "f/nodes/client_get_users",
+
+  // Transactional email (dot notation)
+  "lifecycle-email.send": "f/nodes/lifecycle_email_send",
+  "transactional-email.getStats": "f/nodes/transactional_email_get_stats",
+
+  // App-level logic (inline scripts, no HTTP calls)
+  "app.resolveProduct": "f/nodes/app_resolve_product",
+  "app.resolveDiscount": "f/nodes/app_resolve_discount",
+
+  // Legacy names (kept for backward compatibility)
   "twilio-sms": "f/nodes/twilio_sms",
   "order-service": "f/nodes/order_service",
   "product-service": "f/nodes/product_service",
