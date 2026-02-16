@@ -1,16 +1,14 @@
 // Windmill node script — calls transactional-email POST /send
 export async function main(
-  config: {
-    appId: string;
-    eventType: string;
-    recipientEmail?: string;
-    brandId?: string;
-    campaignId?: string;
-    productId?: string;
-    clerkUserId?: string;
-    clerkOrgId?: string;
-    metadata?: Record<string, unknown>;
-  }
+  appId: string,
+  eventType: string,
+  recipientEmail?: string,
+  brandId?: string,
+  campaignId?: string,
+  productId?: string,
+  clerkUserId?: string,
+  clerkOrgId?: string,
+  metadata?: Record<string, unknown>,
 ) {
   const response = await fetch(
     `${Bun.env.LIFECYCLE_EMAILS_URL!}/send`,
@@ -20,7 +18,7 @@ export async function main(
         "Content-Type": "application/json",
         "x-api-key": Bun.env.LIFECYCLE_EMAILS_API_KEY!,
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ appId, eventType, recipientEmail, brandId, campaignId, productId, clerkUserId, clerkOrgId, metadata }),
     }
   );
 

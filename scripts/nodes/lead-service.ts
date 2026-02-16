@@ -1,9 +1,7 @@
 // Windmill node script — calls lead-service POST /buffer/next
 export async function main(
-  config: {
-    source?: string;
-    searchParams?: Record<string, unknown>;
-  },
+  source: string | undefined,
+  searchParams: Record<string, unknown> | undefined,
   context: {
     orgId: string;
     brandId: string;
@@ -25,7 +23,7 @@ export async function main(
         campaignId: context.campaignId,
         brandId: context.brandId,
         parentRunId: context.runId,
-        searchParams: config.searchParams,
+        searchParams,
       }),
     }
   );

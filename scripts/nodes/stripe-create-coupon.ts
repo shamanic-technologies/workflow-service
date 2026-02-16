@@ -1,17 +1,15 @@
 // Windmill node script — calls stripe POST /coupons/create
 export async function main(
-  config: {
-    id?: string;
-    name?: string;
-    percentOff?: number;
-    amountOffInCents?: number;
-    currency?: string;
-    duration?: "once" | "repeating" | "forever";
-    durationInMonths?: number;
-    maxRedemptions?: number;
-    redeemBy?: string;
-    metadata?: Record<string, string>;
-  }
+  id?: string,
+  name?: string,
+  percentOff?: number,
+  amountOffInCents?: number,
+  currency?: string,
+  duration?: "once" | "repeating" | "forever",
+  durationInMonths?: number,
+  maxRedemptions?: number,
+  redeemBy?: string,
+  metadata?: Record<string, string>,
 ) {
   const response = await fetch(
     `${Bun.env.STRIPE_SERVICE_URL!}/coupons/create`,
@@ -21,7 +19,7 @@ export async function main(
         "Content-Type": "application/json",
         "X-API-Key": Bun.env.STRIPE_SERVICE_API_KEY!,
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ id, name, percentOff, amountOffInCents, currency, duration, durationInMonths, maxRedemptions, redeemBy, metadata }),
     }
   );
 

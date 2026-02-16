@@ -1,6 +1,5 @@
 // MOCK — twilio-service not yet deployed
 export async function main(
-  config: Record<string, unknown>,
   to: string,
   body: string,
   metadata?: Record<string, unknown>

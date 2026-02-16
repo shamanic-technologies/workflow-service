@@ -1,6 +1,5 @@
 // STUB — LinkedIn Connect not yet implemented
 export async function main(
-  config: Record<string, unknown>,
   recipientLinkedinUrl: string,
   noteContent?: string,
   context?: { orgId: string; runId: string }

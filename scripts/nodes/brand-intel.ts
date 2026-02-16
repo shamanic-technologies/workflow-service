@@ -1,6 +1,6 @@
 // Windmill node script — calls brand-service
 export async function main(
-  config: { action: string },
+  action: string,
   context: {
     orgId: string;
     brandId: string;

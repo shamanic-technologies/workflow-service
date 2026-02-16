@@ -18,7 +18,9 @@ export function buildInputTransforms(
   const transforms: Record<string, InputTransform> = {};
 
   if (config) {
-    transforms["config"] = { type: "static", value: config };
+    for (const [key, value] of Object.entries(config)) {
+      transforms[key] = { type: "static", value };
+    }
   }
 
   if (inputMapping) {

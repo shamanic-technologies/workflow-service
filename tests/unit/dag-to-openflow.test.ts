@@ -90,7 +90,7 @@ describe("dagToOpenFlow", () => {
     }
   });
 
-  it("translates static config to static transforms", () => {
+  it("spreads static config as individual transforms", () => {
     const result = dagToOpenFlow(POLARITY_WELCOME_DAG, "Welcome");
 
     const sendModule = result.value.modules[0];
@@ -99,15 +99,21 @@ describe("dagToOpenFlow", () => {
     if (sendModule.value.type === "script") {
       const transforms = sendModule.value.input_transforms as Record<
         string,
-        { type: string; value?: unknown }
+        { type: string; value?: unknown; expr?: string }
       >;
-      expect(transforms.config).toEqual({
+      expect(transforms.appId).toEqual({
         type: "static",
-        value: {
-          appId: "polaritycourse",
-          eventType: "webinar-registration-welcome",
-        },
+        value: "polaritycourse",
       });
+      expect(transforms.eventType).toEqual({
+        type: "static",
+        value: "webinar-registration-welcome",
+      });
+      expect(transforms.recipientEmail).toEqual({
+        type: "javascript",
+        expr: "flow_input.email",
+      });
+      expect(transforms.config).toBeUndefined();
     }
   });
 

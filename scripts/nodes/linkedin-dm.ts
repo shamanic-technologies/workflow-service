@@ -1,6 +1,5 @@
 // STUB — LinkedIn DM via Unipile not yet implemented
 export async function main(
-  config: Record<string, unknown>,
   recipientLinkedinUrl: string,
   messageContent: string,
   context: { orgId: string; runId: string }

@@ -1,11 +1,9 @@
 // Windmill node script — calls stripe POST /products/create
 export async function main(
-  config: {
-    name: string;
-    description?: string;
-    id?: string;
-    metadata?: Record<string, string>;
-  }
+  name: string,
+  description?: string,
+  id?: string,
+  metadata?: Record<string, string>,
 ) {
   const response = await fetch(
     `${Bun.env.STRIPE_SERVICE_URL!}/products/create`,
@@ -15,7 +13,7 @@ export async function main(
         "Content-Type": "application/json",
         "X-API-Key": Bun.env.STRIPE_SERVICE_API_KEY!,
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ name, description, id, metadata }),
     }
   );
 

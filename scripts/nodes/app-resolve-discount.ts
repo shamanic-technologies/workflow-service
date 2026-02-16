@@ -1,11 +1,9 @@
 // Windmill node script — resolves a coupon/discount by fetching live from Stripe
 export async function main(
-  config: {
-    couponId: string;
-  }
+  couponId: string,
 ) {
   const response = await fetch(
-    `${Bun.env.STRIPE_SERVICE_URL!}/coupons/${config.couponId}`,
+    `${Bun.env.STRIPE_SERVICE_URL!}/coupons/${couponId}`,
     {
       headers: {
         "X-API-Key": Bun.env.STRIPE_SERVICE_API_KEY!,
@@ -15,7 +13,7 @@ export async function main(
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`app.resolveDiscount: failed to fetch coupon "${config.couponId}" (${response.status}): ${err}`);
+    throw new Error(`app.resolveDiscount: failed to fetch coupon "${couponId}" (${response.status}): ${err}`);
   }
 
   const data = await response.json() as {

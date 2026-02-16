@@ -1,17 +1,13 @@
 // Windmill node script — calls client PATCH /anonymous-users/:id
 export async function main(
-  config: {
-    userId: string;
-    firstName?: string;
-    lastName?: string;
-    phone?: string;
-    clerkUserId?: string | null;
-    orgId?: string | null;
-    metadata?: Record<string, unknown> | null;
-  }
+  userId: string,
+  firstName?: string,
+  lastName?: string,
+  phone?: string,
+  clerkUserId?: string | null,
+  orgId?: string | null,
+  metadata?: Record<string, unknown> | null,
 ) {
-  const { userId, ...body } = config;
-
   const response = await fetch(
     `${Bun.env.CLIENT_SERVICE_URL!}/anonymous-users/${userId}`,
     {
@@ -20,7 +16,7 @@ export async function main(
         "Content-Type": "application/json",
         "x-api-key": Bun.env.CLIENT_SERVICE_API_KEY!,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ firstName, lastName, phone, clerkUserId, orgId, metadata }),
     }
   );
 

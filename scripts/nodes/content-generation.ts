@@ -1,6 +1,6 @@
 // Windmill node script — calls email-generation POST /generate
 export async function main(
-  config: { contentType: string },
+  contentType: string,
   leadData: Record<string, unknown>,
   clientData: Record<string, unknown>,
   context: {
@@ -20,7 +20,7 @@ export async function main(
         "x-clerk-org-id": context.orgId,
       },
       body: JSON.stringify({
-        contentType: config.contentType,
+        contentType,
         leadData,
         clientData,
         runId: context.runId,

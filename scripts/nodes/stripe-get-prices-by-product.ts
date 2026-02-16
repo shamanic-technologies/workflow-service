@@ -1,11 +1,9 @@
 // Windmill node script — calls stripe GET /prices/by-product/:productId
 export async function main(
-  config: {
-    productId: string;
-  }
+  productId: string,
 ) {
   const response = await fetch(
-    `${Bun.env.STRIPE_SERVICE_URL!}/prices/by-product/${config.productId}`,
+    `${Bun.env.STRIPE_SERVICE_URL!}/prices/by-product/${productId}`,
     {
       headers: {
         "X-API-Key": Bun.env.STRIPE_SERVICE_API_KEY!,
