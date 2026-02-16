@@ -1,9 +1,7 @@
 // Windmill node script — calls client-service for contact/user management
 export async function main(
-  config: {
-    action: "create" | "get" | "list" | "update";
-    appId?: string;
-  },
+  action: "create" | "get" | "list" | "update",
+  appId?: string,
   contactData?: Record<string, unknown>,
   context?: {
     orgId?: string;
@@ -18,27 +16,27 @@ export async function main(
     "x-api-key": apiKey,
   };
 
-  if (config.action === "create" || config.action === "update") {
+  if (action === "create" || action === "update") {
     const response = await fetch(`${baseUrl}/anonymous-users`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        appId: config.appId,
+        appId,
         ...contactData,
       }),
     });
     return response.json();
   }
 
-  if (config.action === "list") {
+  if (action === "list") {
     const response = await fetch(
-      `${baseUrl}/anonymous-users?appId=${config.appId}`,
+      `${baseUrl}/anonymous-users?appId=${appId}`,
       { headers }
     );
     return response.json();
   }
 
-  if (config.action === "get" && contactData?.id) {
+  if (action === "get" && contactData?.id) {
     const response = await fetch(
       `${baseUrl}/anonymous-users/${contactData.id}`,
       { headers }
@@ -46,5 +44,5 @@ export async function main(
     return response.json();
   }
 
-  throw new Error(`Unknown client-service action: ${config.action}`);
+  throw new Error(`Unknown client-service action: ${action}`);
 }

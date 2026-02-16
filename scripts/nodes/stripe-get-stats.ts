@@ -1,12 +1,10 @@
 // Windmill node script — calls stripe POST /stats
 export async function main(
-  config: {
-    runIds?: string[];
-    clerkOrgId?: string;
-    brandId?: string;
-    appId?: string;
-    campaignId?: string;
-  }
+  runIds?: string[],
+  clerkOrgId?: string,
+  brandId?: string,
+  appId?: string,
+  campaignId?: string,
 ) {
   const baseUrl = Bun.env.STRIPE_SERVICE_URL;
   const apiKey = Bun.env.STRIPE_SERVICE_API_KEY;
@@ -21,7 +19,7 @@ export async function main(
         "Content-Type": "application/json",
         "X-API-Key": apiKey,
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ runIds, clerkOrgId, brandId, appId, campaignId }),
     }
   );
 

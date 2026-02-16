@@ -1,21 +1,18 @@
 // Windmill node script — calls client PATCH /anonymous-users/:id
 export async function main(
-  config: {
-    userId: string;
-    firstName?: string;
-    lastName?: string;
-    phone?: string;
-    clerkUserId?: string | null;
-    orgId?: string | null;
-    metadata?: Record<string, unknown> | null;
-  }
+  userId: string,
+  firstName?: string,
+  lastName?: string,
+  phone?: string,
+  clerkUserId?: string | null,
+  orgId?: string | null,
+  metadata?: Record<string, unknown> | null,
 ) {
   const baseUrl = Bun.env.CLIENT_SERVICE_URL;
   const apiKey = Bun.env.CLIENT_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("CLIENT_SERVICE_URL is not set");
   if (!apiKey) throw new Error("CLIENT_SERVICE_API_KEY is not set");
 
-  const { userId, ...body } = config;
 
   const response = await fetch(
     `${baseUrl}/anonymous-users/${userId}`,
@@ -25,7 +22,7 @@ export async function main(
         "Content-Type": "application/json",
         "x-api-key": apiKey,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ firstName, lastName, phone, clerkUserId, orgId, metadata }),
     }
   );
 

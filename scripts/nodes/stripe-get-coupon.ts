@@ -1,8 +1,6 @@
 // Windmill node script — calls stripe GET /coupons/:couponId
 export async function main(
-  config: {
-    couponId: string;
-  }
+  couponId: string,
 ) {
   const baseUrl = Bun.env.STRIPE_SERVICE_URL;
   const apiKey = Bun.env.STRIPE_SERVICE_API_KEY;
@@ -10,7 +8,7 @@ export async function main(
   if (!apiKey) throw new Error("STRIPE_SERVICE_API_KEY is not set");
 
   const response = await fetch(
-    `${baseUrl}/coupons/${config.couponId}`,
+    `${baseUrl}/coupons/${couponId}`,
     {
       headers: {
         "X-API-Key": apiKey,

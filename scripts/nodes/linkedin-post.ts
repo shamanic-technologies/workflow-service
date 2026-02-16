@@ -1,6 +1,5 @@
 // STUB — LinkedIn Post not yet implemented
 export async function main(
-  config: Record<string, unknown>,
   postContent: string,
   context?: { orgId: string; runId: string }
 ) {

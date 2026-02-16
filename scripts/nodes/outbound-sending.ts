@@ -1,6 +1,7 @@
 // Windmill node script — calls email-sending POST /send
 export async function main(
-  config: { channel: string; sendType: string },
+  channel: string,
+  sendType: string,
   toEmail: string,
   subject: string,
   bodyHtml: string,
@@ -26,8 +27,8 @@ export async function main(
         "x-clerk-org-id": context.orgId,
       },
       body: JSON.stringify({
-        type: config.sendType,
-        channel: config.channel,
+        type: sendType,
+        channel,
         toEmail,
         subject,
         bodyHtml,

@@ -1,11 +1,9 @@
 // Windmill node script — calls transactional-email POST /stats
 export async function main(
-  config: {
-    appId?: string;
-    clerkOrgId?: string;
-    clerkUserId?: string;
-    eventType?: string;
-  }
+  appId?: string,
+  clerkOrgId?: string,
+  clerkUserId?: string,
+  eventType?: string,
 ) {
   const baseUrl = Bun.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
   const apiKey = Bun.env.TRANSACTIONAL_EMAIL_SERVICE_API_KEY;
@@ -20,7 +18,7 @@ export async function main(
         "Content-Type": "application/json",
         "x-api-key": apiKey,
       },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ appId, clerkOrgId, clerkUserId, eventType }),
     }
   );
 

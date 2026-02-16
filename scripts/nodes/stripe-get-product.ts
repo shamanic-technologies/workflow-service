@@ -1,8 +1,6 @@
 // Windmill node script — calls stripe GET /products/:productId
 export async function main(
-  config: {
-    productId: string;
-  }
+  productId: string,
 ) {
   const baseUrl = Bun.env.STRIPE_SERVICE_URL;
   const apiKey = Bun.env.STRIPE_SERVICE_API_KEY;
@@ -10,7 +8,7 @@ export async function main(
   if (!apiKey) throw new Error("STRIPE_SERVICE_API_KEY is not set");
 
   const response = await fetch(
-    `${baseUrl}/products/${config.productId}`,
+    `${baseUrl}/products/${productId}`,
     {
       headers: {
         "X-API-Key": apiKey,

@@ -1,8 +1,6 @@
 // Windmill node script — resolves a product by fetching live from Stripe
 export async function main(
-  config: {
-    productId: string;
-  }
+  productId: string,
 ) {
   const baseUrl = Bun.env.STRIPE_SERVICE_URL;
   const apiKey = Bun.env.STRIPE_SERVICE_API_KEY;
@@ -10,7 +8,7 @@ export async function main(
   if (!apiKey) throw new Error("STRIPE_SERVICE_API_KEY is not set");
 
   const response = await fetch(
-    `${baseUrl}/products/${config.productId}`,
+    `${baseUrl}/products/${productId}`,
     {
       headers: {
         "X-API-Key": apiKey,
@@ -20,7 +18,7 @@ export async function main(
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`app.resolveProduct: failed to fetch product "${config.productId}" (${response.status}): ${err}`);
+    throw new Error(`app.resolveProduct: failed to fetch product "${productId}" (${response.status}): ${err}`);
   }
 
   const data = await response.json() as { productId: string; name: string; description?: string };

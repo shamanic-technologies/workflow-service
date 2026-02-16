@@ -1,6 +1,5 @@
 // Windmill node script — calls reply-qualification POST /qualify
 export async function main(
-  config: Record<string, unknown>,
   emailContent: string,
   context: {
     orgId: string;
@@ -20,7 +19,7 @@ export async function main(
         "x-api-key": apiKey,
         "x-clerk-org-id": context.orgId,
       },
-      body: JSON.stringify({ content: emailContent, ...config }),
+      body: JSON.stringify({ content: emailContent }),
     }
   );
 

@@ -46,26 +46,32 @@ describe("buildInputTransforms", () => {
     });
   });
 
-  it("adds config as static transform", () => {
+  it("spreads config entries as individual static transforms", () => {
     const result = buildInputTransforms(
       { source: "apollo", limit: 10 },
       undefined
     );
 
-    expect(result.config).toEqual({
-      type: "static",
-      value: { source: "apollo", limit: 10 },
-    });
+    expect(result.source).toEqual({ type: "static", value: "apollo" });
+    expect(result.limit).toEqual({ type: "static", value: 10 });
+    expect(result.config).toBeUndefined();
   });
 
-  it("combines config and inputMapping", () => {
+  it("combines config and inputMapping as individual transforms", () => {
     const result = buildInputTransforms(
       { contentType: "cold-email" },
       { leadData: "$ref:lead-search.output.lead" }
     );
 
-    expect(result.config).toBeDefined();
-    expect(result.leadData).toBeDefined();
+    expect(result.contentType).toEqual({
+      type: "static",
+      value: "cold-email",
+    });
+    expect(result.leadData).toEqual({
+      type: "javascript",
+      expr: "results.lead_search.lead",
+    });
+    expect(result.config).toBeUndefined();
   });
 
   it("returns empty object for no inputs", () => {
