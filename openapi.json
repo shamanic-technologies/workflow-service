@@ -379,6 +379,10 @@
       "ExecuteWorkflowRequest": {
         "type": "object",
         "properties": {
+          "appId": {
+            "type": "string",
+            "description": "App ID override. If not provided, falls back to the workflow's stored appId."
+          },
           "inputs": {
             "type": "object",
             "additionalProperties": {
