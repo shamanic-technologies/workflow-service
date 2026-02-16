@@ -112,6 +112,9 @@ export const ValidationResultSchema = z
 
 export const ExecuteWorkflowSchema = z
   .object({
+    appId: z.string().optional().describe(
+      "App ID override. If not provided, falls back to the workflow's stored appId."
+    ),
     inputs: z.record(z.unknown()).optional().describe(
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),

@@ -129,7 +129,8 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
     const client = getWindmillClient();
     if (client) {
       try {
-        const flowInputs = { ...body.inputs, ...(workflow.appId ? { appId: workflow.appId } : {}) };
+        const appId = body.appId ?? workflow.appId;
+        const flowInputs = { ...body.inputs, ...(appId ? { appId } : {}) };
         windmillJobId = await client.runFlow(
           workflow.windmillFlowPath,
           flowInputs

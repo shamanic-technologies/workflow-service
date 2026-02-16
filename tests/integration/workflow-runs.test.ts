@@ -109,6 +109,52 @@ describe("POST /workflows/:id/execute", () => {
     expect(mockRunFlow).toHaveBeenCalled();
   });
 
+  it("accepts appId in request body and forwards it to Windmill", async () => {
+    mockWorkflows.push({
+      id: "wf-1",
+      appId: null,
+      orgId: "org-1",
+      name: "Test Flow",
+      status: "active",
+      windmillFlowPath: "f/workflows/org_1/test_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    await request
+      .post("/workflows/wf-1/execute")
+      .set(AUTH)
+      .send({ appId: "kevinlourd-com", inputs: { email: "user@test.com" } });
+
+    expect(mockRunFlow).toHaveBeenCalledWith(
+      "f/workflows/org_1/test_flow",
+      expect.objectContaining({ appId: "kevinlourd-com", email: "user@test.com" }),
+    );
+  });
+
+  it("prefers body appId over workflow appId", async () => {
+    mockWorkflows.push({
+      id: "wf-1",
+      appId: "old-app-id",
+      orgId: "org-1",
+      name: "Test Flow",
+      status: "active",
+      windmillFlowPath: "f/workflows/org_1/test_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    await request
+      .post("/workflows/wf-1/execute")
+      .set(AUTH)
+      .send({ appId: "new-app-id", inputs: {} });
+
+    expect(mockRunFlow).toHaveBeenCalledWith(
+      "f/workflows/org_1/test_flow",
+      expect.objectContaining({ appId: "new-app-id" }),
+    );
+  });
+
   it("forwards workflow appId into Windmill flow inputs", async () => {
     mockWorkflows.push({
       id: "wf-1",
