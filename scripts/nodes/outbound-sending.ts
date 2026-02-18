@@ -10,10 +10,11 @@ export async function main(
     brandId: string;
     campaignId: string;
     runId: string;
-  }
+  },
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.OUTBOUND_SENDING_URL;
-  const apiKey = Bun.env.OUTBOUND_SENDING_API_KEY;
+  const baseUrl = serviceEnvs?.["OUTBOUND_SENDING_URL"] ?? Bun.env.OUTBOUND_SENDING_URL;
+  const apiKey = serviceEnvs?.["OUTBOUND_SENDING_API_KEY"] ?? Bun.env.OUTBOUND_SENDING_API_KEY;
   if (!baseUrl) throw new Error("OUTBOUND_SENDING_URL is not set");
   if (!apiKey) throw new Error("OUTBOUND_SENDING_API_KEY is not set");
 

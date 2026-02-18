@@ -1,27 +1,31 @@
 // Windmill node script — generic HTTP call to any microservice.
 //
-// Resolves service URLs and API keys from environment variables using the
-// convention: {SERVICE}_SERVICE_URL and {SERVICE}_SERVICE_API_KEY.
-// Example: service "stripe" → STRIPE_SERVICE_URL, STRIPE_SERVICE_API_KEY.
+// Resolves service URLs and API keys from serviceEnvs (injected via flow_input
+// by windmill-service) with a fallback to Bun.env for backward compatibility.
 //
-// This avoids hardcoding one script per service endpoint. Clients specify
-// the service name, HTTP method, and path — this script does the rest.
+// Convention: {SERVICE}_SERVICE_URL and {SERVICE}_SERVICE_API_KEY.
+// Example: service "stripe" → STRIPE_SERVICE_URL, STRIPE_SERVICE_API_KEY.
 export async function main(
   service: string,
   method: string,
   path: string,
   body?: Record<string, unknown>,
   query?: Record<string, string>,
+  serviceEnvs?: Record<string, string>,
 ) {
   // Convert service name to env var prefix: "transactional-email" → "TRANSACTIONAL_EMAIL"
   const envPrefix = service.toUpperCase().replace(/-/g, "_");
-  const baseUrl = Bun.env[`${envPrefix}_SERVICE_URL`];
-  const apiKey = Bun.env[`${envPrefix}_SERVICE_API_KEY`];
+  const urlKey = `${envPrefix}_SERVICE_URL`;
+  const apiKeyKey = `${envPrefix}_SERVICE_API_KEY`;
+
+  const baseUrl = serviceEnvs?.[urlKey] ?? Bun.env[urlKey];
+  const apiKey = serviceEnvs?.[apiKeyKey] ?? Bun.env[apiKeyKey];
 
   if (!baseUrl) {
     throw new Error(
-      `Missing env var: ${envPrefix}_SERVICE_URL. ` +
-      `Make sure the "${service}" service URL is configured on the Windmill worker.`
+      `Missing: ${urlKey}. ` +
+      `Not found in serviceEnvs (${serviceEnvs ? Object.keys(serviceEnvs).length + " keys" : "undefined"}) ` +
+      `or Bun.env.`
     );
   }
 

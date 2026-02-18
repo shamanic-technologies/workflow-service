@@ -67,6 +67,7 @@ export function dagToOpenFlow(dag: DAG, name: string): OpenFlow {
   // Collect all flow_input fields referenced by any node so Windmill accepts them
   const schemaProperties: Record<string, { type: string; description?: string }> = {
     appId: { type: "string", description: "Application identifier" },
+    serviceEnvs: { type: "object", description: "Service URLs and API keys injected by windmill-service" },
   };
   for (const node of dag.nodes) {
     if (!node.inputMapping) continue;
@@ -186,9 +187,12 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     node.inputMapping,
   );
 
-  // Auto-inject appId from flow_input unless the node already maps it explicitly
+  // Auto-inject appId and serviceEnvs from flow_input unless explicitly mapped
   if (!inputTransforms.appId) {
     inputTransforms.appId = { type: "javascript", expr: "flow_input.appId" };
+  }
+  if (!inputTransforms.serviceEnvs) {
+    inputTransforms.serviceEnvs = { type: "javascript", expr: "flow_input.serviceEnvs" };
   }
   const mod: FlowModule = {
     id: node.id,
@@ -214,9 +218,12 @@ function buildFailureModule(node: DAGNode): FlowModule | null {
 
   const inputTransforms = buildInputTransforms(node.config, node.inputMapping);
 
-  // Auto-inject appId from flow_input unless explicitly mapped
+  // Auto-inject appId and serviceEnvs from flow_input unless explicitly mapped
   if (!inputTransforms.appId) {
     inputTransforms.appId = { type: "javascript", expr: "flow_input.appId" };
+  }
+  if (!inputTransforms.serviceEnvs) {
+    inputTransforms.serviceEnvs = { type: "javascript", expr: "flow_input.serviceEnvs" };
   }
 
   // Inject error context — available to the onError node

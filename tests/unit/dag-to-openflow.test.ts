@@ -165,7 +165,7 @@ describe("dagToOpenFlow", () => {
     }
   });
 
-  it("auto-injects appId input_transform into script modules", () => {
+  it("auto-injects appId and serviceEnvs input_transforms into script modules", () => {
     const result = dagToOpenFlow(VALID_LINEAR_DAG, "AppId Inject");
 
     for (const mod of result.value.modules) {
@@ -177,6 +177,10 @@ describe("dagToOpenFlow", () => {
         expect(transforms.appId).toEqual({
           type: "javascript",
           expr: "flow_input.appId",
+        });
+        expect(transforms.serviceEnvs).toEqual({
+          type: "javascript",
+          expr: "flow_input.serviceEnvs",
         });
       }
     }
@@ -201,12 +205,13 @@ describe("dagToOpenFlow", () => {
     }
   });
 
-  it("declares appId in OpenFlow schema properties", () => {
+  it("declares appId and serviceEnvs in OpenFlow schema properties", () => {
     const result = dagToOpenFlow(VALID_LINEAR_DAG, "Schema Test");
 
     expect(result.schema).toBeDefined();
     const props = (result.schema as Record<string, unknown>).properties as Record<string, unknown>;
     expect(props.appId).toEqual({ type: "string", description: "Application identifier" });
+    expect(props.serviceEnvs).toEqual({ type: "object", description: "Service URLs and API keys injected by windmill-service" });
   });
 
   it("generates valid OpenFlow schema structure", () => {
@@ -274,10 +279,14 @@ describe("dagToOpenFlow", () => {
         type: "javascript",
         expr: "error.message",
       });
-      // Should auto-inject appId
+      // Should auto-inject appId and serviceEnvs
       expect(transforms.appId).toEqual({
         type: "javascript",
         expr: "flow_input.appId",
+      });
+      expect(transforms.serviceEnvs).toEqual({
+        type: "javascript",
+        expr: "flow_input.serviceEnvs",
       });
     }
   });

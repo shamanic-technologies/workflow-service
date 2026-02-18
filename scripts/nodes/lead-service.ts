@@ -8,10 +8,11 @@ export async function main(
     campaignId: string;
     subrequestId?: string;
     runId: string;
-  }
+  },
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.LEAD_SERVICE_URL;
-  const apiKey = Bun.env.LEAD_SERVICE_API_KEY;
+  const baseUrl = serviceEnvs?.LEAD_SERVICE_URL ?? Bun.env.LEAD_SERVICE_URL;
+  const apiKey = serviceEnvs?.LEAD_SERVICE_API_KEY ?? Bun.env.LEAD_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("LEAD_SERVICE_URL is not set");
   if (!apiKey) throw new Error("LEAD_SERVICE_API_KEY is not set");
 

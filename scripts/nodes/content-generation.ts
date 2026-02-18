@@ -8,10 +8,11 @@ export async function main(
     brandId: string;
     campaignId: string;
     runId: string;
-  }
+  },
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.CONTENT_GENERATION_URL;
-  const apiKey = Bun.env.CONTENT_GENERATION_API_KEY;
+  const baseUrl = serviceEnvs?.["CONTENT_GENERATION_URL"] ?? Bun.env.CONTENT_GENERATION_URL;
+  const apiKey = serviceEnvs?.["CONTENT_GENERATION_API_KEY"] ?? Bun.env.CONTENT_GENERATION_API_KEY;
   if (!baseUrl) throw new Error("CONTENT_GENERATION_URL is not set");
   if (!apiKey) throw new Error("CONTENT_GENERATION_API_KEY is not set");
 

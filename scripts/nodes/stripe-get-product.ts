@@ -2,9 +2,10 @@
 export async function main(
   appId: string,
   productId: string,
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.STRIPE_SERVICE_URL;
-  const apiKey = Bun.env.STRIPE_SERVICE_API_KEY;
+  const baseUrl = serviceEnvs?.STRIPE_SERVICE_URL ?? Bun.env.STRIPE_SERVICE_URL;
+  const apiKey = serviceEnvs?.STRIPE_SERVICE_API_KEY ?? Bun.env.STRIPE_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("STRIPE_SERVICE_URL is not set");
   if (!apiKey) throw new Error("STRIPE_SERVICE_API_KEY is not set");
 
