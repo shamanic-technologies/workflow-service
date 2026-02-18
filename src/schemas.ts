@@ -23,8 +23,12 @@ export const DAGNodeSchema = z
     type: z.string().min(1).describe(
       "Node type. Use \"http.call\" to call any microservice (recommended), or a specific node type. " +
       "http.call config requires: service (name, e.g. \"stripe\"), method (HTTP verb), path (endpoint path). " +
-      "Other types: wait, condition, for-each (native constructs), " +
-      "or legacy named types like stripe.createProduct, client.createUser, transactional-email.send."
+      "Native flow control types: " +
+      "\"condition\" — if/then/else branching (uses Windmill branchone). " +
+      "Outgoing edges with 'condition' define branches; nodes downstream of a conditional edge are nested inside that branch. " +
+      "Outgoing edges without 'condition' define after-branch steps that always execute. " +
+      "\"wait\" — sleep/delay. \"for-each\" — loop over items (body nodes are nested inside the loop). " +
+      "Legacy named types: stripe.createProduct, client.createUser, transactional-email.send."
     ),
     config: z.record(z.unknown()).optional().describe(
       "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. " +
@@ -33,11 +37,12 @@ export const DAGNodeSchema = z
       "Special config keys (stripped before passing to script): " +
       "retries (number) — override default retry count; " +
       "validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; " +
-      "stopAfterIf (string) — JS expression evaluated after step completes using 'result' variable, " +
-      "stops the flow gracefully (no onError) when true. Example: \"result.found == false\"; " +
-      "skipIf (string) — JS expression evaluated before this step runs, " +
-      "skips the step when true. Can reference previous results or flow_input. " +
-      "Example: \"results.fetch_lead.found == false\" to skip email generation when no leads."
+      "stopAfterIf (string) — native Windmill stop_after_if. JS expression evaluated after step completes using 'result' variable, " +
+      "stops the entire flow gracefully (no onError, no subsequent steps) when true. Example: \"result.found == false\". " +
+      "For conditional branching (run some steps but not others), use a \"condition\" node instead; " +
+      "skipIf (string) — native Windmill skip_if. JS expression evaluated before this step runs, " +
+      "skips only this step when true. Can reference previous results via results.<module_id>. " +
+      "Example: \"results.fetch_lead.found == false\". For multi-step skipping, prefer a \"condition\" node."
     ),
     inputMapping: z.record(z.string()).optional().describe(
       "Dynamic input references using $ref syntax. " +
@@ -57,8 +62,11 @@ export const DAGEdgeSchema = z
     from: z.string().min(1).describe("Source node ID — this node runs first."),
     to: z.string().min(1).describe("Target node ID — runs after the source completes."),
     condition: z.string().optional().describe(
-      "JavaScript expression for conditional execution (only used when source node type is \"condition\"). " +
-      "Example: \"result.status === 'active'\""
+      "JavaScript expression for conditional branching. Only used when source node is type \"condition\". " +
+      "Edges WITH condition: target node (and its chain) are nested inside that branch — they only execute when the condition is true. " +
+      "Edges WITHOUT condition from a condition node: target is an after-branch step that always executes. " +
+      "Expressions can reference previous results (results.<module_id>.<field>) or flow_input. " +
+      "Example: \"results.fetch_lead.found == true\""
     ),
   })
   .openapi("DAGEdge");
