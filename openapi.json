@@ -149,7 +149,7 @@
             "additionalProperties": {
               "nullable": true
             },
-            "description": "Static parameters passed to the node. For http.call: { service, method, path, body?, query? }. For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. Each key becomes a direct parameter of the underlying script."
+            "description": "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. Each key becomes a direct parameter of the underlying script. Special config keys (stripped before passing to script): retries (number) — override default retry count; validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; stopAfterIf (string) — JS expression evaluated after step completes using 'result' variable, stops the flow gracefully (no onError) when true. Example: \"result.found == false\"."
           },
           "inputMapping": {
             "type": "object",
@@ -212,7 +212,7 @@
           },
           "onError": {
             "type": "string",
-            "description": "Node ID of an error handler that runs when any node in the DAG fails. The handler receives error context (failedNodeId, errorMessage) and can access outputs from previously completed nodes via $ref syntax. Use this to call end-run with success: false immediately on failure."
+            "description": "Node ID of an error handler that runs when any node in the DAG fails (including validateResponse failures). Auto-injected parameters (available as script params, no inputMapping needed): failedNodeId (string) — the module ID of the step that failed; errorMessage (string) — the error message text. Can also access outputs from previously completed nodes via $ref syntax. Use this to call end-run with success: false. Tip: check errorMessage to distinguish expected stops (e.g. 'validation failed: expected found=true') from real errors."
           }
         },
         "required": [

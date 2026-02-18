@@ -12,6 +12,7 @@ export interface FlowModule {
     | ForloopFlowModule;
   sleep?: { type: "javascript"; expr: string } | { type: "static"; value: number };
   retry?: { constant?: { attempts: number; seconds: number } };
+  stop_after_if?: { expr: string; skip_if_stopped?: boolean };
 }
 
 interface ScriptModule {
@@ -179,10 +180,12 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     throw new Error(`No script path for node type: ${node.type}`);
   }
 
-  // Extract retries from top-level or config, strip non-script fields from config
+  // Extract retries and stopAfterIf from top-level or config, strip non-script fields
   const retries = node.retries
     ?? (typeof node.config?.retries === "number" ? node.config.retries : 3);
-  const { retries: _r, ...scriptConfig } = node.config ?? {};
+  const stopAfterIf = typeof node.config?.stopAfterIf === "string"
+    ? node.config.stopAfterIf : undefined;
+  const { retries: _r, stopAfterIf: _s, ...scriptConfig } = node.config ?? {};
 
   const inputTransforms = buildInputTransforms(
     Object.keys(scriptConfig).length > 0 ? scriptConfig : undefined,
@@ -208,6 +211,10 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
       ? { constant: { attempts: retries, seconds: 5 } }
       : { constant: { attempts: 0, seconds: 0 } },
   };
+
+  if (stopAfterIf) {
+    mod.stop_after_if = { expr: stopAfterIf, skip_if_stopped: true };
+  }
 
   return mod;
 }

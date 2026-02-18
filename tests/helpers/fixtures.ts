@@ -379,6 +379,31 @@ export const DAG_WITH_DOT_NOTATION_AND_STATIC_BASE: DAG = {
   edges: [],
 };
 
+export const DAG_WITH_STOP_AFTER_IF: DAG = {
+  nodes: [
+    {
+      id: "fetch-lead",
+      type: "http.call",
+      config: {
+        service: "lead",
+        method: "POST",
+        path: "/buffer/next",
+        stopAfterIf: "result.found == false",
+      },
+      retries: 0,
+    },
+    {
+      id: "email-gen",
+      type: "content-generation",
+      config: { contentType: "cold-email" },
+      inputMapping: {
+        leadData: "$ref:fetch-lead.output.lead",
+      },
+    },
+  ],
+  edges: [{ from: "fetch-lead", to: "email-gen" }],
+};
+
 export const POLARITY_WELCOME_DAG: DAG = {
   nodes: [
     {
