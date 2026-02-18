@@ -3,10 +3,11 @@ export async function main(
   emailContent: string,
   context: {
     orgId: string;
-  }
+  },
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.REPLY_QUALIFICATION_URL;
-  const apiKey = Bun.env.REPLY_QUALIFICATION_API_KEY;
+  const baseUrl = serviceEnvs?.["REPLY_QUALIFICATION_URL"] ?? Bun.env.REPLY_QUALIFICATION_URL;
+  const apiKey = serviceEnvs?.["REPLY_QUALIFICATION_API_KEY"] ?? Bun.env.REPLY_QUALIFICATION_API_KEY;
   if (!baseUrl) throw new Error("REPLY_QUALIFICATION_URL is not set");
   if (!apiKey) throw new Error("REPLY_QUALIFICATION_API_KEY is not set");
 

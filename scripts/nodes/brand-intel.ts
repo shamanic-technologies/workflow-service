@@ -4,10 +4,11 @@ export async function main(
   context: {
     orgId: string;
     brandId: string;
-  }
+  },
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.BRAND_SERVICE_URL;
-  const apiKey = Bun.env.BRAND_SERVICE_API_KEY;
+  const baseUrl = serviceEnvs?.BRAND_SERVICE_URL ?? Bun.env.BRAND_SERVICE_URL;
+  const apiKey = serviceEnvs?.BRAND_SERVICE_API_KEY ?? Bun.env.BRAND_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("BRAND_SERVICE_URL is not set");
   if (!apiKey) throw new Error("BRAND_SERVICE_API_KEY is not set");
 

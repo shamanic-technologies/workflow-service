@@ -4,9 +4,10 @@ export async function main(
   clerkOrgId?: string,
   clerkUserId?: string,
   eventType?: string,
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
-  const apiKey = Bun.env.TRANSACTIONAL_EMAIL_SERVICE_API_KEY;
+  const baseUrl = serviceEnvs?.["TRANSACTIONAL_EMAIL_SERVICE_URL"] ?? Bun.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
+  const apiKey = serviceEnvs?.["TRANSACTIONAL_EMAIL_SERVICE_API_KEY"] ?? Bun.env.TRANSACTIONAL_EMAIL_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("TRANSACTIONAL_EMAIL_SERVICE_URL is not set");
   if (!apiKey) throw new Error("TRANSACTIONAL_EMAIL_SERVICE_API_KEY is not set");
 

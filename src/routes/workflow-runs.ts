@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
+import { collectServiceEnvs } from "../lib/service-envs.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 
 const router = Router();
@@ -56,7 +57,7 @@ router.post(
       const client = getWindmillClient();
       if (client) {
         try {
-          const flowInputs = { ...body.inputs, appId: body.appId };
+          const flowInputs = { ...body.inputs, appId: body.appId, serviceEnvs: collectServiceEnvs() };
           windmillJobId = await client.runFlow(
             workflow.windmillFlowPath,
             flowInputs
@@ -130,7 +131,7 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
     if (client) {
       try {
         const appId = body.appId ?? workflow.appId;
-        const flowInputs = { ...body.inputs, ...(appId ? { appId } : {}) };
+        const flowInputs = { ...body.inputs, ...(appId ? { appId } : {}), serviceEnvs: collectServiceEnvs() };
         windmillJobId = await client.runFlow(
           workflow.windmillFlowPath,
           flowInputs

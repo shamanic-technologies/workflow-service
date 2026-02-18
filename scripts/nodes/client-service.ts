@@ -5,10 +5,11 @@ export async function main(
   contactData?: Record<string, unknown>,
   context?: {
     orgId?: string;
-  }
+  },
+  serviceEnvs?: Record<string, string>,
 ) {
-  const baseUrl = Bun.env.CLIENT_SERVICE_URL;
-  const apiKey = Bun.env.CLIENT_SERVICE_API_KEY;
+  const baseUrl = serviceEnvs?.CLIENT_SERVICE_URL ?? Bun.env.CLIENT_SERVICE_URL;
+  const apiKey = serviceEnvs?.CLIENT_SERVICE_API_KEY ?? Bun.env.CLIENT_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("CLIENT_SERVICE_URL is not set");
   if (!apiKey) throw new Error("CLIENT_SERVICE_API_KEY is not set");
   const headers: Record<string, string> = {
