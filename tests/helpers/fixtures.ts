@@ -341,6 +341,44 @@ export const DAG_WITH_FLOW_INPUT_REFS: DAG = {
   edges: [],
 };
 
+export const DAG_WITH_CONFIG_RETRIES: DAG = {
+  nodes: [
+    {
+      id: "start-run",
+      type: "http.call",
+      config: { service: "campaign", method: "POST", path: "/internal/start-run", retries: 0 },
+      inputMapping: {
+        "body.campaignId": "$ref:flow_input.campaignId",
+        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+      },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_DOT_NOTATION_AND_STATIC_BASE: DAG = {
+  nodes: [
+    {
+      id: "email-send",
+      type: "http.call",
+      config: {
+        service: "email-gateway",
+        method: "POST",
+        path: "/send",
+        retries: 0,
+        body: { tag: "cold-email", type: "broadcast", metadata: { source: "campaign-service" } },
+      },
+      inputMapping: {
+        "body.to": "$ref:start-run.output.lead.data.email",
+        "body.appId": "$ref:start-run.output.appId",
+        "body.subject": "$ref:email-generate.output.subject",
+        "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
+      },
+    },
+  ],
+  edges: [],
+};
+
 export const POLARITY_WELCOME_DAG: DAG = {
   nodes: [
     {
