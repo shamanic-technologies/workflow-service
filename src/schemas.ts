@@ -27,9 +27,14 @@ export const DAGNodeSchema = z
       "or legacy named types like stripe.createProduct, client.createUser, transactional-email.send."
     ),
     config: z.record(z.unknown()).optional().describe(
-      "Static parameters passed to the node. For http.call: { service, method, path, body?, query? }. " +
+      "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. " +
       "For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. " +
-      "Each key becomes a direct parameter of the underlying script."
+      "Each key becomes a direct parameter of the underlying script. " +
+      "Special config keys (stripped before passing to script): " +
+      "retries (number) — override default retry count; " +
+      "validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; " +
+      "stopAfterIf (string) — JS expression evaluated after step completes using 'result' variable, " +
+      "stops the flow gracefully (no onError) when true. Example: \"result.found == false\"."
     ),
     inputMapping: z.record(z.string()).optional().describe(
       "Dynamic input references using $ref syntax. " +
@@ -60,9 +65,13 @@ export const DAGSchema = z
     nodes: z.array(DAGNodeSchema).min(1).describe("The steps of the workflow. Must contain at least one node."),
     edges: z.array(DAGEdgeSchema).describe("Execution order between nodes. Empty array for single-node workflows."),
     onError: z.string().optional().describe(
-      "Node ID of an error handler that runs when any node in the DAG fails. " +
-      "The handler receives error context (failedNodeId, errorMessage) and can access outputs " +
-      "from previously completed nodes via $ref syntax. Use this to call end-run with success: false immediately on failure."
+      "Node ID of an error handler that runs when any node in the DAG fails (including validateResponse failures). " +
+      "Auto-injected parameters (available as script params, no inputMapping needed): " +
+      "failedNodeId (string) — the module ID of the step that failed; " +
+      "errorMessage (string) — the error message text. " +
+      "Can also access outputs from previously completed nodes via $ref syntax. " +
+      "Use this to call end-run with success: false. " +
+      "Tip: check errorMessage to distinguish expected stops (e.g. 'validation failed: expected found=true') from real errors."
     ),
   })
   .openapi("DAG");

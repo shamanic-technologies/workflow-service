@@ -14,6 +14,7 @@ import {
   DAG_WITH_FLOW_INPUT_REFS,
   DAG_WITH_CONFIG_RETRIES,
   DAG_WITH_DOT_NOTATION_AND_STATIC_BASE,
+  DAG_WITH_STOP_AFTER_IF,
 } from "../helpers/fixtures.js";
 
 describe("dagToOpenFlow", () => {
@@ -390,6 +391,39 @@ describe("dagToOpenFlow", () => {
     expect(result.value.failure_module).toBeDefined();
     expect(result.value.failure_module!.id).toBe("end_run");
     expect(result.value.failure_module!.id).not.toContain("-");
+  });
+
+  it("adds stop_after_if to module when config.stopAfterIf is set", () => {
+    const result = dagToOpenFlow(DAG_WITH_STOP_AFTER_IF, "Graceful Stop");
+
+    const fetchMod = result.value.modules.find((m) => m.id === "fetch_lead");
+    expect(fetchMod).toBeDefined();
+    expect(fetchMod!.stop_after_if).toEqual({
+      expr: "result.found == false",
+      skip_if_stopped: true,
+    });
+  });
+
+  it("strips stopAfterIf from input_transforms so it is not passed to the script", () => {
+    const result = dagToOpenFlow(DAG_WITH_STOP_AFTER_IF, "Strip StopAfterIf");
+
+    const fetchMod = result.value.modules.find((m) => m.id === "fetch_lead");
+    if (fetchMod!.value.type === "script") {
+      const transforms = fetchMod!.value.input_transforms as Record<
+        string,
+        { type: string; value?: unknown; expr?: string }
+      >;
+      expect(transforms.stopAfterIf).toBeUndefined();
+      // Other config fields should still be present
+      expect(transforms.service).toEqual({ type: "static", value: "lead" });
+    }
+  });
+
+  it("does not add stop_after_if when config.stopAfterIf is absent", () => {
+    const result = dagToOpenFlow(DAG_WITH_HTTP_CALL, "No Stop");
+
+    const mod = result.value.modules[0];
+    expect(mod.stop_after_if).toBeUndefined();
   });
 
   it("merges dot-notation keys with static config body and handles nested metadata", () => {
