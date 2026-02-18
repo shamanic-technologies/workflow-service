@@ -176,14 +176,20 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     throw new Error(`No script path for node type: ${node.type}`);
   }
 
-  const inputTransforms = buildInputTransforms(node.config, node.inputMapping);
+  // Extract retries from top-level or config, strip non-script fields from config
+  const retries = node.retries
+    ?? (typeof node.config?.retries === "number" ? node.config.retries : 3);
+  const { retries: _r, ...scriptConfig } = node.config ?? {};
+
+  const inputTransforms = buildInputTransforms(
+    Object.keys(scriptConfig).length > 0 ? scriptConfig : undefined,
+    node.inputMapping,
+  );
 
   // Auto-inject appId from flow_input unless the node already maps it explicitly
   if (!inputTransforms.appId) {
     inputTransforms.appId = { type: "javascript", expr: "flow_input.appId" };
   }
-
-  const retries = node.retries ?? 3;
   const mod: FlowModule = {
     id: node.id,
     summary: `${node.type}: ${node.id}`,
