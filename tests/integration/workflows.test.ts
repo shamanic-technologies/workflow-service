@@ -185,21 +185,27 @@ describe("GET /workflows", () => {
   });
 });
 
+const DEPLOY_ITEM = {
+  category: "sales" as const,
+  channel: "email" as const,
+  audienceType: "cold-outreach" as const,
+};
+
 describe("PUT /workflows/deploy", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
   });
 
-  it("creates new workflows scoped by appId", async () => {
+  it("creates a workflow with auto-generated name and signatureName", async () => {
     const res = await request
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
           {
-            name: "newsletter-subscribe",
-            description: "Newsletter signup",
+            ...DEPLOY_ITEM,
+            description: "Cold email outreach",
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
         ],
@@ -207,21 +213,35 @@ describe("PUT /workflows/deploy", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.workflows).toHaveLength(1);
-    expect(res.body.workflows[0].name).toBe("newsletter-subscribe");
-    expect(res.body.workflows[0].action).toBe("created");
-    expect(res.body.workflows[0].id).toBeDefined();
+    const wf = res.body.workflows[0];
+    expect(wf.action).toBe("created");
+    expect(wf.id).toBeDefined();
+    expect(wf.category).toBe("sales");
+    expect(wf.channel).toBe("email");
+    expect(wf.audienceType).toBe("cold-outreach");
+    expect(wf.signature).toMatch(/^[a-f0-9]{64}$/);
+    expect(wf.signatureName).toBeTruthy();
+    expect(wf.name).toBe(`sales-email-cold-outreach-${wf.signatureName}`);
   });
 
-  it("updates existing workflows (idempotent)", async () => {
+  it("updates existing workflow when same DAG is redeployed (idempotent)", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+
     mockDbRows.push({
       id: "wf-existing",
-      appId: "kevinlourd-com",
-      orgId: "kevinlourd-com",
-      name: "newsletter-subscribe",
+      appId: "mcpfactory",
+      orgId: "mcpfactory",
+      name: "sales-email-cold-outreach-sequoia",
+      signatureName: "sequoia",
+      signature: sig,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
       description: "Old description",
       status: "active",
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-      windmillFlowPath: "f/workflows/kevinlourd-com/newsletter_subscribe",
+      windmillFlowPath: "f/workflows/mcpfactory/sales_email_cold_outreach_sequoia",
       windmillWorkspace: "prod",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -231,10 +251,10 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
           {
-            name: "newsletter-subscribe",
+            ...DEPLOY_ITEM,
             description: "Updated description",
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
@@ -242,77 +262,65 @@ describe("PUT /workflows/deploy", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.workflows).toHaveLength(1);
     expect(res.body.workflows[0].action).toBe("updated");
+    expect(res.body.workflows[0].signatureName).toBe("sequoia");
   });
 
-  it("accepts displayName and category on deploy", async () => {
+  it("same DAG produces same signature across deploys", async () => {
+    const payload = {
+      appId: "mcpfactory",
+      workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
+    };
+
+    const res1 = await request.put("/workflows/deploy").set(AUTH).send(payload);
+    const res2 = await request.put("/workflows/deploy").set(AUTH).send(payload);
+
+    expect(res1.body.workflows[0].signature).toBe(res2.body.workflows[0].signature);
+  });
+
+  it("different DAG produces different signature", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig1 = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+    const sig2 = computeDAGSignature(VALID_LINEAR_DAG);
+    expect(sig1).not.toBe(sig2);
+
+    // Deploy first DAG
+    const res1 = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
+      });
+    expect(res1.body.workflows[0].signature).toBe(sig1);
+
+    // Deploy second DAG in fresh state (mock DB doesn't filter by column)
+    mockDbRows.length = 0;
+    const res2 = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        workflows: [{ ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG }],
+      });
+    expect(res2.body.workflows[0].signature).toBe(sig2);
+  });
+
+  it("rejects missing dimensions", async () => {
     const res = await request
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
           {
-            name: "sales-cold-email-v1",
-            displayName: "Sales Cold Email Outreach",
-            category: "sales",
-            description: "3-email sequence",
+            // Missing category, channel, audienceType
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
         ],
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body.workflows).toHaveLength(1);
-    expect(res.body.workflows[0].action).toBe("created");
-    expect(res.body.workflows[0].displayName).toBe("Sales Cold Email Outreach");
-    expect(res.body.workflows[0].category).toBe("sales");
-  });
-
-  it("accepts all three dimension enums on deploy", async () => {
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "full-metadata-flow",
-            displayName: "Full Metadata",
-            category: "sales",
-            channel: "email",
-            audienceType: "cold-outreach",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows[0].category).toBe("sales");
-    expect(res.body.workflows[0].channel).toBe("email");
-    expect(res.body.workflows[0].audienceType).toBe("cold-outreach");
-  });
-
-  it("returns null for all dimension fields when not provided", async () => {
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "basic-flow",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows[0].displayName).toBeNull();
-    expect(res.body.workflows[0].category).toBeNull();
-    expect(res.body.workflows[0].channel).toBeNull();
-    expect(res.body.workflows[0].audienceType).toBeNull();
+    expect(res.status).toBe(400);
   });
 
   it("rejects invalid channel value", async () => {
@@ -320,11 +328,12 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
           {
-            name: "bad-channel-flow",
+            category: "sales",
             channel: "smoke-signal",
+            audienceType: "cold-outreach",
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
         ],
@@ -338,10 +347,11 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
           {
-            name: "bad-audience-flow",
+            category: "sales",
+            channel: "email",
             audienceType: "lukewarm",
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
@@ -356,197 +366,18 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
           {
-            name: "bad-category-flow",
             category: "invalid-category",
+            channel: "email",
+            audienceType: "cold-outreach",
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
         ],
       });
 
     expect(res.status).toBe(400);
-  });
-
-  it("rejects non-slug name format", async () => {
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "My Flow With Spaces",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects name starting with hyphen", async () => {
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "-leading-hyphen",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("preserves displayName/category on update", async () => {
-    mockDbRows.push({
-      id: "wf-existing",
-      appId: "kevinlourd-com",
-      orgId: "kevinlourd-com",
-      name: "newsletter-subscribe",
-      displayName: "Newsletter Signup",
-      category: "sales",
-      description: "Old description",
-      status: "active",
-      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-      windmillFlowPath: "f/workflows/kevinlourd-com/newsletter_subscribe",
-      windmillWorkspace: "prod",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "newsletter-subscribe",
-            description: "Updated description",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows[0].action).toBe("updated");
-    expect(res.body.workflows[0].displayName).toBe("Newsletter Signup");
-    expect(res.body.workflows[0].category).toBe("sales");
-  });
-
-  it("computes and returns signature on deploy", async () => {
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "sig-test",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows[0].signature).toMatch(/^[a-f0-9]{64}$/);
-    expect(res.body.workflows[0].signatureName).toBeNull();
-  });
-
-  it("stores signatureName when provided", async () => {
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "sig-name-test",
-            signatureName: "Sequoia",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows[0].signatureName).toBe("Sequoia");
-    expect(res.body.workflows[0].signature).toMatch(/^[a-f0-9]{64}$/);
-  });
-
-  it("same DAG produces same signature across deploys", async () => {
-    const payload = {
-      appId: "kevinlourd-com",
-      workflows: [
-        {
-          name: "determinism-test",
-          dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-        },
-      ],
-    };
-
-    const res1 = await request.put("/workflows/deploy").set(AUTH).send(payload);
-    const res2 = await request.put("/workflows/deploy").set(AUTH).send(payload);
-
-    expect(res1.body.workflows[0].signature).toBe(res2.body.workflows[0].signature);
-  });
-
-  it("different DAG produces different signature", async () => {
-    const res1 = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [{ name: "dag-a", dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
-      });
-
-    const res2 = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [{ name: "dag-b", dag: VALID_LINEAR_DAG }],
-      });
-
-    expect(res1.body.workflows[0].signature).not.toBe(res2.body.workflows[0].signature);
-  });
-
-  it("preserves signatureName on update when not re-provided", async () => {
-    mockDbRows.push({
-      id: "wf-sig",
-      appId: "kevinlourd-com",
-      orgId: "kevinlourd-com",
-      name: "preserve-sig-name",
-      signatureName: "Phoenix",
-      signature: "abc123",
-      status: "active",
-      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-      windmillFlowPath: "f/workflows/kevinlourd-com/preserve_sig_name",
-      windmillWorkspace: "prod",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    const res = await request
-      .put("/workflows/deploy")
-      .set(AUTH)
-      .send({
-        appId: "kevinlourd-com",
-        workflows: [
-          {
-            name: "preserve-sig-name",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows[0].signatureName).toBe("Phoenix");
   });
 
   it("rejects if any DAG is invalid (no partial writes)", async () => {
@@ -554,23 +385,22 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "kevinlourd-com",
+        appId: "mcpfactory",
         workflows: [
-          { name: "good-flow", dag: VALID_LINEAR_DAG },
-          { name: "bad-flow", dag: DAG_WITH_UNKNOWN_TYPE },
+          { ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG },
+          { ...DEPLOY_ITEM, dag: DAG_WITH_UNKNOWN_TYPE },
         ],
       });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Invalid DAGs");
     expect(res.body.details).toHaveLength(1);
-    expect(res.body.details[0].name).toBe("bad-flow");
   });
 
   it("requires authentication", async () => {
     const res = await request.put("/workflows/deploy").send({
-      appId: "kevinlourd-com",
-      workflows: [{ name: "test", dag: VALID_LINEAR_DAG }],
+      appId: "mcpfactory",
+      workflows: [{ ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG }],
     });
 
     expect(res.status).toBe(401);
@@ -580,7 +410,7 @@ describe("PUT /workflows/deploy", () => {
     const res = await request
       .put("/workflows/deploy")
       .set(AUTH)
-      .send({ appId: "kevinlourd-com" }); // missing workflows
+      .send({ appId: "mcpfactory" }); // missing workflows
 
     expect(res.status).toBe(400);
   });
