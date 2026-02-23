@@ -392,6 +392,26 @@ describe("PUT /workflows/deploy", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects removed enum values (utility, api, internal)", async () => {
+    const cases = [
+      { category: "utility", channel: "email", audienceType: "cold-outreach" },
+      { category: "sales", channel: "api", audienceType: "cold-outreach" },
+      { category: "sales", channel: "email", audienceType: "internal" },
+    ];
+
+    for (const dims of cases) {
+      const res = await request
+        .put("/workflows/deploy")
+        .set(AUTH)
+        .send({
+          appId: "mcpfactory",
+          workflows: [{ ...dims, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
+        });
+
+      expect(res.status).toBe(400);
+    }
+  });
+
   it("rejects if any DAG is invalid (no partial writes)", async () => {
     const res = await request
       .put("/workflows/deploy")

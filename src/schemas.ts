@@ -90,17 +90,17 @@ export const DAGSchema = z
 // --- Workflow enums ---
 
 export const WorkflowCategorySchema = z
-  .enum(["sales", "pr", "utility"])
+  .enum(["sales", "pr"])
   .describe("Workflow category.")
   .openapi("WorkflowCategory");
 
 export const WorkflowChannelSchema = z
-  .enum(["email", "api"])
+  .enum(["email"])
   .describe("Workflow distribution channel.")
   .openapi("WorkflowChannel");
 
 export const WorkflowAudienceTypeSchema = z
-  .enum(["cold-outreach", "internal"])
+  .enum(["cold-outreach"])
   .describe("Workflow audience type.")
   .openapi("WorkflowAudienceType");
 
