@@ -83,6 +83,9 @@ describe("POST /workflows", () => {
       .send({
         orgId: "org-1",
         name: "Test Flow",
+        category: "sales",
+        channel: "email",
+        audienceType: "cold-outreach",
         dag: VALID_LINEAR_DAG,
       });
 
@@ -90,6 +93,11 @@ describe("POST /workflows", () => {
     expect(res.body.name).toBe("Test Flow");
     expect(res.body.orgId).toBe("org-1");
     expect(res.body.status).toBe("active");
+    expect(res.body.category).toBe("sales");
+    expect(res.body.channel).toBe("email");
+    expect(res.body.audienceType).toBe("cold-outreach");
+    expect(res.body.signature).toMatch(/^[a-f0-9]{64}$/);
+    expect(res.body.signatureName).toBeTruthy();
     expect(res.body.windmillFlowPath).toContain("f/workflows/org-1/");
   });
 
@@ -100,6 +108,9 @@ describe("POST /workflows", () => {
       .send({
         orgId: "org-1",
         name: "Bad Flow",
+        category: "sales",
+        channel: "email",
+        audienceType: "cold-outreach",
         dag: DAG_WITH_UNKNOWN_TYPE,
       });
 
@@ -160,14 +171,18 @@ describe("GET /workflows", () => {
     expect(res.body.workflows).toBeDefined();
   });
 
-  it("returns displayName and category in response", async () => {
+  it("returns dimensions in response", async () => {
     mockDbRows.push({
       id: "wf-1",
       orgId: "org-1",
       appId: "my-app",
-      name: "sales-flow",
+      name: "sales-email-cold-outreach-sequoia",
       displayName: "Sales Flow",
       category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      signature: "abc123",
+      signatureName: "sequoia",
       status: "active",
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
@@ -180,8 +195,9 @@ describe("GET /workflows", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.workflows[0].displayName).toBe("Sales Flow");
     expect(res.body.workflows[0].category).toBe("sales");
+    expect(res.body.workflows[0].channel).toBe("email");
+    expect(res.body.workflows[0].audienceType).toBe("cold-outreach");
   });
 });
 
