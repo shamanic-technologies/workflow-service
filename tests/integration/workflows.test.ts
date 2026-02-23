@@ -81,6 +81,7 @@ describe("POST /workflows", () => {
       .post("/workflows")
       .set(AUTH)
       .send({
+        appId: "test-app",
         orgId: "org-1",
         name: "Test Flow",
         category: "sales",
@@ -91,6 +92,7 @@ describe("POST /workflows", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.name).toBe("Test Flow");
+    expect(res.body.appId).toBe("test-app");
     expect(res.body.orgId).toBe("org-1");
     expect(res.body.status).toBe("active");
     expect(res.body.category).toBe("sales");
@@ -106,6 +108,7 @@ describe("POST /workflows", () => {
       .post("/workflows")
       .set(AUTH)
       .send({
+        appId: "test-app",
         orgId: "org-1",
         name: "Bad Flow",
         category: "sales",

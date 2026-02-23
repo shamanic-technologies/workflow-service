@@ -1,0 +1,1 @@
+ALTER TABLE "workflows" ALTER COLUMN "app_id" SET NOT NULL;

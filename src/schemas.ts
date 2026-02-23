@@ -108,11 +108,12 @@ export const WorkflowAudienceTypeSchema = z
 
 export const CreateWorkflowSchema = z
   .object({
+    appId: z.string().min(1).describe("Application identifier. Workflows are scoped to appId."),
     orgId: z.string().min(1).describe("Organization ID that owns this workflow."),
     brandId: z.string().optional().describe("Optional brand ID for scoping."),
     campaignId: z.string().optional().describe("Optional campaign ID for scoping."),
     subrequestId: z.string().optional().describe("Optional subrequest ID for cost tracking."),
-    name: z.string().min(1).describe("Workflow name. Must be unique within the orgId. Used to execute by name later."),
+    name: z.string().min(1).describe("Workflow name. Must be unique within the appId. Used to execute by name later."),
     description: z.string().optional().describe("Human-readable description of what this workflow does."),
     category: WorkflowCategorySchema.describe("Workflow category."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
@@ -132,7 +133,7 @@ export const UpdateWorkflowSchema = z
 export const WorkflowResponseSchema = z
   .object({
     id: z.string().uuid().describe("Workflow UUID. Not needed for execution — use name + appId instead."),
-    appId: z.string().nullable().describe("App ID (set via deploy endpoint)."),
+    appId: z.string().describe("Application identifier."),
     orgId: z.string().describe("Organization ID."),
     brandId: z.string().nullable(),
     campaignId: z.string().nullable(),

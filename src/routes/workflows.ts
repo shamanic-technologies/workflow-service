@@ -72,7 +72,7 @@ router.post("/workflows", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(
         and(
-          eq(workflows.orgId, body.orgId),
+          eq(workflows.appId, body.appId),
           rawSql`${workflows.status} != 'deleted'`
         )
       );
@@ -83,6 +83,7 @@ router.post("/workflows", requireApiKey, async (req, res) => {
     const [workflow] = await db
       .insert(workflows)
       .values({
+        appId: body.appId,
         orgId: body.orgId,
         brandId: body.brandId,
         campaignId: body.campaignId,
@@ -193,9 +194,9 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         results.push({
           id: updated.id,
           name: updated.name,
-          category: updated.category ?? wf.category,
-          channel: updated.channel ?? wf.channel,
-          audienceType: updated.audienceType ?? wf.audienceType,
+          category: updated.category,
+          channel: updated.channel,
+          audienceType: updated.audienceType,
           signature: updated.signature,
           signatureName: updated.signatureName,
           action: "updated",
@@ -246,9 +247,9 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         results.push({
           id: created.id,
           name: created.name,
-          category: created.category ?? wf.category,
-          channel: created.channel ?? wf.channel,
-          audienceType: created.audienceType ?? wf.audienceType,
+          category: created.category,
+          channel: created.channel,
+          audienceType: created.audienceType,
           signature: created.signature,
           signatureName: created.signatureName,
           action: "created",
