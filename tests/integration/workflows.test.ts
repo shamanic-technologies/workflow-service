@@ -28,10 +28,7 @@ vi.mock("../../src/db/index.js", () => ({
     select: () => ({
       from: () => ({
         where: (condition?: unknown) => {
-          // Return matching rows or all
-          return Promise.resolve(
-            mockDbRows.filter((r) => r.status !== "deleted")
-          );
+          return Promise.resolve(mockDbRows);
         },
       }),
     }),
@@ -94,7 +91,6 @@ describe("POST /workflows", () => {
     expect(res.body.name).toBe("Test Flow");
     expect(res.body.appId).toBe("test-app");
     expect(res.body.orgId).toBe("org-1");
-    expect(res.body.status).toBe("active");
     expect(res.body.category).toBe("sales");
     expect(res.body.channel).toBe("email");
     expect(res.body.audienceType).toBe("cold-outreach");
@@ -159,7 +155,6 @@ describe("GET /workflows", () => {
       id: "wf-1",
       orgId: "org-1",
       name: "Flow 1",
-      status: "active",
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -186,7 +181,6 @@ describe("GET /workflows", () => {
       audienceType: "cold-outreach",
       signature: "abc123",
       signatureName: "sequoia",
-      status: "active",
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -258,7 +252,6 @@ describe("PUT /workflows/deploy", () => {
       channel: "email",
       audienceType: "cold-outreach",
       description: "Old description",
-      status: "active",
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
       windmillFlowPath: "f/workflows/mcpfactory/sales_email_cold_outreach_sequoia",
       windmillWorkspace: "prod",
@@ -445,7 +438,6 @@ describe("POST /workflows/:id/validate", () => {
       id: "wf-1",
       orgId: "org-1",
       name: "Flow 1",
-      status: "active",
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
       updatedAt: new Date(),

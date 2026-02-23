@@ -149,7 +149,6 @@ export const WorkflowResponseSchema = z
     dag: z.unknown().describe("The DAG definition as submitted."),
     windmillFlowPath: z.string().nullable().describe("Internal Windmill flow path (managed automatically)."),
     windmillWorkspace: z.string().describe("Windmill workspace (managed automatically)."),
-    status: z.string().describe("Workflow status: active or deleted."),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -324,7 +323,6 @@ registry.registerPath({
       category: WorkflowCategorySchema.optional(),
       channel: WorkflowChannelSchema.optional(),
       audienceType: WorkflowAudienceTypeSchema.optional(),
-      status: z.string().optional(),
     }),
   },
   responses: {
@@ -388,7 +386,7 @@ registry.registerPath({
 registry.registerPath({
   method: "delete",
   path: "/workflows/{id}",
-  summary: "Delete a workflow (soft delete)",
+  summary: "Delete a workflow",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, sql as rawSql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
@@ -70,12 +70,7 @@ router.post("/workflows", requireApiKey, async (req, res) => {
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
       .from(workflows)
-      .where(
-        and(
-          eq(workflows.appId, body.appId),
-          rawSql`${workflows.status} != 'deleted'`
-        )
-      );
+      .where(eq(workflows.appId, body.appId));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(signature, usedNames);
 
@@ -97,7 +92,6 @@ router.post("/workflows", requireApiKey, async (req, res) => {
         signatureName,
         dag: body.dag,
         windmillFlowPath: flowPath,
-        status: "active",
       })
       .returning();
 
@@ -134,12 +128,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
       .from(workflows)
-      .where(
-        and(
-          eq(workflows.appId, body.appId),
-          rawSql`${workflows.status} != 'deleted'`
-        )
-      );
+      .where(eq(workflows.appId, body.appId));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
     const results: { id: string; name: string; category: string; channel: string; audienceType: string; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
@@ -156,7 +145,6 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           and(
             eq(workflows.appId, body.appId),
             eq(workflows.signature, signature),
-            rawSql`${workflows.status} != 'deleted'`
           )
         );
 
@@ -240,7 +228,6 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
             signatureName,
             dag: wf.dag,
             windmillFlowPath: flowPath,
-            status: "active",
           })
           .returning();
 
@@ -271,7 +258,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
 // GET /workflows — List workflows
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, appId, brandId, campaignId, category, channel, audienceType, status } = req.query;
+    const { orgId, appId, brandId, campaignId, category, channel, audienceType } = req.query;
 
     if (!orgId || typeof orgId !== "string") {
       res.status(400).json({ error: "orgId query parameter is required" });
@@ -300,12 +287,6 @@ router.get("/workflows", requireApiKey, async (req, res) => {
     if (audienceType && typeof audienceType === "string") {
       conditions.push(eq(workflows.audienceType, audienceType));
     }
-    if (status && typeof status === "string") {
-      conditions.push(eq(workflows.status, status));
-    } else {
-      // Exclude deleted by default
-      conditions.push(rawSql`${workflows.status} != 'deleted'`);
-    }
 
     const results = await db
       .select()
@@ -327,7 +308,7 @@ router.get("/workflows/:id", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(eq(workflows.id, req.params.id));
 
-    if (!workflow || workflow.status === "deleted") {
+    if (!workflow) {
       res.status(404).json({ error: "Workflow not found" });
       return;
     }
@@ -349,7 +330,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(eq(workflows.id, req.params.id));
 
-    if (!existing || existing.status === "deleted") {
+    if (!existing) {
       res.status(404).json({ error: "Workflow not found" });
       return;
     }
@@ -411,7 +392,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
   }
 });
 
-// DELETE /workflows/:id — Soft delete
+// DELETE /workflows/:id — Hard delete
 router.delete("/workflows/:id", requireApiKey, async (req, res) => {
   try {
     const [existing] = await db
@@ -419,7 +400,7 @@ router.delete("/workflows/:id", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(eq(workflows.id, req.params.id));
 
-    if (!existing || existing.status === "deleted") {
+    if (!existing) {
       res.status(404).json({ error: "Workflow not found" });
       return;
     }
@@ -440,8 +421,7 @@ router.delete("/workflows/:id", requireApiKey, async (req, res) => {
     }
 
     await db
-      .update(workflows)
-      .set({ status: "deleted", updatedAt: new Date() })
+      .delete(workflows)
       .where(eq(workflows.id, req.params.id));
 
     res.json({ message: "Workflow deleted" });
@@ -459,7 +439,7 @@ router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(eq(workflows.id, req.params.id));
 
-    if (!workflow || workflow.status === "deleted") {
+    if (!workflow) {
       res.status(404).json({ error: "Workflow not found" });
       return;
     }
