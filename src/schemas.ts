@@ -90,17 +90,17 @@ export const DAGSchema = z
 // --- Workflow enums ---
 
 export const WorkflowCategorySchema = z
-  .enum(["sales", "pr"])
+  .enum(["sales", "pr", "utility"])
   .describe("Workflow category.")
   .openapi("WorkflowCategory");
 
 export const WorkflowChannelSchema = z
-  .enum(["email"])
+  .enum(["email", "api"])
   .describe("Workflow distribution channel.")
   .openapi("WorkflowChannel");
 
 export const WorkflowAudienceTypeSchema = z
-  .enum(["cold-outreach"])
+  .enum(["cold-outreach", "internal"])
   .describe("Workflow audience type.")
   .openapi("WorkflowAudienceType");
 
@@ -114,6 +114,9 @@ export const CreateWorkflowSchema = z
     subrequestId: z.string().optional().describe("Optional subrequest ID for cost tracking."),
     name: z.string().min(1).describe("Workflow name. Must be unique within the orgId. Used to execute by name later."),
     description: z.string().optional().describe("Human-readable description of what this workflow does."),
+    category: WorkflowCategorySchema.describe("Workflow category."),
+    channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
+    audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
     dag: DAGSchema,
   })
   .openapi("CreateWorkflowRequest");
@@ -137,9 +140,9 @@ export const WorkflowResponseSchema = z
     name: z.string().describe("Workflow name. Use this with appId to execute via /workflows/by-name/{name}/execute."),
     displayName: z.string().nullable().describe("Human-readable display name. Falls back to name if not set."),
     description: z.string().nullable(),
-    category: WorkflowCategorySchema.nullable().describe("Workflow category (sales, pr)."),
-    channel: WorkflowChannelSchema.nullable().describe("Workflow distribution channel (email)."),
-    audienceType: WorkflowAudienceTypeSchema.nullable().describe("Workflow audience type (cold-outreach)."),
+    category: WorkflowCategorySchema.describe("Workflow category."),
+    channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
+    audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
     signatureName: z.string().describe("Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."),
     dag: z.unknown().describe("The DAG definition as submitted."),

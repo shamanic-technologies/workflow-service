@@ -42,28 +42,28 @@
       },
       "WorkflowCategory": {
         "type": "string",
-        "nullable": true,
         "enum": [
           "sales",
-          "pr"
+          "pr",
+          "utility"
         ],
-        "description": "Workflow category (sales, pr)."
+        "description": "Workflow category."
       },
       "WorkflowChannel": {
         "type": "string",
-        "nullable": true,
         "enum": [
-          "email"
+          "email",
+          "api"
         ],
-        "description": "Workflow distribution channel (email)."
+        "description": "Workflow distribution channel."
       },
       "WorkflowAudienceType": {
         "type": "string",
-        "nullable": true,
         "enum": [
-          "cold-outreach"
+          "cold-outreach",
+          "internal"
         ],
-        "description": "Workflow audience type (cold-outreach)."
+        "description": "Workflow audience type."
       },
       "WorkflowResponse": {
         "type": "object",
@@ -302,6 +302,15 @@
             "type": "string",
             "description": "Human-readable description of what this workflow does."
           },
+          "category": {
+            "$ref": "#/components/schemas/WorkflowCategory"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/WorkflowChannel"
+          },
+          "audienceType": {
+            "$ref": "#/components/schemas/WorkflowAudienceType"
+          },
           "dag": {
             "$ref": "#/components/schemas/DAG"
           }
@@ -309,6 +318,9 @@
         "required": [
           "orgId",
           "name",
+          "category",
+          "channel",
+          "audienceType",
           "dag"
         ]
       },
@@ -498,34 +510,13 @@
             "description": "Auto-generated workflow name: {category}-{channel}-{audienceType}-{signatureName}."
           },
           "category": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowCategory"
-              },
-              {
-                "description": "Workflow category."
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowCategory"
           },
           "channel": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowChannel"
-              },
-              {
-                "description": "Workflow distribution channel."
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowChannel"
           },
           "audienceType": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowAudienceType"
-              },
-              {
-                "description": "Workflow audience type."
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowAudienceType"
           },
           "signature": {
             "type": "string",
@@ -779,14 +770,7 @@
           },
           {
             "schema": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/WorkflowCategory"
-                },
-                {
-                  "description": "Workflow category."
-                }
-              ]
+              "$ref": "#/components/schemas/WorkflowCategory"
             },
             "required": false,
             "description": "Workflow category.",
@@ -795,14 +779,7 @@
           },
           {
             "schema": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/WorkflowChannel"
-                },
-                {
-                  "description": "Workflow distribution channel."
-                }
-              ]
+              "$ref": "#/components/schemas/WorkflowChannel"
             },
             "required": false,
             "description": "Workflow distribution channel.",
@@ -811,14 +788,7 @@
           },
           {
             "schema": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/WorkflowAudienceType"
-                },
-                {
-                  "description": "Workflow audience type."
-                }
-              ]
+              "$ref": "#/components/schemas/WorkflowAudienceType"
             },
             "required": false,
             "description": "Workflow audience type.",
