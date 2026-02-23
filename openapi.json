@@ -75,8 +75,7 @@
           },
           "appId": {
             "type": "string",
-            "nullable": true,
-            "description": "App ID (set via deploy endpoint)."
+            "description": "Application identifier."
           },
           "orgId": {
             "type": "string",
@@ -276,6 +275,11 @@
       "CreateWorkflowRequest": {
         "type": "object",
         "properties": {
+          "appId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Application identifier. Workflows are scoped to appId."
+          },
           "orgId": {
             "type": "string",
             "minLength": 1,
@@ -296,7 +300,7 @@
           "name": {
             "type": "string",
             "minLength": 1,
-            "description": "Workflow name. Must be unique within the orgId. Used to execute by name later."
+            "description": "Workflow name. Must be unique within the appId. Used to execute by name later."
           },
           "description": {
             "type": "string",
@@ -316,6 +320,7 @@
           }
         },
         "required": [
+          "appId",
           "orgId",
           "name",
           "category",
