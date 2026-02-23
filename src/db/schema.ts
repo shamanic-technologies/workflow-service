@@ -24,6 +24,8 @@ export const workflows = pgTable(
     category: text("category"),
     channel: text("channel"),
     audienceType: text("audience_type"),
+    signature: text("signature"),
+    signatureName: text("signature_name"),
     dag: jsonb("dag").notNull(),
     windmillFlowPath: text("windmill_flow_path"),
     windmillWorkspace: text("windmill_workspace").notNull().default("prod"),

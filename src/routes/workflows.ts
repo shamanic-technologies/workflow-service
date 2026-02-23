@@ -11,6 +11,7 @@ import {
   UpdateWorkflowSchema,
   DeployWorkflowsSchema,
 } from "../schemas.js";
+import { computeDAGSignature } from "../lib/dag-signature.js";
 
 const router = Router();
 
@@ -108,12 +109,13 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       return;
     }
 
-    const results: { id: string; name: string; displayName: string | null; category: string | null; channel: string | null; audienceType: string | null; action: "created" | "updated" }[] = [];
+    const results: { id: string; name: string; displayName: string | null; category: string | null; channel: string | null; audienceType: string | null; signature: string | null; signatureName: string | null; action: "created" | "updated" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
       const openFlow = dagToOpenFlow(dag, wf.name);
       const flowPath = generateFlowPath(body.appId, wf.name);
+      const signature = computeDAGSignature(wf.dag);
       const client = getWindmillClient();
 
       // Check if workflow already exists for this (appId, name)
@@ -151,13 +153,15 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
             category: wf.category ?? existing.category,
             channel: wf.channel ?? existing.channel,
             audienceType: wf.audienceType ?? existing.audienceType,
+            signature,
+            signatureName: wf.signatureName ?? existing.signatureName,
             dag: wf.dag,
             updatedAt: new Date(),
           })
           .where(eq(workflows.id, existing.id))
           .returning();
 
-        results.push({ id: updated.id, name: updated.name, displayName: updated.displayName, category: updated.category, channel: updated.channel, audienceType: updated.audienceType, action: "updated" });
+        results.push({ id: updated.id, name: updated.name, displayName: updated.displayName, category: updated.category, channel: updated.channel, audienceType: updated.audienceType, signature: updated.signature, signatureName: updated.signatureName, action: "updated" });
       } else {
         // Create new workflow
         if (client) {
@@ -185,13 +189,15 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
             category: wf.category ?? null,
             channel: wf.channel ?? null,
             audienceType: wf.audienceType ?? null,
+            signature,
+            signatureName: wf.signatureName ?? null,
             dag: wf.dag,
             windmillFlowPath: flowPath,
             status: "active",
           })
           .returning();
 
-        results.push({ id: created.id, name: created.name, displayName: created.displayName, category: created.category, channel: created.channel, audienceType: created.audienceType, action: "created" });
+        results.push({ id: created.id, name: created.name, displayName: created.displayName, category: created.category, channel: created.channel, audienceType: created.audienceType, signature: created.signature, signatureName: created.signatureName, action: "created" });
       }
     }
 

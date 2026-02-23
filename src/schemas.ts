@@ -140,6 +140,8 @@ export const WorkflowResponseSchema = z
     category: WorkflowCategorySchema.nullable().describe("Workflow category (sales, pr)."),
     channel: WorkflowChannelSchema.nullable().describe("Workflow distribution channel (email)."),
     audienceType: WorkflowAudienceTypeSchema.nullable().describe("Workflow audience type (cold-outreach)."),
+    signature: z.string().nullable().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
+    signatureName: z.string().nullable().describe("Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."),
     dag: z.unknown().describe("The DAG definition as submitted."),
     windmillFlowPath: z.string().nullable().describe("Internal Windmill flow path (managed automatically)."),
     windmillWorkspace: z.string().describe("Windmill workspace (managed automatically)."),
@@ -202,6 +204,7 @@ export const DeployWorkflowItemSchema = z
     category: WorkflowCategorySchema.optional().describe("Workflow category."),
     channel: WorkflowChannelSchema.optional().describe("Workflow distribution channel."),
     audienceType: WorkflowAudienceTypeSchema.optional().describe("Workflow audience type."),
+    signatureName: z.string().optional().describe("Human-readable name for this workflow variant (e.g. 'Sequoia'). Provided by the caller. The signature hash is computed server-side from the DAG."),
     dag: DAGSchema,
   })
   .openapi("DeployWorkflowItem");
@@ -224,6 +227,8 @@ export const DeployWorkflowResultSchema = z
     category: WorkflowCategorySchema.nullable(),
     channel: WorkflowChannelSchema.nullable(),
     audienceType: WorkflowAudienceTypeSchema.nullable(),
+    signature: z.string().nullable(),
+    signatureName: z.string().nullable(),
     action: z.enum(["created", "updated"]),
   })
   .openapi("DeployWorkflowResult");
