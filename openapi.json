@@ -44,24 +44,21 @@
         "type": "string",
         "enum": [
           "sales",
-          "pr",
-          "utility"
+          "pr"
         ],
         "description": "Workflow category."
       },
       "WorkflowChannel": {
         "type": "string",
         "enum": [
-          "email",
-          "api"
+          "email"
         ],
         "description": "Workflow distribution channel."
       },
       "WorkflowAudienceType": {
         "type": "string",
         "enum": [
-          "cold-outreach",
-          "internal"
+          "cold-outreach"
         ],
         "description": "Workflow audience type."
       },
