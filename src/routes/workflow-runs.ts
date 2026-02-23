@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, sql as rawSql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
@@ -34,7 +34,6 @@ router.post(
           and(
             eq(workflows.appId, body.appId),
             eq(workflows.name, req.params.name),
-            rawSql`${workflows.status} != 'deleted'`
           )
         );
 
@@ -113,7 +112,7 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(eq(workflows.id, req.params.id));
 
-    if (!workflow || workflow.status === "deleted") {
+    if (!workflow) {
       res.status(404).json({ error: "Workflow not found" });
       return;
     }

@@ -7,7 +7,6 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 export const workflows = pgTable(
   "workflows",
@@ -29,7 +28,6 @@ export const workflows = pgTable(
     dag: jsonb("dag").notNull(),
     windmillFlowPath: text("windmill_flow_path"),
     windmillWorkspace: text("windmill_workspace").notNull().default("prod"),
-    status: text("status").notNull().default("draft"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -37,16 +35,12 @@ export const workflows = pgTable(
     index("idx_workflows_app").on(table.appId),
     index("idx_workflows_org").on(table.orgId),
     index("idx_workflows_campaign").on(table.campaignId),
-    index("idx_workflows_status").on(table.status),
     uniqueIndex("idx_workflows_app_name_unique")
-      .on(table.appId, table.name)
-      .where(sql`status != 'deleted'`),
+      .on(table.appId, table.name),
     uniqueIndex("idx_workflows_app_signature_unique")
-      .on(table.appId, table.signature)
-      .where(sql`status != 'deleted'`),
+      .on(table.appId, table.signature),
     uniqueIndex("idx_workflows_app_signature_name_unique")
-      .on(table.appId, table.signatureName)
-      .where(sql`status != 'deleted'`),
+      .on(table.appId, table.signatureName),
   ]
 );
 

@@ -136,10 +136,6 @@
             "type": "string",
             "description": "Windmill workspace (managed automatically)."
           },
-          "status": {
-            "type": "string",
-            "description": "Workflow status: active or deleted."
-          },
           "createdAt": {
             "type": "string"
           },
@@ -164,7 +160,6 @@
           "signatureName",
           "windmillFlowPath",
           "windmillWorkspace",
-          "status",
           "createdAt",
           "updatedAt"
         ]
@@ -799,14 +794,6 @@
             "description": "Workflow audience type.",
             "name": "audienceType",
             "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "status",
-            "in": "query"
           }
         ],
         "responses": {
@@ -934,7 +921,7 @@
         }
       },
       "delete": {
-        "summary": "Delete a workflow (soft delete)",
+        "summary": "Delete a workflow",
         "tags": [
           "Workflows"
         ],
