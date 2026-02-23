@@ -41,6 +41,12 @@ export const workflows = pgTable(
     uniqueIndex("idx_workflows_app_name_unique")
       .on(table.appId, table.name)
       .where(sql`status != 'deleted'`),
+    uniqueIndex("idx_workflows_app_signature_unique")
+      .on(table.appId, table.signature)
+      .where(sql`status != 'deleted'`),
+    uniqueIndex("idx_workflows_app_signature_name_unique")
+      .on(table.appId, table.signatureName)
+      .where(sql`status != 'deleted'`),
   ]
 );
 

@@ -12,6 +12,7 @@ import {
   DeployWorkflowsSchema,
 } from "../schemas.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
+import { pickSignatureName } from "../lib/signature-words.js";
 
 const router = Router();
 
@@ -91,17 +92,17 @@ router.post("/workflows", requireApiKey, async (req, res) => {
   }
 });
 
-// PUT /workflows/deploy — Batch upsert workflows by (appId + name)
+// PUT /workflows/deploy — Batch upsert workflows by (appId + signature)
 router.put("/workflows/deploy", requireApiKey, async (req, res) => {
   try {
     const body = DeployWorkflowsSchema.parse(req.body);
 
     // Validate ALL DAGs first — reject if any are invalid
-    const dagErrors: { name: string; errors: unknown[] }[] = [];
-    for (const wf of body.workflows) {
-      const validation = validateDAG(wf.dag as DAG);
+    const dagErrors: { index: number; errors: unknown[] }[] = [];
+    for (let i = 0; i < body.workflows.length; i++) {
+      const validation = validateDAG(body.workflows[i].dag as DAG);
       if (!validation.valid) {
-        dagErrors.push({ name: wf.name, errors: validation.errors ?? [] });
+        dagErrors.push({ index: i, errors: validation.errors ?? [] });
       }
     }
     if (dagErrors.length > 0) {
@@ -109,33 +110,49 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       return;
     }
 
-    const results: { id: string; name: string; displayName: string | null; category: string | null; channel: string | null; audienceType: string | null; signature: string | null; signatureName: string | null; action: "created" | "updated" }[] = [];
+    // Fetch all existing signatureNames for this appId to avoid collisions
+    const existingWorkflows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.appId, body.appId),
+          rawSql`${workflows.status} != 'deleted'`
+        )
+      );
+    const usedNames = new Set(
+      existingWorkflows
+        .map((w) => w.signatureName)
+        .filter((n): n is string => n !== null)
+    );
+
+    const results: { id: string; name: string; category: string; channel: string; audienceType: string; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
-      const openFlow = dagToOpenFlow(dag, wf.name);
-      const flowPath = generateFlowPath(body.appId, wf.name);
       const signature = computeDAGSignature(wf.dag);
-      const client = getWindmillClient();
 
-      // Check if workflow already exists for this (appId, name)
+      // Check if workflow already exists for this (appId, signature)
       const [existing] = await db
         .select()
         .from(workflows)
         .where(
           and(
             eq(workflows.appId, body.appId),
-            eq(workflows.name, wf.name),
+            eq(workflows.signature, signature),
             rawSql`${workflows.status} != 'deleted'`
           )
         );
 
       if (existing) {
-        // Update existing workflow
+        // Same DAG already deployed — update metadata
+        const openFlow = dagToOpenFlow(dag, existing.name);
+        const client = getWindmillClient();
+
         if (client && existing.windmillFlowPath) {
           try {
             await client.updateFlow(existing.windmillFlowPath, {
-              summary: wf.name,
+              summary: existing.name,
               description: wf.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -148,27 +165,41 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         const [updated] = await db
           .update(workflows)
           .set({
-            displayName: wf.displayName ?? existing.displayName,
             description: wf.description ?? existing.description,
-            category: wf.category ?? existing.category,
-            channel: wf.channel ?? existing.channel,
-            audienceType: wf.audienceType ?? existing.audienceType,
-            signature,
-            signatureName: wf.signatureName ?? existing.signatureName,
+            category: wf.category,
+            channel: wf.channel,
+            audienceType: wf.audienceType,
             dag: wf.dag,
             updatedAt: new Date(),
           })
           .where(eq(workflows.id, existing.id))
           .returning();
 
-        results.push({ id: updated.id, name: updated.name, displayName: updated.displayName, category: updated.category, channel: updated.channel, audienceType: updated.audienceType, signature: updated.signature, signatureName: updated.signatureName, action: "updated" });
+        results.push({
+          id: updated.id,
+          name: updated.name,
+          category: updated.category!,
+          channel: updated.channel!,
+          audienceType: updated.audienceType!,
+          signature: updated.signature!,
+          signatureName: updated.signatureName!,
+          action: "updated",
+        });
       } else {
-        // Create new workflow
+        // New DAG — generate signatureName and build name
+        const signatureName = pickSignatureName(signature, usedNames);
+        usedNames.add(signatureName);
+
+        const name = `${wf.category}-${wf.channel}-${wf.audienceType}-${signatureName}`;
+        const openFlow = dagToOpenFlow(dag, name);
+        const flowPath = generateFlowPath(body.appId, name);
+        const client = getWindmillClient();
+
         if (client) {
           try {
             await client.createFlow({
               path: flowPath,
-              summary: wf.name,
+              summary: name,
               description: wf.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -183,21 +214,30 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           .values({
             appId: body.appId,
             orgId: body.appId,
-            name: wf.name,
-            displayName: wf.displayName ?? null,
+            name,
+            displayName: name,
             description: wf.description,
-            category: wf.category ?? null,
-            channel: wf.channel ?? null,
-            audienceType: wf.audienceType ?? null,
+            category: wf.category,
+            channel: wf.channel,
+            audienceType: wf.audienceType,
             signature,
-            signatureName: wf.signatureName ?? null,
+            signatureName,
             dag: wf.dag,
             windmillFlowPath: flowPath,
             status: "active",
           })
           .returning();
 
-        results.push({ id: created.id, name: created.name, displayName: created.displayName, category: created.category, channel: created.channel, audienceType: created.audienceType, signature: created.signature, signatureName: created.signatureName, action: "created" });
+        results.push({
+          id: created.id,
+          name: created.name,
+          category: created.category!,
+          channel: created.channel!,
+          audienceType: created.audienceType!,
+          signature: created.signature!,
+          signatureName: created.signatureName!,
+          action: "created",
+        });
       }
     }
 
