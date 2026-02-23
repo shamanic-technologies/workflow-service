@@ -65,6 +65,20 @@ router.post("/workflows", requireApiKey, async (req, res) => {
       }
     }
 
+    // Compute signature
+    const signature = computeDAGSignature(body.dag);
+    const existingWorkflows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.orgId, body.orgId),
+          rawSql`${workflows.status} != 'deleted'`
+        )
+      );
+    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
+    const signatureName = pickSignatureName(signature, usedNames);
+
     // Store in DB
     const [workflow] = await db
       .insert(workflows)
@@ -75,6 +89,8 @@ router.post("/workflows", requireApiKey, async (req, res) => {
         subrequestId: body.subrequestId,
         name: body.name,
         description: body.description,
+        signature,
+        signatureName,
         dag: body.dag,
         windmillFlowPath: flowPath,
         status: "active",
@@ -120,11 +136,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           rawSql`${workflows.status} != 'deleted'`
         )
       );
-    const usedNames = new Set(
-      existingWorkflows
-        .map((w) => w.signatureName)
-        .filter((n): n is string => n !== null)
-    );
+    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
     const results: { id: string; name: string; category: string; channel: string; audienceType: string; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
 
@@ -178,11 +190,11 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         results.push({
           id: updated.id,
           name: updated.name,
-          category: updated.category!,
-          channel: updated.channel!,
-          audienceType: updated.audienceType!,
-          signature: updated.signature!,
-          signatureName: updated.signatureName!,
+          category: updated.category ?? wf.category,
+          channel: updated.channel ?? wf.channel,
+          audienceType: updated.audienceType ?? wf.audienceType,
+          signature: updated.signature,
+          signatureName: updated.signatureName,
           action: "updated",
         });
       } else {
@@ -231,11 +243,11 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         results.push({
           id: created.id,
           name: created.name,
-          category: created.category!,
-          channel: created.channel!,
-          audienceType: created.audienceType!,
-          signature: created.signature!,
-          signatureName: created.signatureName!,
+          category: created.category ?? wf.category,
+          channel: created.channel ?? wf.channel,
+          audienceType: created.audienceType ?? wf.audienceType,
+          signature: created.signature,
+          signatureName: created.signatureName,
           action: "created",
         });
       }
@@ -353,6 +365,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       }
 
       updates.dag = body.dag;
+      updates.signature = computeDAGSignature(body.dag);
 
       // Re-translate and update in Windmill
       const flowName = body.name ?? existing.name;

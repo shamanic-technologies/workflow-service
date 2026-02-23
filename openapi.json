@@ -118,12 +118,10 @@
           },
           "signature": {
             "type": "string",
-            "nullable": true,
             "description": "Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."
           },
           "signatureName": {
             "type": "string",
-            "nullable": true,
             "description": "Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."
           },
           "dag": {
