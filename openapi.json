@@ -116,6 +116,16 @@
           "audienceType": {
             "$ref": "#/components/schemas/WorkflowAudienceType"
           },
+          "signature": {
+            "type": "string",
+            "nullable": true,
+            "description": "Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."
+          },
+          "signatureName": {
+            "type": "string",
+            "nullable": true,
+            "description": "Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."
+          },
           "dag": {
             "nullable": true,
             "description": "The DAG definition as submitted."
@@ -153,6 +163,8 @@
           "category",
           "channel",
           "audienceType",
+          "signature",
+          "signatureName",
           "windmillFlowPath",
           "windmillWorkspace",
           "status",
@@ -520,6 +532,14 @@
               }
             ]
           },
+          "signature": {
+            "type": "string",
+            "nullable": true
+          },
+          "signatureName": {
+            "type": "string",
+            "nullable": true
+          },
           "action": {
             "type": "string",
             "enum": [
@@ -535,6 +555,8 @@
           "category",
           "channel",
           "audienceType",
+          "signature",
+          "signatureName",
           "action"
         ]
       },
@@ -598,6 +620,10 @@
                 "description": "Workflow audience type."
               }
             ]
+          },
+          "signatureName": {
+            "type": "string",
+            "description": "Human-readable name for this workflow variant (e.g. 'Sequoia'). Provided by the caller. The signature hash is computed server-side from the DAG."
           },
           "dag": {
             "$ref": "#/components/schemas/DAG"

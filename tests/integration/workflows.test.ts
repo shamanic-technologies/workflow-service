@@ -440,6 +440,115 @@ describe("PUT /workflows/deploy", () => {
     expect(res.body.workflows[0].category).toBe("sales");
   });
 
+  it("computes and returns signature on deploy", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "kevinlourd-com",
+        workflows: [
+          {
+            name: "sig-test",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].signature).toMatch(/^[a-f0-9]{64}$/);
+    expect(res.body.workflows[0].signatureName).toBeNull();
+  });
+
+  it("stores signatureName when provided", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "kevinlourd-com",
+        workflows: [
+          {
+            name: "sig-name-test",
+            signatureName: "Sequoia",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].signatureName).toBe("Sequoia");
+    expect(res.body.workflows[0].signature).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("same DAG produces same signature across deploys", async () => {
+    const payload = {
+      appId: "kevinlourd-com",
+      workflows: [
+        {
+          name: "determinism-test",
+          dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+        },
+      ],
+    };
+
+    const res1 = await request.put("/workflows/deploy").set(AUTH).send(payload);
+    const res2 = await request.put("/workflows/deploy").set(AUTH).send(payload);
+
+    expect(res1.body.workflows[0].signature).toBe(res2.body.workflows[0].signature);
+  });
+
+  it("different DAG produces different signature", async () => {
+    const res1 = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "kevinlourd-com",
+        workflows: [{ name: "dag-a", dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
+      });
+
+    const res2 = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "kevinlourd-com",
+        workflows: [{ name: "dag-b", dag: VALID_LINEAR_DAG }],
+      });
+
+    expect(res1.body.workflows[0].signature).not.toBe(res2.body.workflows[0].signature);
+  });
+
+  it("preserves signatureName on update when not re-provided", async () => {
+    mockDbRows.push({
+      id: "wf-sig",
+      appId: "kevinlourd-com",
+      orgId: "kevinlourd-com",
+      name: "preserve-sig-name",
+      signatureName: "Phoenix",
+      signature: "abc123",
+      status: "active",
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+      windmillFlowPath: "f/workflows/kevinlourd-com/preserve_sig_name",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "kevinlourd-com",
+        workflows: [
+          {
+            name: "preserve-sig-name",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].signatureName).toBe("Phoenix");
+  });
+
   it("rejects if any DAG is invalid (no partial writes)", async () => {
     const res = await request
       .put("/workflows/deploy")
