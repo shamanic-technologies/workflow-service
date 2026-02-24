@@ -24,14 +24,36 @@ describe("buildInputTransforms", () => {
     });
   });
 
-  it("handles nested output paths", () => {
+  it("handles nested output paths with optional chaining", () => {
     const result = buildInputTransforms(undefined, {
       email: "$ref:lead-search.output.lead.email",
     });
 
     expect(result.email).toEqual({
       type: "javascript",
-      expr: "results.lead_search.lead.email",
+      expr: "results.lead_search.lead?.email",
+    });
+  });
+
+  it("uses optional chaining for deeply nested output paths", () => {
+    const result = buildInputTransforms(undefined, {
+      email: "$ref:fetch-lead.output.lead.data.email",
+    });
+
+    expect(result.email).toEqual({
+      type: "javascript",
+      expr: "results.fetch_lead.lead?.data?.email",
+    });
+  });
+
+  it("does not use optional chaining for single-level output paths", () => {
+    const result = buildInputTransforms(undefined, {
+      runId: "$ref:start-run.output.runId",
+    });
+
+    expect(result.runId).toEqual({
+      type: "javascript",
+      expr: "results.start_run.runId",
     });
   });
 

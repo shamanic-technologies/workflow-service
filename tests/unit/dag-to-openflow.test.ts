@@ -542,8 +542,8 @@ describe("dagToOpenFlow", () => {
       // Static base should be spread
       expect(expr).toContain('"cold-email"');
       expect(expr).toContain('"broadcast"');
-      // Dynamic fields should be present
-      expect(expr).toContain("results.start_run.lead.data.email");
+      // Dynamic fields should be present (deep paths use optional chaining)
+      expect(expr).toContain("results.start_run.lead?.data?.email");
       expect(expr).toContain("results.start_run.appId");
       // Nested metadata should merge static source with dynamic emailGenerationId
       expect(expr).toContain('"source"');
