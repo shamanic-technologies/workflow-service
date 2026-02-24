@@ -106,7 +106,7 @@ describe("dagToOpenFlow", () => {
       >;
       expect(transforms.leadData).toEqual({
         type: "javascript",
-        expr: "results.lead_search.lead",
+        expr: "results.lead_search?.lead",
       });
       expect(transforms.clientData).toEqual({
         type: "javascript",
@@ -285,7 +285,7 @@ describe("dagToOpenFlow", () => {
       // Should preserve $ref input mappings
       expect(transforms.runId).toEqual({
         type: "javascript",
-        expr: "results.start_run.runId",
+        expr: "results.start_run?.runId",
       });
       // Should inject error context
       expect(transforms.failedNodeId).toEqual({
@@ -543,11 +543,11 @@ describe("dagToOpenFlow", () => {
       expect(expr).toContain('"cold-email"');
       expect(expr).toContain('"broadcast"');
       // Dynamic fields should be present (deep paths use optional chaining)
-      expect(expr).toContain("results.start_run.lead?.data?.email");
-      expect(expr).toContain("results.start_run.appId");
+      expect(expr).toContain("results.start_run?.lead?.data?.email");
+      expect(expr).toContain("results.start_run?.appId");
       // Nested metadata should merge static source with dynamic emailGenerationId
       expect(expr).toContain('"source"');
-      expect(expr).toContain("results.email_generate.id");
+      expect(expr).toContain("results.email_generate?.id");
     }
   });
 });
