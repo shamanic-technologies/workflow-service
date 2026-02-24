@@ -196,6 +196,33 @@ describe("GET /workflows", () => {
     expect(res.body.workflows[0].channel).toBe("email");
     expect(res.body.workflows[0].audienceType).toBe("cold-outreach");
   });
+
+  it("returns requiredProviders in response", async () => {
+    mockDbRows.push({
+      id: "wf-1",
+      orgId: "org-1",
+      appId: "my-app",
+      name: "sales-email-cold-outreach-sequoia",
+      displayName: "Sales Flow",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      requiredProviders: ["anthropic", "apollo"],
+      signature: "abc123",
+      signatureName: "sequoia",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ orgId: "org-1" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].requiredProviders).toEqual(["anthropic", "apollo"]);
+  });
 });
 
 const DEPLOY_ITEM = {
@@ -427,6 +454,88 @@ describe("PUT /workflows/deploy", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Invalid DAGs");
     expect(res.body.details).toHaveLength(1);
+  });
+
+  it("stores and returns requiredProviders when provided", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            requiredProviders: ["anthropic", "apollo"],
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toHaveLength(1);
+
+    // Verify the stored row has requiredProviders
+    const stored = mockDbRows[mockDbRows.length - 1] as Record<string, unknown>;
+    expect(stored.requiredProviders).toEqual(["anthropic", "apollo"]);
+  });
+
+  it("defaults requiredProviders to empty array when not provided", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            dag: VALID_LINEAR_DAG,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const stored = mockDbRows[mockDbRows.length - 1] as Record<string, unknown>;
+    expect(stored.requiredProviders).toEqual([]);
+  });
+
+  it("updates requiredProviders on redeploy", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+
+    mockDbRows.push({
+      id: "wf-existing",
+      appId: "mcpfactory",
+      orgId: "mcpfactory",
+      name: "sales-email-cold-outreach-sequoia",
+      signatureName: "sequoia",
+      signature: sig,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      requiredProviders: ["anthropic"],
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+      windmillFlowPath: "f/workflows/mcpfactory/sales_email_cold_outreach_sequoia",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            requiredProviders: ["anthropic", "apollo"],
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].action).toBe("updated");
   });
 
   it("requires authentication", async () => {
