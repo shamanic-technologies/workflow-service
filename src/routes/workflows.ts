@@ -88,7 +88,6 @@ router.post("/workflows", requireApiKey, async (req, res) => {
         category: body.category,
         channel: body.channel,
         audienceType: body.audienceType,
-        requiredProviders: body.requiredProviders ?? [],
         signature,
         signatureName,
         dag: body.dag,
@@ -174,7 +173,6 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
             category: wf.category,
             channel: wf.channel,
             audienceType: wf.audienceType,
-            requiredProviders: wf.requiredProviders ?? existing.requiredProviders,
             dag: wf.dag,
             updatedAt: new Date(),
           })
@@ -226,7 +224,6 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
             category: wf.category,
             channel: wf.channel,
             audienceType: wf.audienceType,
-            requiredProviders: wf.requiredProviders ?? [],
             signature,
             signatureName,
             dag: wf.dag,

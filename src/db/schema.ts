@@ -7,7 +7,6 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 export const workflows = pgTable(
   "workflows",
@@ -28,10 +27,6 @@ export const workflows = pgTable(
     signatureName: text("signature_name").notNull(),
     dag: jsonb("dag").notNull(),
     windmillFlowPath: text("windmill_flow_path"),
-    requiredProviders: text("required_providers")
-      .array()
-      .notNull()
-      .default(sql`'{}'::text[]`),
     windmillWorkspace: text("windmill_workspace").notNull().default("prod"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

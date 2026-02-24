@@ -120,13 +120,6 @@
             "type": "string",
             "description": "Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."
           },
-          "requiredProviders": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "BYOK provider names required by this workflow (e.g. [\"anthropic\", \"apollo\"]). Empty array if not specified at deploy time."
-          },
           "dag": {
             "nullable": true,
             "description": "The DAG definition as submitted."
@@ -162,7 +155,6 @@
           "audienceType",
           "signature",
           "signatureName",
-          "requiredProviders",
           "windmillFlowPath",
           "windmillWorkspace",
           "createdAt",
@@ -314,13 +306,6 @@
           },
           "audienceType": {
             "$ref": "#/components/schemas/WorkflowAudienceType"
-          },
-          "requiredProviders": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "BYOK provider names required by this workflow (e.g. [\"anthropic\", \"apollo\"]). Stored as-is and returned in GET responses. Used by dashboards to show which API keys the user must configure."
           },
           "dag": {
             "$ref": "#/components/schemas/DAG"
@@ -607,13 +592,6 @@
                 "description": "Workflow audience type. Required — used to build the workflow name."
               }
             ]
-          },
-          "requiredProviders": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "BYOK provider names required by this workflow (e.g. [\"anthropic\", \"apollo\"]). Stored as-is and returned in GET responses. Used by dashboards to show which API keys the user must configure."
           },
           "dag": {
             "$ref": "#/components/schemas/DAG"
