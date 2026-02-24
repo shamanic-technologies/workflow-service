@@ -118,10 +118,6 @@ export const CreateWorkflowSchema = z
     category: WorkflowCategorySchema.describe("Workflow category."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
     audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
-    requiredProviders: z.array(z.string()).optional().describe(
-      "BYOK provider names required by this workflow (e.g. [\"anthropic\", \"apollo\"]). " +
-      "Stored as-is and returned in GET responses. Used by dashboards to show which API keys the user must configure."
-    ),
     dag: DAGSchema,
   })
   .openapi("CreateWorkflowRequest");
@@ -150,10 +146,6 @@ export const WorkflowResponseSchema = z
     audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
     signatureName: z.string().describe("Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."),
-    requiredProviders: z.array(z.string()).describe(
-      "BYOK provider names required by this workflow (e.g. [\"anthropic\", \"apollo\"]). " +
-      "Empty array if not specified at deploy time."
-    ),
     dag: z.unknown().describe("The DAG definition as submitted."),
     windmillFlowPath: z.string().nullable().describe("Internal Windmill flow path (managed automatically)."),
     windmillWorkspace: z.string().describe("Windmill workspace (managed automatically)."),
@@ -213,10 +205,6 @@ export const DeployWorkflowItemSchema = z
     category: WorkflowCategorySchema.describe("Workflow category. Required — used to build the workflow name."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel. Required — used to build the workflow name."),
     audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type. Required — used to build the workflow name."),
-    requiredProviders: z.array(z.string()).optional().describe(
-      "BYOK provider names required by this workflow (e.g. [\"anthropic\", \"apollo\"]). " +
-      "Stored as-is and returned in GET responses. Used by dashboards to show which API keys the user must configure."
-    ),
     dag: DAGSchema,
   })
   .openapi("DeployWorkflowItem");
