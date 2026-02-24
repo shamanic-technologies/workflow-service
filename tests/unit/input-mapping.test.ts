@@ -9,7 +9,7 @@ describe("buildInputTransforms", () => {
 
     expect(result.leadData).toEqual({
       type: "javascript",
-      expr: "results.lead_search.lead",
+      expr: "results.lead_search?.lead",
     });
   });
 
@@ -31,7 +31,7 @@ describe("buildInputTransforms", () => {
 
     expect(result.email).toEqual({
       type: "javascript",
-      expr: "results.lead_search.lead?.email",
+      expr: "results.lead_search?.lead?.email",
     });
   });
 
@@ -42,7 +42,7 @@ describe("buildInputTransforms", () => {
 
     expect(result.email).toEqual({
       type: "javascript",
-      expr: "results.fetch_lead.lead?.data?.email",
+      expr: "results.fetch_lead?.lead?.data?.email",
     });
   });
 
@@ -53,7 +53,7 @@ describe("buildInputTransforms", () => {
 
     expect(result.runId).toEqual({
       type: "javascript",
-      expr: "results.start_run.runId",
+      expr: "results.start_run?.runId",
     });
   });
 
@@ -91,7 +91,7 @@ describe("buildInputTransforms", () => {
     });
     expect(result.leadData).toEqual({
       type: "javascript",
-      expr: "results.lead_search.lead",
+      expr: "results.lead_search?.lead",
     });
     expect(result.config).toBeUndefined();
   });
@@ -139,7 +139,7 @@ describe("buildInputTransforms", () => {
     expect(result.body.type).toBe("javascript");
     // Should spread the static base and add the dynamic field
     expect(result.body.expr).toContain('"cold-email"');
-    expect(result.body.expr).toContain("results.start_run.email");
+    expect(result.body.expr).toContain("results.start_run?.email");
   });
 
   it("merges deeply nested dot-notation with static nested object", () => {
@@ -152,7 +152,7 @@ describe("buildInputTransforms", () => {
     expect(result.body.type).toBe("javascript");
     // Should spread the static metadata and add the dynamic field
     expect(result.body.expr).toContain('"source"');
-    expect(result.body.expr).toContain("results.gen.id");
+    expect(result.body.expr).toContain("results.gen?.id");
   });
 
   it("leaves non-dot-notation keys untouched", () => {

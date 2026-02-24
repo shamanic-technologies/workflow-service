@@ -35,21 +35,21 @@ export function buildInputTransforms(
         if (path === "flow_input" || path.startsWith("flow_input.")) {
           expr = path;
         } else {
-          // "node-id.output.field" → "results.node_id.field"
+          // "node-id.output.field" → "results.node_id?.field"
           // "node-id.output" → "results.node_id" (whole output)
-          // Deep paths use optional chaining to prevent TypeError on null/undefined intermediates:
-          // "node-id.output.lead.data.email" → "results.node_id.lead?.data?.email"
+          // Optional chaining after node_id prevents TypeError when Windmill
+          // returns null for a step result (e.g. internal fetch error).
+          // Deep paths chain all intermediates:
+          // "node-id.output.lead.data.email" → "results.node_id?.lead?.data?.email"
           const parts = path.split(".");
           const nodeId = parts[0].replace(/-/g, "_");
           // Skip "output" part if present
           const rest = parts.slice(1).filter((p) => p !== "output");
-          if (rest.length <= 1) {
-            expr = rest.length > 0
-              ? `results.${nodeId}.${rest[0]}`
-              : `results.${nodeId}`;
+          if (rest.length === 0) {
+            expr = `results.${nodeId}`;
           } else {
-            // Deep path: optional chaining on intermediate properties
-            expr = `results.${nodeId}.${rest[0]}${rest.slice(1).map(p => `?.${p}`).join("")}`;
+            // Optional chaining on node result + all intermediate properties
+            expr = `results.${nodeId}?.${rest.join("?.")}`;
           }
         }
 
