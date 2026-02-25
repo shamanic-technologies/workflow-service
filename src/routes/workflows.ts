@@ -297,6 +297,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       .where(eq(workflows.appId, body.appId));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
+    const orgId = body.orgId ?? body.appId;
     const results: { id: string; name: string; category: string; channel: string; audienceType: string; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
 
     for (const wf of body.workflows) {
@@ -335,6 +336,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         const [updated] = await db
           .update(workflows)
           .set({
+            orgId,
             description: wf.description ?? existing.description,
             category: wf.category,
             channel: wf.channel,
@@ -383,7 +385,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           .insert(workflows)
           .values({
             appId: body.appId,
-            orgId: body.appId,
+            orgId,
             name,
             displayName: name,
             description: wf.description,

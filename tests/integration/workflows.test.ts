@@ -246,6 +246,93 @@ describe("PUT /workflows/deploy", () => {
     expect(wf.name).toBe(`sales-email-cold-outreach-${wf.signatureName}`);
   });
 
+  it("uses orgId from body instead of falling back to appId", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        orgId: "org_real_clerk_id",
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            description: "Workflow with real orgId",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    // Verify the DB row got the correct orgId
+    const inserted = mockDbRows[mockDbRows.length - 1];
+    expect(inserted.orgId).toBe("org_real_clerk_id");
+    expect(inserted.appId).toBe("mcpfactory");
+  });
+
+  it("falls back to appId when orgId is not provided", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            description: "Workflow without orgId",
+            dag: VALID_LINEAR_DAG,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const inserted = mockDbRows[mockDbRows.length - 1];
+    expect(inserted.orgId).toBe("mcpfactory");
+  });
+
+  it("updates orgId on existing workflow when redeployed with orgId", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+
+    mockDbRows.push({
+      id: "wf-wrong-org",
+      appId: "mcpfactory",
+      orgId: "mcpfactory",
+      name: "sales-email-cold-outreach-sequoia",
+      signatureName: "sequoia",
+      signature: sig,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Old",
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+      windmillFlowPath: "f/workflows/mcpfactory/sales_email_cold_outreach_sequoia",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        appId: "mcpfactory",
+        orgId: "org_correct_id",
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            description: "Fixed orgId",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].action).toBe("updated");
+    // The mock DB row should have been updated with the correct orgId
+    const row = mockDbRows[mockDbRows.length - 1];
+    expect(row.orgId).toBe("org_correct_id");
+  });
+
   it("updates existing workflow when same DAG is redeployed (idempotent)", async () => {
     const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
     const sig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
