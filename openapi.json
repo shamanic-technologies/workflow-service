@@ -626,6 +626,107 @@
           "workflows"
         ]
       },
+      "GenerateWorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "workflow": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeployWorkflowResult"
+              },
+              {
+                "description": "The deployed workflow metadata."
+              }
+            ]
+          },
+          "dag": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DAG"
+              },
+              {
+                "description": "The generated DAG definition."
+              }
+            ]
+          },
+          "category": {
+            "$ref": "#/components/schemas/WorkflowCategory"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/WorkflowChannel"
+          },
+          "audienceType": {
+            "$ref": "#/components/schemas/WorkflowAudienceType"
+          },
+          "generatedDescription": {
+            "type": "string",
+            "description": "LLM-generated description of what this workflow does."
+          }
+        },
+        "required": [
+          "workflow",
+          "dag",
+          "category",
+          "channel",
+          "audienceType",
+          "generatedDescription"
+        ]
+      },
+      "GenerateWorkflowHints": {
+        "type": "object",
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Scope generation to these services. Reduces prompt size and improves accuracy."
+          },
+          "nodeTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Suggest specific node types for the LLM to use."
+          },
+          "expectedInputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Expected flow_input field names (e.g. campaignId, email)."
+          }
+        },
+        "description": "Optional hints to guide generation."
+      },
+      "GenerateWorkflowRequest": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Application identifier. The generated workflow will be deployed under this appId."
+          },
+          "orgId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Organization ID."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Natural language description of the desired workflow. Be specific about the steps, services, and data flow."
+          },
+          "hints": {
+            "$ref": "#/components/schemas/GenerateWorkflowHints"
+          }
+        },
+        "required": [
+          "appId",
+          "orgId",
+          "description"
+        ]
+      },
       "ExecuteByNameRequest": {
         "type": "object",
         "properties": {
@@ -1268,6 +1369,62 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/generate": {
+      "post": {
+        "summary": "Generate a workflow from natural language",
+        "description": "Uses an LLM (Claude) to transform a natural language description into a valid DAG workflow. Validates the generated DAG and deploys it automatically. Returns the deployed workflow metadata along with the generated DAG.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateWorkflowRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Workflow generated and deployed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateWorkflowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "LLM generated an invalid DAG that could not be fixed after retries",
             "content": {
               "application/json": {
                 "schema": {

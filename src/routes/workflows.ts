@@ -10,7 +10,12 @@ import {
   CreateWorkflowSchema,
   UpdateWorkflowSchema,
   DeployWorkflowsSchema,
+  GenerateWorkflowSchema,
 } from "../schemas.js";
+import {
+  generateWorkflow,
+  GenerationValidationError,
+} from "../lib/workflow-generator.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import { pickSignatureName } from "../lib/signature-words.js";
 
@@ -31,6 +36,165 @@ function generateFlowPath(scope: string, name: string): string {
     .replace(/^_|_$/g, "");
   return `f/workflows/${scope}/${slug}`;
 }
+
+// POST /workflows/generate — Generate a workflow from natural language
+router.post("/workflows/generate", requireApiKey, async (req, res) => {
+  try {
+    const body = GenerateWorkflowSchema.parse(req.body);
+
+    const generated = await generateWorkflow({
+      description: body.description,
+      hints: body.hints,
+    });
+
+    const dag = generated.dag as DAG;
+    const signature = computeDAGSignature(generated.dag);
+
+    const existingWorkflows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows)
+      .where(eq(workflows.appId, body.appId));
+    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
+
+    const [existing] = await db
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.appId, body.appId),
+          eq(workflows.signature, signature),
+        )
+      );
+
+    type DeployResult = {
+      id: string;
+      name: string;
+      category: string;
+      channel: string;
+      audienceType: string;
+      signature: string;
+      signatureName: string;
+      action: "created" | "updated";
+    };
+
+    let result: DeployResult;
+
+    if (existing) {
+      const openFlow = dagToOpenFlow(dag, existing.name);
+      const client = getWindmillClient();
+      if (client && existing.windmillFlowPath) {
+        try {
+          await client.updateFlow(existing.windmillFlowPath, {
+            summary: existing.name,
+            description: generated.description,
+            value: openFlow.value,
+            schema: openFlow.schema,
+          });
+        } catch (err) {
+          console.error("[workflows] generate: failed to update Windmill flow:", err);
+        }
+      }
+
+      const [updated] = await db
+        .update(workflows)
+        .set({
+          description: generated.description,
+          category: generated.category,
+          channel: generated.channel,
+          audienceType: generated.audienceType,
+          dag: generated.dag,
+          updatedAt: new Date(),
+        })
+        .where(eq(workflows.id, existing.id))
+        .returning();
+
+      result = {
+        id: updated.id,
+        name: updated.name,
+        category: updated.category,
+        channel: updated.channel,
+        audienceType: updated.audienceType,
+        signature: updated.signature,
+        signatureName: updated.signatureName,
+        action: "updated",
+      };
+    } else {
+      const signatureName = pickSignatureName(signature, usedNames);
+      const name = `${generated.category}-${generated.channel}-${generated.audienceType}-${signatureName}`;
+      const openFlow = dagToOpenFlow(dag, name);
+      const flowPath = generateFlowPath(body.appId, name);
+      const client = getWindmillClient();
+
+      if (client) {
+        try {
+          await client.createFlow({
+            path: flowPath,
+            summary: name,
+            description: generated.description,
+            value: openFlow.value,
+            schema: openFlow.schema,
+          });
+        } catch (err) {
+          console.error("[workflows] generate: failed to create Windmill flow:", err);
+        }
+      }
+
+      const [created] = await db
+        .insert(workflows)
+        .values({
+          appId: body.appId,
+          orgId: body.orgId,
+          name,
+          displayName: name,
+          description: generated.description,
+          category: generated.category,
+          channel: generated.channel,
+          audienceType: generated.audienceType,
+          signature,
+          signatureName,
+          dag: generated.dag,
+          windmillFlowPath: flowPath,
+        })
+        .returning();
+
+      result = {
+        id: created.id,
+        name: created.name,
+        category: created.category,
+        channel: created.channel,
+        audienceType: created.audienceType,
+        signature: created.signature,
+        signatureName: created.signatureName,
+        action: "created",
+      };
+    }
+
+    res.json({
+      workflow: result,
+      dag: generated.dag,
+      category: generated.category,
+      channel: generated.channel,
+      audienceType: generated.audienceType,
+      generatedDescription: generated.description,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "ZodError") {
+      res.status(400).json({ error: "Validation error", details: err });
+      return;
+    }
+    if (err instanceof GenerationValidationError) {
+      res.status(422).json({
+        error: err.message,
+        details: err.validationErrors,
+      });
+      return;
+    }
+    console.error("[workflows] GENERATE error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error",
+    });
+  }
+});
 
 // POST /workflows — Create a new workflow
 router.post("/workflows", requireApiKey, async (req, res) => {

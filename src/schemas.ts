@@ -251,6 +251,50 @@ export const ExecuteByNameSchema = z
   })
   .openapi("ExecuteByNameRequest");
 
+// --- Generate schemas ---
+
+export const GenerateWorkflowHintsSchema = z
+  .object({
+    services: z.array(z.string()).optional().describe(
+      "Scope generation to these services. Reduces prompt size and improves accuracy."
+    ),
+    nodeTypes: z.array(z.string()).optional().describe(
+      "Suggest specific node types for the LLM to use."
+    ),
+    expectedInputs: z.array(z.string()).optional().describe(
+      "Expected flow_input field names (e.g. campaignId, email)."
+    ),
+  })
+  .openapi("GenerateWorkflowHints");
+
+export const GenerateWorkflowSchema = z
+  .object({
+    appId: z.string().min(1).describe("Application identifier. The generated workflow will be deployed under this appId."),
+    orgId: z.string().min(1).describe("Organization ID."),
+    description: z.string().min(10).describe(
+      "Natural language description of the desired workflow. Be specific about the steps, services, and data flow."
+    ),
+    hints: GenerateWorkflowHintsSchema.optional().describe(
+      "Optional hints to guide generation."
+    ),
+  })
+  .openapi("GenerateWorkflowRequest");
+
+export const GenerateWorkflowResponseSchema = z
+  .object({
+    workflow: DeployWorkflowResultSchema.describe(
+      "The deployed workflow metadata."
+    ),
+    dag: DAGSchema.describe("The generated DAG definition."),
+    category: WorkflowCategorySchema,
+    channel: WorkflowChannelSchema,
+    audienceType: WorkflowAudienceTypeSchema,
+    generatedDescription: z.string().describe(
+      "LLM-generated description of what this workflow does."
+    ),
+  })
+  .openapi("GenerateWorkflowResponse");
+
 // --- Common ---
 
 export const ErrorResponseSchema = z
@@ -577,6 +621,38 @@ registry.registerPath({
     },
     400: {
       description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/generate",
+  summary: "Generate a workflow from natural language",
+  description:
+    "Uses an LLM (Claude) to transform a natural language description into a valid DAG workflow. " +
+    "Validates the generated DAG and deploys it automatically. " +
+    "Returns the deployed workflow metadata along with the generated DAG.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: GenerateWorkflowSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Workflow generated and deployed",
+      content: { "application/json": { schema: GenerateWorkflowResponseSchema } },
+    },
+    400: {
+      description: "Invalid request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    422: {
+      description: "LLM generated an invalid DAG that could not be fixed after retries",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
