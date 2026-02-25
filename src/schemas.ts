@@ -215,6 +215,9 @@ export const DeployWorkflowsSchema = z
       "Your application identifier. Workflows are scoped to (appId + signature). " +
       "Use the same appId when executing. This is idempotent — deploying the same DAG updates the existing workflow."
     ),
+    orgId: z.string().min(1).optional().describe(
+      "Organization ID that owns these workflows. If omitted, falls back to appId for backward compatibility."
+    ),
     workflows: z.array(DeployWorkflowItemSchema).min(1).describe("The workflows to deploy."),
   })
   .openapi("DeployWorkflowsRequest");
