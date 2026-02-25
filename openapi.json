@@ -321,6 +321,59 @@
           "dag"
         ]
       },
+      "ServiceEndpoint": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "Service name (e.g. 'apollo', 'stripe')."
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method (e.g. 'POST', 'GET')."
+          },
+          "path": {
+            "type": "string",
+            "description": "Endpoint path (e.g. '/leads/search')."
+          }
+        },
+        "required": [
+          "service",
+          "method",
+          "path"
+        ]
+      },
+      "ProviderRequirementsResponse": {
+        "type": "object",
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceEndpoint"
+            },
+            "description": "The http.call endpoints extracted from the workflow DAG."
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "nullable": true
+            },
+            "description": "Provider requirements returned by key-service."
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Unique provider names required by this workflow (e.g. ['apollo', 'firecrawl'])."
+          }
+        },
+        "required": [
+          "endpoints",
+          "requirements",
+          "providers"
+        ]
+      },
       "UpdateWorkflowRequest": {
         "type": "object",
         "properties": {
@@ -1054,6 +1107,63 @@
                   "required": [
                     "message"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/{id}/required-providers": {
+      "get": {
+        "summary": "Get required BYOK providers for a workflow",
+        "description": "Analyzes the workflow DAG to extract all http.call endpoints, then queries key-service to determine which external providers (and their API keys) are needed to execute the workflow.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider requirements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderRequirementsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workflow not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Key service unavailable or returned an error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

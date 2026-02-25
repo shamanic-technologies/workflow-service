@@ -18,6 +18,8 @@ import {
 } from "../lib/workflow-generator.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import { pickSignatureName } from "../lib/signature-words.js";
+import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
+import { fetchProviderRequirements } from "../lib/key-service-client.js";
 
 const router = Router();
 
@@ -480,6 +482,49 @@ router.get("/workflows/:id", requireApiKey, async (req, res) => {
     res.json(formatWorkflow(workflow));
   } catch (err) {
     console.error("[workflows] GET by id error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /workflows/:id/required-providers — Compute required BYOK providers for a workflow
+router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) => {
+  try {
+    const [workflow] = await db
+      .select()
+      .from(workflows)
+      .where(eq(workflows.id, req.params.id));
+
+    if (!workflow) {
+      res.status(404).json({ error: "Workflow not found" });
+      return;
+    }
+
+    const dag = workflow.dag as DAG;
+    const endpoints = extractHttpEndpoints(dag);
+
+    if (endpoints.length === 0) {
+      res.json({ endpoints: [], requirements: [], providers: [] });
+      return;
+    }
+
+    const result = await fetchProviderRequirements(endpoints);
+
+    res.json({
+      endpoints,
+      requirements: result.requirements,
+      providers: result.providers,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("key-service error:")) {
+      console.error("[workflows] required-providers: key-service error:", err.message);
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    if (err instanceof Error && err.message.includes("KEY_SERVICE_URL")) {
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    console.error("[workflows] required-providers error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

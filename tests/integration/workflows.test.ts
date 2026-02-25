@@ -3,6 +3,8 @@ import {
   VALID_LINEAR_DAG,
   DAG_WITH_UNKNOWN_TYPE,
   DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+  DAG_WITH_HTTP_CALL,
+  DAG_WITH_HTTP_CALL_CHAIN,
 } from "../helpers/fixtures.js";
 
 // Mock DB
@@ -47,6 +49,13 @@ vi.mock("../../src/db/index.js", () => ({
   sql: {
     end: () => Promise.resolve(),
   },
+}));
+
+// Mock key-service client
+const mockFetchProviderRequirements = vi.fn();
+vi.mock("../../src/lib/key-service-client.js", () => ({
+  fetchProviderRequirements: (...args: unknown[]) =>
+    mockFetchProviderRequirements(...args),
 }));
 
 // Mock Windmill client
@@ -445,6 +454,130 @@ describe("PUT /workflows/deploy", () => {
       .send({ appId: "mcpfactory" }); // missing workflows
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /workflows/:id/required-providers", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockFetchProviderRequirements.mockReset();
+  });
+
+  it("returns providers for a workflow with http.call nodes", async () => {
+    mockDbRows.push({
+      id: "wf-http",
+      orgId: "org-1",
+      appId: "test-app",
+      name: "HTTP Flow",
+      dag: DAG_WITH_HTTP_CALL_CHAIN,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    mockFetchProviderRequirements.mockResolvedValue({
+      requirements: [
+        { provider: "client", fields: ["apiKey"] },
+        { provider: "transactional-email", fields: ["apiKey"] },
+      ],
+      providers: ["client", "transactional-email"],
+    });
+
+    const res = await request
+      .get("/workflows/wf-http/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.endpoints).toHaveLength(2);
+    expect(res.body.providers).toEqual(["client", "transactional-email"]);
+    expect(mockFetchProviderRequirements).toHaveBeenCalledWith([
+      { service: "client", method: "POST", path: "/users" },
+      { service: "transactional-email", method: "POST", path: "/send" },
+    ]);
+  });
+
+  it("returns empty providers for workflows with no http.call nodes", async () => {
+    mockDbRows.push({
+      id: "wf-legacy",
+      orgId: "org-1",
+      appId: "test-app",
+      name: "Legacy Flow",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows/wf-legacy/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.endpoints).toEqual([]);
+    expect(res.body.requirements).toEqual([]);
+    expect(res.body.providers).toEqual([]);
+    expect(mockFetchProviderRequirements).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for non-existent workflow", async () => {
+    const res = await request
+      .get("/workflows/nonexistent-id/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Workflow not found");
+  });
+
+  it("returns 502 when key-service fails", async () => {
+    mockDbRows.push({
+      id: "wf-http",
+      orgId: "org-1",
+      appId: "test-app",
+      name: "HTTP Flow",
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    mockFetchProviderRequirements.mockRejectedValue(
+      new Error(
+        "key-service error: POST /internal/provider-requirements -> 500 Internal Server Error: boom"
+      )
+    );
+
+    const res = await request
+      .get("/workflows/wf-http/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("key-service error:");
+  });
+
+  it("returns 502 when KEY_SERVICE env vars are missing", async () => {
+    mockDbRows.push({
+      id: "wf-http",
+      orgId: "org-1",
+      appId: "test-app",
+      name: "HTTP Flow",
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    mockFetchProviderRequirements.mockRejectedValue(
+      new Error(
+        "KEY_SERVICE_URL and KEY_SERVICE_API_KEY must be set to fetch provider requirements"
+      )
+    );
+
+    const res = await request
+      .get("/workflows/wf-http/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(502);
+  });
+
+  it("requires authentication", async () => {
+    const res = await request.get("/workflows/wf-1/required-providers");
+    expect(res.status).toBe(401);
   });
 });
 

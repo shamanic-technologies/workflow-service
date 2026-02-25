@@ -295,6 +295,30 @@ export const GenerateWorkflowResponseSchema = z
   })
   .openapi("GenerateWorkflowResponse");
 
+// --- Provider Requirements schemas ---
+
+export const ServiceEndpointSchema = z
+  .object({
+    service: z.string().describe("Service name (e.g. 'apollo', 'stripe')."),
+    method: z.string().describe("HTTP method (e.g. 'POST', 'GET')."),
+    path: z.string().describe("Endpoint path (e.g. '/leads/search')."),
+  })
+  .openapi("ServiceEndpoint");
+
+export const ProviderRequirementsResponseSchema = z
+  .object({
+    endpoints: z.array(ServiceEndpointSchema).describe(
+      "The http.call endpoints extracted from the workflow DAG."
+    ),
+    requirements: z.array(z.unknown()).describe(
+      "Provider requirements returned by key-service."
+    ),
+    providers: z.array(z.string()).describe(
+      "Unique provider names required by this workflow (e.g. ['apollo', 'firecrawl'])."
+    ),
+  })
+  .openapi("ProviderRequirementsResponse");
+
 // --- Common ---
 
 export const ErrorResponseSchema = z
@@ -397,6 +421,37 @@ registry.registerPath({
     },
     404: {
       description: "Not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/{id}/required-providers",
+  summary: "Get required BYOK providers for a workflow",
+  description:
+    "Analyzes the workflow DAG to extract all http.call endpoints, " +
+    "then queries key-service to determine which external providers " +
+    "(and their API keys) are needed to execute the workflow.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Provider requirements",
+      content: {
+        "application/json": { schema: ProviderRequirementsResponseSchema },
+      },
+    },
+    404: {
+      description: "Workflow not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Key service unavailable or returned an error",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
