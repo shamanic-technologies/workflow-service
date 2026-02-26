@@ -333,7 +333,7 @@ export const DAG_WITH_FLOW_INPUT_REFS: DAG = {
       config: { service: "campaign", method: "POST", path: "/internal/start-run" },
       inputMapping: {
         "body.campaignId": "$ref:flow_input.campaignId",
-        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+        "body.orgId": "$ref:flow_input.orgId",
       },
       retries: 0,
     },
@@ -349,7 +349,7 @@ export const DAG_WITH_CONFIG_RETRIES: DAG = {
       config: { service: "campaign", method: "POST", path: "/internal/start-run", retries: 0 },
       inputMapping: {
         "body.campaignId": "$ref:flow_input.campaignId",
-        "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+        "body.orgId": "$ref:flow_input.orgId",
       },
     },
   ],

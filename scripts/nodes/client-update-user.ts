@@ -4,7 +4,7 @@ export async function main(
   firstName?: string,
   lastName?: string,
   phone?: string,
-  clerkUserId?: string | null,
+  linkedUserId?: string | null,
   orgId?: string | null,
   metadata?: Record<string, unknown> | null,
   serviceEnvs?: Record<string, string>,
@@ -23,7 +23,7 @@ export async function main(
         "Content-Type": "application/json",
         "x-api-key": apiKey,
       },
-      body: JSON.stringify({ firstName, lastName, phone, clerkUserId, orgId, metadata }),
+      body: JSON.stringify({ firstName, lastName, phone, userId: linkedUserId, orgId, metadata }),
     }
   );
 

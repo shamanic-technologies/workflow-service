@@ -167,13 +167,13 @@ Prefer "http.call" over legacy named types for new workflows.
       "id": "gate-check",
       "type": "http.call",
       "config": { "service": "campaign", "method": "POST", "path": "/internal/gate-check", "stopAfterIf": "result.allowed == false" },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.clerkOrgId": "$ref:flow_input.clerkOrgId" }
+      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
     },
     {
       "id": "start-run",
       "type": "http.call",
       "config": { "service": "campaign", "method": "POST", "path": "/internal/start-run" },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.clerkOrgId": "$ref:flow_input.clerkOrgId" }
+      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
     },
     {
       "id": "fetch-lead",

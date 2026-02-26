@@ -115,18 +115,18 @@ describe("buildInputTransforms", () => {
   it("collapses dot-notation keys into a nested object expression", () => {
     const result = buildInputTransforms(undefined, {
       "body.campaignId": "$ref:flow_input.campaignId",
-      "body.clerkOrgId": "$ref:flow_input.clerkOrgId",
+      "body.orgId": "$ref:flow_input.orgId",
     });
 
     // Should NOT have flat dot-notation keys
     expect(result["body.campaignId"]).toBeUndefined();
-    expect(result["body.clerkOrgId"]).toBeUndefined();
+    expect(result["body.orgId"]).toBeUndefined();
 
     // Should have a single body transform with a JavaScript expression
     expect(result.body).toBeDefined();
     expect(result.body.type).toBe("javascript");
     expect(result.body.expr).toContain("flow_input.campaignId");
-    expect(result.body.expr).toContain("flow_input.clerkOrgId");
+    expect(result.body.expr).toContain("flow_input.orgId");
   });
 
   it("merges dot-notation keys with static config base", () => {

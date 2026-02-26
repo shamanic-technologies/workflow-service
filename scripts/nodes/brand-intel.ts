@@ -17,7 +17,7 @@ export async function main(
     {
       headers: {
         "x-api-key": apiKey,
-        "x-clerk-org-id": context.orgId,
+        "x-org-id": context.orgId,
       },
     }
   );
