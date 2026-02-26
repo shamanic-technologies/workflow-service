@@ -49,11 +49,10 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
       orgId: body.orgId,
     });
 
-    const generated = await generateWorkflow({
-      description: body.description,
-      hints: body.hints,
+    const generated = await generateWorkflow(
+      { description: body.description, hints: body.hints },
       anthropicApiKey,
-    });
+    );
 
     const dag = generated.dag as DAG;
     const signature = computeDAGSignature(generated.dag);
