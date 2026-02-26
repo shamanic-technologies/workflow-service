@@ -111,6 +111,8 @@ function createMockToolResponse(dag: unknown, overrides?: Record<string, unknown
   };
 }
 
+const TEST_API_KEY = "test-anthropic-key";
+
 describe("generateWorkflow", () => {
   let mockCreate: ReturnType<typeof vi.fn>;
 
@@ -130,9 +132,10 @@ describe("generateWorkflow", () => {
       createMockToolResponse(VALID_LINEAR_DAG),
     );
 
-    const result = await generateWorkflow({
-      description: "Search leads and send cold emails",
-    });
+    const result = await generateWorkflow(
+      { description: "Search leads and send cold emails" },
+      TEST_API_KEY,
+    );
 
     expect(result.dag).toEqual(VALID_LINEAR_DAG);
     expect(result.category).toBe("sales");
@@ -150,9 +153,10 @@ describe("generateWorkflow", () => {
     mockCreate.mockResolvedValueOnce(createMockToolResponse(invalidDag));
     mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
 
-    const result = await generateWorkflow({
-      description: "Search leads and send cold emails",
-    });
+    const result = await generateWorkflow(
+      { description: "Search leads and send cold emails" },
+      TEST_API_KEY,
+    );
 
     expect(result.dag).toEqual(VALID_LINEAR_DAG);
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -172,35 +176,26 @@ describe("generateWorkflow", () => {
     mockCreate.mockResolvedValue(createMockToolResponse(invalidDag));
 
     await expect(
-      generateWorkflow({ description: "Bad workflow" }),
+      generateWorkflow({ description: "Bad workflow" }, TEST_API_KEY),
     ).rejects.toThrow(GenerationValidationError);
 
     // 1 initial + 2 retries = 3 calls
     expect(mockCreate).toHaveBeenCalledTimes(3);
   });
 
-  it("throws if ANTHROPIC_API_KEY is not set and no apiKey provided", async () => {
-    setAnthropicClient(null);
-    const saved = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
-
-    await expect(
-      generateWorkflow({ description: "test workflow" }),
-    ).rejects.toThrow("ANTHROPIC_API_KEY is not set");
-
-    process.env.ANTHROPIC_API_KEY = saved;
-  });
-
   it("passes hints to the user message", async () => {
     mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
 
-    await generateWorkflow({
-      description: "Send email to leads",
-      hints: {
-        services: ["lead", "email-gateway"],
-        expectedInputs: ["campaignId"],
+    await generateWorkflow(
+      {
+        description: "Send email to leads",
+        hints: {
+          services: ["lead", "email-gateway"],
+          expectedInputs: ["campaignId"],
+        },
       },
-    });
+      TEST_API_KEY,
+    );
 
     const call = mockCreate.mock.calls[0][0];
     const userMsg = call.messages[0].content;
@@ -219,14 +214,14 @@ describe("generateWorkflow", () => {
     });
 
     await expect(
-      generateWorkflow({ description: "test workflow" }),
+      generateWorkflow({ description: "test workflow" }, TEST_API_KEY),
     ).rejects.toThrow("LLM did not return a tool use response");
   });
 
   it("includes system prompt with DAG schema", async () => {
     mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
 
-    await generateWorkflow({ description: "test workflow" });
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
 
     const call = mockCreate.mock.calls[0][0];
     expect(call.system).toContain("DAG Format");
@@ -236,7 +231,7 @@ describe("generateWorkflow", () => {
   it("uses tool_choice to force structured output", async () => {
     mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
 
-    await generateWorkflow({ description: "test workflow" });
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
 
     const call = mockCreate.mock.calls[0][0];
     expect(call.tool_choice).toEqual({ type: "tool", name: "create_workflow" });
