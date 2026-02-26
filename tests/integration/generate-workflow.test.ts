@@ -127,7 +127,8 @@ describe("POST /workflows/generate", () => {
     expect(res.body.audienceType).toBe("cold-outreach");
     expect(mockFetchAnthropicKey).toHaveBeenCalledWith("app", { appId: "test-app", orgId: "org-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({ anthropicApiKey: "resolved-anthropic-key" }),
+      { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined },
+      "resolved-anthropic-key",
     );
   });
 
@@ -221,11 +222,10 @@ describe("POST /workflows/generate", () => {
       });
 
     expect(mockFetchAnthropicKey).toHaveBeenCalledWith("byok", { appId: "test-app", orgId: "org-1" });
-    expect(mockGenerateWorkflow).toHaveBeenCalledWith({
-      description: "Cold email outreach with lead search",
-      hints: { services: ["lead", "email-gateway"] },
-      anthropicApiKey: "resolved-anthropic-key",
-    });
+    expect(mockGenerateWorkflow).toHaveBeenCalledWith(
+      { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] } },
+      "resolved-anthropic-key",
+    );
   });
 
   it("returns 500 when LLM throws unexpected error", async () => {
