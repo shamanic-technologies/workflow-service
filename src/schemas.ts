@@ -310,6 +310,50 @@ export const GenerateWorkflowResponseSchema = z
   })
   .openapi("GenerateWorkflowResponse");
 
+// --- Best Workflow schemas ---
+
+export const BestWorkflowObjectiveSchema = z
+  .enum(["replies", "clicks"])
+  .describe(
+    'Optimization objective. "replies" sorts by lowest cost per reply; "clicks" sorts by lowest cost per click.'
+  )
+  .openapi("BestWorkflowObjective");
+
+export const BestWorkflowQuerySchema = z
+  .object({
+    appId: z.string().min(1).describe("Application identifier. Required to scope the query."),
+    category: WorkflowCategorySchema.describe("Filter workflows by category."),
+    channel: WorkflowChannelSchema.describe("Filter workflows by channel."),
+    audienceType: WorkflowAudienceTypeSchema.describe("Filter workflows by audience type."),
+    objective: BestWorkflowObjectiveSchema.describe("Which metric to optimize for."),
+  })
+  .openapi("BestWorkflowQuery");
+
+export const BestWorkflowStatsSchema = z
+  .object({
+    totalCostInUsdCents: z.number().describe("Total cost across all completed runs of this workflow."),
+    totalOutcomes: z.number().describe("Total replies or clicks (depending on objective) across all runs."),
+    costPerOutcome: z.number().nullable().describe("Cost per reply or cost per click in USD cents. Null if no outcomes yet."),
+    completedRuns: z.number().describe("Number of completed runs used in the calculation."),
+  })
+  .openapi("BestWorkflowStats");
+
+export const BestWorkflowResponseSchema = z
+  .object({
+    workflow: z.object({
+      id: z.string().uuid(),
+      name: z.string(),
+      category: WorkflowCategorySchema,
+      channel: WorkflowChannelSchema,
+      audienceType: WorkflowAudienceTypeSchema,
+      signature: z.string(),
+      signatureName: z.string(),
+    }).describe("The best-performing workflow metadata."),
+    dag: DAGSchema.describe("The DAG definition of the best workflow."),
+    stats: BestWorkflowStatsSchema.describe("Aggregated performance stats for this workflow."),
+  })
+  .openapi("BestWorkflowResponse");
+
 // --- Provider Requirements schemas ---
 
 export const ServiceEndpointSchema = z
@@ -723,6 +767,41 @@ registry.registerPath({
     },
     422: {
       description: "LLM generated an invalid DAG that could not be fixed after retries",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/best",
+  summary: "Get the best-performing workflow by cost-per-outcome",
+  description:
+    "Returns the single best workflow for the given category/channel/audienceType, " +
+    "ranked by lowest cost-per-reply or cost-per-click. " +
+    "Uses run cost data from runs-service and email engagement stats from email-gateway-service.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    query: BestWorkflowQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Best workflow found",
+      content: {
+        "application/json": { schema: BestWorkflowResponseSchema },
+      },
+    },
+    404: {
+      description: "No workflows found matching the criteria or no completed runs",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    400: {
+      description: "Missing or invalid query parameters",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "External service (runs-service or email-gateway-service) unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

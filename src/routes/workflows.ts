@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { workflows } from "../db/schema.js";
+import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { validateDAG, type DAG } from "../lib/dag-validator.js";
 import { dagToOpenFlow } from "../lib/dag-to-openflow.js";
@@ -11,6 +11,7 @@ import {
   UpdateWorkflowSchema,
   DeployWorkflowsSchema,
   GenerateWorkflowSchema,
+  BestWorkflowQuerySchema,
 } from "../schemas.js";
 import {
   generateWorkflow,
@@ -20,6 +21,7 @@ import { computeDAGSignature } from "../lib/dag-signature.js";
 import { pickSignatureName } from "../lib/signature-words.js";
 import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
 import { fetchProviderRequirements, fetchAnthropicKey } from "../lib/key-service-client.js";
+import { fetchRunCosts, fetchEmailStats } from "../lib/stats-client.js";
 
 const router = Router();
 
@@ -433,6 +435,160 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       return;
     }
     console.error("[workflows] PUT deploy error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /workflows/best — Get the best-performing workflow by cost efficiency
+router.get("/workflows/best", requireApiKey, async (req, res) => {
+  try {
+    const query = BestWorkflowQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      res.status(400).json({ error: "Validation error", details: query.error });
+      return;
+    }
+    const { appId, category, channel, audienceType, objective } = query.data;
+
+    // 1. Get all workflows matching the dimensions
+    const matchingWorkflows = await db
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.appId, appId),
+          eq(workflows.category, category),
+          eq(workflows.channel, channel),
+          eq(workflows.audienceType, audienceType),
+        )
+      );
+
+    if (matchingWorkflows.length === 0) {
+      res.status(404).json({ error: "No workflows found matching the criteria" });
+      return;
+    }
+
+    // 2. For each workflow, get completed runs and extract external runIds
+    const workflowRunsByWfId: Record<string, string[]> = {};
+    const allRunIds: string[] = [];
+
+    for (const wf of matchingWorkflows) {
+      const runs = await db
+        .select()
+        .from(workflowRuns)
+        .where(
+          and(
+            eq(workflowRuns.workflowId, wf.id),
+            eq(workflowRuns.status, "completed"),
+          )
+        );
+
+      const runIds = runs
+        .map((r) => r.runId)
+        .filter((id): id is string => id !== null);
+
+      workflowRunsByWfId[wf.id] = runIds;
+      allRunIds.push(...runIds);
+    }
+
+    if (allRunIds.length === 0) {
+      res.status(404).json({
+        error: "No completed runs found for any matching workflow",
+      });
+      return;
+    }
+
+    // 3. Batch fetch costs from runs-service
+    const runCosts = await fetchRunCosts(allRunIds);
+    const costByRunId = new Map(
+      runCosts.map((c) => [c.runId, c.totalCostInUsdCents])
+    );
+
+    // 4. Per-workflow: compute cost + fetch email stats
+    const workflowScores: Array<{
+      workflow: (typeof matchingWorkflows)[0];
+      totalCost: number;
+      totalOutcomes: number;
+      costPerOutcome: number | null;
+      completedRuns: number;
+    }> = [];
+
+    for (const wf of matchingWorkflows) {
+      const runIds = workflowRunsByWfId[wf.id];
+      if (!runIds || runIds.length === 0) continue;
+
+      const totalCost = runIds.reduce(
+        (sum, id) => sum + (costByRunId.get(id) ?? 0),
+        0
+      );
+
+      const stats = await fetchEmailStats(runIds);
+      const outcomes =
+        objective === "replies"
+          ? (stats.transactional?.replied ?? 0) + (stats.broadcast?.replied ?? 0)
+          : (stats.transactional?.clicked ?? 0) + (stats.broadcast?.clicked ?? 0);
+
+      const costPerOutcome = outcomes > 0 ? totalCost / outcomes : null;
+
+      workflowScores.push({
+        workflow: wf,
+        totalCost,
+        totalOutcomes: outcomes,
+        costPerOutcome,
+        completedRuns: runIds.length,
+      });
+    }
+
+    if (workflowScores.length === 0) {
+      res.status(404).json({ error: "No workflows with completed runs found" });
+      return;
+    }
+
+    // 5. Sort: lowest costPerOutcome first; null last (fallback: most runs)
+    workflowScores.sort((a, b) => {
+      if (a.costPerOutcome !== null && b.costPerOutcome !== null) {
+        return a.costPerOutcome - b.costPerOutcome;
+      }
+      if (a.costPerOutcome !== null) return -1;
+      if (b.costPerOutcome !== null) return 1;
+      return b.completedRuns - a.completedRuns;
+    });
+
+    // 6. Return the best workflow
+    const best = workflowScores[0];
+    res.json({
+      workflow: {
+        id: best.workflow.id,
+        name: best.workflow.name,
+        category: best.workflow.category,
+        channel: best.workflow.channel,
+        audienceType: best.workflow.audienceType,
+        signature: best.workflow.signature,
+        signatureName: best.workflow.signatureName,
+      },
+      dag: best.workflow.dag,
+      stats: {
+        totalCostInUsdCents: best.totalCost,
+        totalOutcomes: best.totalOutcomes,
+        costPerOutcome: best.costPerOutcome,
+        completedRuns: best.completedRuns,
+      },
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "ZodError") {
+      res.status(400).json({ error: "Validation error", details: err });
+      return;
+    }
+    if (
+      err instanceof Error &&
+      (err.message.includes("RUNS_SERVICE_URL") ||
+        err.message.includes("EMAIL_GATEWAY_SERVICE_URL") ||
+        err.message.startsWith("email-gateway-service error:"))
+    ) {
+      console.error("[workflows] best: external service error:", err.message);
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    console.error("[workflows] GET best error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
