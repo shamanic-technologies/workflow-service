@@ -797,6 +797,103 @@
           "description"
         ]
       },
+      "BestWorkflowStats": {
+        "type": "object",
+        "properties": {
+          "totalCostInUsdCents": {
+            "type": "number",
+            "description": "Total cost across all completed runs of this workflow."
+          },
+          "totalOutcomes": {
+            "type": "number",
+            "description": "Total replies or clicks (depending on objective) across all runs."
+          },
+          "costPerOutcome": {
+            "type": "number",
+            "nullable": true,
+            "description": "Cost per reply or cost per click in USD cents. Null if no outcomes yet."
+          },
+          "completedRuns": {
+            "type": "number",
+            "description": "Number of completed runs used in the calculation."
+          }
+        },
+        "required": [
+          "totalCostInUsdCents",
+          "totalOutcomes",
+          "costPerOutcome",
+          "completedRuns"
+        ],
+        "description": "Aggregated performance stats for this workflow."
+      },
+      "BestWorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              },
+              "category": {
+                "$ref": "#/components/schemas/WorkflowCategory"
+              },
+              "channel": {
+                "$ref": "#/components/schemas/WorkflowChannel"
+              },
+              "audienceType": {
+                "$ref": "#/components/schemas/WorkflowAudienceType"
+              },
+              "signature": {
+                "type": "string"
+              },
+              "signatureName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "category",
+              "channel",
+              "audienceType",
+              "signature",
+              "signatureName"
+            ],
+            "description": "The best-performing workflow metadata."
+          },
+          "dag": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DAG"
+              },
+              {
+                "description": "The DAG definition of the best workflow."
+              }
+            ]
+          },
+          "stats": {
+            "$ref": "#/components/schemas/BestWorkflowStats"
+          }
+        },
+        "required": [
+          "workflow",
+          "dag",
+          "stats"
+        ]
+      },
+      "BestWorkflowObjective": {
+        "type": "string",
+        "enum": [
+          "replies",
+          "clicks"
+        ],
+        "description": "Which metric to optimize for."
+      },
       "ExecuteByNameRequest": {
         "type": "object",
         "properties": {
@@ -1552,6 +1649,132 @@
           },
           "422": {
             "description": "LLM generated an invalid DAG that could not be fixed after retries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/best": {
+      "get": {
+        "summary": "Get the best-performing workflow by cost-per-outcome",
+        "description": "Returns the single best workflow for the given category/channel/audienceType, ranked by lowest cost-per-reply or cost-per-click. Uses run cost data from runs-service and email engagement stats from email-gateway-service.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Application identifier. Required to scope the query."
+            },
+            "required": true,
+            "description": "Application identifier. Required to scope the query.",
+            "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/WorkflowCategory"
+                },
+                {
+                  "description": "Filter workflows by category."
+                }
+              ]
+            },
+            "required": true,
+            "description": "Filter workflows by category.",
+            "name": "category",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/WorkflowChannel"
+                },
+                {
+                  "description": "Filter workflows by channel."
+                }
+              ]
+            },
+            "required": true,
+            "description": "Filter workflows by channel.",
+            "name": "channel",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/WorkflowAudienceType"
+                },
+                {
+                  "description": "Filter workflows by audience type."
+                }
+              ]
+            },
+            "required": true,
+            "description": "Filter workflows by audience type.",
+            "name": "audienceType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/BestWorkflowObjective"
+            },
+            "required": true,
+            "description": "Which metric to optimize for.",
+            "name": "objective",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Best workflow found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BestWorkflowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No workflows found matching the criteria or no completed runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External service (runs-service or email-gateway-service) unavailable",
             "content": {
               "application/json": {
                 "schema": {
