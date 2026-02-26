@@ -179,7 +179,7 @@ describe("generateWorkflow", () => {
     expect(mockCreate).toHaveBeenCalledTimes(3);
   });
 
-  it("throws if ANTHROPIC_API_KEY is not set", async () => {
+  it("throws if ANTHROPIC_API_KEY is not set and no apiKey provided", async () => {
     setAnthropicClient(null);
     const saved = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;

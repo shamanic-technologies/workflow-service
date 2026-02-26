@@ -5,9 +5,7 @@ export interface ProviderRequirementsResponse {
   providers: string[];
 }
 
-export async function fetchProviderRequirements(
-  endpoints: HttpEndpoint[]
-): Promise<ProviderRequirementsResponse> {
+function getKeyServiceConfig(): { baseUrl: string; apiKey: string } {
   const baseUrl = process.env.KEY_SERVICE_URL;
   const apiKey = process.env.KEY_SERVICE_API_KEY;
 
@@ -17,7 +15,15 @@ export async function fetchProviderRequirements(
     );
   }
 
-  const url = `${baseUrl.replace(/\/$/, "")}/internal/provider-requirements`;
+  return { baseUrl: baseUrl.replace(/\/$/, ""), apiKey };
+}
+
+export async function fetchProviderRequirements(
+  endpoints: HttpEndpoint[]
+): Promise<ProviderRequirementsResponse> {
+  const { baseUrl, apiKey } = getKeyServiceConfig();
+
+  const url = `${baseUrl}/internal/provider-requirements`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -35,4 +41,40 @@ export async function fetchProviderRequirements(
   }
 
   return res.json() as Promise<ProviderRequirementsResponse>;
+}
+
+export async function fetchAnthropicKey(
+  keySource: "app" | "byok",
+  opts: { appId: string; orgId: string },
+): Promise<string> {
+  const { baseUrl, apiKey } = getKeyServiceConfig();
+
+  const callerHeaders = {
+    "x-caller-service": "workflow",
+    "x-caller-method": "POST",
+    "x-caller-path": "/workflows/generate",
+  };
+
+  const path =
+    keySource === "app"
+      ? `/internal/app-keys/anthropic/decrypt?appId=${encodeURIComponent(opts.appId)}`
+      : `/internal/keys/anthropic/decrypt?orgId=${encodeURIComponent(opts.orgId)}`;
+
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "GET",
+    headers: {
+      "x-api-key": apiKey,
+      ...callerHeaders,
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `key-service error: GET ${path.split("?")[0]} -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  const body = (await res.json()) as { provider: string; key: string };
+  return body.key;
 }
