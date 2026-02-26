@@ -8,6 +8,7 @@ import {
 
 export interface GenerateWorkflowInput {
   description: string;
+  anthropicApiKey?: string;
   hints?: {
     services?: string[];
     nodeTypes?: string[];
@@ -28,11 +29,14 @@ const MODEL = "claude-sonnet-4-20250514";
 
 let anthropicClient: Anthropic | null = null;
 
-function getAnthropicClient(): Anthropic {
+function getAnthropicClient(apiKey?: string): Anthropic {
+  if (apiKey) {
+    return new Anthropic({ apiKey });
+  }
   if (!anthropicClient) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
-    anthropicClient = new Anthropic({ apiKey });
+    const envKey = process.env.ANTHROPIC_API_KEY;
+    if (!envKey) throw new Error("ANTHROPIC_API_KEY is not set");
+    anthropicClient = new Anthropic({ apiKey: envKey });
   }
   return anthropicClient;
 }
@@ -45,7 +49,9 @@ export function setAnthropicClient(client: Anthropic | null): void {
 export async function generateWorkflow(
   input: GenerateWorkflowInput,
 ): Promise<GenerateWorkflowResult> {
-  const client = getAnthropicClient();
+  const client = input.anthropicApiKey
+    ? getAnthropicClient(input.anthropicApiKey)
+    : getAnthropicClient();
   const systemPrompt = buildSystemPrompt(input.hints?.services);
 
   let userMessage = input.description;

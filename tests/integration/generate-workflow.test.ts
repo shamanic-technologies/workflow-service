@@ -75,6 +75,13 @@ vi.mock("../../src/lib/workflow-generator.js", () => {
   };
 });
 
+// Mock fetchAnthropicKey from key-service-client
+const mockFetchAnthropicKey = vi.fn().mockResolvedValue("resolved-anthropic-key");
+vi.mock("../../src/lib/key-service-client.js", () => ({
+  fetchProviderRequirements: vi.fn().mockResolvedValue({ requirements: [], providers: [] }),
+  fetchAnthropicKey: (...args: unknown[]) => mockFetchAnthropicKey(...args),
+}));
+
 import supertest from "supertest";
 import app from "../../src/index.js";
 
@@ -85,6 +92,8 @@ describe("POST /workflows/generate", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
     mockGenerateWorkflow.mockReset();
+    mockFetchAnthropicKey.mockReset();
+    mockFetchAnthropicKey.mockResolvedValue("resolved-anthropic-key");
   });
 
   it("generates and deploys a workflow from description", async () => {
@@ -102,6 +111,7 @@ describe("POST /workflows/generate", () => {
       .send({
         appId: "test-app",
         orgId: "org-1",
+        keySource: "app",
         description: "I want a cold email outreach workflow that finds leads and sends emails",
       });
 
@@ -115,6 +125,10 @@ describe("POST /workflows/generate", () => {
     expect(res.body.category).toBe("sales");
     expect(res.body.channel).toBe("email");
     expect(res.body.audienceType).toBe("cold-outreach");
+    expect(mockFetchAnthropicKey).toHaveBeenCalledWith("app", { appId: "test-app", orgId: "org-1" });
+    expect(mockGenerateWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ anthropicApiKey: "resolved-anthropic-key" }),
+    );
   });
 
   it("returns 422 when LLM generates invalid DAG after retries", async () => {
@@ -131,6 +145,7 @@ describe("POST /workflows/generate", () => {
       .send({
         appId: "test-app",
         orgId: "org-1",
+        keySource: "app",
         description: "A workflow that does something impossible with bad types",
       });
 
@@ -153,7 +168,7 @@ describe("POST /workflows/generate", () => {
     const res = await request
       .post("/workflows/generate")
       .set(AUTH)
-      .send({ appId: "test-app", orgId: "org-1" });
+      .send({ appId: "test-app", orgId: "org-1", keySource: "app" });
 
     expect(res.status).toBe(400);
   });
@@ -162,7 +177,25 @@ describe("POST /workflows/generate", () => {
     const res = await request
       .post("/workflows/generate")
       .set(AUTH)
-      .send({ appId: "test-app", orgId: "org-1", description: "hi" });
+      .send({ appId: "test-app", orgId: "org-1", keySource: "app", description: "hi" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("validates keySource is required", async () => {
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({ appId: "test-app", orgId: "org-1", description: "A workflow that does things" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("validates keySource enum values", async () => {
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({ appId: "test-app", orgId: "org-1", keySource: "invalid", description: "A workflow that does things" });
 
     expect(res.status).toBe(400);
   });
@@ -182,19 +215,22 @@ describe("POST /workflows/generate", () => {
       .send({
         appId: "test-app",
         orgId: "org-1",
+        keySource: "byok",
         description: "Cold email outreach with lead search",
         hints: { services: ["lead", "email-gateway"] },
       });
 
+    expect(mockFetchAnthropicKey).toHaveBeenCalledWith("byok", { appId: "test-app", orgId: "org-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith({
       description: "Cold email outreach with lead search",
       hints: { services: ["lead", "email-gateway"] },
+      anthropicApiKey: "resolved-anthropic-key",
     });
   });
 
   it("returns 500 when LLM throws unexpected error", async () => {
     mockGenerateWorkflow.mockRejectedValueOnce(
-      new Error("ANTHROPIC_API_KEY is not set"),
+      new Error("Unexpected LLM error"),
     );
 
     const res = await request
@@ -203,10 +239,49 @@ describe("POST /workflows/generate", () => {
       .send({
         appId: "test-app",
         orgId: "org-1",
+        keySource: "app",
         description: "Some workflow description for testing errors",
       });
 
     expect(res.status).toBe(500);
-    expect(res.body.error).toContain("ANTHROPIC_API_KEY");
+    expect(res.body.error).toContain("Unexpected LLM error");
+  });
+
+  it("returns 502 when key-service returns an error", async () => {
+    mockFetchAnthropicKey.mockRejectedValueOnce(
+      new Error("key-service error: GET /internal/app-keys/anthropic/decrypt -> 404 Not Found: key not configured"),
+    );
+
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Some workflow description for testing key-service errors",
+      });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("key-service error:");
+  });
+
+  it("returns 502 when KEY_SERVICE_URL is not configured", async () => {
+    mockFetchAnthropicKey.mockRejectedValueOnce(
+      new Error("KEY_SERVICE_URL and KEY_SERVICE_API_KEY must be set to fetch provider requirements"),
+    );
+
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Some workflow description for testing missing config",
+      });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("KEY_SERVICE_URL");
   });
 });

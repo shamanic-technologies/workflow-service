@@ -730,6 +730,14 @@
           "generatedDescription"
         ]
       },
+      "KeySource": {
+        "type": "string",
+        "enum": [
+          "app",
+          "byok"
+        ],
+        "description": "Required. Where to resolve the Anthropic API key: \"app\" or \"byok\"."
+      },
       "GenerateWorkflowHints": {
         "type": "object",
         "properties": {
@@ -770,6 +778,9 @@
             "minLength": 1,
             "description": "Organization ID."
           },
+          "keySource": {
+            "$ref": "#/components/schemas/KeySource"
+          },
           "description": {
             "type": "string",
             "minLength": 10,
@@ -782,6 +793,7 @@
         "required": [
           "appId",
           "orgId",
+          "keySource",
           "description"
         ]
       },

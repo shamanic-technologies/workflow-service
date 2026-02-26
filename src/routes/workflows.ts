@@ -19,7 +19,7 @@ import {
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import { pickSignatureName } from "../lib/signature-words.js";
 import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
-import { fetchProviderRequirements } from "../lib/key-service-client.js";
+import { fetchProviderRequirements, fetchAnthropicKey } from "../lib/key-service-client.js";
 
 const router = Router();
 
@@ -44,9 +44,15 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
   try {
     const body = GenerateWorkflowSchema.parse(req.body);
 
+    const anthropicApiKey = await fetchAnthropicKey(body.keySource, {
+      appId: body.appId,
+      orgId: body.orgId,
+    });
+
     const generated = await generateWorkflow({
       description: body.description,
       hints: body.hints,
+      anthropicApiKey,
     });
 
     const dag = generated.dag as DAG;
@@ -189,6 +195,15 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
         error: err.message,
         details: err.validationErrors,
       });
+      return;
+    }
+    if (err instanceof Error && err.message.startsWith("key-service error:")) {
+      console.error("[workflows] generate: key-service error:", err.message);
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    if (err instanceof Error && err.message.includes("KEY_SERVICE_URL")) {
+      res.status(502).json({ error: err.message });
       return;
     }
     console.error("[workflows] GENERATE error:", err);
