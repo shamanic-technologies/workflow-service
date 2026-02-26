@@ -319,7 +319,7 @@ describe("dagToOpenFlow", () => {
     const props = (result.schema as Record<string, unknown>).properties as Record<string, unknown>;
     expect(props.appId).toEqual({ type: "string", description: "Application identifier" });
     expect(props.campaignId).toEqual({ type: "string" });
-    expect(props.clerkOrgId).toEqual({ type: "string" });
+    expect(props.orgId).toEqual({ type: "string" });
   });
 
   it("declares flow_input fields from all nodes including onError handler", () => {
@@ -373,12 +373,12 @@ describe("dagToOpenFlow", () => {
       >;
       // Should NOT have flat dot-notation keys
       expect(transforms["body.campaignId"]).toBeUndefined();
-      expect(transforms["body.clerkOrgId"]).toBeUndefined();
+      expect(transforms["body.orgId"]).toBeUndefined();
       // Should have a collapsed body transform
       expect(transforms.body).toBeDefined();
       expect(transforms.body.type).toBe("javascript");
       expect(transforms.body.expr).toContain("flow_input.campaignId");
-      expect(transforms.body.expr).toContain("flow_input.clerkOrgId");
+      expect(transforms.body.expr).toContain("flow_input.orgId");
     }
   });
 

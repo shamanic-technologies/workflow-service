@@ -252,7 +252,7 @@ describe("PUT /workflows/deploy", () => {
       .set(AUTH)
       .send({
         appId: "mcpfactory",
-        orgId: "org_real_clerk_id",
+        orgId: "org_test_id",
         workflows: [
           {
             ...DEPLOY_ITEM,
@@ -265,7 +265,7 @@ describe("PUT /workflows/deploy", () => {
     expect(res.status).toBe(200);
     // Verify the DB row got the correct orgId
     const inserted = mockDbRows[mockDbRows.length - 1];
-    expect(inserted.orgId).toBe("org_real_clerk_id");
+    expect(inserted.orgId).toBe("org_test_id");
     expect(inserted.appId).toBe("mcpfactory");
   });
 

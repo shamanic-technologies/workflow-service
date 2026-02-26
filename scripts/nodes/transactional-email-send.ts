@@ -6,8 +6,8 @@ export async function main(
   brandId?: string,
   campaignId?: string,
   productId?: string,
-  clerkUserId?: string,
-  clerkOrgId?: string,
+  userId?: string,
+  orgId?: string,
   metadata?: Record<string, unknown>,
   serviceEnvs?: Record<string, string>,
 ) {
@@ -24,7 +24,7 @@ export async function main(
         "Content-Type": "application/json",
         "x-api-key": apiKey,
       },
-      body: JSON.stringify({ appId, eventType, recipientEmail, brandId, campaignId, productId, clerkUserId, clerkOrgId, metadata }),
+      body: JSON.stringify({ appId, eventType, recipientEmail, brandId, campaignId, productId, userId, orgId, metadata }),
     }
   );
 

@@ -1,7 +1,7 @@
 // Windmill node script — calls stripe POST /stats
 export async function main(
   runIds?: string[],
-  clerkOrgId?: string,
+  orgId?: string,
   brandId?: string,
   appId?: string,
   campaignId?: string,
@@ -20,7 +20,7 @@ export async function main(
         "Content-Type": "application/json",
         "X-API-Key": apiKey,
       },
-      body: JSON.stringify({ runIds, clerkOrgId, brandId, appId, campaignId }),
+      body: JSON.stringify({ runIds, orgId, brandId, appId, campaignId }),
     }
   );
 

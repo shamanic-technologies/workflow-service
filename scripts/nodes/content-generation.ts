@@ -23,7 +23,7 @@ export async function main(
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
-        "x-clerk-org-id": context.orgId,
+        "x-org-id": context.orgId,
       },
       body: JSON.stringify({
         contentType,
