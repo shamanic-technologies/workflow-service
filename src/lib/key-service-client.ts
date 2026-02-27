@@ -56,9 +56,11 @@ export async function fetchAnthropicKey(
   };
 
   const path =
-    keySource === "app" || keySource === "platform"
-      ? `/internal/app-keys/anthropic/decrypt?appId=${encodeURIComponent(opts.appId)}`
-      : `/internal/keys/anthropic/decrypt?orgId=${encodeURIComponent(opts.orgId)}`;
+    keySource === "platform"
+      ? `/internal/platform-keys/anthropic/decrypt`
+      : keySource === "app"
+        ? `/internal/app-keys/anthropic/decrypt?appId=${encodeURIComponent(opts.appId)}`
+        : `/internal/keys/anthropic/decrypt?orgId=${encodeURIComponent(opts.orgId)}`;
 
   const res = await fetch(`${baseUrl}${path}`, {
     method: "GET",

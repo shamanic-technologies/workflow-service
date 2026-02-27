@@ -140,7 +140,7 @@ describe("fetchAnthropicKey", () => {
     );
   });
 
-  it("calls app-keys decrypt endpoint when keySource is 'platform'", async () => {
+  it("calls platform-keys decrypt endpoint when keySource is 'platform'", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -153,7 +153,7 @@ describe("fetchAnthropicKey", () => {
 
     expect(key).toBe("sk-ant-platform-key");
     expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:4000/internal/app-keys/anthropic/decrypt?appId=my-app",
+      "http://localhost:4000/internal/platform-keys/anthropic/decrypt",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({
