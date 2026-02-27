@@ -44,7 +44,7 @@ export async function fetchProviderRequirements(
 }
 
 export async function fetchAnthropicKey(
-  keySource: "app" | "byok",
+  keySource: "app" | "byok" | "platform",
   opts: { appId: string; orgId: string },
 ): Promise<string> {
   const { baseUrl, apiKey } = getKeyServiceConfig();
@@ -56,7 +56,7 @@ export async function fetchAnthropicKey(
   };
 
   const path =
-    keySource === "app"
+    keySource === "app" || keySource === "platform"
       ? `/internal/app-keys/anthropic/decrypt?appId=${encodeURIComponent(opts.appId)}`
       : `/internal/keys/anthropic/decrypt?orgId=${encodeURIComponent(opts.orgId)}`;
 

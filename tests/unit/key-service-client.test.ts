@@ -140,6 +140,32 @@ describe("fetchAnthropicKey", () => {
     );
   });
 
+  it("calls app-keys decrypt endpoint when keySource is 'platform'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ provider: "anthropic", key: "sk-ant-platform-key" }),
+      })
+    );
+
+    const key = await fetchAnthropicKey("platform", { appId: "my-app", orgId: "org-1" });
+
+    expect(key).toBe("sk-ant-platform-key");
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:4000/internal/app-keys/anthropic/decrypt?appId=my-app",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "x-api-key": "test-key-svc-key",
+          "x-caller-service": "workflow",
+          "x-caller-method": "POST",
+          "x-caller-path": "/workflows/generate",
+        }),
+      })
+    );
+  });
+
   it("calls byok keys decrypt endpoint when keySource is 'byok'", async () => {
     vi.stubGlobal(
       "fetch",
