@@ -4,7 +4,12 @@ import {
   buildSystemPrompt,
   buildRetryUserMessage,
   DAG_GENERATION_TOOL,
+  AGENTIC_TOOLS,
 } from "./prompt-templates.js";
+import {
+  fetchLlmContext,
+  fetchServiceSpec,
+} from "./api-registry-client.js";
 
 export interface GenerateWorkflowInput {
   description: string;
@@ -24,7 +29,8 @@ export interface GenerateWorkflowResult {
 }
 
 const MAX_RETRIES = 2;
-const MODEL = "claude-sonnet-4-20250514";
+const MAX_AGENT_TURNS = 10;
+const MODEL = "claude-opus-4-6";
 
 let overrideClient: Anthropic | null = null;
 
@@ -33,12 +39,47 @@ export function setAnthropicClient(client: Anthropic | null): void {
   overrideClient = client;
 }
 
+async function resolveToolCall(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): Promise<{ content: string; isError?: boolean }> {
+  switch (toolName) {
+    case "list_services": {
+      const context = await fetchLlmContext();
+      const summary = context.services.map((s) => ({
+        name: s.service,
+        description: s.description ?? s.title ?? "",
+        endpointCount: s.endpoints.length,
+        endpoints: s.endpoints.map((e) => `${e.method} ${e.path}`),
+      }));
+      return { content: JSON.stringify(summary, null, 2) };
+    }
+    case "get_service_endpoints": {
+      const serviceName = toolInput.service as string;
+      const spec = await fetchServiceSpec(serviceName);
+      return { content: JSON.stringify(spec, null, 2) };
+    }
+    default:
+      return { content: `Unknown tool: ${toolName}`, isError: true };
+  }
+}
+
 export async function generateWorkflow(
   input: GenerateWorkflowInput,
   anthropicApiKey: string,
 ): Promise<GenerateWorkflowResult> {
   const client = overrideClient ?? new Anthropic({ apiKey: anthropicApiKey });
-  const systemPrompt = buildSystemPrompt(input.hints?.services);
+
+  const agenticMode = Boolean(
+    process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY,
+  );
+
+  const systemPrompt = buildSystemPrompt({
+    filterServices: input.hints?.services,
+    agenticMode,
+  });
+
+  const tools = agenticMode ? AGENTIC_TOOLS : [DAG_GENERATION_TOOL];
 
   let userMessage = input.description;
   if (input.hints?.services?.length) {
@@ -55,70 +96,109 @@ export async function generateWorkflow(
     { role: "user", content: userMessage },
   ];
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  let dagRetries = 0;
+
+  for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 4096,
+      max_tokens: agenticMode ? 16384 : 4096,
       system: systemPrompt,
       messages,
-      tools: [DAG_GENERATION_TOOL],
-      tool_choice: { type: "tool", name: "create_workflow" },
+      tools,
+      tool_choice: agenticMode
+        ? { type: "auto" as const }
+        : { type: "tool" as const, name: "create_workflow" },
     });
 
-    const toolUse = response.content.find(
+    // Check if the response contains a create_workflow call
+    const createWorkflowCall = response.content.find(
       (block): block is Anthropic.Messages.ToolUseBlock =>
         block.type === "tool_use" && block.name === "create_workflow",
     );
 
-    if (!toolUse) {
-      throw new Error("LLM did not return a tool use response");
-    }
-
-    const result = toolUse.input as {
-      category: string;
-      channel: string;
-      audienceType: string;
-      description: string;
-      dag: DAG;
-    };
-
-    const validation = validateDAG(result.dag);
-
-    if (validation.valid) {
-      return {
-        dag: result.dag,
-        category: result.category,
-        channel: result.channel,
-        audienceType: result.audienceType,
-        description: result.description,
+    if (createWorkflowCall) {
+      const result = createWorkflowCall.input as {
+        category: string;
+        channel: string;
+        audienceType: string;
+        description: string;
+        dag: DAG;
       };
-    }
 
-    if (attempt < MAX_RETRIES) {
-      messages.push({
-        role: "assistant",
-        content: response.content,
-      });
+      const validation = validateDAG(result.dag);
+
+      if (validation.valid) {
+        return {
+          dag: result.dag,
+          category: result.category,
+          channel: result.channel,
+          audienceType: result.audienceType,
+          description: result.description,
+        };
+      }
+
+      dagRetries++;
+      if (dagRetries > MAX_RETRIES) {
+        throw new GenerationValidationError(
+          "Generated DAG is invalid after retries",
+          validation.errors,
+        );
+      }
+
+      messages.push({ role: "assistant", content: response.content });
       messages.push({
         role: "user",
         content: [
           {
             type: "tool_result",
-            tool_use_id: toolUse.id,
+            tool_use_id: createWorkflowCall.id,
             is_error: true,
             content: buildRetryUserMessage(input.description, validation.errors),
           },
         ],
       });
-    } else {
-      throw new GenerationValidationError(
-        "Generated DAG is invalid after retries",
-        validation.errors,
-      );
+      continue;
     }
+
+    // No create_workflow — resolve discovery tool calls (list_services, get_service_endpoints)
+    const toolUseBlocks = response.content.filter(
+      (block): block is Anthropic.Messages.ToolUseBlock =>
+        block.type === "tool_use",
+    );
+
+    if (toolUseBlocks.length === 0) {
+      throw new Error("LLM did not return a tool use response");
+    }
+
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+    for (const toolBlock of toolUseBlocks) {
+      try {
+        const resolved = await resolveToolCall(
+          toolBlock.name,
+          toolBlock.input as Record<string, unknown>,
+        );
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolBlock.id,
+          content: resolved.content,
+          ...(resolved.isError ? { is_error: true } : {}),
+        });
+      } catch (err) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolBlock.id,
+          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          is_error: true,
+        });
+      }
+    }
+
+    messages.push({ role: "user", content: toolResults });
   }
 
-  throw new Error("Unexpected: generation loop exited without result");
+  throw new Error("Generation exceeded maximum turns without producing a workflow");
 }
 
 export class GenerationValidationError extends Error {
