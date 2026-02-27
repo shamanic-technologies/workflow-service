@@ -274,7 +274,8 @@ export const KeySourceSchema = z
   .enum(["app", "byok", "platform"])
   .describe(
     "Where to resolve the Anthropic API key. " +
-    '"app" or "platform" fetches the key registered for the appId via /internal/app-keys/anthropic/decrypt. ' +
+    '"app" fetches the per-app key via /internal/app-keys/anthropic/decrypt. ' +
+    '"platform" fetches the global platform key via /internal/platform-keys/anthropic/decrypt. ' +
     '"byok" fetches the user\'s own key via /internal/keys/anthropic/decrypt.'
   )
   .openapi("KeySource");
