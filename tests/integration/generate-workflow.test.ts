@@ -201,6 +201,29 @@ describe("POST /workflows/generate", () => {
     expect(res.status).toBe(400);
   });
 
+  it("accepts keySource 'platform' and resolves via app-keys", async () => {
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: VALID_LINEAR_DAG,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Test",
+    });
+
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "platform",
+        description: "A workflow that does things with platform key",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockFetchAnthropicKey).toHaveBeenCalledWith("platform", { appId: "test-app", orgId: "org-1" });
+  });
+
   it("passes hints through to generator", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,

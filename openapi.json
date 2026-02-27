@@ -734,9 +734,10 @@
         "type": "string",
         "enum": [
           "app",
-          "byok"
+          "byok",
+          "platform"
         ],
-        "description": "Required. Where to resolve the Anthropic API key: \"app\" or \"byok\"."
+        "description": "Required. Where to resolve the Anthropic API key: \"app\", \"platform\", or \"byok\"."
       },
       "GenerateWorkflowHints": {
         "type": "object",

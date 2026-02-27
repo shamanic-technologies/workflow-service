@@ -271,10 +271,10 @@ export const GenerateWorkflowHintsSchema = z
   .openapi("GenerateWorkflowHints");
 
 export const KeySourceSchema = z
-  .enum(["app", "byok"])
+  .enum(["app", "byok", "platform"])
   .describe(
     "Where to resolve the Anthropic API key. " +
-    '"app" fetches the key registered for the appId via /internal/app-keys/anthropic/decrypt. ' +
+    '"app" or "platform" fetches the key registered for the appId via /internal/app-keys/anthropic/decrypt. ' +
     '"byok" fetches the user\'s own key via /internal/keys/anthropic/decrypt.'
   )
   .openapi("KeySource");
@@ -284,7 +284,7 @@ export const GenerateWorkflowSchema = z
     appId: z.string().min(1).describe("Application identifier. The generated workflow will be deployed under this appId."),
     orgId: z.string().min(1).describe("Organization ID."),
     keySource: KeySourceSchema.describe(
-      'Required. Where to resolve the Anthropic API key: "app" or "byok".'
+      'Required. Where to resolve the Anthropic API key: "app", "platform", or "byok".'
     ),
     description: z.string().min(10).describe(
       "Natural language description of the desired workflow. Be specific about the steps, services, and data flow."
