@@ -11,6 +11,15 @@ import {
 } from "../../src/lib/prompt-templates.js";
 import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 
+// Mock api-registry-client
+const mockFetchLlmContext = vi.fn();
+const mockFetchServiceSpec = vi.fn();
+
+vi.mock("../../src/lib/api-registry-client.js", () => ({
+  fetchLlmContext: (...args: unknown[]) => mockFetchLlmContext(...args),
+  fetchServiceSpec: (...args: unknown[]) => mockFetchServiceSpec(...args),
+}));
+
 // --- Prompt building tests ---
 
 describe("buildSystemPrompt", () => {
@@ -30,19 +39,16 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain('"cold-outreach"');
   });
 
-  it("includes service catalog", () => {
+  it("includes service catalog in non-agentic mode", () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain("campaign");
     expect(prompt).toContain("lead");
     expect(prompt).toContain("content-generation");
+    expect(prompt).toContain("Available Services");
   });
 
   it("filters service catalog when filterServices is provided", () => {
-    const prompt = buildSystemPrompt(["campaign", "lead"]);
-    expect(prompt).toContain("campaign");
-    expect(prompt).toContain("lead");
-    // stripe should not appear in the services section
-    // but may appear in node types; check services section specifically
+    const prompt = buildSystemPrompt({ filterServices: ["campaign", "lead"] });
     expect(prompt).toContain("**campaign**");
     expect(prompt).toContain("**lead**");
   });
@@ -69,6 +75,28 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain('"wait"');
     expect(prompt).toContain('"for-each"');
   });
+
+  it("includes campaign execution model", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain("Campaign Execution Model");
+    expect(prompt).toContain("budget");
+    expect(prompt).toContain("gate-check");
+    expect(prompt).toContain("every minute");
+  });
+
+  it("replaces static catalog with discovery instructions in agentic mode", () => {
+    const prompt = buildSystemPrompt({ agenticMode: true });
+    expect(prompt).toContain("Service Discovery (MANDATORY)");
+    expect(prompt).toContain("list_services");
+    expect(prompt).toContain("get_service_endpoints");
+    expect(prompt).not.toContain("Available Services");
+  });
+
+  it("does not include static catalog in agentic mode", () => {
+    const prompt = buildSystemPrompt({ agenticMode: true });
+    // The static catalog entries should not be present
+    expect(prompt).not.toContain("**campaign**: Campaign lifecycle");
+  });
 });
 
 describe("buildRetryUserMessage", () => {
@@ -90,7 +118,7 @@ function createMockToolResponse(dag: unknown, overrides?: Record<string, unknown
     id: "msg_test",
     type: "message" as const,
     role: "assistant" as const,
-    model: "claude-sonnet-4-20250514",
+    model: "claude-opus-4-6",
     stop_reason: "tool_use" as const,
     content: [
       {
@@ -111,9 +139,67 @@ function createMockToolResponse(dag: unknown, overrides?: Record<string, unknown
   };
 }
 
+function createMockAgenticResponse(toolCalls: Array<{ name: string; input: unknown }>) {
+  return {
+    id: "msg_test",
+    type: "message" as const,
+    role: "assistant" as const,
+    model: "claude-opus-4-6",
+    stop_reason: "tool_use" as const,
+    content: toolCalls.map((tc) => ({
+      type: "tool_use" as const,
+      id: "tool_" + Math.random().toString(36).slice(2, 6),
+      name: tc.name,
+      input: tc.input,
+    })),
+    usage: { input_tokens: 100, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+  };
+}
+
 const TEST_API_KEY = "test-anthropic-key";
 
-describe("generateWorkflow", () => {
+const MOCK_LLM_CONTEXT = {
+  _description: "LLM-friendly context",
+  _usage: "Use this to discover services",
+  services: [
+    {
+      service: "lead",
+      baseUrl: "https://lead.example.com",
+      title: "Lead Service",
+      description: "Lead buffer management",
+      endpoints: [
+        { method: "POST", path: "/buffer/next", summary: "Get next lead" },
+        { method: "POST", path: "/buffer/push", summary: "Push lead" },
+      ],
+    },
+    {
+      service: "campaign",
+      baseUrl: "https://campaign.example.com",
+      title: "Campaign Service",
+      description: "Campaign lifecycle",
+      endpoints: [
+        { method: "POST", path: "/internal/gate-check", summary: "Gate check" },
+      ],
+    },
+  ],
+};
+
+const MOCK_SERVICE_SPEC = {
+  openapi: "3.0.0",
+  info: { title: "Lead Service", version: "1.0.0" },
+  paths: {
+    "/buffer/next": {
+      post: {
+        summary: "Get next lead",
+        requestBody: {
+          content: { "application/json": { schema: { type: "object", properties: { campaignId: { type: "string" } } } } },
+        },
+      },
+    },
+  },
+};
+
+describe("generateWorkflow (fallback mode — no api-registry)", () => {
   let mockCreate: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -121,6 +207,9 @@ describe("generateWorkflow", () => {
     setAnthropicClient({
       messages: { create: mockCreate },
     } as unknown as Anthropic);
+    // Ensure agentic mode is off
+    delete process.env.API_REGISTRY_SERVICE_URL;
+    delete process.env.API_REGISTRY_SERVICE_API_KEY;
   });
 
   afterEach(() => {
@@ -208,7 +297,7 @@ describe("generateWorkflow", () => {
       id: "msg_test",
       type: "message",
       role: "assistant",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-opus-4-6",
       content: [{ type: "text", text: "I cannot generate a workflow" }],
       usage: { input_tokens: 100, output_tokens: 50 },
     });
@@ -228,12 +317,208 @@ describe("generateWorkflow", () => {
     expect(call.system).toContain("http.call");
   });
 
-  it("uses tool_choice to force structured output", async () => {
+  it("uses forced tool_choice in fallback mode", async () => {
     mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
 
     const call = mockCreate.mock.calls[0][0];
     expect(call.tool_choice).toEqual({ type: "tool", name: "create_workflow" });
+  });
+
+  it("only provides create_workflow tool in fallback mode", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.tools).toHaveLength(1);
+    expect(call.tools[0].name).toBe("create_workflow");
+  });
+});
+
+describe("generateWorkflow (agentic mode — with api-registry)", () => {
+  let mockCreate: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockCreate = vi.fn();
+    setAnthropicClient({
+      messages: { create: mockCreate },
+    } as unknown as Anthropic);
+    process.env.API_REGISTRY_SERVICE_URL = "http://fake-registry";
+    process.env.API_REGISTRY_SERVICE_API_KEY = "test-key";
+    mockFetchLlmContext.mockReset();
+    mockFetchServiceSpec.mockReset();
+    mockFetchLlmContext.mockResolvedValue(MOCK_LLM_CONTEXT);
+    mockFetchServiceSpec.mockResolvedValue(MOCK_SERVICE_SPEC);
+  });
+
+  afterEach(() => {
+    setAnthropicClient(null);
+    delete process.env.API_REGISTRY_SERVICE_URL;
+    delete process.env.API_REGISTRY_SERVICE_API_KEY;
+  });
+
+  it("uses auto tool_choice in agentic mode", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.tool_choice).toEqual({ type: "auto" });
+  });
+
+  it("provides all three tools in agentic mode", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.tools).toHaveLength(3);
+    const toolNames = call.tools.map((t: { name: string }) => t.name);
+    expect(toolNames).toContain("list_services");
+    expect(toolNames).toContain("get_service_endpoints");
+    expect(toolNames).toContain("create_workflow");
+  });
+
+  it("resolves list_services then create_workflow across turns", async () => {
+    // Turn 1: LLM calls list_services
+    mockCreate.mockResolvedValueOnce(
+      createMockAgenticResponse([{ name: "list_services", input: {} }]),
+    );
+    // Turn 2: LLM calls create_workflow with valid DAG
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    const result = await generateWorkflow(
+      { description: "Search leads and send cold emails" },
+      TEST_API_KEY,
+    );
+
+    expect(result.dag).toEqual(VALID_LINEAR_DAG);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockFetchLlmContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves list_services then get_service_endpoints then create_workflow", async () => {
+    // Turn 1: list_services
+    mockCreate.mockResolvedValueOnce(
+      createMockAgenticResponse([{ name: "list_services", input: {} }]),
+    );
+    // Turn 2: get_service_endpoints for "lead"
+    mockCreate.mockResolvedValueOnce(
+      createMockAgenticResponse([{ name: "get_service_endpoints", input: { service: "lead" } }]),
+    );
+    // Turn 3: create_workflow
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    const result = await generateWorkflow(
+      { description: "Cold email outreach" },
+      TEST_API_KEY,
+    );
+
+    expect(result.dag).toEqual(VALID_LINEAR_DAG);
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(mockFetchLlmContext).toHaveBeenCalledTimes(1);
+    expect(mockFetchServiceSpec).toHaveBeenCalledWith("lead");
+  });
+
+  it("handles multiple tool calls in a single turn", async () => {
+    // Turn 1: LLM calls both list_services and get_service_endpoints in one response
+    mockCreate.mockResolvedValueOnce(
+      createMockAgenticResponse([
+        { name: "list_services", input: {} },
+        { name: "get_service_endpoints", input: { service: "lead" } },
+      ]),
+    );
+    // Turn 2: create_workflow
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    const result = await generateWorkflow(
+      { description: "Cold email outreach" },
+      TEST_API_KEY,
+    );
+
+    expect(result.dag).toEqual(VALID_LINEAR_DAG);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockFetchLlmContext).toHaveBeenCalledTimes(1);
+    expect(mockFetchServiceSpec).toHaveBeenCalledWith("lead");
+  });
+
+  it("passes api-registry error to LLM as tool_result error", async () => {
+    mockFetchLlmContext.mockRejectedValueOnce(new Error("api-registry error: connection refused"));
+
+    // Turn 1: list_services (will fail)
+    mockCreate.mockResolvedValueOnce(
+      createMockAgenticResponse([{ name: "list_services", input: {} }]),
+    );
+    // Turn 2: LLM recovers and calls create_workflow
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    const result = await generateWorkflow(
+      { description: "Cold email outreach" },
+      TEST_API_KEY,
+    );
+
+    expect(result.dag).toEqual(VALID_LINEAR_DAG);
+    // Verify the error was passed back to the LLM
+    const turn2Call = mockCreate.mock.calls[1][0];
+    const toolResultMsg = turn2Call.messages[2]; // user message with tool_result
+    expect(toolResultMsg.content[0].is_error).toBe(true);
+    expect(toolResultMsg.content[0].content).toContain("api-registry error");
+  });
+
+  it("throws when max agent turns exceeded without create_workflow", async () => {
+    // LLM keeps calling list_services forever
+    mockCreate.mockResolvedValue(
+      createMockAgenticResponse([{ name: "list_services", input: {} }]),
+    );
+
+    await expect(
+      generateWorkflow({ description: "Stuck workflow" }, TEST_API_KEY),
+    ).rejects.toThrow("Generation exceeded maximum turns without producing a workflow");
+  });
+
+  it("retries invalid DAG within agentic loop", async () => {
+    const invalidDag = {
+      nodes: [{ id: "a", type: "unknown-type-xyz" }],
+      edges: [],
+    };
+
+    // Turn 1: list_services
+    mockCreate.mockResolvedValueOnce(
+      createMockAgenticResponse([{ name: "list_services", input: {} }]),
+    );
+    // Turn 2: create_workflow with invalid DAG
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(invalidDag));
+    // Turn 3: create_workflow with valid DAG (after retry)
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    const result = await generateWorkflow(
+      { description: "Cold email outreach" },
+      TEST_API_KEY,
+    );
+
+    expect(result.dag).toEqual(VALID_LINEAR_DAG);
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+  });
+
+  it("includes service discovery instructions in system prompt", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.system).toContain("Service Discovery (MANDATORY)");
+    expect(call.system).toContain("list_services");
+    expect(call.system).not.toContain("Available Services");
+  });
+
+  it("uses higher max_tokens in agentic mode", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY);
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.max_tokens).toBe(16384);
   });
 });

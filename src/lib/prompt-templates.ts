@@ -68,7 +68,54 @@ export const DAG_GENERATION_TOOL = {
   },
 };
 
-export function buildSystemPrompt(filterServices?: string[]): string {
+/** Tool for listing all available services from the API registry */
+export const LIST_SERVICES_TOOL = {
+  name: "list_services" as const,
+  description:
+    "List all available microservices in the platform. Returns service name, description, and endpoint summaries. " +
+    "Call this FIRST to understand what services are available before designing the workflow.",
+  input_schema: {
+    type: "object" as const,
+    properties: {},
+    required: [] as string[],
+  },
+};
+
+/** Tool for getting detailed OpenAPI spec for a specific service */
+export const GET_SERVICE_ENDPOINTS_TOOL = {
+  name: "get_service_endpoints" as const,
+  description:
+    "Get the full OpenAPI specification for a specific service, including all endpoints, " +
+    "request/response schemas, required fields, and parameter details. " +
+    "Call this for EACH service you plan to use in the workflow to understand exact endpoint paths, " +
+    "required body fields, and response shapes. Do NOT guess — always verify.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      service: {
+        type: "string" as const,
+        description: "The service name (e.g. 'lead', 'campaign', 'brand')",
+      },
+    },
+    required: ["service"],
+  },
+};
+
+/** All tools for agentic workflow generation */
+export const AGENTIC_TOOLS = [
+  LIST_SERVICES_TOOL,
+  GET_SERVICE_ENDPOINTS_TOOL,
+  DAG_GENERATION_TOOL,
+];
+
+export interface BuildSystemPromptOptions {
+  filterServices?: string[];
+  agenticMode?: boolean;
+}
+
+export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
+  const { filterServices, agenticMode } = options ?? {};
+
   const nodeTypes = Object.entries(NODE_TYPE_REGISTRY)
     .map(([type, path]) => {
       if (path === null) return `- "${type}" (native flow control)`;
@@ -76,7 +123,19 @@ export function buildSystemPrompt(filterServices?: string[]): string {
     })
     .join("\n");
 
-  const serviceCatalog = getServiceCatalogForPrompt(filterServices);
+  const serviceSection = agenticMode
+    ? `## Service Discovery (MANDATORY)
+
+You have access to a live API registry via tools. Before generating the workflow, you MUST:
+1. Call list_services to see all available microservices and their endpoints
+2. Call get_service_endpoints for EACH service you plan to use in the workflow — this gives you exact endpoint paths, required request body fields, and response schemas
+3. Only then call create_workflow with an informed DAG based on verified endpoint specs
+
+Do NOT guess endpoint paths or request body fields. ALWAYS verify with get_service_endpoints first.
+If a service or endpoint you need does not exist, do NOT invent it — adjust the workflow to use only real endpoints.`
+    : `## Available Services
+
+${getServiceCatalogForPrompt(filterServices)}`;
 
   return `You are a workflow architect that generates valid DAG (Directed Acyclic Graph) workflows.
 
@@ -137,15 +196,23 @@ Static body fields go in config.body, dynamic overrides go in inputMapping with 
 - channel: "email"
 - audienceType: "cold-outreach"
 
-## Available Services
-
-${serviceCatalog}
+${serviceSection}
 
 ## All Registered Node Types
 
 ${nodeTypes}
 
 Prefer "http.call" over legacy named types for new workflows.
+
+## Campaign Execution Model
+
+Campaign service orchestrates workflow execution with budget constraints. Key concepts:
+- A campaign has budget limits: max leads and/or max spend, scoped per day, per week, or per month
+- Campaign service triggers the workflow (DAG) repeatedly, roughly every minute, until the budget is exhausted
+- Each workflow run processes ONE unit of work (e.g. one lead, one email send)
+- The gate-check step validates that budget remains before each run — if budget is exhausted, it returns allowed=false and the flow stops gracefully via stopAfterIf
+- The end-run step reports success/failure so campaign service knows whether to continue re-triggering
+- This is why campaign workflows MUST use the chassis pattern: gate-check → start-run → [business logic] → end-run, with onError → end-run-error
 
 ## Rules
 
