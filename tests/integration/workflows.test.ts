@@ -232,7 +232,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             ...DEPLOY_ITEM,
@@ -260,7 +260,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         orgId: "org_test_id",
         workflows: [
           {
@@ -275,7 +275,7 @@ describe("PUT /workflows/deploy", () => {
     // Verify the DB row got the correct orgId
     const inserted = mockDbRows[mockDbRows.length - 1];
     expect(inserted.orgId).toBe("org_test_id");
-    expect(inserted.appId).toBe("mcpfactory");
+    expect(inserted.appId).toBe("distribute");
   });
 
   it("falls back to appId when orgId is not provided", async () => {
@@ -283,7 +283,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             ...DEPLOY_ITEM,
@@ -295,7 +295,7 @@ describe("PUT /workflows/deploy", () => {
 
     expect(res.status).toBe(200);
     const inserted = mockDbRows[mockDbRows.length - 1];
-    expect(inserted.orgId).toBe("mcpfactory");
+    expect(inserted.orgId).toBe("distribute");
   });
 
   it("updates orgId on existing workflow when redeployed with orgId", async () => {
@@ -304,8 +304,8 @@ describe("PUT /workflows/deploy", () => {
 
     mockDbRows.push({
       id: "wf-wrong-org",
-      appId: "mcpfactory",
-      orgId: "mcpfactory",
+      appId: "distribute",
+      orgId: "distribute",
       name: "sales-email-cold-outreach-sequoia",
       signatureName: "sequoia",
       signature: sig,
@@ -314,7 +314,7 @@ describe("PUT /workflows/deploy", () => {
       audienceType: "cold-outreach",
       description: "Old",
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-      windmillFlowPath: "f/workflows/mcpfactory/sales_email_cold_outreach_sequoia",
+      windmillFlowPath: "f/workflows/distribute/sales_email_cold_outreach_sequoia",
       windmillWorkspace: "prod",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -324,7 +324,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         orgId: "org_correct_id",
         workflows: [
           {
@@ -348,8 +348,8 @@ describe("PUT /workflows/deploy", () => {
 
     mockDbRows.push({
       id: "wf-existing",
-      appId: "mcpfactory",
-      orgId: "mcpfactory",
+      appId: "distribute",
+      orgId: "distribute",
       name: "sales-email-cold-outreach-sequoia",
       signatureName: "sequoia",
       signature: sig,
@@ -358,7 +358,7 @@ describe("PUT /workflows/deploy", () => {
       audienceType: "cold-outreach",
       description: "Old description",
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-      windmillFlowPath: "f/workflows/mcpfactory/sales_email_cold_outreach_sequoia",
+      windmillFlowPath: "f/workflows/distribute/sales_email_cold_outreach_sequoia",
       windmillWorkspace: "prod",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -368,7 +368,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             ...DEPLOY_ITEM,
@@ -385,7 +385,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("same DAG produces same signature across deploys", async () => {
     const payload = {
-      appId: "mcpfactory",
+      appId: "distribute",
       workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
     };
 
@@ -406,7 +406,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
       });
     expect(res1.body.workflows[0].signature).toBe(sig1);
@@ -417,7 +417,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [{ ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG }],
       });
     expect(res2.body.workflows[0].signature).toBe(sig2);
@@ -428,7 +428,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             // Missing category, channel, audienceType
@@ -445,7 +445,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             category: "sales",
@@ -464,7 +464,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             category: "sales",
@@ -483,7 +483,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           {
             category: "invalid-category",
@@ -509,7 +509,7 @@ describe("PUT /workflows/deploy", () => {
         .put("/workflows/deploy")
         .set(AUTH)
         .send({
-          appId: "mcpfactory",
+          appId: "distribute",
           workflows: [{ ...dims, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
         });
 
@@ -522,7 +522,7 @@ describe("PUT /workflows/deploy", () => {
       .put("/workflows/deploy")
       .set(AUTH)
       .send({
-        appId: "mcpfactory",
+        appId: "distribute",
         workflows: [
           { ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG },
           { ...DEPLOY_ITEM, dag: DAG_WITH_UNKNOWN_TYPE },
@@ -536,7 +536,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("requires authentication", async () => {
     const res = await request.put("/workflows/deploy").send({
-      appId: "mcpfactory",
+      appId: "distribute",
       workflows: [{ ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG }],
     });
 
@@ -547,7 +547,7 @@ describe("PUT /workflows/deploy", () => {
     const res = await request
       .put("/workflows/deploy")
       .set(AUTH)
-      .send({ appId: "mcpfactory" }); // missing workflows
+      .send({ appId: "distribute" }); // missing workflows
 
     expect(res.status).toBe(400);
   });
