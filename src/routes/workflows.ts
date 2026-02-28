@@ -638,15 +638,11 @@ router.get("/workflows", requireApiKey, async (req, res) => {
   try {
     const { orgId, appId, brandId, humanId, campaignId, category, channel, audienceType } = req.query;
 
-    if (!orgId || typeof orgId !== "string") {
-      res.status(400).json({ error: "orgId query parameter is required" });
-      return;
+    const conditions: ReturnType<typeof eq>[] = [];
+
+    if (orgId && typeof orgId === "string") {
+      conditions.push(eq(workflows.orgId, orgId));
     }
-
-    const conditions = [
-      eq(workflows.orgId, orgId),
-    ];
-
     if (appId && typeof appId === "string") {
       conditions.push(eq(workflows.appId, appId));
     }
@@ -669,10 +665,9 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       conditions.push(eq(workflows.audienceType, audienceType));
     }
 
-    const results = await db
-      .select()
-      .from(workflows)
-      .where(and(...conditions));
+    const results = conditions.length > 0
+      ? await db.select().from(workflows).where(and(...conditions))
+      : await db.select().from(workflows);
 
     res.json({ workflows: results.map(formatWorkflow) });
   } catch (err) {
