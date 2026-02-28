@@ -18,6 +18,12 @@ export interface GenerateWorkflowInput {
     nodeTypes?: string[];
     expectedInputs?: string[];
   };
+  style?: {
+    type: "human" | "brand";
+    name: string;
+    humanId?: string;
+    brandId?: string;
+  };
 }
 
 export interface GenerateWorkflowResult {
@@ -74,9 +80,14 @@ export async function generateWorkflow(
     process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY,
   );
 
+  const styleDirective = input.style
+    ? `This workflow MUST be created in the style of ${input.style.name}. Adopt their methodology, tone, and strategic patterns.`
+    : undefined;
+
   const systemPrompt = buildSystemPrompt({
     filterServices: input.hints?.services,
     agenticMode,
+    styleDirective,
   });
 
   const tools = agenticMode ? AGENTIC_TOOLS : [DAG_GENERATION_TOOL];
@@ -90,6 +101,9 @@ export async function generateWorkflow(
   }
   if (input.hints?.expectedInputs?.length) {
     userMessage += `\nExpected flow_input fields: ${input.hints.expectedInputs.join(", ")}`;
+  }
+  if (input.style) {
+    userMessage += `\n\nStyle: Generate this workflow in the style of "${input.style.name}".`;
   }
 
   const messages: Anthropic.Messages.MessageParam[] = [

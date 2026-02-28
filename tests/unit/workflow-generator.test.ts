@@ -84,6 +84,20 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("every minute");
   });
 
+  it("includes style directive when provided", () => {
+    const prompt = buildSystemPrompt({
+      styleDirective: "This workflow MUST be created in the style of Hormozi. Adopt their methodology, tone, and strategic patterns.",
+    });
+    expect(prompt).toContain("Style Directive");
+    expect(prompt).toContain("Hormozi");
+    expect(prompt).toContain("methodology, tone, and strategic patterns");
+  });
+
+  it("does not include style directive when not provided", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).not.toContain("Style Directive");
+  });
+
   it("replaces static catalog with discovery instructions in agentic mode", () => {
     const prompt = buildSystemPrompt({ agenticMode: true });
     expect(prompt).toContain("Service Discovery (MANDATORY)");
@@ -324,6 +338,51 @@ describe("generateWorkflow (fallback mode — no api-registry)", () => {
 
     const call = mockCreate.mock.calls[0][0];
     expect(call.tool_choice).toEqual({ type: "tool", name: "create_workflow" });
+  });
+
+  it("includes style directive in system prompt when style is provided", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow(
+      {
+        description: "Cold email outreach",
+        style: { type: "human", name: "Hormozi", humanId: "human-123" },
+      },
+      TEST_API_KEY,
+    );
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.system).toContain("Style Directive");
+    expect(call.system).toContain("Hormozi");
+  });
+
+  it("appends style to user message when style is provided", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow(
+      {
+        description: "Cold email outreach",
+        style: { type: "brand", name: "My Brand", brandId: "brand-456" },
+      },
+      TEST_API_KEY,
+    );
+
+    const call = mockCreate.mock.calls[0][0];
+    const userMsg = call.messages[0].content;
+    expect(userMsg).toContain('Style: Generate this workflow in the style of "My Brand"');
+  });
+
+  it("does not include style in prompt when style is not provided", async () => {
+    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow(
+      { description: "Cold email outreach" },
+      TEST_API_KEY,
+    );
+
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.system).not.toContain("Style Directive");
+    expect(call.messages[0].content).not.toContain("Style:");
   });
 
   it("only provides create_workflow tool in fallback mode", async () => {

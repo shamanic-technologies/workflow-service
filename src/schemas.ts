@@ -136,8 +136,10 @@ export const WorkflowResponseSchema = z
     appId: z.string().describe("Application identifier."),
     orgId: z.string().describe("Organization ID."),
     brandId: z.string().nullable(),
+    humanId: z.string().nullable().describe("Human ID if this workflow was generated in a human expert's style."),
     campaignId: z.string().nullable(),
     subrequestId: z.string().nullable(),
+    styleName: z.string().nullable().describe("Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."),
     name: z.string().describe("Workflow name. Use this with appId to execute via /workflows/by-name/{name}/execute."),
     displayName: z.string().nullable().describe("Human-readable display name. Falls back to name if not set."),
     description: z.string().nullable(),
@@ -254,6 +256,39 @@ export const ExecuteByNameSchema = z
   })
   .openapi("ExecuteByNameRequest");
 
+// --- Style schema ---
+
+export const WorkflowStyleTypeSchema = z
+  .enum(["human", "brand"])
+  .describe('Style source type. "human" for an industry expert, "brand" for a company/organization.')
+  .openapi("WorkflowStyleType");
+
+export const WorkflowStyleSchema = z
+  .object({
+    type: WorkflowStyleTypeSchema,
+    humanId: z.string().optional().describe(
+      "Human ID from human-service. Required when type is 'human'."
+    ),
+    brandId: z.string().optional().describe(
+      "Brand ID from brand-service. Required when type is 'brand'."
+    ),
+    name: z.string().min(1).describe(
+      "Display name of the human or brand (e.g. 'Hormozi', 'My Brand'). " +
+      "Used to build the signatureName (e.g. 'hormozi-v1')."
+    ),
+  })
+  .refine(
+    (data) => {
+      if (data.type === "human") return !!data.humanId;
+      if (data.type === "brand") return !!data.brandId;
+      return true;
+    },
+    {
+      message: "humanId is required when type is 'human'; brandId is required when type is 'brand'",
+    }
+  )
+  .openapi("WorkflowStyle");
+
 // --- Generate schemas ---
 
 export const GenerateWorkflowHintsSchema = z
@@ -292,6 +327,10 @@ export const GenerateWorkflowSchema = z
     ),
     hints: GenerateWorkflowHintsSchema.optional().describe(
       "Optional hints to guide generation."
+    ),
+    style: WorkflowStyleSchema.optional().describe(
+      "Optional style configuration. When provided, the workflow is generated in the style of the specified human or brand, " +
+      "and the signatureName uses the style name with auto-versioning (e.g. 'hormozi-v1')."
     ),
   })
   .openapi("GenerateWorkflowRequest");
@@ -447,6 +486,7 @@ registry.registerPath({
       orgId: z.string(),
       appId: z.string().optional(),
       brandId: z.string().optional(),
+      humanId: z.string().optional(),
       campaignId: z.string().optional(),
       category: WorkflowCategorySchema.optional(),
       channel: WorkflowChannelSchema.optional(),

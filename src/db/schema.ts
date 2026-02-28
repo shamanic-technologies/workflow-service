@@ -15,8 +15,10 @@ export const workflows = pgTable(
     appId: text("app_id").notNull(),
     orgId: text("org_id").notNull(),
     brandId: text("brand_id"),
+    humanId: text("human_id"),
     campaignId: text("campaign_id"),
     subrequestId: text("subrequest_id"),
+    styleName: text("style_name"),
     name: text("name").notNull(),
     displayName: text("display_name"),
     description: text("description"),
@@ -41,6 +43,7 @@ export const workflows = pgTable(
       .on(table.appId, table.signature),
     uniqueIndex("idx_workflows_app_signature_name_unique")
       .on(table.appId, table.signatureName),
+    index("idx_workflows_style").on(table.appId, table.styleName),
   ]
 );
 
