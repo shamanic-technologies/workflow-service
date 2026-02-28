@@ -361,11 +361,11 @@ export const BestWorkflowObjectiveSchema = z
 
 export const BestWorkflowQuerySchema = z
   .object({
-    appId: z.string().min(1).describe("Application identifier. Required to scope the query."),
-    category: WorkflowCategorySchema.describe("Filter workflows by category."),
-    channel: WorkflowChannelSchema.describe("Filter workflows by channel."),
-    audienceType: WorkflowAudienceTypeSchema.describe("Filter workflows by audience type."),
-    objective: BestWorkflowObjectiveSchema.describe("Which metric to optimize for."),
+    appId: z.string().min(1).optional().describe("Application identifier. When omitted, searches across all apps."),
+    category: WorkflowCategorySchema.optional().describe("Filter workflows by category."),
+    channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
+    audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
+    objective: BestWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
   })
   .openapi("BestWorkflowQuery");
 
@@ -483,7 +483,7 @@ registry.registerPath({
   security: [{ apiKey: [] }],
   request: {
     query: z.object({
-      orgId: z.string(),
+      orgId: z.string().optional(),
       appId: z.string().optional(),
       brandId: z.string().optional(),
       humanId: z.string().optional(),

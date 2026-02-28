@@ -28,11 +28,11 @@ vi.mock("../../src/db/index.js", () => ({
       },
     }),
     select: () => ({
-      from: () => ({
-        where: (condition?: unknown) => {
-          return Promise.resolve(mockDbRows);
-        },
-      }),
+      from: () => {
+        const result = Promise.resolve(mockDbRows);
+        (result as any).where = (_condition?: unknown) => Promise.resolve(mockDbRows);
+        return result;
+      },
     }),
     update: () => ({
       set: (values: Record<string, unknown>) => ({
@@ -152,11 +152,20 @@ describe("GET /workflows", () => {
     mockDbRows.length = 0;
   });
 
-  it("requires orgId parameter", async () => {
+  it("returns all workflows when no filters provided", async () => {
+    mockDbRows.push({
+      id: "wf-1",
+      orgId: "org-1",
+      name: "Flow 1",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
     const res = await request.get("/workflows").set(AUTH);
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("orgId");
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toHaveLength(1);
   });
 
   it("returns workflows for orgId", async () => {
