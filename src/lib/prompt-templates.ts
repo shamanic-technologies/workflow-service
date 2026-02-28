@@ -111,10 +111,11 @@ export const AGENTIC_TOOLS = [
 export interface BuildSystemPromptOptions {
   filterServices?: string[];
   agenticMode?: boolean;
+  styleDirective?: string;
 }
 
 export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
-  const { filterServices, agenticMode } = options ?? {};
+  const { filterServices, agenticMode, styleDirective } = options ?? {};
 
   const nodeTypes = Object.entries(NODE_TYPE_REGISTRY)
     .map(([type, path]) => {
@@ -312,7 +313,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 }
 \`\`\`
 
-Generate a single workflow DAG that fulfills the user's description. Use the create_workflow tool to return the result.`;
+${styleDirective ? `## Style Directive\n\n${styleDirective}\n\n` : ""}Generate a single workflow DAG that fulfills the user's description. Use the create_workflow tool to return the result.`;
 }
 
 export function buildRetryUserMessage(

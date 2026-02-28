@@ -127,7 +127,7 @@ describe("POST /workflows/generate", () => {
     expect(res.body.audienceType).toBe("cold-outreach");
     expect(mockFetchAnthropicKey).toHaveBeenCalledWith("app", { appId: "test-app", orgId: "org-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined },
+      { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined, style: undefined },
       "resolved-anthropic-key",
     );
   });
@@ -246,7 +246,7 @@ describe("POST /workflows/generate", () => {
 
     expect(mockFetchAnthropicKey).toHaveBeenCalledWith("byok", { appId: "test-app", orgId: "org-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] } },
+      { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] }, style: undefined },
       "resolved-anthropic-key",
     );
   });
@@ -287,6 +287,122 @@ describe("POST /workflows/generate", () => {
 
     expect(res.status).toBe(502);
     expect(res.body.error).toContain("key-service error:");
+  });
+
+  // --- Style tests ---
+
+  it("generates a styled workflow with human type", async () => {
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: VALID_LINEAR_DAG,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Hormozi-style cold outreach",
+    });
+
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Cold email outreach in the style of Alex Hormozi",
+        style: { type: "human", humanId: "human-123", name: "Hormozi" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.action).toBe("created");
+    expect(res.body.workflow.signatureName).toBe("hormozi-v1");
+    expect(res.body.workflow.name).toBe("sales-email-cold-outreach-hormozi-v1");
+    // Verify style was passed through to generator
+    expect(mockGenerateWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        style: { type: "human", humanId: "human-123", name: "Hormozi" },
+      }),
+      "resolved-anthropic-key",
+    );
+  });
+
+  it("generates a styled workflow with brand type", async () => {
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: VALID_LINEAR_DAG,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Brand-style cold outreach",
+    });
+
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Cold email outreach in my brand style with good copy",
+        style: { type: "brand", brandId: "brand-456", name: "My Brand" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.signatureName).toBe("my-brand-v1");
+    expect(res.body.workflow.name).toBe("sales-email-cold-outreach-my-brand-v1");
+  });
+
+  it("rejects human style without humanId", async () => {
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Cold email outreach in expert style",
+        style: { type: "human", name: "Hormozi" },
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects brand style without brandId", async () => {
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Cold email outreach in brand style long description",
+        style: { type: "brand", name: "My Brand" },
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("generates workflow with old naming when no style provided", async () => {
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: VALID_LINEAR_DAG,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Standard cold outreach",
+    });
+
+    const res = await request
+      .post("/workflows/generate")
+      .set(AUTH)
+      .send({
+        appId: "test-app",
+        orgId: "org-1",
+        keySource: "app",
+        description: "Standard cold email outreach without any style preference",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.signatureName).not.toContain("-v");
+    expect(res.body.workflow.name).toContain("sales-email-cold-outreach-");
+    // signatureName should be a random word, not a versioned style name
+    expect(res.body.workflow.signatureName).toMatch(/^[a-z]+$/);
   });
 
   it("returns 502 when KEY_SERVICE_URL is not configured", async () => {

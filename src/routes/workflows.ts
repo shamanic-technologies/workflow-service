@@ -52,7 +52,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
     });
 
     const generated = await generateWorkflow(
-      { description: body.description, hints: body.hints },
+      { description: body.description, hints: body.hints, style: body.style },
       anthropicApiKey,
     );
 
@@ -128,7 +128,44 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
         action: "updated",
       };
     } else {
-      const signatureName = pickSignatureName(signature, usedNames);
+      let signatureName: string;
+      let displayName: string;
+      let styleName: string | null = null;
+      let humanId: string | null = null;
+      let brandId: string | null = null;
+
+      if (body.style) {
+        styleName = body.style.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "");
+
+        // Count existing workflows with same (appId, styleName) for versioning
+        const sameStyle = await db
+          .select({ id: workflows.id })
+          .from(workflows)
+          .where(
+            and(
+              eq(workflows.appId, body.appId),
+              eq(workflows.styleName, styleName),
+            )
+          );
+        const version = sameStyle.length + 1;
+
+        signatureName = `${styleName}-v${version}`;
+        displayName = `${body.style.name} v${version}`;
+
+        if (body.style.type === "human" && body.style.humanId) {
+          humanId = body.style.humanId;
+        }
+        if (body.style.type === "brand" && body.style.brandId) {
+          brandId = body.style.brandId;
+        }
+      } else {
+        signatureName = pickSignatureName(signature, usedNames);
+        displayName = `${generated.category}-${generated.channel}-${generated.audienceType}-${signatureName}`;
+      }
+
       const name = `${generated.category}-${generated.channel}-${generated.audienceType}-${signatureName}`;
       const openFlow = dagToOpenFlow(dag, name);
       const flowPath = generateFlowPath(body.appId, name);
@@ -154,7 +191,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
           appId: body.appId,
           orgId: body.orgId,
           name,
-          displayName: name,
+          displayName,
           description: generated.description,
           category: generated.category,
           channel: generated.channel,
@@ -163,6 +200,9 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
           signatureName,
           dag: generated.dag,
           windmillFlowPath: flowPath,
+          humanId,
+          brandId,
+          styleName,
         })
         .returning();
 
@@ -596,7 +636,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
 // GET /workflows — List workflows
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, appId, brandId, campaignId, category, channel, audienceType } = req.query;
+    const { orgId, appId, brandId, humanId, campaignId, category, channel, audienceType } = req.query;
 
     if (!orgId || typeof orgId !== "string") {
       res.status(400).json({ error: "orgId query parameter is required" });
@@ -612,6 +652,9 @@ router.get("/workflows", requireApiKey, async (req, res) => {
     }
     if (brandId && typeof brandId === "string") {
       conditions.push(eq(workflows.brandId, brandId));
+    }
+    if (humanId && typeof humanId === "string") {
+      conditions.push(eq(workflows.humanId, humanId));
     }
     if (campaignId && typeof campaignId === "string") {
       conditions.push(eq(workflows.campaignId, campaignId));
