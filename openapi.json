@@ -942,7 +942,8 @@
           "replies",
           "clicks"
         ],
-        "description": "Which metric to optimize for."
+        "default": "replies",
+        "description": "Which metric to optimize for. Defaults to 'replies'."
       },
       "ExecuteByNameRequest": {
         "type": "object",
@@ -1055,7 +1056,7 @@
             "schema": {
               "type": "string"
             },
-            "required": true,
+            "required": false,
             "name": "orgId",
             "in": "query"
           },
@@ -1735,10 +1736,10 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "Application identifier. Required to scope the query."
+              "description": "Application identifier. When omitted, searches across all apps."
             },
-            "required": true,
-            "description": "Application identifier. Required to scope the query.",
+            "required": false,
+            "description": "Application identifier. When omitted, searches across all apps.",
             "name": "appId",
             "in": "query"
           },
@@ -1753,7 +1754,7 @@
                 }
               ]
             },
-            "required": true,
+            "required": false,
             "description": "Filter workflows by category.",
             "name": "category",
             "in": "query"
@@ -1769,7 +1770,7 @@
                 }
               ]
             },
-            "required": true,
+            "required": false,
             "description": "Filter workflows by channel.",
             "name": "channel",
             "in": "query"
@@ -1785,7 +1786,7 @@
                 }
               ]
             },
-            "required": true,
+            "required": false,
             "description": "Filter workflows by audience type.",
             "name": "audienceType",
             "in": "query"
@@ -1794,8 +1795,8 @@
             "schema": {
               "$ref": "#/components/schemas/BestWorkflowObjective"
             },
-            "required": true,
-            "description": "Which metric to optimize for.",
+            "required": false,
+            "description": "Which metric to optimize for. Defaults to 'replies'.",
             "name": "objective",
             "in": "query"
           }

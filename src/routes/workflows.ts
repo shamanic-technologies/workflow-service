@@ -489,18 +489,16 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     }
     const { appId, category, channel, audienceType, objective } = query.data;
 
-    // 1. Get all workflows matching the dimensions
-    const matchingWorkflows = await db
-      .select()
-      .from(workflows)
-      .where(
-        and(
-          eq(workflows.appId, appId),
-          eq(workflows.category, category),
-          eq(workflows.channel, channel),
-          eq(workflows.audienceType, audienceType),
-        )
-      );
+    // 1. Get all workflows matching the dimensions (all filters optional)
+    const conditions: ReturnType<typeof eq>[] = [];
+    if (appId) conditions.push(eq(workflows.appId, appId));
+    if (category) conditions.push(eq(workflows.category, category));
+    if (channel) conditions.push(eq(workflows.channel, channel));
+    if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));
+
+    const matchingWorkflows = conditions.length > 0
+      ? await db.select().from(workflows).where(and(...conditions))
+      : await db.select().from(workflows);
 
     if (matchingWorkflows.length === 0) {
       res.status(404).json({ error: "No workflows found matching the criteria" });

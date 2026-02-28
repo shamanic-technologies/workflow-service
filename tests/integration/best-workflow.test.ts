@@ -34,14 +34,10 @@ vi.mock("../../src/db/index.js", () => ({
           typeof table === "object" &&
           "workflowId" in (table as Record<string, unknown>);
 
-        return {
-          where: (_condition?: unknown) => {
-            if (isWorkflowRuns) {
-              return Promise.resolve(mockWorkflowRunRows);
-            }
-            return Promise.resolve(mockWorkflowRows);
-          },
-        };
+        const rows = isWorkflowRuns ? mockWorkflowRunRows : mockWorkflowRows;
+        const result = Promise.resolve(rows);
+        (result as any).where = (_condition?: unknown) => Promise.resolve(rows);
+        return result;
       },
     }),
     update: () => ({
@@ -221,13 +217,36 @@ describe("GET /workflows/best", () => {
     expect(res.body.stats.costPerOutcome).toBe(10);
   });
 
-  it("requires all query parameters", async () => {
+  it("accepts partial filters (all optional)", async () => {
+    // With only category set and no matching workflows, should return 404 (not 400)
     const res = await request
       .get("/workflows/best")
       .query({ category: "sales" })
       .set(AUTH);
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns best workflow with no filters (defaults objective to replies)", async () => {
+    const wf = makeWorkflow({ id: "wf-nofilter" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-nofilter", "ext-run-nf"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-nf", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.id).toBe("wf-nofilter");
+    expect(res.body.stats.totalOutcomes).toBe(5);
   });
 
   it("returns 404 when no workflows match", async () => {
