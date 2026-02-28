@@ -29,6 +29,55 @@
       "when": 1771325106410,
       "tag": "0003_add_channel_audience_type",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771411506410,
+      "tag": "0004_add_signature",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1771497906410,
+      "tag": "0005_add_signature_unique_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1771584306410,
+      "tag": "0006_signature_not_null",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1771670706410,
+      "tag": "0007_dimensions_not_null",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1771757106410,
+      "tag": "0008_appid_not_null",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1771843506410,
+      "tag": "0009_drop_status_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1771929906410,
+      "tag": "0010_add_style_columns",
+      "breakpoints": true
     }
   ]
 }
