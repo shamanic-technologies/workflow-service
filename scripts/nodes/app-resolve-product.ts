@@ -2,18 +2,25 @@
 export async function main(
   productId: string,
   serviceEnvs?: Record<string, string>,
+  orgId?: string,
+  userId?: string,
+  runId?: string,
 ) {
   const baseUrl = serviceEnvs?.STRIPE_SERVICE_URL ?? Bun.env.STRIPE_SERVICE_URL;
   const apiKey = serviceEnvs?.STRIPE_SERVICE_API_KEY ?? Bun.env.STRIPE_SERVICE_API_KEY;
   if (!baseUrl) throw new Error("STRIPE_SERVICE_URL is not set");
   if (!apiKey) throw new Error("STRIPE_SERVICE_API_KEY is not set");
 
+  const reqHeaders: Record<string, string> = {};
+  if (orgId) reqHeaders["x-org-id"] = orgId;
+  if (userId) reqHeaders["x-user-id"] = userId;
+  if (runId) reqHeaders["x-run-id"] = runId;
+  if (apiKey) reqHeaders["x-api-key"] = apiKey;
+
   const response = await fetch(
     `${baseUrl}/products/${productId}`,
     {
-      headers: {
-        "X-API-Key": apiKey,
-      },
+      headers: reqHeaders,
     }
   );
 

@@ -4,6 +4,8 @@ export async function main(
   limit?: number,
   offset?: number,
   serviceEnvs?: Record<string, string>,
+  userId?: string,
+  runId?: string,
 ) {
   const baseUrl = serviceEnvs?.CLIENT_SERVICE_URL ?? Bun.env.CLIENT_SERVICE_URL;
   const apiKey = serviceEnvs?.CLIENT_SERVICE_API_KEY ?? Bun.env.CLIENT_SERVICE_API_KEY;
@@ -14,12 +16,16 @@ export async function main(
   if (limit) params.set("limit", String(limit));
   if (offset) params.set("offset", String(offset));
 
+  const reqHeaders: Record<string, string> = {};
+  if (orgId) reqHeaders["x-org-id"] = orgId;
+  if (userId) reqHeaders["x-user-id"] = userId;
+  if (runId) reqHeaders["x-run-id"] = runId;
+  if (apiKey) reqHeaders["x-api-key"] = apiKey;
+
   const response = await fetch(
     `${baseUrl}/anonymous-users?${params}`,
     {
-      headers: {
-        "x-api-key": apiKey,
-      },
+      headers: reqHeaders,
     }
   );
 
