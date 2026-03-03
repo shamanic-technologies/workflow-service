@@ -70,6 +70,7 @@ export function dagToOpenFlow(dag: DAG, name: string): OpenFlow {
   const schemaProperties: Record<string, { type: string; description?: string }> = {
     orgId: { type: "string", description: "Organization identifier" },
     userId: { type: "string", description: "User identifier" },
+    runId: { type: "string", description: "Runs-service run ID for this execution" },
     serviceEnvs: { type: "object", description: "Service URLs and API keys injected by workflow-service" },
   };
   for (const node of dag.nodes) {
@@ -357,12 +358,15 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     node.inputMapping,
   );
 
-  // Auto-inject orgId, userId, and serviceEnvs from flow_input unless explicitly mapped
+  // Auto-inject orgId, userId, runId, and serviceEnvs from flow_input unless explicitly mapped
   if (!inputTransforms.orgId) {
     inputTransforms.orgId = { type: "javascript", expr: "flow_input.orgId" };
   }
   if (!inputTransforms.userId) {
     inputTransforms.userId = { type: "javascript", expr: "flow_input.userId" };
+  }
+  if (!inputTransforms.runId) {
+    inputTransforms.runId = { type: "javascript", expr: "flow_input.runId" };
   }
   if (!inputTransforms.serviceEnvs) {
     inputTransforms.serviceEnvs = { type: "javascript", expr: "flow_input.serviceEnvs" };
@@ -398,12 +402,15 @@ function buildFailureModule(node: DAGNode): FlowModule | null {
 
   const inputTransforms = buildInputTransforms(node.config, node.inputMapping);
 
-  // Auto-inject orgId, userId, and serviceEnvs from flow_input unless explicitly mapped
+  // Auto-inject orgId, userId, runId, and serviceEnvs from flow_input unless explicitly mapped
   if (!inputTransforms.orgId) {
     inputTransforms.orgId = { type: "javascript", expr: "flow_input.orgId" };
   }
   if (!inputTransforms.userId) {
     inputTransforms.userId = { type: "javascript", expr: "flow_input.userId" };
+  }
+  if (!inputTransforms.runId) {
+    inputTransforms.runId = { type: "javascript", expr: "flow_input.runId" };
   }
   if (!inputTransforms.serviceEnvs) {
     inputTransforms.serviceEnvs = { type: "javascript", expr: "flow_input.serviceEnvs" };

@@ -14,6 +14,9 @@ export async function main(
   serviceEnvs?: Record<string, string>,
   headers?: Record<string, string>,
   validateResponse?: { field: string; equals: unknown },
+  orgId?: string,
+  userId?: string,
+  runId?: string,
 ) {
   // Convert service name to env var prefix: "transactional-email" → "TRANSACTIONAL_EMAIL"
   const envPrefix = service.toUpperCase().replace(/-/g, "_");
@@ -38,14 +41,17 @@ export async function main(
     url += `?${params}`;
   }
 
-  // Build request — merge caller-supplied headers with defaults
+  // Build request — identity headers + caller-supplied headers, then resolved x-api-key wins
   const reqHeaders: Record<string, string> = {
     "Content-Type": "application/json",
-    ...headers,
   };
-  if (apiKey) {
-    reqHeaders["x-api-key"] = apiKey;
-  }
+  if (orgId) reqHeaders["x-org-id"] = orgId;
+  if (userId) reqHeaders["x-user-id"] = userId;
+  if (runId) reqHeaders["x-run-id"] = runId;
+  // Caller-supplied headers can override identity headers
+  if (headers) Object.assign(reqHeaders, headers);
+  // Resolved x-api-key always takes precedence
+  if (apiKey) reqHeaders["x-api-key"] = apiKey;
 
   const options: RequestInit = { method, headers: reqHeaders };
 

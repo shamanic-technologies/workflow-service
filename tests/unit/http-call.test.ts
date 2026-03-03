@@ -39,6 +39,27 @@ describe("http-call script", () => {
     expect(options.headers["x-api-key"]).toBe("lead-key-123");
   });
 
+  it("auto-injects identity headers (x-org-id, x-user-id, x-run-id) when params provided", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    await main(
+      "lead", "POST", "/buffer/next",
+      { foo: "bar" },
+      undefined,
+      serviceEnvs,
+      undefined,
+      undefined,
+      "org-uuid-1",
+      "user-uuid-2",
+      "run-uuid-3",
+    );
+
+    const [, options] = mockFetch.mock.calls[0];
+    expect(options.headers["x-org-id"]).toBe("org-uuid-1");
+    expect(options.headers["x-user-id"]).toBe("user-uuid-2");
+    expect(options.headers["x-run-id"]).toBe("run-uuid-3");
+  });
+
   it("merges custom headers with defaults", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ found: true }));
 

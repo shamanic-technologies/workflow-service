@@ -182,7 +182,7 @@ describe("dagToOpenFlow", () => {
     }
   });
 
-  it("auto-injects orgId, userId, and serviceEnvs input_transforms into script modules", () => {
+  it("auto-injects orgId, userId, runId, and serviceEnvs input_transforms into script modules", () => {
     const result = dagToOpenFlow(VALID_LINEAR_DAG, "OrgId UserId Inject");
 
     for (const mod of result.value.modules) {
@@ -198,6 +198,10 @@ describe("dagToOpenFlow", () => {
         expect(transforms.userId).toEqual({
           type: "javascript",
           expr: "flow_input.userId",
+        });
+        expect(transforms.runId).toEqual({
+          type: "javascript",
+          expr: "flow_input.runId",
         });
         expect(transforms.serviceEnvs).toEqual({
           type: "javascript",
@@ -231,13 +235,14 @@ describe("dagToOpenFlow", () => {
     }
   });
 
-  it("declares orgId, userId, and serviceEnvs in OpenFlow schema properties", () => {
+  it("declares orgId, userId, runId, and serviceEnvs in OpenFlow schema properties", () => {
     const result = dagToOpenFlow(VALID_LINEAR_DAG, "Schema Test");
 
     expect(result.schema).toBeDefined();
     const props = (result.schema as Record<string, unknown>).properties as Record<string, unknown>;
     expect(props.orgId).toEqual({ type: "string", description: "Organization identifier" });
     expect(props.userId).toEqual({ type: "string", description: "User identifier" });
+    expect(props.runId).toEqual({ type: "string", description: "Runs-service run ID for this execution" });
     expect(props.serviceEnvs).toEqual({ type: "object", description: "Service URLs and API keys injected by workflow-service" });
   });
 
