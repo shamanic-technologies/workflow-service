@@ -50,7 +50,7 @@ describe("fetchProviderRequirements", () => {
 
     expect(result).toEqual(mockResponse);
     expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:4000/internal/provider-requirements",
+      "http://localhost:4000/provider-requirements",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -75,9 +75,27 @@ describe("fetchProviderRequirements", () => {
     await fetchProviderRequirements([]);
 
     expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:4000/internal/provider-requirements",
+      "http://localhost:4000/provider-requirements",
       expect.anything()
     );
+  });
+
+  it("calls /provider-requirements without /internal prefix (regression)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ requirements: [], providers: [] }),
+      })
+    );
+
+    await fetchProviderRequirements([
+      { service: "apollo", method: "POST", path: "/search" },
+    ]);
+
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(calledUrl).not.toContain("/internal/");
+    expect(calledUrl.endsWith("/provider-requirements")).toBe(true);
   });
 
   it("throws on non-2xx response from key-service", async () => {
