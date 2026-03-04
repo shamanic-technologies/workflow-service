@@ -28,7 +28,7 @@ export async function fetchProviderRequirements(
 ): Promise<ProviderRequirementsResponse> {
   const { baseUrl, apiKey } = getKeyServiceConfig();
 
-  const url = `${baseUrl}/internal/provider-requirements`;
+  const url = `${baseUrl}/provider-requirements`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -41,7 +41,7 @@ export async function fetchProviderRequirements(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `key-service error: POST /internal/provider-requirements -> ${res.status} ${res.statusText}: ${text}`
+      `key-service error: POST /provider-requirements -> ${res.status} ${res.statusText}: ${text}`
     );
   }
 

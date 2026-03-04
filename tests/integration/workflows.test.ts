@@ -623,7 +623,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
     mockFetchProviderRequirements.mockRejectedValue(
       new Error(
-        "key-service error: POST /internal/provider-requirements -> 500 Internal Server Error: boom"
+        "key-service error: POST /provider-requirements -> 500 Internal Server Error: boom"
       )
     );
 
