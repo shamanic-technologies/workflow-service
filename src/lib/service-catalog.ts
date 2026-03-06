@@ -8,7 +8,7 @@ export const SERVICE_CATALOG: ServiceInfo[] = [
   {
     name: "campaign",
     description: "Campaign lifecycle: gate-check (budget/volume validation), start-run (creates execution run), end-run (finalizes run, auto-retriggers if budget remains)",
-    keyEndpoints: ["POST /internal/gate-check", "POST /internal/start-run", "POST /internal/end-run"],
+    keyEndpoints: ["POST /gate-check", "POST /start-run", "POST /end-run"],
   },
   {
     name: "lead",

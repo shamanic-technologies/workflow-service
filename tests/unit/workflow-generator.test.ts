@@ -193,7 +193,7 @@ const MOCK_LLM_CONTEXT = {
       title: "Campaign Service",
       description: "Campaign lifecycle",
       endpoints: [
-        { method: "POST", path: "/internal/gate-check", summary: "Gate check" },
+        { method: "POST", path: "/gate-check", summary: "Gate check" },
       ],
     },
   ],
