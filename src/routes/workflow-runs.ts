@@ -63,6 +63,9 @@ router.post(
           return;
         }
 
+        console.warn(
+          `[workflow-service] Execute by name: workflow "${req.params.name}" not found (no active workflow with this name)`,
+        );
         res.status(404).json({
           error: `Workflow "${req.params.name}" not found`,
         });
@@ -91,7 +94,7 @@ router.post(
         });
         ownRunId = newRunId;
       } catch (err) {
-        console.error("[workflow-runs] Failed to create run in runs-service:", err);
+        console.error("[workflow-service] Failed to create run in runs-service:", err);
         res.status(502).json({ error: "Failed to create run in runs-service" });
         return;
       }
@@ -108,7 +111,7 @@ router.post(
           );
         } catch (err) {
           console.error(
-            "[workflow-runs] Failed to run flow in Windmill:",
+            "[workflow-service] Failed to run flow in Windmill:",
             err
           );
           res
@@ -135,13 +138,17 @@ router.post(
         })
         .returning();
 
+      console.log(
+        `[workflow-service] Workflow "${workflow.name}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
+      );
+
       res.status(201).json(formatRun(run));
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "ZodError") {
         res.status(400).json({ error: "Validation error", details: err });
         return;
       }
-      console.error("[workflow-runs] POST execute-by-name error:", err);
+      console.error("[workflow-service] POST execute-by-name error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   }
@@ -204,7 +211,7 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
       });
       ownRunId = newRunId;
     } catch (err) {
-      console.error("[workflow-runs] Failed to create run in runs-service:", err);
+      console.error("[workflow-service] Failed to create run in runs-service:", err);
       res.status(502).json({ error: "Failed to create run in runs-service" });
       return;
     }
@@ -220,7 +227,7 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
           flowInputs
         );
       } catch (err) {
-        console.error("[workflow-runs] Failed to run flow in Windmill:", err);
+        console.error("[workflow-service] Failed to run flow in Windmill:", err);
         res
           .status(502)
           .json({ error: "Failed to start workflow in Windmill" });
@@ -251,7 +258,7 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: err });
       return;
     }
-    console.error("[workflow-runs] POST execute error:", err);
+    console.error("[workflow-service] POST execute error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -308,7 +315,7 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
         }
       } catch (err) {
         console.error(
-          "[workflow-runs] Failed to poll Windmill job:",
+          "[workflow-service] Failed to poll Windmill job:",
           err
         );
         // Return what we have in DB
@@ -317,7 +324,7 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
 
     res.json(formatRun(run));
   } catch (err) {
-    console.error("[workflow-runs] GET by id error:", err);
+    console.error("[workflow-service] GET by id error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -352,7 +359,7 @@ router.get("/workflow-runs", requireApiKey, async (req, res) => {
 
     res.json({ workflowRuns: results.map(formatRun) });
   } catch (err) {
-    console.error("[workflow-runs] GET list error:", err);
+    console.error("[workflow-service] GET list error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -391,7 +398,7 @@ router.get("/workflow-runs/:id/debug", requireApiKey, async (req, res) => {
       result: job.result ?? null,
     });
   } catch (err) {
-    console.error("[workflow-runs] GET debug error:", err);
+    console.error("[workflow-service] GET debug error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -421,7 +428,7 @@ router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
         try {
           await cancelClient.cancelJob(run.windmillJobId, "Cancelled by user");
         } catch (err) {
-          console.error("[workflow-runs] Failed to cancel Windmill job:", err);
+          console.error("[workflow-service] Failed to cancel Windmill job:", err);
         }
       }
     }
@@ -434,7 +441,7 @@ router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
 
     res.json(formatRun(updated));
   } catch (err) {
-    console.error("[workflow-runs] POST cancel error:", err);
+    console.error("[workflow-service] POST cancel error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

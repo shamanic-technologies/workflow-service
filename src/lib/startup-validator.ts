@@ -32,7 +32,9 @@ export async function checkApiRegistryHealth(): Promise<void> {
 
 /**
  * Validate all active workflows against the API Registry.
- * Deprecates workflows with broken endpoints and attempts LLM-powered upgrade.
+ * Attempts LLM-powered upgrade for broken workflows.
+ * Throws if any workflow has broken endpoints that cannot be fixed — the service
+ * should crash at startup rather than silently running with broken workflows.
  */
 export async function validateAndUpgradeWorkflows(
   deps: StartupValidatorDeps,
@@ -46,7 +48,7 @@ export async function validateAndUpgradeWorkflows(
     .where(eq(workflows.status, "active"));
 
   if (activeWorkflows.length === 0) {
-    console.log("[startup] No active workflows to validate");
+    console.log("[workflow-service] No active workflows to validate");
     return;
   }
 
@@ -77,7 +79,7 @@ export async function validateAndUpgradeWorkflows(
     }
 
     console.warn(
-      `[startup] Workflow "${wf.name}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
+      `[workflow-service] Workflow "${wf.name}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
       result.invalidEndpoints.map((ep) => `${ep.method} ${ep.service}${ep.path}`).join(", "),
     );
 
@@ -94,21 +96,20 @@ export async function validateAndUpgradeWorkflows(
       if (upgraded) {
         upgradedCount++;
         console.log(
-          `[startup] Workflow "${wf.name}" upgraded successfully -> new ID: ${upgraded}`,
+          `[workflow-service] Workflow "${wf.name}" upgraded successfully -> new ID: ${upgraded}`,
         );
       } else {
-        // Upgrade skipped (no Anthropic key available)
+        // Upgrade skipped (no Anthropic key available) — keep workflow active
         failedCount++;
-        await deprecateWorkflow(database, wf.id, null);
         console.warn(
-          `[startup] Workflow "${wf.name}" deprecated (upgrade skipped: platform key not available)`,
+          `[workflow-service] Workflow "${wf.name}" has broken endpoints but upgrade skipped (platform key not available) — keeping active`,
         );
       }
     } catch (err) {
+      // Upgrade failed — keep workflow active rather than breaking all campaigns
       failedCount++;
-      await deprecateWorkflow(database, wf.id, null);
       console.error(
-        `[startup] Workflow "${wf.name}" upgrade failed, deprecated:`,
+        `[workflow-service] Workflow "${wf.name}" upgrade failed — keeping active:`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -118,13 +119,19 @@ export async function validateAndUpgradeWorkflows(
       await sendAdminNotification(wf, result.invalidEndpoints, upgradedCount > failedCount);
     } catch {
       // Non-blocking — log and continue
-      console.warn(`[startup] Failed to send admin notification for "${wf.name}"`);
+      console.warn(`[workflow-service] Failed to send admin notification for "${wf.name}"`);
     }
   }
 
   console.log(
-    `[startup] Validated ${activeWorkflows.length} workflows: ${validCount} valid, ${upgradedCount} upgraded, ${failedCount} failed`,
+    `[workflow-service] Validated ${activeWorkflows.length} workflows: ${validCount} valid, ${upgradedCount} upgraded, ${failedCount} failed`,
   );
+
+  if (failedCount > 0) {
+    throw new Error(
+      `[workflow-service] ${failedCount} workflow(s) have broken endpoints that could not be auto-upgraded. Fix the workflows or provide the platform Anthropic key, then restart.`,
+    );
+  }
 }
 
 async function attemptUpgrade(
@@ -141,7 +148,7 @@ async function attemptUpgrade(
     anthropicApiKey = keyResult.key;
   } catch (err) {
     console.warn(
-      "[startup] Platform Anthropic key not available — upgrade skipped:",
+      "[workflow-service] Platform Anthropic key not available — upgrade skipped:",
       err instanceof Error ? err.message : err,
     );
     return null;
@@ -158,7 +165,7 @@ async function attemptUpgrade(
     platformRunId = run.runId;
   } catch (err) {
     console.warn(
-      "[startup] Failed to create platform run — continuing without tracking:",
+      "[workflow-service] Failed to create platform run — continuing without tracking:",
       err instanceof Error ? err.message : err,
     );
   }
@@ -205,7 +212,7 @@ async function attemptUpgrade(
         });
         windmillFlowPath = flowPath;
       } catch (err) {
-        console.error("[startup] Failed to create upgraded flow in Windmill:", err);
+        console.error("[workflow-service] Failed to create upgraded flow in Windmill:", err);
       }
     }
 
