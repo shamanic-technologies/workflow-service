@@ -299,14 +299,15 @@ describe("validateAndUpgradeWorkflows", () => {
       expect.objectContaining({ category: "sales" }),
     );
 
-    // Should have inserted a new workflow
+    // Should have inserted a new workflow with the SAME name as the old one
     expect(dbInserts.length).toBe(1);
     expect(dbInserts[0].status).toBe("active");
+    expect(dbInserts[0].name).toBe(BROKEN_WORKFLOW.name);
     expect(dbInserts[0].createdByUserId).toBe("workflow-service");
     expect(dbInserts[0].createdByRunId).toBe("platform-run-123");
 
-    // Should have deprecated the old workflow
-    expect(dbUpdates.length).toBeGreaterThan(0);
+    // Should have deprecated the old workflow first, then updated its upgradedTo pointer
+    expect(dbUpdates.length).toBeGreaterThanOrEqual(2);
     expect(dbUpdates[0].values.status).toBe("deprecated");
 
     // Should have closed the platform run as completed
