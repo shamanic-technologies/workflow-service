@@ -234,13 +234,13 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     {
       "id": "gate-check",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/internal/gate-check", "stopAfterIf": "result.allowed == false" },
+      "config": { "service": "campaign", "method": "POST", "path": "/gate-check", "stopAfterIf": "result.allowed == false" },
       "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
     },
     {
       "id": "start-run",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/internal/start-run" },
+      "config": { "service": "campaign", "method": "POST", "path": "/start-run" },
       "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
     },
     {
@@ -274,13 +274,13 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     {
       "id": "end-run",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/internal/end-run", "body": { "success": true } },
+      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true } },
       "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.leadFound": "$ref:fetch-lead.output.found" }
     },
     {
       "id": "end-run-error",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/internal/end-run", "body": { "success": false } },
+      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": false } },
       "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId" }
     }
   ],
