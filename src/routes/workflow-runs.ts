@@ -40,6 +40,29 @@ router.post(
         );
 
       if (!workflow) {
+        // Check if deprecated — return 410 with upgrade info instead of 404
+        const [deprecated] = await db
+          .select()
+          .from(workflows)
+          .where(eq(workflows.name, req.params.name));
+
+        if (deprecated && deprecated.status === "deprecated") {
+          let upgradedToName: string | null = null;
+          if (deprecated.upgradedTo) {
+            const [replacement] = await db
+              .select()
+              .from(workflows)
+              .where(eq(workflows.id, deprecated.upgradedTo));
+            upgradedToName = replacement?.name ?? null;
+          }
+          res.status(410).json({
+            error: "Workflow has been deprecated",
+            upgradedTo: deprecated.upgradedTo,
+            upgradedToName,
+          });
+          return;
+        }
+
         res.status(404).json({
           error: `Workflow "${req.params.name}" not found`,
         });
@@ -141,6 +164,20 @@ router.post("/workflows/:id/execute", requireApiKey, async (req, res) => {
       );
 
     if (!workflow) {
+      // Check if deprecated — return 410 with upgrade info instead of 404
+      const [deprecated] = await db
+        .select()
+        .from(workflows)
+        .where(eq(workflows.id, req.params.id));
+
+      if (deprecated && deprecated.status === "deprecated") {
+        res.status(410).json({
+          error: "Workflow has been deprecated",
+          upgradedTo: deprecated.upgradedTo,
+        });
+        return;
+      }
+
       res.status(404).json({ error: "Workflow not found" });
       return;
     }

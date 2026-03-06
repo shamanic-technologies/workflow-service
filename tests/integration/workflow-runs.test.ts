@@ -4,6 +4,8 @@ import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 // Mock DB state
 const mockWorkflows: Record<string, unknown>[] = [];
 const mockRuns: Record<string, unknown>[] = [];
+// Optional queue: when populated, select().from().where() shifts from it
+const mockSelectResponses: Record<string, unknown>[][] = [];
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
@@ -26,6 +28,9 @@ vi.mock("../../src/db/index.js", () => ({
     select: () => ({
       from: (table: unknown) => ({
         where: () => {
+          if (mockSelectResponses.length > 0) {
+            return Promise.resolve(mockSelectResponses.shift()!);
+          }
           // Simple mock: return first matching item
           if (mockWorkflows.length > 0) return Promise.resolve([mockWorkflows[0]]);
           if (mockRuns.length > 0) return Promise.resolve([mockRuns[0]]);
@@ -92,6 +97,7 @@ describe("POST /workflows/:id/execute", () => {
   beforeEach(() => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
+    mockSelectResponses.length = 0;
     mockRunFlow.mockClear();
     mockCreateRun.mockClear();
     mockCreateRun.mockResolvedValue({ runId: "run-own-123" });
@@ -215,6 +221,26 @@ describe("POST /workflows/:id/execute", () => {
     expect(res.body.error).toContain("runs-service");
   });
 
+  it("returns 410 when workflow is deprecated (by ID)", async () => {
+    mockSelectResponses.push(
+      [],  // 1. active-only lookup → not found
+      [{   // 2. any-status lookup → deprecated
+        id: "wf-old-id",
+        status: "deprecated",
+        upgradedTo: "wf-new-id",
+      }],
+    );
+
+    const res = await request
+      .post("/workflows/wf-old-id/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(410);
+    expect(res.body.error).toBe("Workflow has been deprecated");
+    expect(res.body.upgradedTo).toBe("wf-new-id");
+  });
+
   it("requires authentication", async () => {
     const res = await request
       .post("/workflows/wf-1/execute")
@@ -229,6 +255,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
   beforeEach(() => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
+    mockSelectResponses.length = 0;
     mockRunFlow.mockClear();
     mockCreateRun.mockClear();
     mockCreateRun.mockResolvedValue({ runId: "run-own-456" });
@@ -361,6 +388,53 @@ describe("POST /workflows/by-name/:name/execute", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error).toContain("nonexistent");
+  });
+
+  it("returns 410 when workflow is deprecated (with replacement info)", async () => {
+    mockSelectResponses.push(
+      [],  // 1. active-only lookup → not found
+      [{   // 2. any-status lookup → deprecated workflow
+        id: "wf-old",
+        name: "deprecated-flow",
+        status: "deprecated",
+        upgradedTo: "wf-new",
+      }],
+      [{   // 3. replacement name lookup
+        name: "replacement-flow",
+      }],
+    );
+
+    const res = await request
+      .post("/workflows/by-name/deprecated-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(410);
+    expect(res.body.error).toBe("Workflow has been deprecated");
+    expect(res.body.upgradedTo).toBe("wf-new");
+    expect(res.body.upgradedToName).toBe("replacement-flow");
+  });
+
+  it("returns 410 with null upgradedTo when deprecated workflow has no replacement", async () => {
+    mockSelectResponses.push(
+      [],  // 1. active-only lookup → not found
+      [{   // 2. any-status lookup → deprecated, no replacement
+        id: "wf-dead",
+        name: "dead-flow",
+        status: "deprecated",
+        upgradedTo: null,
+      }],
+    );
+
+    const res = await request
+      .post("/workflows/by-name/dead-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(410);
+    expect(res.body.error).toBe("Workflow has been deprecated");
+    expect(res.body.upgradedTo).toBeNull();
+    expect(res.body.upgradedToName).toBeNull();
   });
 
   it("requires authentication", async () => {

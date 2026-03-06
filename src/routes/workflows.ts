@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
@@ -39,6 +39,42 @@ function generateFlowPath(scope: string, name: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
   return `f/workflows/${scope}/${slug}`;
+}
+
+/**
+ * Returns all workflow IDs in the upgrade chain for the given active workflow,
+ * including the active workflow itself. Walks backwards through deprecated
+ * predecessors via the `upgraded_to` column.
+ */
+function getUpgradeChainIds(
+  activeWorkflowId: string,
+  deprecatedWorkflows: { id: string; upgradedTo: string | null }[],
+): string[] {
+  const predecessorMap = new Map<string, string[]>();
+  for (const d of deprecatedWorkflows) {
+    if (!d.upgradedTo) continue;
+    const existing = predecessorMap.get(d.upgradedTo) ?? [];
+    existing.push(d.id);
+    predecessorMap.set(d.upgradedTo, existing);
+  }
+
+  const chainIds: string[] = [activeWorkflowId];
+  const queue = [activeWorkflowId];
+  const visited = new Set<string>([activeWorkflowId]);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const preds = predecessorMap.get(current) ?? [];
+    for (const predId of preds) {
+      if (!visited.has(predId)) {
+        visited.add(predId);
+        chainIds.push(predId);
+        queue.push(predId);
+      }
+    }
+  }
+
+  return chainIds;
 }
 
 // POST /workflows/generate — Generate a workflow from natural language
@@ -364,7 +400,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       .where(eq(workflows.orgId, orgId));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; name: string; category: string; channel: string; audienceType: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
+    const results: { id: string; name: string; category: string; channel: string; audienceType: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated"; upgradedFrom?: string | null }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
@@ -471,6 +507,33 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           })
           .returning();
 
+        // Auto-deprecate previous active workflow with same dimensions
+        let upgradedFrom: string | null = null;
+        const previousActive = await db
+          .select({ id: workflows.id })
+          .from(workflows)
+          .where(
+            and(
+              eq(workflows.orgId, orgId),
+              eq(workflows.category, wf.category),
+              eq(workflows.channel, wf.channel),
+              eq(workflows.audienceType, wf.audienceType),
+              eq(workflows.status, "active"),
+            )
+          );
+        const candidates = previousActive.filter((w) => w.id !== created.id);
+        if (candidates.length === 1) {
+          await db
+            .update(workflows)
+            .set({
+              status: "deprecated" as const,
+              upgradedTo: created.id,
+              updatedAt: new Date(),
+            })
+            .where(eq(workflows.id, candidates[0].id));
+          upgradedFrom = candidates[0].id;
+        }
+
         results.push({
           id: created.id,
           name: created.name,
@@ -481,6 +544,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           signature: created.signature,
           signatureName: created.signatureName,
           action: "created",
+          upgradedFrom,
         });
       }
     }
@@ -511,36 +575,51 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       runId: res.locals.runId as string,
     };
 
-    // 1. Get all active workflows matching the dimensions (all filters optional)
-    const conditions: ReturnType<typeof eq>[] = [eq(workflows.status, "active")];
+    // 1. Get all workflows matching the dimensions (active + deprecated for chain stats)
+    const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (category) conditions.push(eq(workflows.category, category));
     if (channel) conditions.push(eq(workflows.channel, channel));
     if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));
 
-    const matchingWorkflows = conditions.length > 0
+    const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
       : await db.select().from(workflows);
 
-    if (matchingWorkflows.length === 0) {
+    const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
+    const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
+
+    if (activeWorkflows.length === 0) {
       res.status(404).json({ error: "No workflows found matching the criteria" });
       return;
     }
 
-    // 2. For each workflow, get completed runs and extract external runIds
+    // 2. For each active workflow, get completed runs across entire upgrade chain
     const workflowRunsByWfId: Record<string, string[]> = {};
     const allRunIds: string[] = [];
 
-    for (const wf of matchingWorkflows) {
-      const runs = await db
-        .select()
-        .from(workflowRuns)
-        .where(
-          and(
-            eq(workflowRuns.workflowId, wf.id),
-            eq(workflowRuns.status, "completed"),
-          )
-        );
+    for (const wf of activeWorkflows) {
+      const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
+
+      const runs = chainIds.length === 1
+        ? await db
+            .select()
+            .from(workflowRuns)
+            .where(
+              and(
+                eq(workflowRuns.workflowId, chainIds[0]),
+                eq(workflowRuns.status, "completed"),
+              )
+            )
+        : await db
+            .select()
+            .from(workflowRuns)
+            .where(
+              and(
+                inArray(workflowRuns.workflowId, chainIds),
+                eq(workflowRuns.status, "completed"),
+              )
+            );
 
       const runIds = runs
         .map((r) => r.runId)
@@ -565,14 +644,14 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
 
     // 4. Per-workflow: compute cost + fetch email stats
     const workflowScores: Array<{
-      workflow: (typeof matchingWorkflows)[0];
+      workflow: (typeof activeWorkflows)[0];
       totalCost: number;
       totalOutcomes: number;
       costPerOutcome: number | null;
       completedRuns: number;
     }> = [];
 
-    for (const wf of matchingWorkflows) {
+    for (const wf of activeWorkflows) {
       const runIds = workflowRunsByWfId[wf.id];
       if (!runIds || runIds.length === 0) continue;
 
