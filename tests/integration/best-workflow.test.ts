@@ -118,6 +118,8 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     dag: VALID_LINEAR_DAG,
     windmillFlowPath: "f/workflows/test/flow",
     windmillWorkspace: "prod",
+    status: "active",
+    upgradedTo: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -332,5 +334,93 @@ describe("GET /workflows/best", () => {
     expect(res.status).toBe(200);
     expect(res.body.stats.costPerOutcome).toBeNull();
     expect(res.body.stats.completedRuns).toBe(1);
+  });
+
+  it("includes runs from deprecated predecessor in stats", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-active" }),
+      makeWorkflow({ id: "wf-old", status: "deprecated", upgradedTo: "wf-active" }),
+    );
+    mockWorkflowRunRows.push(
+      makeRun("wf-active", "ext-run-active"),
+      makeRun("wf-old", "ext-run-old"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-active", totalCostInUsdCents: 100 },
+      { runId: "ext-run-old", totalCostInUsdCents: 200 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 10 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query(BASE_QUERY)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.id).toBe("wf-active");
+    expect(res.body.stats.totalCostInUsdCents).toBe(300);
+    expect(res.body.stats.completedRuns).toBe(2);
+  });
+
+  it("aggregates across deep upgrade chain (3 levels)", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-v3" }),
+      makeWorkflow({ id: "wf-v2", status: "deprecated", upgradedTo: "wf-v3" }),
+      makeWorkflow({ id: "wf-v1", status: "deprecated", upgradedTo: "wf-v2" }),
+    );
+    mockWorkflowRunRows.push(
+      makeRun("wf-v3", "ext-run-v3"),
+      makeRun("wf-v2", "ext-run-v2"),
+      makeRun("wf-v1", "ext-run-v1"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-v3", totalCostInUsdCents: 50 },
+      { runId: "ext-run-v2", totalCostInUsdCents: 100 },
+      { runId: "ext-run-v1", totalCostInUsdCents: 150 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 15 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query(BASE_QUERY)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.id).toBe("wf-v3");
+    expect(res.body.stats.totalCostInUsdCents).toBe(300);
+    expect(res.body.stats.completedRuns).toBe(3);
+  });
+
+  it("returns only active workflow in response even when deprecated predecessors exist", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-active" }),
+      makeWorkflow({ id: "wf-old", status: "deprecated", upgradedTo: "wf-active" }),
+    );
+    mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-1"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-1", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query(BASE_QUERY)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    // The returned workflow is the active one, not the deprecated predecessor
+    expect(res.body.workflow.id).toBe("wf-active");
   });
 });

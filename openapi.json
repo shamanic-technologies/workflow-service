@@ -632,6 +632,12 @@
               "created",
               "updated"
             ]
+          },
+          "upgradedFrom": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "If action is 'created' and a previous active workflow with the same dimensions existed, this is the ID of that workflow (now deprecated)."
           }
         },
         "required": [

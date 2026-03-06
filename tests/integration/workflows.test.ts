@@ -9,6 +9,8 @@ import {
 
 // Mock DB
 const mockDbRows: Record<string, unknown>[] = [];
+// Optional queue: when populated, select().from().where() shifts from it instead of returning mockDbRows
+const mockSelectResponses: Record<string, unknown>[][] = [];
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
@@ -30,7 +32,10 @@ vi.mock("../../src/db/index.js", () => ({
     select: () => ({
       from: () => {
         const result = Promise.resolve(mockDbRows);
-        (result as any).where = (_condition?: unknown) => Promise.resolve(mockDbRows);
+        (result as any).where = (_condition?: unknown) =>
+          Promise.resolve(
+            mockSelectResponses.length > 0 ? mockSelectResponses.shift()! : mockDbRows,
+          );
         return result;
       },
     }),
@@ -240,6 +245,7 @@ const DEPLOY_ITEM = {
 describe("PUT /workflows/deploy", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
   });
 
   it("deploys a workflow with tags", async () => {
@@ -523,6 +529,82 @@ describe("PUT /workflows/deploy", () => {
       .send({}); // missing workflows
 
     expect(res.status).toBe(400);
+  });
+
+  it("deprecates previous active workflow when deploying new signature with same dimensions", async () => {
+    // Mock select responses for the deploy flow:
+    // 1. signatureNames query → existing workflow
+    // 2. signature match → no match (different DAG)
+    // 3. previousActive query → old workflow + newly created
+    const oldWf = {
+      id: "wf-old",
+      orgId: "org-1",
+      name: "sales-email-cold-outreach-alpha",
+      signatureName: "alpha",
+      signature: "old-sig-different",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      windmillFlowPath: "f/workflows/org-1/sales_email_cold_outreach_alpha",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [oldWf],  // 1. signatureNames query
+      [],       // 2. signature match → no match
+    );
+    // After insert, the previousActive query will use default (mockDbRows).
+    // We pre-populate with the old workflow so it's found as a candidate.
+    mockDbRows.push(oldWf);
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].action).toBe("created");
+    expect(res.body.workflows[0].upgradedFrom).toBe("wf-old");
+  });
+
+  it("does not deprecate when updating existing workflow (same signature)", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+
+    mockDbRows.push({
+      id: "wf-existing",
+      orgId: "org-1",
+      name: "sales-email-cold-outreach-sequoia",
+      signatureName: "sequoia",
+      signature: sig,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      status: "active",
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+      windmillFlowPath: "f/workflows/org-1/sales_email_cold_outreach_sequoia",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].action).toBe("updated");
+    // No upgradedFrom on updates
+    expect(res.body.workflows[0].upgradedFrom).toBeUndefined();
   });
 });
 
