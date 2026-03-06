@@ -194,18 +194,20 @@ async function attemptUpgrade(
     const usedNames = new Set<string>(existingWorkflows.map((w) => w.signatureName));
 
     const newSignatureName = pickSignatureName(newSignature, usedNames);
-    const newName = `${result.category}-${result.channel}-${result.audienceType}-${newSignatureName}`;
+
+    // Reuse the old workflow's name so clients calling by-name are not disrupted
+    const stableName = wf.name;
 
     // Deploy to Windmill
-    const openFlow = dagToOpenFlow(result.dag, newName);
-    const flowPath = `f/workflows/${wf.orgId}/${newName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+    const openFlow = dagToOpenFlow(result.dag, stableName);
+    const flowPath = `f/workflows/${wf.orgId}/${stableName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
     let windmillFlowPath: string | null = null;
 
     if (windmillClient) {
       try {
         await windmillClient.createFlow({
           path: flowPath,
-          summary: newName,
+          summary: stableName,
           description: result.description,
           value: openFlow.value,
           schema: openFlow.schema,
@@ -216,7 +218,10 @@ async function attemptUpgrade(
       }
     }
 
-    // Insert new active workflow
+    // Deprecate old workflow FIRST (frees the unique name index for the replacement)
+    await deprecateWorkflow(database, wf.id, null);
+
+    // Insert new active workflow with the same name
     const [created] = await database
       .insert(workflows)
       .values({
@@ -226,8 +231,8 @@ async function attemptUpgrade(
         campaignId: wf.campaignId,
         subrequestId: wf.subrequestId,
         styleName: wf.styleName,
-        name: newName,
-        displayName: wf.displayName,
+        name: stableName,
+        displayName: wf.displayName ?? stableName,
         description: result.description,
         category: result.category,
         channel: result.channel,
@@ -244,8 +249,11 @@ async function attemptUpgrade(
       })
       .returning();
 
-    // Deprecate old workflow
-    await deprecateWorkflow(database, wf.id, created.id);
+    // Update the deprecated workflow's upgradedTo pointer
+    await database
+      .update(workflows)
+      .set({ upgradedTo: created.id })
+      .where(eq(workflows.id, wf.id));
 
     // Close platform run as completed
     if (platformRunId) {

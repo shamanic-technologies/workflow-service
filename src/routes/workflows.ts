@@ -468,7 +468,34 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        const name = `${wf.category}-${wf.channel}-${wf.audienceType}-${signatureName}`;
+        // Use client-provided name or auto-generate
+        const name = wf.name ?? `${wf.category}-${wf.channel}-${wf.audienceType}-${signatureName}`;
+
+        // If client provided a name, deprecate any existing active workflow with that name first
+        let upgradedFrom: string | null = null;
+        if (wf.name) {
+          const [previousActive] = await db
+            .select()
+            .from(workflows)
+            .where(
+              and(
+                eq(workflows.name, wf.name),
+                eq(workflows.status, "active"),
+              )
+            );
+          if (previousActive) {
+            await db
+              .update(workflows)
+              .set({
+                status: "deprecated" as const,
+                upgradedTo: null, // will be updated after insert
+                updatedAt: new Date(),
+              })
+              .where(eq(workflows.id, previousActive.id));
+            upgradedFrom = previousActive.id;
+          }
+        }
+
         const openFlow = dagToOpenFlow(dag, name);
         const flowPath = generateFlowPath(orgId, name);
         const client = getWindmillClient();
@@ -507,31 +534,12 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           })
           .returning();
 
-        // Auto-deprecate previous active workflow with same dimensions
-        let upgradedFrom: string | null = null;
-        const previousActive = await db
-          .select({ id: workflows.id })
-          .from(workflows)
-          .where(
-            and(
-              eq(workflows.orgId, orgId),
-              eq(workflows.category, wf.category),
-              eq(workflows.channel, wf.channel),
-              eq(workflows.audienceType, wf.audienceType),
-              eq(workflows.status, "active"),
-            )
-          );
-        const candidates = previousActive.filter((w) => w.id !== created.id);
-        if (candidates.length === 1) {
+        // Update the deprecated workflow's upgradedTo pointer
+        if (upgradedFrom) {
           await db
             .update(workflows)
-            .set({
-              status: "deprecated" as const,
-              upgradedTo: created.id,
-              updatedAt: new Date(),
-            })
-            .where(eq(workflows.id, candidates[0].id));
-          upgradedFrom = candidates[0].id;
+            .set({ upgradedTo: created.id })
+            .where(eq(workflows.id, upgradedFrom));
         }
 
         results.push({
