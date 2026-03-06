@@ -632,12 +632,6 @@
               "created",
               "updated"
             ]
-          },
-          "upgradedFrom": {
-            "type": "string",
-            "nullable": true,
-            "format": "uuid",
-            "description": "If action is 'created' and a previous active workflow with the same name existed, this is the ID of that workflow (now deprecated)."
           }
         },
         "required": [
@@ -669,10 +663,6 @@
       "DeployWorkflowItem": {
         "type": "object",
         "properties": {
-          "name": {
-            "type": "string",
-            "description": "Optional stable workflow name. When provided, any existing active workflow with this name is deprecated and replaced by the new one. When omitted, a name is auto-generated."
-          },
           "description": {
             "type": "string",
             "description": "Human-readable description."

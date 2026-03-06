@@ -400,7 +400,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       .where(eq(workflows.orgId, orgId));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; name: string; category: string; channel: string; audienceType: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated"; upgradedFrom?: string | null }[] = [];
+    const results: { id: string; name: string; category: string; channel: string; audienceType: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
@@ -468,33 +468,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        // Use client-provided name or auto-generate
-        const name = wf.name ?? `${wf.category}-${wf.channel}-${wf.audienceType}-${signatureName}`;
-
-        // If client provided a name, deprecate any existing active workflow with that name first
-        let upgradedFrom: string | null = null;
-        if (wf.name) {
-          const [previousActive] = await db
-            .select()
-            .from(workflows)
-            .where(
-              and(
-                eq(workflows.name, wf.name),
-                eq(workflows.status, "active"),
-              )
-            );
-          if (previousActive) {
-            await db
-              .update(workflows)
-              .set({
-                status: "deprecated" as const,
-                upgradedTo: null, // will be updated after insert
-                updatedAt: new Date(),
-              })
-              .where(eq(workflows.id, previousActive.id));
-            upgradedFrom = previousActive.id;
-          }
-        }
+        const name = `${wf.category}-${wf.channel}-${wf.audienceType}-${signatureName}`;
 
         const openFlow = dagToOpenFlow(dag, name);
         const flowPath = generateFlowPath(orgId, name);
@@ -534,14 +508,6 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           })
           .returning();
 
-        // Update the deprecated workflow's upgradedTo pointer
-        if (upgradedFrom) {
-          await db
-            .update(workflows)
-            .set({ upgradedTo: created.id })
-            .where(eq(workflows.id, upgradedFrom));
-        }
-
         results.push({
           id: created.id,
           name: created.name,
@@ -552,7 +518,6 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           signature: created.signature,
           signatureName: created.signatureName,
           action: "created",
-          upgradedFrom,
         });
       }
     }
