@@ -221,7 +221,23 @@ async function attemptUpgrade(
         });
         windmillFlowPath = flowPath;
       } catch (err) {
-        console.error("[workflow-service] Failed to create upgraded flow in Windmill:", err);
+        // Flow may already exist from a previous startup attempt — update instead
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("already exists")) {
+          try {
+            await windmillClient.updateFlow(flowPath, {
+              summary: stableName,
+              description: result.description,
+              value: openFlow.value,
+              schema: openFlow.schema,
+            });
+            windmillFlowPath = flowPath;
+          } catch (updateErr) {
+            console.error("[workflow-service] Failed to update existing flow in Windmill:", updateErr);
+          }
+        } else {
+          console.error("[workflow-service] Failed to create upgraded flow in Windmill:", err);
+        }
       }
     }
 
