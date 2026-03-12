@@ -138,6 +138,63 @@ describe("http-call script", () => {
     expect(options.headers["x-run-id"]).toBe("run-uuid");
   });
 
+  describe("path params", () => {
+    it("replaces {placeholders} in path with params values", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ profile: {} }));
+
+      const brandServiceEnvs = {
+        ...serviceEnvs,
+        BRAND_SERVICE_URL: "https://brand.example.com",
+        BRAND_SERVICE_API_KEY: "brand-key-789",
+      };
+
+      await main(
+        "brand", "POST", "/brands/{brandId}/sales-profile",
+        { workflowName: "test" },
+        undefined,
+        brandServiceEnvs,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { brandId: "brand-uuid-123" },
+      );
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://brand.example.com/brands/brand-uuid-123/sales-profile");
+    });
+
+    it("replaces multiple path params", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await main(
+        "campaign", "GET", "/orgs/{orgId}/campaigns/{campaignId}",
+        undefined,
+        undefined,
+        serviceEnvs,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { orgId: "org-1", campaignId: "camp-2" },
+      );
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://campaign.example.com/orgs/org-1/campaigns/camp-2");
+    });
+
+    it("works without params (backward compat)", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await main("campaign", "GET", "/status", undefined, undefined, serviceEnvs);
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://campaign.example.com/status");
+    });
+  });
+
   describe("validateResponse", () => {
     it("passes when response field matches expected value", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ allowed: true, reason: "ok" }));

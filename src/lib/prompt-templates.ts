@@ -148,6 +148,7 @@ Use "http.call" for all service calls. Config:
 - path (string): endpoint path
 - body (object, optional): static request body parts
 - query (object, optional): query params
+- params (object, optional): path parameters — keys match \`\{placeholder\}\` in the path
 
 Example:
 {
@@ -176,6 +177,9 @@ Dot-notation keys create nested objects:
 - "body.metadata.source": "$ref:flow_input.source" → body: { metadata: { source: ... } }
 
 Static body fields go in config.body, dynamic overrides go in inputMapping with dot-notation.
+
+For path parameters (e.g. \`/brands/{brandId}/sales-profile\`), use \`params.*\` in inputMapping:
+- "params.brandId": "$ref:start-run.output.brandId" → replaces {brandId} in the path
 
 ## Special Config Keys (stripped before passing to script)
 
@@ -247,8 +251,8 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     {
       "id": "brand-profile",
       "type": "http.call",
-      "config": { "service": "brand", "method": "POST", "path": "/sales-profile" },
-      "inputMapping": { "body.brandId": "$ref:start-run.output.brandId" }
+      "config": { "service": "brand", "method": "POST", "path": "/brands/{brandId}/sales-profile" },
+      "inputMapping": { "params.brandId": "$ref:start-run.output.brandId" }
     },
     {
       "id": "email-generate",
