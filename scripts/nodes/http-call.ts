@@ -17,6 +17,7 @@ export async function main(
   orgId?: string,
   userId?: string,
   runId?: string,
+  params?: Record<string, string>,
 ) {
   // Convert service name to env var prefix: "transactional-email" → "TRANSACTIONAL_EMAIL"
   const envPrefix = service.toUpperCase().replace(/-/g, "_");
@@ -34,8 +35,16 @@ export async function main(
     );
   }
 
+  // Resolve path parameters: "/brands/{brandId}/profile" + params.brandId → "/brands/abc/profile"
+  let resolvedPath = path;
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      resolvedPath = resolvedPath.replace(`{${key}}`, encodeURIComponent(String(value)));
+    }
+  }
+
   // Build URL with query params
-  let url = `${baseUrl}${path}`;
+  let url = `${baseUrl}${resolvedPath}`;
   if (query && Object.keys(query).length > 0) {
     const params = new URLSearchParams(query);
     url += `?${params}`;
