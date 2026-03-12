@@ -145,6 +145,30 @@ export async function validateAndUpgradeWorkflows(
       `[workflow-service] ${failedCount} workflow(s) have broken endpoints that could not be auto-upgraded. Fix the workflows or provide the platform Anthropic key, then restart.`,
     );
   }
+
+  // 5. Sync all active workflows to Windmill — ensures DB DAG changes
+  //    (e.g. new inputMapping fields) are reflected in Windmill flows.
+  //    Re-fetch active workflows since upgrades may have changed them.
+  if (windmillClient) {
+    const currentActive = await database
+      .select()
+      .from(workflows)
+      .where(eq(workflows.status, "active"));
+
+    let synced = 0;
+    for (const wf of currentActive) {
+      try {
+        await syncFlowToWindmill(wf, windmillClient);
+        synced++;
+      } catch (err) {
+        console.warn(
+          `[workflow-service] Failed to sync flow for "${wf.name}":`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    console.log(`[workflow-service] Synced ${synced}/${currentActive.length} flows to Windmill`);
+  }
 }
 
 async function attemptUpgrade(
@@ -308,6 +332,37 @@ async function attemptUpgrade(
       }
     }
     throw err;
+  }
+}
+
+async function syncFlowToWindmill(
+  wf: Workflow,
+  windmillClient: WindmillClient,
+): Promise<void> {
+  const dag = wf.dag as DAG;
+  const openFlow = dagToOpenFlow(dag, wf.name);
+  const flowPath = `f/workflows/${wf.orgId}/${wf.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+
+  try {
+    await windmillClient.updateFlow(flowPath, {
+      summary: wf.name,
+      description: wf.description ?? "",
+      value: openFlow.value,
+      schema: openFlow.schema,
+    });
+  } catch (updateErr) {
+    const msg = updateErr instanceof Error ? updateErr.message : String(updateErr);
+    if (msg.includes("not found") || msg.includes("404")) {
+      await windmillClient.createFlow({
+        path: flowPath,
+        summary: wf.name,
+        description: wf.description ?? "",
+        value: openFlow.value,
+        schema: openFlow.schema,
+      });
+    } else {
+      throw updateErr;
+    }
   }
 }
 
