@@ -155,20 +155,18 @@ describe("validateAndUpgradeWorkflows", () => {
       select: () => ({
         from: () => {
           selectCallCount++;
-          const currentCount = selectCallCount;
 
-          const getData = () => {
-            if (currentCount === 1) {
-              return Promise.resolve(dbSelectResult);
-            }
-            return Promise.resolve(
+          // Non-where calls after the first return signatureName-only (for collision detection)
+          const signatureData = () =>
+            Promise.resolve(
               dbSelectResult.map((r) => ({ signatureName: (r as Record<string, unknown>).signatureName })),
             );
-          };
 
-          // Return a thenable with .where() — supports both `await db.select().from()` and `.from().where()`
-          const promise = getData();
-          (promise as any).where = () => getData();
+          // .where() calls always return full workflow objects (active workflows query + sync query)
+          const fullData = () => Promise.resolve(dbSelectResult);
+
+          const promise = signatureData();
+          (promise as any).where = () => fullData();
           return promise;
         },
       }),
@@ -223,6 +221,42 @@ describe("validateAndUpgradeWorkflows", () => {
 
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining("1 valid"),
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it("syncs all active workflows to Windmill on startup", async () => {
+    dbSelectResult = [VALID_WORKFLOW];
+    mockFetchSpecsForServices.mockResolvedValue(
+      new Map([["campaign", CAMPAIGN_SPEC]]),
+    );
+
+    const mockUpdateFlow = vi.fn().mockResolvedValue(undefined);
+    const mockCreateFlow = vi.fn();
+
+    const consoleSpy = vi.spyOn(console, "log");
+
+    await validateAndUpgradeWorkflows({
+      db: createMockDb() as any,
+      windmillClient: {
+        updateFlow: mockUpdateFlow,
+        createFlow: mockCreateFlow,
+      } as any,
+    });
+
+    // Should have synced the valid workflow's flow to Windmill
+    expect(mockUpdateFlow).toHaveBeenCalledTimes(1);
+    expect(mockUpdateFlow).toHaveBeenCalledWith(
+      expect.stringContaining("f/workflows/org-1/"),
+      expect.objectContaining({
+        summary: VALID_WORKFLOW.name,
+        value: expect.any(Object),
+        schema: expect.any(Object),
+      }),
+    );
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Synced 1/1 flows to Windmill"),
     );
     consoleSpy.mockRestore();
   });
@@ -595,8 +629,8 @@ describe("validateAndUpgradeWorkflows", () => {
       } as any,
     });
 
-    // Should have called updateFlow only — no createFlow needed
-    expect(mockUpdateFlow).toHaveBeenCalledTimes(1);
+    // Should have called updateFlow during upgrade + once during sync
+    expect(mockUpdateFlow).toHaveBeenCalledTimes(2);
     expect(mockCreateFlow).not.toHaveBeenCalled();
 
     // The new workflow should still be inserted in the DB
@@ -643,9 +677,9 @@ describe("validateAndUpgradeWorkflows", () => {
       } as any,
     });
 
-    // Should have tried updateFlow first, then fallen back to createFlow
-    expect(mockUpdateFlow).toHaveBeenCalledTimes(1);
-    expect(mockCreateFlow).toHaveBeenCalledTimes(1);
+    // Should have tried updateFlow first, then fallen back to createFlow (upgrade + sync)
+    expect(mockUpdateFlow).toHaveBeenCalledTimes(2);
+    expect(mockCreateFlow).toHaveBeenCalledTimes(2);
 
     expect(dbInserts.length).toBe(1);
     expect(dbInserts[0].status).toBe("active");
