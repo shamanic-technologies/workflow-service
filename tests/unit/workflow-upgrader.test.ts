@@ -108,6 +108,7 @@ describe("upgradeWorkflow", () => {
     const result = await upgradeWorkflow(
       BROKEN_DAG,
       [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
+      [],
       "fake-key",
       IDENTITY,
       METADATA,
@@ -163,6 +164,7 @@ describe("upgradeWorkflow", () => {
     const result = await upgradeWorkflow(
       BROKEN_DAG,
       [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
+      [],
       "fake-key",
       IDENTITY,
       METADATA,
@@ -207,6 +209,7 @@ describe("upgradeWorkflow", () => {
       upgradeWorkflow(
         BROKEN_DAG,
         [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
+        [],
         "fake-key",
         IDENTITY,
         METADATA,

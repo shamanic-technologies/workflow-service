@@ -312,16 +312,46 @@ ${styleDirective ? `## Style Directive\n\n${styleDirective}\n\n` : ""}Generate a
 export interface BuildUpgradeSystemPromptOptions {
   currentDag: Record<string, unknown>;
   invalidEndpoints: Array<{ service: string; method: string; path: string; reason: string }>;
+  fieldErrors?: Array<{ nodeId: string; service: string; method: string; path: string; field: string; reason: string }>;
 }
 
 export function buildUpgradeSystemPrompt(options: BuildUpgradeSystemPromptOptions): string {
-  const { currentDag, invalidEndpoints } = options;
+  const { currentDag, invalidEndpoints, fieldErrors = [] } = options;
 
   const brokenList = invalidEndpoints
     .map((ep) => `- ${ep.method} ${ep.service}${ep.path} — ${ep.reason}`)
     .join("\n");
 
-  return `You are a workflow maintenance engineer. Your job is to FIX a broken workflow DAG by correcting invalid endpoint paths.
+  const fieldErrorList = fieldErrors
+    .map((f) => `- Node "${f.nodeId}": ${f.reason}`)
+    .join("\n");
+
+  const hasBrokenEndpoints = invalidEndpoints.length > 0;
+  const hasFieldErrors = fieldErrors.length > 0;
+
+  let issuesSection = "";
+
+  if (hasBrokenEndpoints) {
+    issuesSection += `## Broken Endpoints
+
+The following endpoints in this DAG are invalid — they no longer exist in the upstream service:
+
+${brokenList}
+`;
+  }
+
+  if (hasFieldErrors) {
+    issuesSection += `${hasBrokenEndpoints ? "\n" : ""}## Field Errors
+
+The following nodes send incorrect body fields to their endpoints (missing required fields or sending unknown fields):
+
+${fieldErrorList}
+
+To fix field errors, update the node's \`inputMapping\` (add missing \`body.*\` entries or remove incorrect ones) and/or \`config.body\` to match the endpoint's actual request schema. Use get_service_endpoints to check the correct schema.
+`;
+  }
+
+  return `You are a workflow maintenance engineer. Your job is to FIX a broken workflow DAG by correcting endpoint paths and body field mappings.
 
 ## Current DAG (DO NOT change business logic)
 
@@ -329,27 +359,23 @@ export function buildUpgradeSystemPrompt(options: BuildUpgradeSystemPromptOption
 ${JSON.stringify(currentDag, null, 2)}
 \`\`\`
 
-## Broken Endpoints
-
-The following endpoints in this DAG are invalid — they no longer exist in the upstream service:
-
-${brokenList}
-
+${issuesSection}
 ## Your Task
 
 1. Call list_services to see all available services
-2. Call get_service_endpoints for EACH service that has a broken endpoint — find the correct path
+2. Call get_service_endpoints for EACH service that has a broken endpoint or field error — find the correct path and request schema
 3. Call create_workflow with a corrected DAG
 
 ## CRITICAL RULES
 
-- **Preserve ALL business logic exactly**: same node IDs, same edges, same conditions, same inputMapping, same retries, same onError
-- **Only change what's broken**: update config.path (and config.service or config.method if needed) on the affected nodes
+- **Preserve ALL business logic exactly**: same node IDs, same edges, same conditions, same retries, same onError
+- **Only change what's broken**: update config.path, config.body, or inputMapping on the affected nodes
 - **Do NOT add, remove, or reorder nodes or edges**
-- **Do NOT change inputMapping, conditions, stopAfterIf, skipIf, or any other config keys**
+- **Do NOT change conditions, stopAfterIf, skipIf, or any non-broken config keys**
 - **Keep the same category, channel, audienceType, and description**
-- **Use the discovery tools to verify the correct endpoint exists before fixing**
+- **Use the discovery tools to verify the correct endpoint and schema before fixing**
 - If you cannot find a replacement endpoint, keep the original and note it in the description
+- When fixing field errors, use \`$ref:flow_input.fieldName\` or \`$ref:node-id.output.fieldName\` for dynamic values in inputMapping
 
 Return the corrected DAG via the create_workflow tool.`;
 }
