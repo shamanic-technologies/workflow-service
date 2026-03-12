@@ -7,7 +7,7 @@ import {
   fetchServiceList,
   fetchSpecsForServices,
 } from "./api-registry-client.js";
-import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
+import { validateWorkflowEndpoints, type FieldValidationIssue } from "./validate-workflow-endpoints.js";
 import { upgradeWorkflow } from "./workflow-upgrader.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
 import { computeDAGSignature } from "./dag-signature.js";
@@ -85,10 +85,19 @@ export async function validateAndUpgradeWorkflows(
       continue;
     }
 
-    console.warn(
-      `[workflow-service] Workflow "${wf.name}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
-      result.invalidEndpoints.map((ep) => `${ep.method} ${ep.service}${ep.path}`).join(", "),
-    );
+    if (result.invalidEndpoints.length > 0) {
+      console.warn(
+        `[workflow-service] Workflow "${wf.name}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
+        result.invalidEndpoints.map((ep) => `${ep.method} ${ep.service}${ep.path}`).join(", "),
+      );
+    }
+
+    const fieldErrors = result.fieldIssues.filter((f) => f.severity === "error");
+    if (fieldErrors.length > 0 && result.invalidEndpoints.length === 0) {
+      console.warn(
+        `[workflow-service] Workflow "${wf.name}" (${wf.id}) has ${fieldErrors.length} field error(s) — attempting upgrade`,
+      );
+    }
 
     // Attempt upgrade
     try {
@@ -96,6 +105,7 @@ export async function validateAndUpgradeWorkflows(
         wf,
         dag,
         result.invalidEndpoints,
+        result.fieldIssues.filter((f) => f.severity === "error"),
         database,
         windmillClient,
       );
@@ -145,6 +155,7 @@ async function attemptUpgrade(
   wf: Workflow,
   dag: DAG,
   invalidEndpoints: Array<{ service: string; method: string; path: string; reason: string }>,
+  fieldErrors: FieldValidationIssue[],
   database: Database,
   windmillClient: WindmillClient | null,
 ): Promise<string | null> {
@@ -181,6 +192,7 @@ async function attemptUpgrade(
     const result = await upgradeWorkflow(
       dag,
       invalidEndpoints,
+      fieldErrors,
       anthropicApiKey,
       undefined,
       {

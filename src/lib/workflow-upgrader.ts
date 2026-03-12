@@ -10,7 +10,7 @@ import {
   fetchServiceSpec,
 } from "./api-registry-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
-import type { InvalidEndpoint } from "./validate-workflow-endpoints.js";
+import type { InvalidEndpoint, FieldValidationIssue } from "./validate-workflow-endpoints.js";
 
 const MAX_RETRIES = 2;
 const MAX_AGENT_TURNS = 10;
@@ -60,6 +60,7 @@ export interface UpgradeWorkflowResult {
 export async function upgradeWorkflow(
   currentDag: DAG,
   invalidEndpoints: InvalidEndpoint[],
+  fieldErrors: FieldValidationIssue[],
   anthropicApiKey: string,
   identity: IdentityHeaders | undefined,
   metadata: { category: string; channel: string; audienceType: string; description: string },
@@ -69,11 +70,12 @@ export async function upgradeWorkflow(
   const systemPrompt = buildUpgradeSystemPrompt({
     currentDag: currentDag as unknown as Record<string, unknown>,
     invalidEndpoints,
+    fieldErrors,
   });
 
   const tools = AGENTIC_TOOLS;
 
-  const userMessage = `Fix this workflow. The category is "${metadata.category}", channel is "${metadata.channel}", audienceType is "${metadata.audienceType}". Description: "${metadata.description}". Only fix the broken endpoints listed above.`;
+  const userMessage = `Fix this workflow. The category is "${metadata.category}", channel is "${metadata.channel}", audienceType is "${metadata.audienceType}". Description: "${metadata.description}". Fix the broken endpoints and field errors listed above.`;
 
   const messages: Anthropic.Messages.MessageParam[] = [
     { role: "user", content: userMessage },

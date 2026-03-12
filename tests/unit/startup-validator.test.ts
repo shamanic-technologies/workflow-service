@@ -293,7 +293,8 @@ describe("validateAndUpgradeWorkflows", () => {
     // Should have called upgradeWorkflow with the platform key and no identity
     expect(mockUpgradeWorkflow).toHaveBeenCalledWith(
       BROKEN_WORKFLOW.dag,
-      expect.any(Array),
+      expect.any(Array), // invalidEndpoints
+      expect.any(Array), // fieldErrors
       "test-platform-key",
       undefined,
       expect.objectContaining({ category: "sales" }),
@@ -328,6 +329,104 @@ describe("validateAndUpgradeWorkflows", () => {
       "[workflow-service] No active workflows to validate",
     );
     consoleSpy.mockRestore();
+  });
+
+  it("upgrades workflow with field errors even when all endpoints are valid", async () => {
+    // Workflow has a valid endpoint path but is missing a required body field
+    const FIELD_ISSUES_WORKFLOW = {
+      ...VALID_WORKFLOW,
+      id: "wf-field",
+      name: "sales-email-cold-outreach-FieldIssue",
+      signatureName: "FieldIssue",
+      dag: {
+        nodes: [
+          {
+            id: "end-run",
+            type: "http.call",
+            config: { service: "campaign", method: "POST", path: "/end-run" },
+            // Missing required "orgId" in body
+            inputMapping: { "body.status": "$ref:flow_input.status" },
+          },
+        ],
+        edges: [],
+      },
+    };
+
+    // Spec declares orgId as required for /end-run
+    const SPEC_WITH_REQUIRED = {
+      paths: {
+        "/end-run": {
+          post: {
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["orgId", "status"],
+                    properties: {
+                      orgId: { type: "string" },
+                      status: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    dbSelectResult = [FIELD_ISSUES_WORKFLOW];
+    mockFetchSpecsForServices.mockResolvedValue(
+      new Map([["campaign", SPEC_WITH_REQUIRED]]),
+    );
+
+    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+    mockCreatePlatformRun.mockResolvedValue({ runId: "field-run-1" });
+    mockClosePlatformRun.mockResolvedValue(undefined);
+
+    const fixedDag = {
+      nodes: [
+        {
+          id: "end-run",
+          type: "http.call",
+          config: { service: "campaign", method: "POST", path: "/end-run" },
+          inputMapping: {
+            "body.status": "$ref:flow_input.status",
+            "body.orgId": "$ref:flow_input.orgId",
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    mockUpgradeWorkflow.mockResolvedValue({
+      dag: fixedDag,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Fixed workflow",
+    });
+
+    await validateAndUpgradeWorkflows({
+      db: createMockDb() as any,
+      windmillClient: null,
+    });
+
+    // Should attempt upgrade with field errors passed through
+    expect(mockFetchPlatformAnthropicKey).toHaveBeenCalledTimes(1);
+    expect(mockUpgradeWorkflow).toHaveBeenCalledTimes(1);
+
+    // upgradeWorkflow should receive empty invalidEndpoints but non-empty fieldErrors
+    const callArgs = mockUpgradeWorkflow.mock.calls[0];
+    expect(callArgs[1]).toEqual([]); // invalidEndpoints
+    expect(callArgs[2]).toEqual([   // fieldErrors
+      expect.objectContaining({ nodeId: "end-run", field: "orgId", severity: "error" }),
+    ]);
+
+    // Should have inserted a new upgraded workflow
+    expect(dbInserts.length).toBe(1);
+    expect(dbInserts[0].status).toBe("active");
   });
 
   it("throws when upgrade fails (LLM error) and closes platform run as failed", async () => {
