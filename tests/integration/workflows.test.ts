@@ -563,7 +563,10 @@ describe("GET /workflows/:id/required-providers", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.endpoints).toHaveLength(2);
-    expect(res.body.providers).toEqual(["client", "transactional-email"]);
+    expect(res.body.providers).toEqual([
+      { name: "client", domain: null },
+      { name: "transactional-email", domain: null },
+    ]);
     expect(mockFetchProviderRequirements).toHaveBeenCalledWith(
       [
         { service: "client", method: "POST", path: "/users" },
@@ -571,6 +574,35 @@ describe("GET /workflows/:id/required-providers", () => {
       ],
       { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
     );
+  });
+
+  it("enriches providers with domain info for known providers", async () => {
+    mockDbRows.push({
+      id: "wf-http",
+      orgId: "org-1",
+      name: "HTTP Flow",
+      dag: DAG_WITH_HTTP_CALL_CHAIN,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    mockFetchProviderRequirements.mockResolvedValue({
+      requirements: [
+        { provider: "anthropic", fields: ["apiKey"] },
+        { provider: "apollo", fields: ["apiKey"] },
+      ],
+      providers: ["anthropic", "apollo"],
+    });
+
+    const res = await request
+      .get("/workflows/wf-http/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([
+      { name: "anthropic", domain: "anthropic.com" },
+      { name: "apollo", domain: "apollo.io" },
+    ]);
   });
 
   it("returns empty providers for workflows with no http.call nodes", async () => {
