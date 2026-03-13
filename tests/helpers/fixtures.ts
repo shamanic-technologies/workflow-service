@@ -496,16 +496,15 @@ export const DAG_WITH_TWO_BRANCHES: DAG = {
 export const DAG_WITH_PATH_PARAMS: DAG = {
   nodes: [
     {
-      id: "track-cost",
+      id: "fetch-brand",
       type: "http.call",
       config: {
-        body: { amount: 0.1, costType: "email_send" },
-        path: "/runs/:id/costs",
-        method: "POST",
-        service: "runs",
+        path: "/brands/:brandId/sales-profile",
+        method: "GET",
+        service: "brand",
       },
       inputMapping: {
-        "path.id": "$ref:start-run.output.runId",
+        "path.brandId": "$ref:start-run.output.brandId",
       },
     },
   ],

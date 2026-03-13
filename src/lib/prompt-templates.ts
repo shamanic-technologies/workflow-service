@@ -235,6 +235,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 6. Use "condition" nodes for branching, not skipIf (skipIf only skips one step)
 7. The http.call node auto-injects orgId, userId, and serviceEnvs from flow_input — no need to map them
 8. Campaign workflows should use the chassis pattern: gate-check → start-run → ... → end-run, with onError → end-run-error
+9. NEVER include cost-tracking nodes in workflows. Cost tracking (run costs, usage metering) is handled internally by each downstream service — do NOT add steps that POST to runs-service /costs or any similar cost endpoint
 
 ## Example: Cold Email Outreach with Branching
 
@@ -420,6 +421,7 @@ ${issuesSection}
 - **Use the discovery tools to verify the correct endpoint and schema before fixing**
 - If you cannot find a replacement endpoint, keep the original and note it in the description
 - When fixing field errors, use \`$ref:flow_input.fieldName\` or \`$ref:node-id.output.fieldName\` for dynamic values in inputMapping
+- NEVER add cost-tracking nodes — cost tracking is handled internally by each downstream service
 
 Return the corrected DAG via the create_workflow tool.`;
 }
