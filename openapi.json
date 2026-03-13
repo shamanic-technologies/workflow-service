@@ -381,6 +381,24 @@
           "path"
         ]
       },
+      "ProviderInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Provider name (e.g. 'anthropic', 'apollo')."
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Provider's primary domain for logo lookup (e.g. 'anthropic.com'). Null if unknown."
+          }
+        },
+        "required": [
+          "name",
+          "domain"
+        ]
+      },
       "ProviderRequirementsResponse": {
         "type": "object",
         "properties": {
@@ -401,9 +419,9 @@
           "providers": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ProviderInfo"
             },
-            "description": "Unique provider names required by this workflow (e.g. ['apollo', 'firecrawl'])."
+            "description": "Providers required by this workflow, with domain info for logo lookup."
           }
         },
         "required": [

@@ -23,6 +23,7 @@ import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
 import { validateWorkflowEndpoints } from "../lib/validate-workflow-endpoints.js";
 import { fetchSpecsForServices } from "../lib/api-registry-client.js";
 import { fetchProviderRequirements, fetchAnthropicKey } from "../lib/key-service-client.js";
+import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { fetchRunCosts, fetchEmailStats } from "../lib/stats-client.js";
 
 const router = Router();
@@ -875,7 +876,7 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
     res.json({
       endpoints,
       requirements: result.requirements,
-      providers: result.providers,
+      providers: enrichProvidersWithDomains(result.providers),
     });
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("key-service error:")) {

@@ -398,6 +398,15 @@ export const ServiceEndpointSchema = z
   })
   .openapi("ServiceEndpoint");
 
+export const ProviderInfoSchema = z
+  .object({
+    name: z.string().describe("Provider name (e.g. 'anthropic', 'apollo')."),
+    domain: z.string().nullable().describe(
+      "Provider's primary domain for logo lookup (e.g. 'anthropic.com'). Null if unknown."
+    ),
+  })
+  .openapi("ProviderInfo");
+
 export const ProviderRequirementsResponseSchema = z
   .object({
     endpoints: z.array(ServiceEndpointSchema).describe(
@@ -406,8 +415,8 @@ export const ProviderRequirementsResponseSchema = z
     requirements: z.array(z.unknown()).describe(
       "Provider requirements returned by key-service."
     ),
-    providers: z.array(z.string()).describe(
-      "Unique provider names required by this workflow (e.g. ['apollo', 'firecrawl'])."
+    providers: z.array(ProviderInfoSchema).describe(
+      "Providers required by this workflow, with domain info for logo lookup."
     ),
   })
   .openapi("ProviderRequirementsResponse");
