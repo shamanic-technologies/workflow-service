@@ -38,4 +38,9 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("body.variables.*");
     expect(prompt).toContain("variable-length");
   });
+
+  it("forbids cost-tracking nodes in workflows", () => {
+    expect(prompt).toContain("NEVER include cost-tracking nodes");
+    expect(prompt).toContain("handled internally by each downstream service");
+  });
 });
