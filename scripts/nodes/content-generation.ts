@@ -1,4 +1,4 @@
-// Windmill node script — calls email-generation POST /generate
+// Windmill node script — calls content-generation POST /generate
 export async function main(
   contentType: string,
   leadData: Record<string, unknown>,
@@ -29,15 +29,29 @@ export async function main(
   if (userId) reqHeaders["x-user-id"] = userId;
   if (resolvedRunId) reqHeaders["x-run-id"] = resolvedRunId;
 
+  // Flatten lead.data.* and clientData into the flat variables format
+  // expected by POST /generate (leadFirstName, leadLastName, etc.)
+  const nested = (leadData?.data ?? leadData) as Record<string, unknown>;
+  const variables: Record<string, unknown> = {
+    leadFirstName: nested.firstName,
+    leadLastName: nested.lastName,
+    leadTitle: nested.title,
+    leadCompanyName: nested.organizationName,
+    leadCompanyIndustry: nested.industry,
+    leadEmail: nested.email,
+    leadCompanyDomain: nested.organizationDomain,
+    clientCompanyName: (clientData as Record<string, unknown>)?.companyName
+      ?? (clientData as Record<string, unknown>)?.name,
+  };
+
   const response = await fetch(
     `${baseUrl}/generate`,
     {
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({
-        contentType,
-        leadData,
-        clientData,
+        type: contentType,
+        variables,
         runId: resolvedRunId,
         campaignId: context.campaignId,
         brandId: context.brandId,
@@ -50,6 +64,7 @@ export async function main(
     id: data.id,
     subject: data.subject,
     bodyHtml: data.bodyHtml,
-    email: (leadData as { email?: string }).email,
+    sequence: data.sequence,
+    email: nested.email as string | undefined,
   };
 }
