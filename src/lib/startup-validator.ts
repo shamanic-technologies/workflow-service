@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { workflows, type Workflow } from "../db/schema.js";
+import { eq, inArray, desc, sql } from "drizzle-orm";
+import { workflows, workflowRuns, type Workflow } from "../db/schema.js";
 import type { db as DbInstance } from "../db/index.js";
 import type { DAG } from "./dag-validator.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
@@ -51,6 +51,27 @@ export async function validateAndUpgradeWorkflows(
     console.log("[workflow-service] No active workflows to validate");
     return;
   }
+
+  // Sort by most recent usage — workflows used recently get upgraded first,
+  // so the ones that actually matter in prod are fixed before dormant ones.
+  const lastRunRows = await database
+    .select({
+      workflowId: workflowRuns.workflowId,
+      lastRun: sql<string>`max(${workflowRuns.createdAt})`.as("last_run"),
+    })
+    .from(workflowRuns)
+    .where(inArray(workflowRuns.workflowId, activeWorkflows.map((w) => w.id)))
+    .groupBy(workflowRuns.workflowId);
+
+  const lastRunByWorkflowId = new Map(
+    lastRunRows.map((r) => [r.workflowId, new Date(r.lastRun).getTime()]),
+  );
+
+  activeWorkflows.sort((a, b) => {
+    const aTime = lastRunByWorkflowId.get(a.id) ?? 0;
+    const bTime = lastRunByWorkflowId.get(b.id) ?? 0;
+    return bTime - aTime; // Most recent first
+  });
 
   // 2. Collect unique service names across all workflows
   const allServiceNames = new Set<string>();
