@@ -35,7 +35,7 @@ describe("buildSystemPrompt", () => {
   it("documents the content-generation + email send pattern", () => {
     expect(prompt).toContain("Content Generation + Email Send Pattern");
     expect(prompt).toContain('body.type` MUST be "cold-email"');
-    expect(prompt).toContain("body.variables.*");
+    expect(prompt).toContain("body.variables` MUST contain FLAT keys only");
     expect(prompt).toContain("variable-length");
   });
 

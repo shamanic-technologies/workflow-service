@@ -206,7 +206,16 @@ Prefer "http.call" over legacy named types for new workflows.
 
 When using content-generation service (\`POST /generate\`):
 - \`body.type\` MUST be "cold-email" (matches the registered prompt type) — do NOT use "email", "cold_outreach", or other variants
-- Pass lead/brand data as \`body.variables.*\` (variable substitution into the prompt template)
+- **CRITICAL: \`body.variables\` MUST contain FLAT keys only.** Each variable must be a separate scalar mapping. NEVER pass an entire object like \`"body.variables.lead": "$ref:fetch-lead.output.lead"\`. Instead, map each field individually:
+  - \`"body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName"\`
+  - \`"body.variables.leadLastName": "$ref:fetch-lead.output.lead.data.lastName"\`
+  - \`"body.variables.leadTitle": "$ref:fetch-lead.output.lead.data.title"\`
+  - \`"body.variables.leadEmail": "$ref:fetch-lead.output.lead.data.email"\`
+  - \`"body.variables.leadCompanyName": "$ref:fetch-lead.output.lead.data.organizationName"\`
+  - \`"body.variables.leadCompanyDomain": "$ref:fetch-lead.output.lead.data.organizationDomain"\`
+  - \`"body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview"\`
+  - \`"body.variables.clientValueProposition": "$ref:brand-profile.output.profile.valueProposition"\`
+  - \`"body.variables.clientTargetAudience": "$ref:brand-profile.output.profile.targetAudience"\`
 - Include tracking fields: \`body.brandId\`, \`body.campaignId\`, \`body.leadId\`, \`body.workflowName\`, \`body.apolloEnrichmentId\`
 - Response contains \`subject\` (string) and \`sequence\` (array of { step, bodyHtml, bodyText, daysSinceLastStep })
 
