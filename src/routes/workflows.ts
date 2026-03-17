@@ -25,6 +25,8 @@ import { fetchSpecsForServices } from "../lib/api-registry-client.js";
 import { fetchProviderRequirements, fetchAnthropicKey } from "../lib/key-service-client.js";
 import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { fetchRunCosts, fetchEmailStats } from "../lib/stats-client.js";
+import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIssue, type TemplateRef } from "../lib/validate-template-contracts.js";
+import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 
 const router = Router();
 
@@ -1005,7 +1007,7 @@ router.delete("/workflows/:id", requireApiKey, async (req, res) => {
   }
 });
 
-// POST /workflows/:id/validate — Validate DAG only
+// POST /workflows/:id/validate — Validate DAG structure + template contracts
 router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
   try {
     const [workflow] = await db
@@ -1018,8 +1020,29 @@ router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
       return;
     }
 
-    const validation = validateDAG(workflow.dag as DAG);
-    res.json(validation);
+    const dag = workflow.dag as DAG;
+    const validation = validateDAG(dag);
+
+    // Template contract validation (best-effort — doesn't block if content-gen is unreachable)
+    let templateContract: { valid: boolean; templateRefs: TemplateRef[]; issues: TemplateContractIssue[] } | undefined;
+    try {
+      const templateRefs = extractTemplateRefs(dag);
+      if (templateRefs.length > 0) {
+        const types = templateRefs.map((r) => r.templateType);
+        const templates = await fetchPromptTemplates(types);
+        templateContract = validateTemplateContracts(dag, templates);
+      }
+    } catch (err) {
+      console.warn("[workflow-service] Template contract check skipped:", err instanceof Error ? err.message : err);
+    }
+
+    const result: Record<string, unknown> = { ...validation };
+    if (templateContract) {
+      result.valid = validation.valid && templateContract.valid;
+      result.templateContract = templateContract;
+    }
+
+    res.json(result);
   } catch (err) {
     console.error("[workflow-service] VALIDATE error:", err);
     res.status(500).json({ error: "Internal server error" });

@@ -452,6 +452,67 @@
           }
         }
       },
+      "TemplateRef": {
+        "type": "object",
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "description": "DAG node ID."
+          },
+          "templateType": {
+            "type": "string",
+            "description": "Prompt template type used by this node."
+          },
+          "variablesProvided": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Variable names the workflow provides to this node."
+          }
+        },
+        "required": [
+          "nodeId",
+          "templateType",
+          "variablesProvided"
+        ]
+      },
+      "TemplateContractIssue": {
+        "type": "object",
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "description": "DAG node ID that calls content-generation."
+          },
+          "templateType": {
+            "type": "string",
+            "description": "Prompt template type (e.g. 'cold-email')."
+          },
+          "field": {
+            "type": "string",
+            "description": "Variable name or template type."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "description": "'error' = missing required variable, 'warning' = extra/unknown variable."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable explanation of the issue."
+          }
+        },
+        "required": [
+          "nodeId",
+          "templateType",
+          "field",
+          "severity",
+          "reason"
+        ]
+      },
       "ValidationResult": {
         "type": "object",
         "properties": {
@@ -475,6 +536,34 @@
                 "message"
               ]
             }
+          },
+          "templateContract": {
+            "type": "object",
+            "properties": {
+              "valid": {
+                "type": "boolean"
+              },
+              "templateRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TemplateRef"
+                },
+                "description": "Content-generation template references found in the DAG."
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TemplateContractIssue"
+                },
+                "description": "Variable mismatches between workflow and prompt templates."
+              }
+            },
+            "required": [
+              "valid",
+              "templateRefs",
+              "issues"
+            ],
+            "description": "Template contract validation result. Present when content-generation service is reachable."
           }
         },
         "required": [

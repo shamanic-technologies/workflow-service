@@ -162,12 +162,38 @@ export const WorkflowResponseSchema = z
   })
   .openapi("WorkflowResponse");
 
+export const TemplateContractIssueSchema = z
+  .object({
+    nodeId: z.string().describe("DAG node ID that calls content-generation."),
+    templateType: z.string().describe("Prompt template type (e.g. 'cold-email')."),
+    field: z.string().describe("Variable name or template type."),
+    severity: z.enum(["error", "warning"]).describe("'error' = missing required variable, 'warning' = extra/unknown variable."),
+    reason: z.string().describe("Human-readable explanation of the issue."),
+  })
+  .openapi("TemplateContractIssue");
+
+export const TemplateRefSchema = z
+  .object({
+    nodeId: z.string().describe("DAG node ID."),
+    templateType: z.string().describe("Prompt template type used by this node."),
+    variablesProvided: z.array(z.string()).describe("Variable names the workflow provides to this node."),
+  })
+  .openapi("TemplateRef");
+
 export const ValidationResultSchema = z
   .object({
     valid: z.boolean(),
     errors: z
       .array(z.object({ field: z.string(), message: z.string() }))
       .optional(),
+    templateContract: z
+      .object({
+        valid: z.boolean(),
+        templateRefs: z.array(TemplateRefSchema).describe("Content-generation template references found in the DAG."),
+        issues: z.array(TemplateContractIssueSchema).describe("Variable mismatches between workflow and prompt templates."),
+      })
+      .optional()
+      .describe("Template contract validation result. Present when content-generation service is reachable."),
   })
   .openapi("ValidationResult");
 
