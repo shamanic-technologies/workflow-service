@@ -59,6 +59,7 @@ import {
   checkApiRegistryHealth,
   validateAndUpgradeWorkflows,
 } from "../../src/lib/startup-validator.js";
+import { workflowRuns } from "../../src/db/schema.js";
 
 describe("checkApiRegistryHealth", () => {
   beforeEach(() => {
@@ -153,8 +154,20 @@ describe("validateAndUpgradeWorkflows", () => {
     selectCallCount = 0;
     return {
       select: () => ({
-        from: () => {
+        from: (table: unknown) => {
           selectCallCount++;
+
+          // workflowRuns query (last run dates) → return empty array with groupBy chain
+          if (table === workflowRuns) {
+            const emptyResult = Promise.resolve([]);
+            (emptyResult as any).where = () => {
+              const grouped = Promise.resolve([]);
+              (grouped as any).groupBy = () => Promise.resolve([]);
+              return grouped;
+            };
+            (emptyResult as any).groupBy = () => Promise.resolve([]);
+            return emptyResult;
+          }
 
           // Non-where calls after the first return signatureName-only (for collision detection)
           const signatureData = () =>
@@ -735,5 +748,116 @@ describe("validateAndUpgradeWorkflows", () => {
       expect.any(Error),
     );
     consoleSpy.mockRestore();
+  });
+
+  it("upgrades workflows with recent runs before dormant ones", async () => {
+    const DORMANT_BROKEN = {
+      ...BROKEN_WORKFLOW,
+      id: "wf-dormant",
+      name: "sales-email-cold-outreach-Dormant",
+      signatureName: "Dormant",
+    };
+    const ACTIVE_BROKEN = {
+      ...BROKEN_WORKFLOW,
+      id: "wf-active",
+      name: "sales-email-cold-outreach-Active",
+      signatureName: "Active",
+    };
+
+    // Return dormant first in DB order — upgrade should reorder
+    dbSelectResult = [DORMANT_BROKEN, ACTIVE_BROKEN];
+
+    mockFetchSpecsForServices.mockResolvedValue(
+      new Map([["campaign", CAMPAIGN_SPEC]]),
+    );
+    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "sk-test" });
+    mockCreatePlatformRun.mockResolvedValue({ runId: "run-1" });
+    mockClosePlatformRun.mockResolvedValue(undefined);
+
+    mockUpgradeWorkflow.mockResolvedValue({
+      dag: VALID_WORKFLOW.dag,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Fixed",
+    });
+
+    const warnSpy = vi.spyOn(console, "warn");
+
+    // Mock DB that returns run data showing wf-active was used recently
+    function createMockDbWithRuns() {
+      let callCount = 0;
+      return {
+        select: () => ({
+          from: (table: unknown) => {
+            callCount++;
+
+            // workflowRuns query → return last run for wf-active only
+            if (table === workflowRuns) {
+              const result = Promise.resolve([]);
+              (result as any).where = () => {
+                const grouped = Promise.resolve([]);
+                (grouped as any).groupBy = () =>
+                  Promise.resolve([
+                    { workflowId: "wf-active", lastRun: "2026-03-17T08:00:00Z" },
+                  ]);
+                return grouped;
+              };
+              return result;
+            }
+
+            const signatureData = () =>
+              Promise.resolve(
+                dbSelectResult.map((r) => ({ signatureName: (r as Record<string, unknown>).signatureName })),
+              );
+            const fullData = () => Promise.resolve(dbSelectResult);
+            const promise = signatureData();
+            (promise as any).where = () => fullData();
+            return promise;
+          },
+        }),
+        insert: () => ({
+          values: (row: Record<string, unknown>) => {
+            const newRow = {
+              id: "wf-new-" + Math.random().toString(36).slice(2, 8),
+              ...row,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+            dbInserts.push(newRow);
+            return { returning: () => Promise.resolve([newRow]) };
+          },
+        }),
+        update: () => ({
+          set: (values: Record<string, unknown>) => ({
+            where: () => {
+              dbUpdates.push({ values, id: "unknown" });
+              return { returning: () => Promise.resolve([]) };
+            },
+          }),
+        }),
+      };
+    }
+
+    try {
+      await validateAndUpgradeWorkflows({
+        db: createMockDbWithRuns() as any,
+        windmillClient: null,
+      });
+    } catch {
+      // May throw due to failedCount — that's OK for this test
+    }
+
+    // wf-active (recent run) should be upgraded before wf-dormant (no runs)
+    // Check order via console.warn calls which log the workflow name
+    const brokenEndpointWarns = warnSpy.mock.calls
+      .filter((call) => typeof call[0] === "string" && call[0].includes("broken endpoint"))
+      .map((call) => call[0] as string);
+
+    expect(brokenEndpointWarns).toHaveLength(2);
+    expect(brokenEndpointWarns[0]).toContain("Active");
+    expect(brokenEndpointWarns[1]).toContain("Dormant");
+
+    warnSpy.mockRestore();
   });
 });
