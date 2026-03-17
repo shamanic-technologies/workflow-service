@@ -547,3 +547,290 @@ describe("field validation — output fields", () => {
     expect(refs.map((r) => r.field)).toContain("brandId");
   });
 });
+
+describe("field validation — nested object detection in additionalProperties", () => {
+  const CONTENT_GEN_SPEC: Record<string, unknown> = {
+    paths: {
+      "/generate": {
+        post: {
+          summary: "Generate content",
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    type: { type: "string" },
+                    variables: {
+                      type: "object",
+                      additionalProperties: { nullable: true },
+                      description: "Flat variable keys only",
+                    },
+                    brandId: { type: "string" },
+                    campaignId: { type: "string" },
+                    leadId: { type: "string" },
+                    workflowName: { type: "string" },
+                  },
+                  required: ["type", "variables"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      subject: { type: "string" },
+                      sequence: { type: "array" },
+                    },
+                    required: ["subject", "sequence"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const LEAD_SPEC_WITH_SCHEMAS: Record<string, unknown> = {
+    paths: {
+      "/buffer/next": {
+        post: {
+          summary: "Get next lead from buffer",
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    brandId: { type: "string" },
+                    campaignId: { type: "string" },
+                  },
+                  required: ["campaignId"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      found: { type: "boolean" },
+                      lead: {
+                        type: "object",
+                        properties: {
+                          leadId: { type: "string" },
+                          email: { type: "string" },
+                          data: {
+                            type: "object",
+                            properties: {
+                              firstName: { type: "string" },
+                              lastName: { type: "string" },
+                              title: { type: "string" },
+                              organizationName: { type: "string" },
+                            },
+                          },
+                        },
+                      },
+                    },
+                    required: ["found"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const BRAND_SPEC: Record<string, unknown> = {
+    paths: {
+      "/brands/{brandId}/sales-profile": {
+        get: {
+          summary: "Get brand sales profile",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      profile: {
+                        type: "object",
+                        properties: {
+                          companyOverview: { type: "string" },
+                          valueProposition: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  it("detects nested object in body.variables.lead (regression: 'To: Unknown recipient' bug)", () => {
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "fetch-lead",
+          type: "http.call",
+          config: { service: "lead", method: "POST", path: "/buffer/next" },
+          inputMapping: {
+            "body.campaignId": "$ref:flow_input.campaignId",
+          },
+        },
+        {
+          id: "brand-profile",
+          type: "http.call",
+          config: { service: "brand", method: "GET", path: "/brands/{brandId}/sales-profile" },
+          inputMapping: {
+            "params.brandId": "$ref:flow_input.brandId",
+          },
+        },
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            "body.variables.lead": "$ref:fetch-lead.output.lead",
+            "body.variables.brandProfile": "$ref:brand-profile.output",
+            "body.variables.targetUrl": "https://example.com",
+          },
+        },
+      ],
+      edges: [
+        { from: "fetch-lead", to: "email-generate" },
+        { from: "brand-profile", to: "email-generate" },
+      ],
+    };
+
+    const specs = new Map([
+      ["content-generation", CONTENT_GEN_SPEC],
+      ["lead", LEAD_SPEC_WITH_SCHEMAS],
+      ["brand", BRAND_SPEC],
+    ]);
+
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    // Should detect that body.variables.lead maps to an object
+    const nestedErrors = result.fieldIssues.filter(
+      (i) => i.severity === "error" && i.field === "variables.lead",
+    );
+    expect(nestedErrors).toHaveLength(1);
+    expect(nestedErrors[0].reason).toContain("object");
+    expect(nestedErrors[0].reason).toContain("flat scalars");
+    expect(result.valid).toBe(false);
+  });
+
+  it("allows flat scalar variables (leadFirstName, leadLastName, etc.)", () => {
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "fetch-lead",
+          type: "http.call",
+          config: { service: "lead", method: "POST", path: "/buffer/next" },
+          inputMapping: {
+            "body.campaignId": "$ref:flow_input.campaignId",
+          },
+        },
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
+            "body.variables.leadLastName": "$ref:fetch-lead.output.lead.data.lastName",
+            "body.variables.leadTitle": "$ref:fetch-lead.output.lead.data.title",
+            "body.variables.targetUrl": "https://example.com",
+          },
+        },
+      ],
+      edges: [{ from: "fetch-lead", to: "email-generate" }],
+    };
+
+    const specs = new Map([
+      ["content-generation", CONTENT_GEN_SPEC],
+      ["lead", LEAD_SPEC_WITH_SCHEMAS],
+    ]);
+
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    // No nested object errors
+    const nestedErrors = result.fieldIssues.filter(
+      (i) => i.reason.includes("flat scalars"),
+    );
+    expect(nestedErrors).toHaveLength(0);
+  });
+
+  it("skips nested object check for flow_input refs", () => {
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            "body.variables.targetUrl": "$ref:flow_input.targetUrl",
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const specs = new Map([["content-generation", CONTENT_GEN_SPEC]]);
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    const nestedErrors = result.fieldIssues.filter(
+      (i) => i.reason.includes("flat scalars"),
+    );
+    expect(nestedErrors).toHaveLength(0);
+  });
+
+  it("skips nested object check when upstream spec is unavailable", () => {
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "fetch-lead",
+          type: "http.call",
+          config: { service: "unknown-service", method: "POST", path: "/buffer/next" },
+        },
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            "body.variables.lead": "$ref:fetch-lead.output.lead",
+          },
+        },
+      ],
+      edges: [{ from: "fetch-lead", to: "email-generate" }],
+    };
+
+    const specs = new Map([["content-generation", CONTENT_GEN_SPEC]]);
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    // Can't validate without upstream spec — no error for this specific check
+    const nestedErrors = result.fieldIssues.filter(
+      (i) => i.reason.includes("flat scalars"),
+    );
+    expect(nestedErrors).toHaveLength(0);
+  });
+});
