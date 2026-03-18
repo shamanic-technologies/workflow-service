@@ -5,6 +5,8 @@ import {
   DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
   DAG_WITH_HTTP_CALL,
   DAG_WITH_HTTP_CALL_CHAIN,
+  DAG_WITH_CONTENT_GEN_MISSING_VAR,
+  DAG_WITH_CONTENT_GEN_ALL_VARS,
 } from "../helpers/fixtures.js";
 
 // Mock DB
@@ -61,6 +63,14 @@ const mockFetchProviderRequirements = vi.fn();
 vi.mock("../../src/lib/key-service-client.js", () => ({
   fetchProviderRequirements: (...args: unknown[]) =>
     mockFetchProviderRequirements(...args),
+}));
+
+// Mock content-generation client (for template contract validation)
+const mockFetchPromptTemplates = vi.fn().mockResolvedValue(new Map());
+vi.mock("../../src/lib/content-generation-client.js", () => ({
+  fetchPromptTemplate: vi.fn().mockResolvedValue(null),
+  fetchPromptTemplates: (...args: unknown[]) =>
+    mockFetchPromptTemplates(...args),
 }));
 
 // Mock Windmill client
@@ -246,6 +256,8 @@ describe("PUT /workflows/deploy", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
     mockSelectResponses.length = 0;
+    mockFetchPromptTemplates.mockReset();
+    mockFetchPromptTemplates.mockResolvedValue(new Map());
   });
 
   it("deploys a workflow with tags", async () => {
@@ -529,6 +541,111 @@ describe("PUT /workflows/deploy", () => {
       .send({}); // missing workflows
 
     expect(res.status).toBe(400);
+  });
+
+  it("rejects deploy when workflow is missing template variables", async () => {
+    const COLD_EMAIL_TEMPLATE = {
+      id: "tmpl-1",
+      type: "cold-email",
+      prompt: "Write for {{leadFirstName}} at {{clientCompanyName}}...",
+      variables: [
+        "leadFirstName",
+        "leadLastName",
+        "leadTitle",
+        "leadCompanyName",
+        "leadCompanyIndustry",
+        "clientCompanyName",
+        "brandProfile",
+      ],
+      createdAt: "2026-03-12T00:00:00Z",
+      updatedAt: "2026-03-17T00:00:00Z",
+    };
+
+    mockFetchPromptTemplates.mockResolvedValueOnce(
+      new Map([["cold-email", COLD_EMAIL_TEMPLATE]]),
+    );
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            dag: DAG_WITH_CONTENT_GEN_MISSING_VAR,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Template contract validation failed");
+    expect(res.body.details).toHaveLength(1);
+    expect(res.body.details[0].issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "clientCompanyName",
+          severity: "error",
+        }),
+      ]),
+    );
+  });
+
+  it("allows deploy when all template variables are provided", async () => {
+    const COLD_EMAIL_TEMPLATE = {
+      id: "tmpl-1",
+      type: "cold-email",
+      prompt: "Write for {{leadFirstName}} at {{clientCompanyName}}...",
+      variables: [
+        "leadFirstName",
+        "leadLastName",
+        "leadTitle",
+        "leadCompanyName",
+        "leadCompanyIndustry",
+        "clientCompanyName",
+        "brandProfile",
+      ],
+      createdAt: "2026-03-12T00:00:00Z",
+      updatedAt: "2026-03-17T00:00:00Z",
+    };
+
+    mockFetchPromptTemplates.mockResolvedValueOnce(
+      new Map([["cold-email", COLD_EMAIL_TEMPLATE]]),
+    );
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            dag: DAG_WITH_CONTENT_GEN_ALL_VARS,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("does not block deploy when content-generation service is unreachable", async () => {
+    mockFetchPromptTemplates.mockRejectedValueOnce(
+      new Error("ECONNREFUSED"),
+    );
+
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            dag: DAG_WITH_CONTENT_GEN_MISSING_VAR,
+          },
+        ],
+      });
+
+    // Should still succeed — template validation is best-effort
+    expect(res.status).toBe(200);
   });
 
 });

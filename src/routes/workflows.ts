@@ -454,6 +454,42 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
       }
     }
 
+    // Validate template contracts (variables provided vs declared in prompt templates)
+    try {
+      const allTemplateRefs: TemplateRef[] = [];
+      for (const wf of body.workflows) {
+        allTemplateRefs.push(...extractTemplateRefs(wf.dag as DAG));
+      }
+
+      if (allTemplateRefs.length > 0) {
+        const types = [...new Set(allTemplateRefs.map((r) => r.templateType))];
+        const templates = await fetchPromptTemplates(types);
+
+        const templateErrors: Array<{ index: number; issues: TemplateContractIssue[] }> = [];
+        for (let i = 0; i < body.workflows.length; i++) {
+          const result = validateTemplateContracts(body.workflows[i].dag as DAG, templates);
+          const errors = result.issues.filter((issue) => issue.severity === "error");
+          if (errors.length > 0) {
+            templateErrors.push({ index: i, issues: errors });
+          }
+        }
+
+        if (templateErrors.length > 0) {
+          console.error(
+            `[workflow-service] deploy: rejected — ${templateErrors.length} workflow(s) with missing template variables`,
+          );
+          res.status(400).json({
+            error: "Template contract validation failed",
+            details: templateErrors,
+          });
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("[workflow-service] deploy: template contract validation skipped:", err instanceof Error ? err.message : err);
+      // Don't block deploy if content-generation is unreachable
+    }
+
     // Fetch all existing signatureNames for this orgId to avoid collisions
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
