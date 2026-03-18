@@ -985,8 +985,8 @@ registry.registerPath({
 
 registry.registerPath({
   method: "put",
-  path: "/workflows/deploy",
-  summary: "Deploy (upsert) workflows by DAG signature",
+  path: "/workflows/upgrade",
+  summary: "Upgrade (upsert) workflows by DAG signature",
   description:
     "Idempotent: creates new workflows or updates existing ones matched by (orgId + DAG signature). " +
     "The workflow name is auto-generated as {category}-{channel}-{audienceType}-{signatureName}. " +

@@ -389,7 +389,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
       id: "wf-cross",
       orgId: "8c734aed-45ac-4780-a4ee-1fdcbbedeab1",
       name: "sales-email-cold-outreach-pharaoh",
-      windmillFlowPath: "f/workflows/deployer/sales_email_cold_outreach_pharaoh",
+      windmillFlowPath: "f/workflows/upgradeer/sales_email_cold_outreach_pharaoh",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
     });

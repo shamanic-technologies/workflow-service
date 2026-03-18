@@ -161,7 +161,7 @@ describe("POST /workflows", () => {
 
   it("rejects deploy without brandId", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -290,7 +290,7 @@ const DEPLOY_ITEM = {
   audienceType: "cold-outreach" as const,
 };
 
-describe("PUT /workflows/deploy", () => {
+describe("PUT /workflows/upgrade", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
     mockSelectResponses.length = 0;
@@ -300,7 +300,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("deploys a workflow with tags", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -318,7 +318,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("defaults tags to empty array when omitted", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -335,7 +335,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("creates a workflow with auto-generated name and signatureName", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -362,7 +362,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("stores orgId from x-org-id header in DB", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH) // x-org-id: "org-1"
       .send({
         workflows: [
@@ -401,7 +401,7 @@ describe("PUT /workflows/deploy", () => {
     });
 
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -423,8 +423,8 @@ describe("PUT /workflows/deploy", () => {
       workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
     };
 
-    const res1 = await request.put("/workflows/deploy").set(AUTH).send(payload);
-    const res2 = await request.put("/workflows/deploy").set(AUTH).send(payload);
+    const res1 = await request.put("/workflows/upgrade").set(AUTH).send(payload);
+    const res2 = await request.put("/workflows/upgrade").set(AUTH).send(payload);
 
     expect(res1.body.workflows[0].signature).toBe(res2.body.workflows[0].signature);
   });
@@ -437,7 +437,7 @@ describe("PUT /workflows/deploy", () => {
 
     // Deploy first DAG
     const res1 = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [{ ...DEPLOY_ITEM, dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND }],
@@ -447,7 +447,7 @@ describe("PUT /workflows/deploy", () => {
     // Deploy second DAG in fresh state (mock DB doesn't filter by column)
     mockDbRows.length = 0;
     const res2 = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [{ ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG }],
@@ -457,7 +457,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("rejects missing dimensions", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -473,7 +473,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("rejects invalid channel value", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -491,7 +491,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("rejects invalid audienceType value", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -509,7 +509,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("rejects invalid category values", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -534,7 +534,7 @@ describe("PUT /workflows/deploy", () => {
 
     for (const dims of cases) {
       const res = await request
-        .put("/workflows/deploy")
+        .put("/workflows/upgrade")
         .set(AUTH)
         .send({
           orgId: "org-deploy",
@@ -547,7 +547,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("rejects if any DAG is invalid (no partial writes)", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -563,7 +563,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(IDENTITY)
       .send({
         workflows: [{ ...DEPLOY_ITEM, dag: VALID_LINEAR_DAG }],
@@ -574,7 +574,7 @@ describe("PUT /workflows/deploy", () => {
 
   it("validates request body", async () => {
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({}); // missing workflows
 
@@ -604,7 +604,7 @@ describe("PUT /workflows/deploy", () => {
     );
 
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -651,7 +651,7 @@ describe("PUT /workflows/deploy", () => {
     );
 
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
@@ -671,7 +671,7 @@ describe("PUT /workflows/deploy", () => {
     );
 
     const res = await request
-      .put("/workflows/deploy")
+      .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [

@@ -352,8 +352,8 @@ router.post("/workflows", requireApiKey, async (req, res) => {
   }
 });
 
-// PUT /workflows/deploy — Batch upsert workflows by (orgId + signature)
-router.put("/workflows/deploy", requireApiKey, async (req, res) => {
+// PUT /workflows/upgrade — Batch upsert workflows by (orgId + signature)
+router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
   try {
     const body = DeployWorkflowsSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
