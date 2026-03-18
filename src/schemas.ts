@@ -544,7 +544,7 @@ export const BestWorkflowRecordSchema = z
     workflowId: z.string().uuid().describe("ID of the workflow holding the record."),
     workflowName: z.string().describe("Name of the workflow."),
     displayName: z.string().nullable().describe("Stable display name of the workflow family."),
-    brandId: z.string().nullable().describe("Brand ID associated with the workflow."),
+    createdForBrandId: z.string().nullable().describe("Brand ID that created this workflow (creation context, not execution brand)."),
     value: z.number().describe("The record value in USD cents."),
   })
   .openapi("BestWorkflowRecord");

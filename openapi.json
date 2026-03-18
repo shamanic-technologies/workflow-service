@@ -1232,10 +1232,10 @@
             "nullable": true,
             "description": "Stable display name of the workflow family."
           },
-          "brandId": {
+          "createdForBrandId": {
             "type": "string",
             "nullable": true,
-            "description": "Brand ID associated with the workflow."
+            "description": "Brand ID that created this workflow (creation context, not execution brand)."
           },
           "value": {
             "type": "number",
@@ -1246,7 +1246,7 @@
           "workflowId",
           "workflowName",
           "displayName",
-          "brandId",
+          "createdForBrandId",
           "value"
         ],
         "description": "Workflow with the lowest cost per email open. Null if no data."
