@@ -511,6 +511,48 @@ export const DAG_WITH_PATH_PARAMS: DAG = {
   edges: [],
 };
 
+export const DAG_WITH_CONTENT_GEN_MISSING_VAR: DAG = {
+  nodes: [
+    {
+      id: "email-generate",
+      type: "http.call",
+      config: { service: "content-generation", method: "POST", path: "/generate" },
+      inputMapping: {
+        "body.type": "cold-email",
+        "body.variables.leadFirstName": "$ref:flow_input.leadFirstName",
+        "body.variables.leadLastName": "$ref:flow_input.leadLastName",
+        "body.variables.leadTitle": "$ref:flow_input.leadTitle",
+        "body.variables.leadCompanyName": "$ref:flow_input.leadCompanyName",
+        "body.variables.leadCompanyIndustry": "$ref:flow_input.leadCompanyIndustry",
+        "body.variables.brandProfile": "$ref:flow_input.brandProfile",
+        // Missing: clientCompanyName
+      },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_CONTENT_GEN_ALL_VARS: DAG = {
+  nodes: [
+    {
+      id: "email-generate",
+      type: "http.call",
+      config: { service: "content-generation", method: "POST", path: "/generate" },
+      inputMapping: {
+        "body.type": "cold-email",
+        "body.variables.leadFirstName": "$ref:flow_input.leadFirstName",
+        "body.variables.leadLastName": "$ref:flow_input.leadLastName",
+        "body.variables.leadTitle": "$ref:flow_input.leadTitle",
+        "body.variables.leadCompanyName": "$ref:flow_input.leadCompanyName",
+        "body.variables.leadCompanyIndustry": "$ref:flow_input.leadCompanyIndustry",
+        "body.variables.clientCompanyName": "$ref:flow_input.clientCompanyName",
+        "body.variables.brandProfile": "$ref:flow_input.brandProfile",
+      },
+    },
+  ],
+  edges: [],
+};
+
 export const POLARITY_WELCOME_DAG: DAG = {
   nodes: [
     {
