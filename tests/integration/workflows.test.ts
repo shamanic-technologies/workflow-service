@@ -866,6 +866,9 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.body.audienceType).toBe("cold-outreach");
     expect(res.body.description).toBe("Forked with new DAG");
     expect(res.body.status).toBe("active");
+    // displayName must use the new generated name, not inherit the parent's stale displayName
+    expect(res.body.displayName).not.toBe("Jasmine Flow");
+    expect(res.body.displayName).toMatch(/^sales-email-cold-outreach-/);
     // Original should still be in mockDbRows unchanged
     expect(originalWorkflow.status).toBe("active");
   });
