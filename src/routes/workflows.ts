@@ -1068,7 +1068,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         subrequestId: existing.subrequestId,
         styleName: existing.styleName,
         name: newName,
-        displayName: body.name ?? existing.displayName,
+        displayName: body.name ?? newName,
         description: body.description ?? existing.description,
         category: existing.category,
         channel: existing.channel,
