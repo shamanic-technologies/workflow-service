@@ -12,6 +12,7 @@ import healthRoutes from "./routes/health.js";
 import workflowsRoutes from "./routes/workflows.js";
 import workflowRunsRoutes from "./routes/workflow-runs.js";
 import openapiRoutes from "./routes/openapi.js";
+import publicWorkflowsRoutes from "./routes/public-workflows.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -22,6 +23,7 @@ app.use(express.json());
 // Public routes (no identity required)
 app.use(healthRoutes);
 app.use(openapiRoutes);
+app.use(publicWorkflowsRoutes);
 
 // Identity-gated routes
 app.use(requireIdentity);
