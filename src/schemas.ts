@@ -373,25 +373,7 @@ export const GenerateWorkflowResponseSchema = z
   })
   .openapi("GenerateWorkflowResponse");
 
-// --- Best Workflow schemas ---
-
-export const BestWorkflowObjectiveSchema = z
-  .enum(["replies", "clicks"])
-  .describe(
-    'Optimization objective. "replies" sorts by lowest cost per reply; "clicks" sorts by lowest cost per click.'
-  )
-  .openapi("BestWorkflowObjective");
-
-export const BestWorkflowQuerySchema = z
-  .object({
-    orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
-    category: WorkflowCategorySchema.optional().describe("Filter workflows by category."),
-    channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
-    audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
-    objective: BestWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
-    limit: z.coerce.number().int().min(1).max(100).default(1).describe("Number of workflows to return, ranked by performance. Defaults to 1."),
-  })
-  .openapi("BestWorkflowQuery");
+// --- Shared stats schemas ---
 
 export const EmailStatsSchema = z
   .object({
@@ -406,7 +388,7 @@ export const EmailStatsSchema = z
   })
   .openapi("EmailStats");
 
-export const BestWorkflowStatsSchema = z
+export const WorkflowStatsSchema = z
   .object({
     totalCostInUsdCents: z.number().describe("Total cost across all completed runs of this workflow."),
     totalOutcomes: z.number().describe("Total replies or clicks (depending on objective) across all runs."),
@@ -417,28 +399,103 @@ export const BestWorkflowStatsSchema = z
       broadcast: EmailStatsSchema.describe("Aggregated broadcast email stats across all runs."),
     }).describe("Detailed email engagement stats aggregated across the upgrade chain."),
   })
-  .openapi("BestWorkflowStats");
+  .openapi("WorkflowStats");
 
-export const BestWorkflowResultItemSchema = z
+export const WorkflowMetadataSchema = z
   .object({
-    workflow: z.object({
-      id: z.string().uuid(),
-      name: z.string(),
-      displayName: z.string().nullable(),
-      category: WorkflowCategorySchema,
-      channel: WorkflowChannelSchema,
-      audienceType: WorkflowAudienceTypeSchema,
-      signature: z.string(),
-      signatureName: z.string(),
-    }).describe("Workflow metadata."),
-    dag: DAGSchema.describe("The DAG definition of the workflow."),
-    stats: BestWorkflowStatsSchema.describe("Aggregated performance stats for this workflow."),
+    id: z.string().uuid(),
+    name: z.string(),
+    displayName: z.string().nullable(),
+    brandId: z.string().nullable(),
+    category: WorkflowCategorySchema,
+    channel: WorkflowChannelSchema,
+    audienceType: WorkflowAudienceTypeSchema,
+    signature: z.string(),
+    signatureName: z.string(),
   })
-  .openapi("BestWorkflowResultItem");
+  .openapi("WorkflowMetadata");
+
+// --- Ranked Workflow schemas ---
+
+export const RankedWorkflowObjectiveSchema = z
+  .enum(["replies", "clicks"])
+  .describe(
+    'Optimization objective. "replies" sorts by lowest cost per reply; "clicks" sorts by lowest cost per click.'
+  )
+  .openapi("RankedWorkflowObjective");
+
+export const RankedWorkflowGroupBySchema = z
+  .enum(["section"])
+  .describe(
+    'Group results by section (category-channel-audienceType). Each section includes aggregated stats and its workflows ranked within.'
+  )
+  .openapi("RankedWorkflowGroupBy");
+
+export const RankedWorkflowQuerySchema = z
+  .object({
+    orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
+    category: WorkflowCategorySchema.optional().describe("Filter workflows by category."),
+    channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
+    audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
+    objective: RankedWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
+    limit: z.coerce.number().int().min(1).max(100).default(10).describe("Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10."),
+    groupBy: RankedWorkflowGroupBySchema.optional().describe("Group results by section. When omitted, returns a flat ranked list."),
+  })
+  .openapi("RankedWorkflowQuery");
+
+export const RankedWorkflowItemSchema = z
+  .object({
+    workflow: WorkflowMetadataSchema.describe("Workflow metadata."),
+    dag: DAGSchema.describe("The DAG definition of the workflow."),
+    stats: WorkflowStatsSchema.describe("Aggregated performance stats for this workflow."),
+  })
+  .openapi("RankedWorkflowItem");
+
+export const RankedSectionSchema = z
+  .object({
+    sectionKey: z.string().describe("Section key in the format category-channel-audienceType."),
+    category: WorkflowCategorySchema,
+    channel: WorkflowChannelSchema,
+    audienceType: WorkflowAudienceTypeSchema,
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows in this section."),
+    workflows: z.array(RankedWorkflowItemSchema).describe("Workflows in this section, ranked by performance."),
+  })
+  .openapi("RankedSection");
+
+export const RankedWorkflowResponseSchema = z
+  .object({
+    results: z.array(RankedWorkflowItemSchema).describe("Workflows ranked by performance, best first."),
+  })
+  .openapi("RankedWorkflowResponse");
+
+export const RankedWorkflowGroupedResponseSchema = z
+  .object({
+    sections: z.array(RankedSectionSchema).describe("Workflow sections grouped by category-channel-audienceType."),
+  })
+  .openapi("RankedWorkflowGroupedResponse");
+
+// --- Best Workflow schemas (hero records) ---
+
+export const BestWorkflowQuerySchema = z
+  .object({
+    orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
+  })
+  .openapi("BestWorkflowQuery");
+
+export const BestWorkflowRecordSchema = z
+  .object({
+    workflowId: z.string().uuid().describe("ID of the workflow holding the record."),
+    workflowName: z.string().describe("Name of the workflow."),
+    displayName: z.string().nullable().describe("Stable display name of the workflow family."),
+    brandId: z.string().nullable().describe("Brand ID associated with the workflow."),
+    value: z.number().describe("The record value in USD cents."),
+  })
+  .openapi("BestWorkflowRecord");
 
 export const BestWorkflowResponseSchema = z
   .object({
-    results: z.array(BestWorkflowResultItemSchema).describe("Workflows ranked by performance, best first."),
+    bestCostPerOpen: BestWorkflowRecordSchema.nullable().describe("Workflow with the lowest cost per email open. Null if no data."),
+    bestCostPerReply: BestWorkflowRecordSchema.nullable().describe("Workflow with the lowest cost per reply. Null if no data."),
   })
   .openapi("BestWorkflowResponse");
 
@@ -921,28 +978,28 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/workflows/best",
-  summary: "Get the best-performing workflows by cost-per-outcome",
+  path: "/workflows/ranked",
+  summary: "Get workflows ranked by cost-per-outcome",
   description:
     "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. " +
     "Stats are aggregated across the full upgrade chain (deprecated predecessors included). " +
-    "Use `limit` to control how many results are returned (default 1). " +
+    "Use `groupBy=section` to group results by category-channel-audienceType with aggregated section stats. " +
     "Workflows with no completed runs are included with zeroed stats.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
     headers: IdentityHeaders,
-    query: BestWorkflowQuerySchema,
+    query: RankedWorkflowQuerySchema,
   },
   responses: {
     200: {
-      description: "Best workflow found",
+      description: "Ranked workflows (flat list or grouped by section)",
       content: {
-        "application/json": { schema: BestWorkflowResponseSchema },
+        "application/json": { schema: RankedWorkflowResponseSchema },
       },
     },
     404: {
-      description: "No workflows found matching the criteria or no completed runs",
+      description: "No workflows found matching the criteria",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     400: {
@@ -951,6 +1008,38 @@ registry.registerPath({
     },
     502: {
       description: "External service (runs-service or email-gateway-service) unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/best",
+  summary: "Get hero records — best cost-per-open and best cost-per-reply",
+  description:
+    "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. " +
+    "Stats are aggregated across the full upgrade chain. " +
+    "Use this for leaderboard hero/headline stats.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    query: BestWorkflowQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Hero records found",
+      content: {
+        "application/json": { schema: BestWorkflowResponseSchema },
+      },
+    },
+    404: {
+      description: "No active workflows found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "External service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

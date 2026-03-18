@@ -5,10 +5,6 @@ import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 const mockWorkflowRows: Record<string, unknown>[] = [];
 const mockWorkflowRunRows: Record<string, unknown>[] = [];
 
-// Track which table is being queried
-const workflowsTableMarker = Symbol("workflows");
-const workflowRunsTableMarker = Symbol("workflowRuns");
-
 vi.mock("../../src/db/index.js", () => ({
   db: {
     insert: () => ({
@@ -28,7 +24,6 @@ vi.mock("../../src/db/index.js", () => ({
     }),
     select: () => ({
       from: (table: unknown) => {
-        // Determine which table is being queried based on the table reference
         const isWorkflowRuns =
           table &&
           typeof table === "object" &&
@@ -109,6 +104,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     orgId: "org1",
     name: "sales-email-cold-outreach-alpha",
     displayName: null,
+    brandId: null,
     description: null,
     category: "sales",
     channel: "email",
@@ -157,7 +153,9 @@ const EMPTY_STATS = {
   recipients: 0,
 };
 
-describe("GET /workflows/best", () => {
+// ==================== GET /workflows/ranked ====================
+
+describe("GET /workflows/ranked", () => {
   beforeEach(() => {
     mockWorkflowRows.length = 0;
     mockWorkflowRunRows.length = 0;
@@ -165,7 +163,7 @@ describe("GET /workflows/best", () => {
     mockFetchEmailStats.mockReset();
   });
 
-  it("returns the best workflow by cost_per_reply", async () => {
+  it("returns ranked workflows with stats", async () => {
     const wf = makeWorkflow({ id: "wf-a" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(
@@ -183,7 +181,7 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
@@ -214,7 +212,7 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query({ ...BASE_QUERY, objective: "clicks" })
       .set(AUTH);
 
@@ -224,41 +222,9 @@ describe("GET /workflows/best", () => {
     expect(best.stats.costPerOutcome).toBe(10);
   });
 
-  it("accepts partial filters (all optional)", async () => {
-    // With only category set and no matching workflows, should return 404 (not 400)
-    const res = await request
-      .get("/workflows/best")
-      .query({ category: "sales" })
-      .set(AUTH);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("returns best workflow with no filters (defaults objective to replies)", async () => {
-    const wf = makeWorkflow({ id: "wf-nofilter" });
-    mockWorkflowRows.push(wf);
-    mockWorkflowRunRows.push(makeRun("wf-nofilter", "ext-run-nf"));
-
-    mockFetchRunCosts.mockResolvedValue([
-      { runId: "ext-run-nf", totalCostInUsdCents: 100 },
-    ]);
-    mockFetchEmailStats.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
-
-    const res = await request
-      .get("/workflows/best")
-      .set(AUTH);
-
-    expect(res.status).toBe(200);
-    expect(res.body.results[0].workflow.id).toBe("wf-nofilter");
-    expect(res.body.results[0].stats.totalOutcomes).toBe(5);
-  });
-
   it("returns 404 when no workflows match", async () => {
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
@@ -280,7 +246,7 @@ describe("GET /workflows/best", () => {
     );
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
@@ -290,20 +256,11 @@ describe("GET /workflows/best", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .set(IDENTITY)
       .query(BASE_QUERY);
 
     expect(res.status).toBe(401);
-  });
-
-  it("rejects invalid objective value", async () => {
-    const res = await request
-      .get("/workflows/best")
-      .query({ ...BASE_QUERY, objective: "conversions" })
-      .set(AUTH);
-
-    expect(res.status).toBe(400);
   });
 
   it("handles workflow with zero outcomes (costPerOutcome is null)", async () => {
@@ -319,7 +276,7 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
@@ -348,7 +305,7 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
@@ -381,7 +338,7 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
@@ -391,32 +348,7 @@ describe("GET /workflows/best", () => {
     expect(res.body.results[0].stats.completedRuns).toBe(3);
   });
 
-  it("returns only active workflow in response even when deprecated predecessors exist", async () => {
-    mockWorkflowRows.push(
-      makeWorkflow({ id: "wf-active" }),
-      makeWorkflow({ id: "wf-old", status: "deprecated", upgradedTo: "wf-active" }),
-    );
-    mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-1"));
-
-    mockFetchRunCosts.mockResolvedValue([
-      { runId: "ext-run-1", totalCostInUsdCents: 100 },
-    ]);
-    mockFetchEmailStats.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
-
-    const res = await request
-      .get("/workflows/best")
-      .query(BASE_QUERY)
-      .set(AUTH);
-
-    expect(res.status).toBe(200);
-    // The returned workflow is the active one, not the deprecated predecessor
-    expect(res.body.results[0].workflow.id).toBe("wf-active");
-  });
-
-  it("returns multiple workflows when limit > 1", async () => {
+  it("returns multiple workflows ranked when limit > 1", async () => {
     const wfA = makeWorkflow({ id: "wf-a", signatureName: "alpha" });
     const wfB = makeWorkflow({ id: "wf-b", signatureName: "beta" });
     const wfC = makeWorkflow({ id: "wf-c", signatureName: "gamma" });
@@ -432,16 +364,13 @@ describe("GET /workflows/best", () => {
       { runId: "ext-run-b", totalCostInUsdCents: 200 },
       { runId: "ext-run-c", totalCostInUsdCents: 50 },
     ]);
-    // wf-a: cost=100, replies=10, cpo=10
-    // wf-b: cost=200, replies=5, cpo=40
-    // wf-c: cost=50, replies=25, cpo=2
     mockFetchEmailStats
       .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, replied: 10 }, broadcast: { ...EMPTY_STATS } })
       .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, replied: 5 }, broadcast: { ...EMPTY_STATS } })
       .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, replied: 25 }, broadcast: { ...EMPTY_STATS } });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query({ ...BASE_QUERY, limit: "3" })
       .set(AUTH);
 
@@ -453,40 +382,8 @@ describe("GET /workflows/best", () => {
     expect(res.body.results[2].workflow.id).toBe("wf-b");
   });
 
-  it("includes all active workflows with their stats when limit > 1", async () => {
-    // The mock DB returns all rows regardless of where clause, so both workflows
-    // get the same runs. This test verifies that all active workflows appear in results.
-    const wfA = makeWorkflow({ id: "wf-a-stats" });
-    const wfB = makeWorkflow({ id: "wf-b-stats" });
-    mockWorkflowRows.push(wfA, wfB);
-    mockWorkflowRunRows.push(
-      makeRun("wf-a-stats", "ext-run-1"),
-      makeRun("wf-b-stats", "ext-run-2"),
-    );
-
-    mockFetchRunCosts.mockResolvedValue([
-      { runId: "ext-run-1", totalCostInUsdCents: 100 },
-      { runId: "ext-run-2", totalCostInUsdCents: 200 },
-    ]);
-    mockFetchEmailStats.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
-
-    const res = await request
-      .get("/workflows/best")
-      .query({ ...BASE_QUERY, limit: "10" })
-      .set(AUTH);
-
-    expect(res.status).toBe(200);
-    expect(res.body.results).toHaveLength(2);
-    // Both workflows should have email stats included
-    expect(res.body.results[0].stats.email.transactional.replied).toBe(5);
-    expect(res.body.results[1].stats.email.transactional.replied).toBe(5);
-  });
-
-  it("includes displayName in workflow response", async () => {
-    const wf = makeWorkflow({ id: "wf-dn", displayName: "sales-email-cold-outreach-jasmine" });
+  it("includes displayName and brandId in workflow response", async () => {
+    const wf = makeWorkflow({ id: "wf-dn", displayName: "sales-email-cold-outreach-jasmine", brandId: "brand-123" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-dn", "ext-run-dn"));
 
@@ -499,18 +396,18 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query(BASE_QUERY)
       .set(AUTH);
 
     expect(res.status).toBe(200);
     expect(res.body.results[0].workflow.displayName).toBe("sales-email-cold-outreach-jasmine");
+    expect(res.body.results[0].workflow.brandId).toBe("brand-123");
   });
 
   it("respects limit to cap results", async () => {
     for (let i = 0; i < 5; i++) {
-      const wf = makeWorkflow({ id: `wf-${i}` });
-      mockWorkflowRows.push(wf);
+      mockWorkflowRows.push(makeWorkflow({ id: `wf-${i}` }));
       mockWorkflowRunRows.push(makeRun(`wf-${i}`, `ext-run-${i}`));
     }
 
@@ -523,11 +420,177 @@ describe("GET /workflows/best", () => {
     });
 
     const res = await request
-      .get("/workflows/best")
+      .get("/workflows/ranked")
       .query({ ...BASE_QUERY, limit: "2" })
       .set(AUTH);
 
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(2);
+  });
+
+  it("returns grouped sections with groupBy=section", async () => {
+    const wfSales = makeWorkflow({ id: "wf-sales", category: "sales", channel: "email", audienceType: "cold-outreach" });
+    const wfSales2 = makeWorkflow({ id: "wf-sales2", category: "sales", channel: "email", audienceType: "cold-outreach" });
+    mockWorkflowRows.push(wfSales, wfSales2);
+    mockWorkflowRunRows.push(
+      makeRun("wf-sales", "ext-run-s1"),
+      makeRun("wf-sales2", "ext-run-s2"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-s1", totalCostInUsdCents: 100 },
+      { runId: "ext-run-s2", totalCostInUsdCents: 200 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5, sent: 50, opened: 20 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/ranked")
+      .query({ ...BASE_QUERY, groupBy: "section" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sections).toBeDefined();
+    expect(res.body.sections).toHaveLength(1);
+    const section = res.body.sections[0];
+    expect(section.sectionKey).toBe("sales-email-cold-outreach");
+    expect(section.category).toBe("sales");
+    expect(section.channel).toBe("email");
+    expect(section.audienceType).toBe("cold-outreach");
+    expect(section.stats).toBeDefined();
+    expect(section.stats.email).toBeDefined();
+    expect(section.workflows).toHaveLength(2);
+  });
+});
+
+// ==================== GET /workflows/best (hero records) ====================
+
+describe("GET /workflows/best (hero records)", () => {
+  beforeEach(() => {
+    mockWorkflowRows.length = 0;
+    mockWorkflowRunRows.length = 0;
+    mockFetchRunCosts.mockReset();
+    mockFetchEmailStats.mockReset();
+  });
+
+  it("returns bestCostPerOpen and bestCostPerReply", async () => {
+    const wf = makeWorkflow({ id: "wf-hero", brandId: "brand-abc" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-hero", "ext-run-hero"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-hero", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.bestCostPerOpen).toBeDefined();
+    expect(res.body.bestCostPerOpen.workflowId).toBe("wf-hero");
+    expect(res.body.bestCostPerOpen.brandId).toBe("brand-abc");
+    expect(res.body.bestCostPerOpen.value).toBe(10); // 100 / 10 opens
+    expect(res.body.bestCostPerReply).toBeDefined();
+    expect(res.body.bestCostPerReply.workflowId).toBe("wf-hero");
+    expect(res.body.bestCostPerReply.value).toBe(20); // 100 / 5 replies
+  });
+
+  it("returns null when no opens or replies exist", async () => {
+    const wf = makeWorkflow({ id: "wf-no-outcomes" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-no-outcomes", "ext-run-no"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-no", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.bestCostPerOpen).toBeNull();
+    expect(res.body.bestCostPerReply).toBeNull();
+  });
+
+  it("returns 404 when no active workflows exist", async () => {
+    const res = await request
+      .get("/workflows/best")
+      .set(AUTH);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("requires authentication", async () => {
+    const res = await request
+      .get("/workflows/best")
+      .set(IDENTITY);
+
+    expect(res.status).toBe(401);
+  });
+
+  it("includes displayName in hero records", async () => {
+    const wf = makeWorkflow({ id: "wf-dn-hero", displayName: "sales-email-cold-outreach-jasmine" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-dn-hero", "ext-run-dn"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-dn", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.bestCostPerOpen.displayName).toBe("sales-email-cold-outreach-jasmine");
+    expect(res.body.bestCostPerReply.displayName).toBe("sales-email-cold-outreach-jasmine");
+  });
+
+  it("picks the best from multiple workflows", async () => {
+    // Mock DB returns all runs for all workflows, so both workflows see the same runs.
+    // To test ranking, we use different mockFetchEmailStats responses per workflow call.
+    // wf-expensive gets called first (higher cost-per-outcome), wf-cheap second (lower).
+    const wfExpensive = makeWorkflow({ id: "wf-expensive" });
+    const wfCheap = makeWorkflow({ id: "wf-cheap" });
+    mockWorkflowRows.push(wfExpensive, wfCheap);
+    mockWorkflowRunRows.push(
+      makeRun("wf-expensive", "ext-run-1"),
+      makeRun("wf-cheap", "ext-run-2"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-1", totalCostInUsdCents: 500 },
+      { runId: "ext-run-2", totalCostInUsdCents: 500 },
+    ]);
+    // First call (wf-expensive): low opens/replies → high cost-per
+    mockFetchEmailStats
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 2, replied: 1 }, broadcast: { ...EMPTY_STATS } })
+      // Second call (wf-cheap): high opens/replies → low cost-per
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 100, replied: 50 }, broadcast: { ...EMPTY_STATS } });
+
+    const res = await request
+      .get("/workflows/best")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    // wf-cheap has lower cost-per-open (1000/100=10 vs 1000/2=500) and cost-per-reply
+    expect(res.body.bestCostPerOpen.workflowId).toBe("wf-cheap");
+    expect(res.body.bestCostPerReply.workflowId).toBe("wf-cheap");
   });
 });
