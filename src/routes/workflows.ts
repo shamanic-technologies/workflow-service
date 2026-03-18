@@ -649,7 +649,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       return;
     }
 
-    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, identity);
+    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", identity });
 
     if (groupBy === "section") {
       // Group by sectionKey = category-channel-audienceType
@@ -736,7 +736,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     }
 
     // Use "replies" as objective — we compute both cost-per-open and cost-per-reply from email stats
-    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", identity);
+    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", { kind: "auth", identity });
 
     if (by === "brand") {
       // Aggregate scores by brandId, find the best brand for cost-per-open and cost-per-reply
