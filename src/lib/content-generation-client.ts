@@ -8,16 +8,12 @@ export interface PromptTemplate {
 }
 
 function getConfig(): { baseUrl: string; apiKey: string } {
-  const baseUrl =
-    process.env.CONTENT_GENERATION_SERVICE_URL ??
-    process.env.CONTENT_GENERATION_URL;
-  const apiKey =
-    process.env.CONTENT_GENERATION_SERVICE_API_KEY ??
-    process.env.CONTENT_GENERATION_API_KEY;
+  const baseUrl = process.env.CONTENT_GENERATION_SERVICE_URL;
+  const apiKey = process.env.CONTENT_GENERATION_SERVICE_API_KEY;
 
   if (!baseUrl || !apiKey) {
     throw new Error(
-      "CONTENT_GENERATION_SERVICE_URL / CONTENT_GENERATION_SERVICE_API_KEY (or legacy CONTENT_GENERATION_URL / CONTENT_GENERATION_API_KEY) must be set",
+      "CONTENT_GENERATION_SERVICE_URL and CONTENT_GENERATION_SERVICE_API_KEY must be set",
     );
   }
 
