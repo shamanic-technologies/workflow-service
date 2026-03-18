@@ -108,7 +108,7 @@ export const WorkflowAudienceTypeSchema = z
 
 export const CreateWorkflowSchema = z
   .object({
-    brandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
+    createdForBrandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
     campaignId: z.string().optional().describe("Optional campaign ID for scoping."),
     subrequestId: z.string().optional().describe("Optional subrequest ID for cost tracking."),
     name: z.string().min(1).describe("Workflow name. Must be unique within the orgId. Used to execute by name later."),
@@ -136,7 +136,7 @@ export const WorkflowResponseSchema = z
   .object({
     id: z.string().uuid().describe("Workflow UUID."),
     orgId: z.string().describe("Organization ID."),
-    brandId: z.string().nullable(),
+    createdForBrandId: z.string().nullable(),
     humanId: z.string().nullable().describe("Human ID if this workflow was generated in a human expert's style."),
     campaignId: z.string().nullable(),
     subrequestId: z.string().nullable(),
@@ -235,7 +235,7 @@ export const WorkflowRunResponseSchema = z
 
 export const DeployWorkflowItemSchema = z
   .object({
-    brandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
+    createdForBrandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
     description: z.string().optional().describe("Human-readable description."),
     category: WorkflowCategorySchema.describe("Workflow category. Required — used to build the workflow name."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel. Required — used to build the workflow name."),
@@ -407,7 +407,7 @@ export const WorkflowMetadataSchema = z
     id: z.string().uuid(),
     name: z.string(),
     displayName: z.string().nullable(),
-    brandId: z.string().nullable(),
+    createdForBrandId: z.string().nullable(),
     category: WorkflowCategorySchema,
     channel: WorkflowChannelSchema,
     audienceType: WorkflowAudienceTypeSchema,

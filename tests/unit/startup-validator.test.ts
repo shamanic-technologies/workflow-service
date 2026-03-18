@@ -105,7 +105,7 @@ describe("validateAndUpgradeWorkflows", () => {
       edges: [],
     },
     tags: [],
-    brandId: null,
+    createdForBrandId: null,
     humanId: null,
     campaignId: null,
     subrequestId: null,

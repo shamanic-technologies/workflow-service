@@ -104,7 +104,7 @@ describe("POST /workflows", () => {
       .set(AUTH)
       .send({
         name: "Test Flow",
-        brandId: "brand-test-001",
+        createdForBrandId: "brand-test-001",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -129,7 +129,7 @@ describe("POST /workflows", () => {
       .set(AUTH)
       .send({
         name: "Multi-Channel Flow",
-        brandId: "brand-test-001",
+        createdForBrandId: "brand-test-001",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -147,7 +147,7 @@ describe("POST /workflows", () => {
       .set(AUTH)
       .send({
         name: "Bad Flow",
-        brandId: "brand-test-001",
+        createdForBrandId: "brand-test-001",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -821,7 +821,7 @@ describe("PUT /workflows/:id — fork", () => {
     const originalWorkflow = {
       id: "wf-original",
       orgId: "org-1",
-      brandId: "brand-1",
+      createdForBrandId: "brand-1",
       humanId: null,
       campaignId: "camp-1",
       subrequestId: null,
@@ -974,7 +974,7 @@ describe("PUT /workflows/:id — fork", () => {
     const fork1 = {
       id: "wf-fork1",
       orgId: "org-1",
-      brandId: null,
+      createdForBrandId: null,
       humanId: null,
       campaignId: null,
       subrequestId: null,
@@ -1019,7 +1019,7 @@ describe("PUT /workflows/:id — fork", () => {
     const parent = {
       id: "wf-parent",
       orgId: "org-1",
-      brandId: "brand-xyz",
+      createdForBrandId: "brand-xyz",
       humanId: "human-abc",
       campaignId: "camp-123",
       subrequestId: "sub-456",
@@ -1057,7 +1057,7 @@ describe("PUT /workflows/:id — fork", () => {
       .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
 
     expect(res.status).toBe(201);
-    expect(res.body.brandId).toBe("brand-xyz");
+    expect(res.body.createdForBrandId).toBe("brand-xyz");
     expect(res.body.category).toBe("sales");
     expect(res.body.channel).toBe("email");
     expect(res.body.audienceType).toBe("cold-outreach");
@@ -1068,7 +1068,7 @@ describe("PUT /workflows/:id — fork", () => {
     const originalWorkflow = {
       id: "wf-null-desc",
       orgId: "org-1",
-      brandId: null,
+      createdForBrandId: null,
       humanId: null,
       campaignId: null,
       subrequestId: null,
