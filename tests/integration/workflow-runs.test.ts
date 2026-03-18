@@ -100,7 +100,7 @@ import supertest from "supertest";
 import app from "../../src/index.js";
 
 const request = supertest(app);
-const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1" };
+const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
 describe("POST /workflows/:id/execute", () => {
@@ -156,6 +156,7 @@ describe("POST /workflows/:id/execute", () => {
       userId: "user-1",
       taskName: "execute-workflow",
       workflowName: "Test Flow",
+      brandId: "brand-1",
     });
   });
 
@@ -205,6 +206,7 @@ describe("POST /workflows/:id/execute", () => {
       userId: "user-1",
       taskName: "execute-workflow",
       workflowName: "Test Flow",
+      brandId: "brand-1",
     });
   });
 
@@ -359,6 +361,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
       userId: "user-1",
       taskName: "execute-workflow",
       workflowName: "create-user-flow",
+      brandId: "brand-1",
     });
   });
 
@@ -400,6 +403,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
       "x-org-id": "b645207b-d8e9-40b0-9391-072b777cd9a9",
       "x-user-id": "user-b",
       "x-run-id": "run-caller-b",
+      "x-brand-id": "brand-b",
     };
 
     const res = await request
