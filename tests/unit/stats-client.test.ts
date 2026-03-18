@@ -28,32 +28,6 @@ describe("mapGatewayStats", () => {
     });
   });
 
-  it("maps short field names (opened) for backwards compat", () => {
-    const raw = {
-      sent: 10,
-      delivered: 9,
-      opened: 5,
-      clicked: 1,
-      replied: 1,
-      bounced: 0,
-      unsubscribed: 0,
-      recipients: 10,
-    };
-
-    const result = mapGatewayStats(raw);
-
-    expect(result).toEqual({
-      sent: 10,
-      delivered: 9,
-      opened: 5,
-      clicked: 1,
-      replied: 1,
-      bounced: 0,
-      unsubscribed: 0,
-      recipients: 10,
-    });
-  });
-
   it("defaults missing fields to 0", () => {
     const result = mapGatewayStats({});
 
@@ -67,15 +41,5 @@ describe("mapGatewayStats", () => {
       unsubscribed: 0,
       recipients: 0,
     });
-  });
-
-  it("prefers prefixed names over short names when both present", () => {
-    const raw = {
-      emailsOpened: 15,
-      opened: 999, // should be ignored — emailsOpened takes precedence
-    };
-
-    const result = mapGatewayStats(raw);
-    expect(result.opened).toBe(15);
   });
 });
