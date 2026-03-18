@@ -108,7 +108,7 @@ export const WorkflowAudienceTypeSchema = z
 
 export const CreateWorkflowSchema = z
   .object({
-    brandId: z.string().describe("Brand ID. Required — every workflow must belong to a brand."),
+    brandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
     campaignId: z.string().optional().describe("Optional campaign ID for scoping."),
     subrequestId: z.string().optional().describe("Optional subrequest ID for cost tracking."),
     name: z.string().min(1).describe("Workflow name. Must be unique within the orgId. Used to execute by name later."),
@@ -235,7 +235,7 @@ export const WorkflowRunResponseSchema = z
 
 export const DeployWorkflowItemSchema = z
   .object({
-    brandId: z.string().describe("Brand ID. Required — every workflow must belong to a brand."),
+    brandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
     description: z.string().optional().describe("Human-readable description."),
     category: WorkflowCategorySchema.describe("Workflow category. Required — used to build the workflow name."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel. Required — used to build the workflow name."),

@@ -87,7 +87,7 @@ import supertest from "supertest";
 import app from "../../src/index.js";
 
 const request = supertest(app);
-const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1" };
+const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
 const BASE_QUERY = {
@@ -122,12 +122,13 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeRun(workflowId: string, runId: string) {
+function makeRun(workflowId: string, runId: string, brandId?: string | null) {
   return {
     id: "wr-" + Math.random().toString(36).slice(2, 10),
     workflowId,
     runId,
     orgId: "org1",
+    brandId: brandId ?? null,
     campaignId: null,
     subrequestId: null,
     windmillJobId: "wm-job-1",
@@ -428,15 +429,18 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.results).toHaveLength(2);
   });
 
-  it("filters by brandId", async () => {
-    // Note: the mock DB returns all rows regardless of .where(), so both workflows appear.
-    // This test verifies that brandId is accepted as a query param without error.
-    const wfBrand = makeWorkflow({ id: "wf-brand", brandId: "brand-1" });
-    mockWorkflowRows.push(wfBrand);
-    mockWorkflowRunRows.push(makeRun("wf-brand", "ext-run-brand"));
+  it("filters by brandId from runs", async () => {
+    // brandId filter now uses workflow_run.brandId, not workflow.brandId
+    // Note: mock DB returns all runs for all workflows, so both workflows see all runs
+    // This test verifies the endpoint accepts brandId and filters by run brandId
+    const wf1 = makeWorkflow({ id: "wf-1" });
+    mockWorkflowRows.push(wf1);
+    mockWorkflowRunRows.push(
+      makeRun("wf-1", "ext-run-1", "brand-1"),
+    );
 
     mockFetchRunCosts.mockResolvedValue([
-      { runId: "ext-run-brand", totalCostInUsdCents: 100 },
+      { runId: "ext-run-1", totalCostInUsdCents: 100 },
     ]);
     mockFetchEmailStats.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 5 },
@@ -450,24 +454,21 @@ describe("GET /workflows/ranked", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(1);
-    expect(res.body.results[0].workflow.brandId).toBe("brand-1");
   });
 
-  it("returns grouped brands with groupBy=brand", async () => {
-    const wf1 = makeWorkflow({ id: "wf-b1a", brandId: "brand-A" });
-    const wf2 = makeWorkflow({ id: "wf-b1b", brandId: "brand-A" });
-    const wf3 = makeWorkflow({ id: "wf-b2", brandId: "brand-B" });
-    mockWorkflowRows.push(wf1, wf2, wf3);
+  it("returns grouped brands with groupBy=brand (from runs)", async () => {
+    // Mock DB returns all runs for all workflows, so each workflow sees all runs/brands
+    // With 1 workflow and 2 runs for different brands, we get 2 brand groups each with 1 workflow
+    const wf1 = makeWorkflow({ id: "wf-1" });
+    mockWorkflowRows.push(wf1);
     mockWorkflowRunRows.push(
-      makeRun("wf-b1a", "ext-run-1"),
-      makeRun("wf-b1b", "ext-run-2"),
-      makeRun("wf-b2", "ext-run-3"),
+      makeRun("wf-1", "ext-run-1", "brand-A"),
+      makeRun("wf-1", "ext-run-2", "brand-B"),
     );
 
     mockFetchRunCosts.mockResolvedValue([
       { runId: "ext-run-1", totalCostInUsdCents: 100 },
       { runId: "ext-run-2", totalCostInUsdCents: 200 },
-      { runId: "ext-run-3", totalCostInUsdCents: 50 },
     ]);
     mockFetchEmailStats.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 5 },
@@ -486,19 +487,19 @@ describe("GET /workflows/ranked", () => {
     const brandA = res.body.brands.find((b: { brandId: string }) => b.brandId === "brand-A");
     const brandB = res.body.brands.find((b: { brandId: string }) => b.brandId === "brand-B");
     expect(brandA).toBeDefined();
-    expect(brandA.workflows).toHaveLength(2);
+    expect(brandA.workflows).toHaveLength(1);
     expect(brandA.stats).toBeDefined();
     expect(brandB).toBeDefined();
     expect(brandB.workflows).toHaveLength(1);
   });
 
-  it("excludes workflows without brandId when groupBy=brand", async () => {
-    const wfBranded = makeWorkflow({ id: "wf-branded", brandId: "brand-X" });
-    const wfNoBrand = makeWorkflow({ id: "wf-no-brand", brandId: null });
+  it("excludes runs without brandId when groupBy=brand", async () => {
+    const wfBranded = makeWorkflow({ id: "wf-branded" });
+    const wfNoBrand = makeWorkflow({ id: "wf-no-brand" });
     mockWorkflowRows.push(wfBranded, wfNoBrand);
     mockWorkflowRunRows.push(
-      makeRun("wf-branded", "ext-run-1"),
-      makeRun("wf-no-brand", "ext-run-2"),
+      makeRun("wf-branded", "ext-run-1", "brand-X"),
+      makeRun("wf-no-brand", "ext-run-2"), // no brandId on run
     );
 
     mockFetchRunCosts.mockResolvedValue([
@@ -685,28 +686,24 @@ describe("GET /workflows/best (hero records)", () => {
     // The mock DB returns all runs for all workflows — each workflow sees all 3 run IDs.
     // fetchRunCosts returns costs for all runs, so each workflow gets totalCost = 600.
     // We use mockFetchEmailStats per-workflow to differentiate brands.
-    const wfA1 = makeWorkflow({ id: "wf-a1", brandId: "brand-A" });
-    const wfA2 = makeWorkflow({ id: "wf-a2", brandId: "brand-A" });
-    const wfB = makeWorkflow({ id: "wf-b", brandId: "brand-B" });
-    mockWorkflowRows.push(wfA1, wfA2, wfB);
+    // Mock DB returns all runs for all workflows — so use 1 workflow with runs for 2 brands
+    const wf1 = makeWorkflow({ id: "wf-1" });
+    mockWorkflowRows.push(wf1);
     mockWorkflowRunRows.push(
-      makeRun("wf-a1", "ext-run-a1"),
-      makeRun("wf-a2", "ext-run-a2"),
-      makeRun("wf-b", "ext-run-b"),
+      makeRun("wf-1", "ext-run-a", "brand-A"),
+      makeRun("wf-1", "ext-run-b", "brand-B"),
     );
 
     mockFetchRunCosts.mockResolvedValue([
-      { runId: "ext-run-a1", totalCostInUsdCents: 50 },
-      { runId: "ext-run-a2", totalCostInUsdCents: 50 },
+      { runId: "ext-run-a", totalCostInUsdCents: 100 },
       { runId: "ext-run-b", totalCostInUsdCents: 500 },
     ]);
-    // Each workflow sees all 3 runs → totalCost per workflow = 600
-    // brand-A: 2 workflows × 600 = 1200 cost, 40 opens, 20 replies → 30/open, 60/reply
-    // brand-B: 1 workflow × 600 = 600 cost, 5 opens, 2 replies → 120/open, 300/reply
+    // wf-1 sees both runs → totalCost = 600, opened = 20, replied = 10
+    // brand-A: 1 workflow, cost 600, 20 opens → 30/open, 10 replies → 60/reply
+    // brand-B: 1 workflow, cost 600, 20 opens → 30/open, 10 replies → 60/reply
+    // Both brands have same stats since workflow-level stats are the same
     mockFetchEmailStats
-      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } })
-      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } })
-      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 5, replied: 2 }, broadcast: { ...EMPTY_STATS } });
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } });
 
     const res = await request
       .get("/workflows/best")
@@ -714,12 +711,11 @@ describe("GET /workflows/best (hero records)", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    // brand-A wins with lower cost-per-open (30 vs 120) and cost-per-reply (60 vs 300)
-    expect(res.body.bestCostPerOpen.brandId).toBe("brand-A");
-    expect(res.body.bestCostPerOpen.workflowCount).toBe(2);
-    expect(res.body.bestCostPerOpen.value).toBe(30); // 1200 / 40
-    expect(res.body.bestCostPerReply.brandId).toBe("brand-A");
-    expect(res.body.bestCostPerReply.value).toBe(60); // 1200 / 20
+    expect(res.body.bestCostPerOpen).toBeDefined();
+    expect(res.body.bestCostPerOpen.workflowCount).toBe(1);
+    expect(res.body.bestCostPerOpen.value).toBe(30); // 600 / 20
+    expect(res.body.bestCostPerReply).toBeDefined();
+    expect(res.body.bestCostPerReply.value).toBe(60); // 600 / 10
   });
 
   it("returns null for by=brand when no branded workflows have outcomes", async () => {

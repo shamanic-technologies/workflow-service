@@ -90,7 +90,7 @@ import supertest from "supertest";
 import app from "../../src/index.js";
 
 const request = supertest(app);
-const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1" };
+const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
 describe("POST /workflows", () => {
@@ -159,39 +159,6 @@ describe("POST /workflows", () => {
     expect(res.body.details).toBeDefined();
   });
 
-  it("rejects deploy without brandId", async () => {
-    const res = await request
-      .put("/workflows/upgrade")
-      .set(AUTH)
-      .send({
-        workflows: [
-          {
-            category: "sales",
-            channel: "email",
-            audienceType: "cold-outreach",
-            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-          },
-        ],
-      });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Validation error");
-  });
-
-  it("rejects POST /workflows without brandId", async () => {
-    const res = await request
-      .post("/workflows")
-      .set(AUTH)
-      .send({
-        name: "No Brand",
-        category: "sales",
-        channel: "email",
-        audienceType: "cold-outreach",
-        dag: VALID_LINEAR_DAG,
-      });
-
-    expect(res.status).toBe(400);
-  });
 
   it("requires authentication", async () => {
     const res = await request
@@ -284,7 +251,6 @@ describe("GET /workflows", () => {
 });
 
 const DEPLOY_ITEM = {
-  brandId: "brand-test-001",
   category: "sales" as const,
   channel: "email" as const,
   audienceType: "cold-outreach" as const,

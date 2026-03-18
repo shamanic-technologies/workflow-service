@@ -29,7 +29,6 @@ router.get("/public/workflows/ranked", async (req, res) => {
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
-    if (brandId) conditions.push(eq(workflows.brandId, brandId));
     if (category) conditions.push(eq(workflows.category, category));
     if (channel) conditions.push(eq(workflows.channel, channel));
     if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));
@@ -46,7 +45,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
 
-    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "public" as const, brandId, orgId });
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "public" as const, brandId, orgId });
 
     if (groupBy === "section") {
       const sectionMap = new Map<string, WorkflowScore[]>();
@@ -72,24 +71,54 @@ router.get("/public/workflows/ranked", async (req, res) => {
 
       res.json({ sections });
     } else if (groupBy === "brand") {
-      // Group by brandId — exclude workflows without a brandId
-      const brandMap = new Map<string, WorkflowScore[]>();
+      // Group by brandId from runs
+      const brandRunIds = new Map<string, Set<string>>();
+      const brandWorkflowIds = new Map<string, Set<string>>();
+
       for (const score of scores) {
-        if (!score.workflow.brandId) continue;
-        const arr = brandMap.get(score.workflow.brandId) ?? [];
-        arr.push(score);
-        brandMap.set(score.workflow.brandId, arr);
+        const runIds = workflowRunIds[score.workflow.id] ?? [];
+        for (const runId of runIds) {
+          const bId = runBrandMap.get(runId);
+          if (!bId) continue;
+          if (!brandRunIds.has(bId)) brandRunIds.set(bId, new Set());
+          if (!brandWorkflowIds.has(bId)) brandWorkflowIds.set(bId, new Set());
+          brandRunIds.get(bId)!.add(runId);
+          brandWorkflowIds.get(bId)!.add(score.workflow.id);
+        }
       }
 
-      const brands = [...brandMap.entries()].map(([bId, brandScores]) => ({
-        brandId: bId,
-        stats: aggregateSectionStats(brandScores),
-        workflows: rankScores(brandScores).slice(0, limit).map(formatPublicScoreItem),
-      }));
+      const brandEntries = brandId
+        ? [...brandRunIds.entries()].filter(([bId]) => bId === brandId)
+        : [...brandRunIds.entries()];
+
+      const brands = brandEntries.map(([bId]) => {
+        const wfIds = brandWorkflowIds.get(bId)!;
+        const brandScores = scores.filter((s) => wfIds.has(s.workflow.id));
+        return {
+          brandId: bId,
+          stats: aggregateSectionStats(brandScores),
+          workflows: rankScores(brandScores).slice(0, limit).map(formatPublicScoreItem),
+        };
+      });
 
       res.json({ brands });
     } else {
-      const ranked = rankScores(scores).slice(0, limit);
+      // If brandId filter is set, only include workflows that have runs for that brand
+      let filteredScores = scores;
+      if (brandId) {
+        const wfIdsForBrand = new Set<string>();
+        for (const score of scores) {
+          const runIds = workflowRunIds[score.workflow.id] ?? [];
+          for (const runId of runIds) {
+            if (runBrandMap.get(runId) === brandId) {
+              wfIdsForBrand.add(score.workflow.id);
+              break;
+            }
+          }
+        }
+        filteredScores = scores.filter((s) => wfIdsForBrand.has(s.workflow.id));
+      }
+      const ranked = rankScores(filteredScores).slice(0, limit);
       res.json({ results: ranked.map(formatPublicScoreItem) });
     }
   } catch (err: unknown) {
@@ -112,7 +141,6 @@ router.get("/public/workflows/best", async (req, res) => {
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
-    if (brandId) conditions.push(eq(workflows.brandId, brandId));
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -126,22 +154,32 @@ router.get("/public/workflows/best", async (req, res) => {
       return;
     }
 
-    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", { kind: "public" as const, brandId, orgId });
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", { kind: "public" as const, brandId, orgId });
 
     if (by === "brand") {
-      // Aggregate scores by brandId, find the best brand for cost-per-open and cost-per-reply
-      const brandMap = new Map<string, WorkflowScore[]>();
+      // Aggregate by brandId from runs
+      const brandScoresMap = new Map<string, WorkflowScore[]>();
       for (const s of scores) {
-        if (!s.workflow.brandId) continue;
-        const arr = brandMap.get(s.workflow.brandId) ?? [];
-        arr.push(s);
-        brandMap.set(s.workflow.brandId, arr);
+        const runIds = workflowRunIds[s.workflow.id] ?? [];
+        for (const runId of runIds) {
+          const bId = runBrandMap.get(runId);
+          if (!bId) continue;
+          if (!brandScoresMap.has(bId)) brandScoresMap.set(bId, []);
+          const arr = brandScoresMap.get(bId)!;
+          if (!arr.some((existing) => existing.workflow.id === s.workflow.id)) {
+            arr.push(s);
+          }
+        }
       }
+
+      const brandEntries = brandId
+        ? [...brandScoresMap.entries()].filter(([bId]) => bId === brandId)
+        : [...brandScoresMap.entries()];
 
       let bestCostPerOpen: { brandId: string; workflowCount: number; value: number } | null = null;
       let bestCostPerReply: { brandId: string; workflowCount: number; value: number } | null = null;
 
-      for (const [bId, brandScores] of brandMap) {
+      for (const [bId, brandScores] of brandEntries) {
         const totalCost = brandScores.reduce((s, e) => s + e.totalCost, 0);
         const hasRuns = brandScores.some((s) => s.completedRuns > 0);
         if (!hasRuns) continue;

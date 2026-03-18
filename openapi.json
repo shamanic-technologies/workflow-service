@@ -319,7 +319,7 @@
         "properties": {
           "brandId": {
             "type": "string",
-            "description": "Brand ID. Required — every workflow must belong to a brand."
+            "description": "Optional brand ID — records which brand context created this workflow."
           },
           "campaignId": {
             "type": "string",
@@ -359,7 +359,6 @@
           }
         },
         "required": [
-          "brandId",
           "name",
           "category",
           "channel",
@@ -813,7 +812,7 @@
         "properties": {
           "brandId": {
             "type": "string",
-            "description": "Brand ID. Required — every workflow must belong to a brand."
+            "description": "Optional brand ID — records which brand context created this workflow."
           },
           "description": {
             "type": "string",
@@ -861,7 +860,6 @@
           }
         },
         "required": [
-          "brandId",
           "category",
           "channel",
           "audienceType",

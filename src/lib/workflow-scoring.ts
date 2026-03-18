@@ -53,16 +53,25 @@ type ScoreMode =
   | { kind: "auth"; identity: IdentityHeaders }
   | { kind: "public"; brandId?: string; orgId?: string };
 
+export interface ScoreResult {
+  scores: WorkflowScore[];
+  /** Maps runId → brandId (from workflow_runs table) for brand-level aggregation */
+  runBrandMap: Map<string, string>;
+  /** Maps workflowId → runIds for cross-referencing */
+  workflowRunIds: Record<string, string[]>;
+}
+
 export async function computeWorkflowScores(
   activeWorkflows: (typeof workflows.$inferSelect)[],
   deprecatedWorkflows: (typeof workflows.$inferSelect)[],
   objective: "replies" | "clicks",
   mode: ScoreMode,
-): Promise<WorkflowScore[]> {
+): Promise<ScoreResult> {
   // 1. For each active workflow, get completed runs across entire upgrade chain
   const workflowRunsByWfId: Record<string, string[]> = {};
   const chainWorkflowsById: Record<string, (typeof workflows.$inferSelect)[]> = {};
   const allRunIds: string[] = [];
+  const runBrandMap = new Map<string, string>();
 
   for (const wf of activeWorkflows) {
     const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
@@ -91,9 +100,12 @@ export async function computeWorkflowScores(
             )
           );
 
-    const runIds = runs
-      .map((r) => r.runId)
-      .filter((id): id is string => id !== null);
+    const runIds: string[] = [];
+    for (const r of runs) {
+      if (!r.runId) continue;
+      runIds.push(r.runId);
+      if (r.brandId) runBrandMap.set(r.runId, r.brandId);
+    }
 
     workflowRunsByWfId[wf.id] = runIds;
     allRunIds.push(...runIds);
@@ -176,7 +188,7 @@ export async function computeWorkflowScores(
     });
   }
 
-  return scores;
+  return { scores, runBrandMap, workflowRunIds: workflowRunsByWfId };
 }
 
 export function rankScores(scores: WorkflowScore[]): WorkflowScore[] {
