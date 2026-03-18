@@ -155,22 +155,23 @@ export async function fetchEmailStats(
 
   const { baseUrl, apiKey } = getEmailGatewayConfig();
 
-  const res = await fetch(`${baseUrl}/stats`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+  const res = await fetch(
+    `${baseUrl}/stats?runIds=${runIds.join(",")}`,
+    {
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey,
+        "x-org-id": identity.orgId,
+        "x-user-id": identity.userId,
+        "x-run-id": identity.runId,
+      },
     },
-    body: JSON.stringify({ runIds }),
-  });
+  );
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `email-gateway-service error: POST /stats -> ${res.status} ${res.statusText}: ${text}`
+      `email-gateway-service error: GET /stats -> ${res.status} ${res.statusText}: ${text}`
     );
   }
 
