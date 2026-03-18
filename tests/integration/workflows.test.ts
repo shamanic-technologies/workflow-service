@@ -961,6 +961,7 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toContain("already exists");
     expect(res.body.existingWorkflowId).toBe("wf-conflict");
+    expect(res.body.existingWorkflowName).toBe("sales-email-cold-outreach-birch");
   });
 
   it("forking a fork sets forkedFrom to immediate parent", async () => {
