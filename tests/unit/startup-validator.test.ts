@@ -347,12 +347,13 @@ describe("validateAndUpgradeWorkflows", () => {
       expect.objectContaining({ category: "sales" }),
     );
 
-    // Should have inserted a new workflow with the SAME name as the old one
+    // Should have inserted a new workflow with a NEW name (using new signatureName)
     expect(dbInserts.length).toBe(1);
     expect(dbInserts[0].status).toBe("active");
-    expect(dbInserts[0].name).toBe(BROKEN_WORKFLOW.name);
-    // displayName must use the stable name, not inherit stale parent displayName
-    expect(dbInserts[0].displayName).toBe(BROKEN_WORKFLOW.name);
+    expect(dbInserts[0].name).toMatch(/^sales-email-cold-outreach-/);
+    expect(dbInserts[0].name).not.toBe(BROKEN_WORKFLOW.name); // name must change with new signature
+    // displayName stays as the ancestor's name (stable display identity)
+    expect(dbInserts[0].displayName).toBe(BROKEN_WORKFLOW.displayName ?? BROKEN_WORKFLOW.name);
     expect(dbInserts[0].createdByUserId).toBe("workflow-service");
     expect(dbInserts[0].createdByRunId).toBe("platform-run-123");
 
