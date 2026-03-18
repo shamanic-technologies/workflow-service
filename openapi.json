@@ -319,7 +319,7 @@
         "properties": {
           "brandId": {
             "type": "string",
-            "description": "Optional brand ID for scoping."
+            "description": "Brand ID. Required — every workflow must belong to a brand."
           },
           "campaignId": {
             "type": "string",
@@ -359,6 +359,7 @@
           }
         },
         "required": [
+          "brandId",
           "name",
           "category",
           "channel",
@@ -810,6 +811,10 @@
       "DeployWorkflowItem": {
         "type": "object",
         "properties": {
+          "brandId": {
+            "type": "string",
+            "description": "Brand ID. Required — every workflow must belong to a brand."
+          },
           "description": {
             "type": "string",
             "description": "Human-readable description."
@@ -856,6 +861,7 @@
           }
         },
         "required": [
+          "brandId",
           "category",
           "channel",
           "audienceType",
