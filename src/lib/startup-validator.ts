@@ -255,12 +255,12 @@ async function attemptUpgrade(
 
     const newSignatureName = pickSignatureName(newSignature, usedNames);
 
-    // Reuse the old workflow's name so clients calling by-name are not disrupted
-    const stableName = wf.name;
+    // Build the new name with the new signatureName; displayName stays as the ancestor's name
+    const newName = `${result.category}-${result.channel}-${result.audienceType}-${newSignatureName}`;
 
     // Deploy to Windmill
-    const openFlow = dagToOpenFlow(result.dag, stableName);
-    const flowPath = `f/workflows/${wf.orgId}/${stableName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+    const openFlow = dagToOpenFlow(result.dag, newName);
+    const flowPath = `f/workflows/${wf.orgId}/${newName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
     let windmillFlowPath: string | null = null;
 
     if (windmillClient) {
@@ -269,7 +269,7 @@ async function attemptUpgrade(
       // This avoids Windmill logging noisy 400 "already exists" errors.
       try {
         await windmillClient.updateFlow(flowPath, {
-          summary: stableName,
+          summary: newName,
           description: result.description,
           value: openFlow.value,
           schema: openFlow.schema,
@@ -281,7 +281,7 @@ async function attemptUpgrade(
           try {
             await windmillClient.createFlow({
               path: flowPath,
-              summary: stableName,
+              summary: newName,
               description: result.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -309,8 +309,8 @@ async function attemptUpgrade(
         campaignId: wf.campaignId,
         subrequestId: wf.subrequestId,
         styleName: wf.styleName,
-        name: stableName,
-        displayName: stableName,
+        name: newName,
+        displayName: wf.displayName ?? wf.name,
         description: result.description,
         category: result.category,
         channel: result.channel,
