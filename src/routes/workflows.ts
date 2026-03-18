@@ -11,6 +11,7 @@ import {
   UpdateWorkflowSchema,
   DeployWorkflowsSchema,
   GenerateWorkflowSchema,
+  RankedWorkflowQuerySchema,
   BestWorkflowQuerySchema,
 } from "../schemas.js";
 import {
@@ -642,22 +643,203 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
   }
 });
 
-// GET /workflows/best — Get the best-performing workflow by cost efficiency
-router.get("/workflows/best", requireApiKey, async (req, res) => {
+// --- Shared helpers for ranked/best endpoints ---
+
+const EMPTY_EMAIL_STATS = {
+  sent: 0, delivered: 0, opened: 0, clicked: 0,
+  replied: 0, bounced: 0, unsubscribed: 0, recipients: 0,
+};
+
+interface WorkflowScore {
+  workflow: typeof workflows.$inferSelect;
+  totalCost: number;
+  totalOutcomes: number;
+  costPerOutcome: number | null;
+  completedRuns: number;
+  emailStats: { transactional: typeof EMPTY_EMAIL_STATS; broadcast: typeof EMPTY_EMAIL_STATS };
+}
+
+async function computeWorkflowScores(
+  activeWorkflows: (typeof workflows.$inferSelect)[],
+  deprecatedWorkflows: { id: string; upgradedTo: string | null }[],
+  objective: "replies" | "clicks",
+  identity: { orgId: string; userId: string; runId: string },
+): Promise<WorkflowScore[]> {
+  // 1. For each active workflow, get completed runs across entire upgrade chain
+  const workflowRunsByWfId: Record<string, string[]> = {};
+  const allRunIds: string[] = [];
+
+  for (const wf of activeWorkflows) {
+    const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
+
+    const runs = chainIds.length === 1
+      ? await db
+          .select()
+          .from(workflowRuns)
+          .where(
+            and(
+              eq(workflowRuns.workflowId, chainIds[0]),
+              eq(workflowRuns.status, "completed"),
+            )
+          )
+      : await db
+          .select()
+          .from(workflowRuns)
+          .where(
+            and(
+              inArray(workflowRuns.workflowId, chainIds),
+              eq(workflowRuns.status, "completed"),
+            )
+          );
+
+    const runIds = runs
+      .map((r) => r.runId)
+      .filter((id): id is string => id !== null);
+
+    workflowRunsByWfId[wf.id] = runIds;
+    allRunIds.push(...runIds);
+  }
+
+  // 2. Batch fetch costs from runs-service (only if there are runs)
+  const costByRunId = new Map<string, number>();
+  if (allRunIds.length > 0) {
+    const runCosts = await fetchRunCosts(allRunIds, identity);
+    for (const c of runCosts) {
+      costByRunId.set(c.runId, c.totalCostInUsdCents);
+    }
+  }
+
+  // 3. Per-workflow: compute cost + fetch email stats
+  const scores: WorkflowScore[] = [];
+
+  for (const wf of activeWorkflows) {
+    const runIds = workflowRunsByWfId[wf.id] ?? [];
+
+    if (runIds.length === 0) {
+      scores.push({
+        workflow: wf,
+        totalCost: 0,
+        totalOutcomes: 0,
+        costPerOutcome: null,
+        completedRuns: 0,
+        emailStats: { transactional: { ...EMPTY_EMAIL_STATS }, broadcast: { ...EMPTY_EMAIL_STATS } },
+      });
+      continue;
+    }
+
+    const totalCost = runIds.reduce(
+      (sum, id) => sum + (costByRunId.get(id) ?? 0),
+      0
+    );
+
+    const stats = await fetchEmailStats(runIds, identity);
+    const outcomes =
+      objective === "replies"
+        ? (stats.transactional?.replied ?? 0) + (stats.broadcast?.replied ?? 0)
+        : (stats.transactional?.clicked ?? 0) + (stats.broadcast?.clicked ?? 0);
+
+    const costPerOutcome = outcomes > 0 ? totalCost / outcomes : null;
+
+    scores.push({
+      workflow: wf,
+      totalCost,
+      totalOutcomes: outcomes,
+      costPerOutcome,
+      completedRuns: runIds.length,
+      emailStats: {
+        transactional: stats.transactional ?? { ...EMPTY_EMAIL_STATS },
+        broadcast: stats.broadcast ?? { ...EMPTY_EMAIL_STATS },
+      },
+    });
+  }
+
+  return scores;
+}
+
+function rankScores(scores: WorkflowScore[]): WorkflowScore[] {
+  return [...scores].sort((a, b) => {
+    if (a.costPerOutcome !== null && b.costPerOutcome !== null) {
+      return a.costPerOutcome - b.costPerOutcome;
+    }
+    if (a.costPerOutcome !== null) return -1;
+    if (b.costPerOutcome !== null) return 1;
+    return b.completedRuns - a.completedRuns;
+  });
+}
+
+function formatScoreItem(entry: WorkflowScore) {
+  return {
+    workflow: {
+      id: entry.workflow.id,
+      name: entry.workflow.name,
+      displayName: entry.workflow.displayName,
+      brandId: entry.workflow.brandId,
+      category: entry.workflow.category,
+      channel: entry.workflow.channel,
+      audienceType: entry.workflow.audienceType,
+      signature: entry.workflow.signature,
+      signatureName: entry.workflow.signatureName,
+    },
+    dag: entry.workflow.dag,
+    stats: {
+      totalCostInUsdCents: entry.totalCost,
+      totalOutcomes: entry.totalOutcomes,
+      costPerOutcome: entry.costPerOutcome,
+      completedRuns: entry.completedRuns,
+      email: entry.emailStats,
+    },
+  };
+}
+
+function aggregateSectionStats(scores: WorkflowScore[]) {
+  const totalCost = scores.reduce((s, e) => s + e.totalCost, 0);
+  const totalOutcomes = scores.reduce((s, e) => s + e.totalOutcomes, 0);
+  const completedRuns = scores.reduce((s, e) => s + e.completedRuns, 0);
+  const costPerOutcome = totalOutcomes > 0 ? totalCost / totalOutcomes : null;
+  const transactional = { ...EMPTY_EMAIL_STATS };
+  const broadcast = { ...EMPTY_EMAIL_STATS };
+  for (const e of scores) {
+    for (const key of Object.keys(EMPTY_EMAIL_STATS) as (keyof typeof EMPTY_EMAIL_STATS)[]) {
+      transactional[key] += e.emailStats.transactional[key];
+      broadcast[key] += e.emailStats.broadcast[key];
+    }
+  }
+  return { totalCostInUsdCents: totalCost, totalOutcomes, costPerOutcome, completedRuns, email: { transactional, broadcast } };
+}
+
+function handleExternalServiceError(err: unknown, res: import("express").Response, label: string) {
+  if (err instanceof Error && err.name === "ZodError") {
+    res.status(400).json({ error: "Validation error", details: err });
+    return true;
+  }
+  if (
+    err instanceof Error &&
+    (err.message.includes("RUNS_SERVICE_URL") ||
+      err.message.includes("EMAIL_GATEWAY_SERVICE_URL") ||
+      err.message.startsWith("email-gateway-service error:"))
+  ) {
+    console.error(`[workflow-service] ${label}: external service error:`, err.message);
+    res.status(502).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
+// GET /workflows/ranked — Workflows ranked by cost-per-outcome, with optional groupBy=section
+router.get("/workflows/ranked", requireApiKey, async (req, res) => {
   try {
-    const query = BestWorkflowQuerySchema.safeParse(req.query);
+    const query = RankedWorkflowQuerySchema.safeParse(req.query);
     if (!query.success) {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, category, channel, audienceType, objective, limit } = query.data;
+    const { orgId, category, channel, audienceType, objective, limit, groupBy } = query.data;
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
       runId: res.locals.runId as string,
     };
 
-    // 1. Get all workflows matching the dimensions (active + deprecated for chain stats)
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (category) conditions.push(eq(workflows.category, category));
@@ -676,157 +858,120 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       return;
     }
 
-    // 2. For each active workflow, get completed runs across entire upgrade chain
-    const workflowRunsByWfId: Record<string, string[]> = {};
-    const allRunIds: string[] = [];
+    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, identity);
 
-    for (const wf of activeWorkflows) {
-      const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
-
-      const runs = chainIds.length === 1
-        ? await db
-            .select()
-            .from(workflowRuns)
-            .where(
-              and(
-                eq(workflowRuns.workflowId, chainIds[0]),
-                eq(workflowRuns.status, "completed"),
-              )
-            )
-        : await db
-            .select()
-            .from(workflowRuns)
-            .where(
-              and(
-                inArray(workflowRuns.workflowId, chainIds),
-                eq(workflowRuns.status, "completed"),
-              )
-            );
-
-      const runIds = runs
-        .map((r) => r.runId)
-        .filter((id): id is string => id !== null);
-
-      workflowRunsByWfId[wf.id] = runIds;
-      allRunIds.push(...runIds);
-    }
-
-    // 3. Batch fetch costs from runs-service (only if there are runs)
-    const costByRunId = new Map<string, number>();
-    if (allRunIds.length > 0) {
-      const runCosts = await fetchRunCosts(allRunIds, identity);
-      for (const c of runCosts) {
-        costByRunId.set(c.runId, c.totalCostInUsdCents);
+    if (groupBy === "section") {
+      // Group by sectionKey = category-channel-audienceType
+      const sectionMap = new Map<string, WorkflowScore[]>();
+      for (const score of scores) {
+        const key = `${score.workflow.category}-${score.workflow.channel}-${score.workflow.audienceType}`;
+        const arr = sectionMap.get(key) ?? [];
+        arr.push(score);
+        sectionMap.set(key, arr);
       }
-    }
 
-    const EMPTY_EMAIL_STATS = {
-      sent: 0, delivered: 0, opened: 0, clicked: 0,
-      replied: 0, bounced: 0, unsubscribed: 0, recipients: 0,
+      const sections = [...sectionMap.entries()].map(([sectionKey, sectionScores]) => {
+        const ranked = rankScores(sectionScores).slice(0, limit);
+        const sample = sectionScores[0].workflow;
+        return {
+          sectionKey,
+          category: sample.category,
+          channel: sample.channel,
+          audienceType: sample.audienceType,
+          stats: aggregateSectionStats(sectionScores),
+          workflows: ranked.map(formatScoreItem),
+        };
+      });
+
+      res.json({ sections });
+    } else {
+      const ranked = rankScores(scores).slice(0, limit);
+      res.json({ results: ranked.map(formatScoreItem) });
+    }
+  } catch (err: unknown) {
+    if (!handleExternalServiceError(err, res, "ranked")) {
+      console.error("[workflow-service] GET ranked error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+});
+
+// GET /workflows/best — Hero records: best cost-per-open and best cost-per-reply
+router.get("/workflows/best", requireApiKey, async (req, res) => {
+  try {
+    const query = BestWorkflowQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      res.status(400).json({ error: "Validation error", details: query.error });
+      return;
+    }
+    const { orgId } = query.data;
+    const identity = {
+      orgId: res.locals.orgId as string,
+      userId: res.locals.userId as string,
+      runId: res.locals.runId as string,
     };
 
-    // 4. Per-workflow: compute cost + fetch email stats
-    const workflowScores: Array<{
-      workflow: (typeof activeWorkflows)[0];
-      totalCost: number;
-      totalOutcomes: number;
-      costPerOutcome: number | null;
-      completedRuns: number;
-      emailStats: { transactional: typeof EMPTY_EMAIL_STATS; broadcast: typeof EMPTY_EMAIL_STATS };
-    }> = [];
+    const conditions: ReturnType<typeof eq>[] = [];
+    if (orgId) conditions.push(eq(workflows.orgId, orgId));
 
-    for (const wf of activeWorkflows) {
-      const runIds = workflowRunsByWfId[wf.id] ?? [];
+    const allMatchingWorkflows = conditions.length > 0
+      ? await db.select().from(workflows).where(and(...conditions))
+      : await db.select().from(workflows);
 
-      if (runIds.length === 0) {
-        workflowScores.push({
-          workflow: wf,
-          totalCost: 0,
-          totalOutcomes: 0,
-          costPerOutcome: null,
-          completedRuns: 0,
-          emailStats: { transactional: { ...EMPTY_EMAIL_STATS }, broadcast: { ...EMPTY_EMAIL_STATS } },
-        });
-        continue;
-      }
+    const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
+    const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
-      const totalCost = runIds.reduce(
-        (sum, id) => sum + (costByRunId.get(id) ?? 0),
-        0
-      );
-
-      const stats = await fetchEmailStats(runIds, identity);
-      const outcomes =
-        objective === "replies"
-          ? (stats.transactional?.replied ?? 0) + (stats.broadcast?.replied ?? 0)
-          : (stats.transactional?.clicked ?? 0) + (stats.broadcast?.clicked ?? 0);
-
-      const costPerOutcome = outcomes > 0 ? totalCost / outcomes : null;
-
-      workflowScores.push({
-        workflow: wf,
-        totalCost,
-        totalOutcomes: outcomes,
-        costPerOutcome,
-        completedRuns: runIds.length,
-        emailStats: {
-          transactional: stats.transactional ?? { ...EMPTY_EMAIL_STATS },
-          broadcast: stats.broadcast ?? { ...EMPTY_EMAIL_STATS },
-        },
-      });
+    if (activeWorkflows.length === 0) {
+      res.status(404).json({ error: "No active workflows found" });
+      return;
     }
 
-    // 5. Sort: lowest costPerOutcome first; null last (fallback: most runs)
-    workflowScores.sort((a, b) => {
-      if (a.costPerOutcome !== null && b.costPerOutcome !== null) {
-        return a.costPerOutcome - b.costPerOutcome;
-      }
-      if (a.costPerOutcome !== null) return -1;
-      if (b.costPerOutcome !== null) return 1;
-      return b.completedRuns - a.completedRuns;
-    });
+    // Use "replies" as objective — we compute both cost-per-open and cost-per-reply from email stats
+    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", identity);
 
-    // 6. Return ranked results up to limit
-    const top = workflowScores.slice(0, limit);
+    let bestCostPerOpen: { score: WorkflowScore; value: number } | null = null;
+    let bestCostPerReply: { score: WorkflowScore; value: number } | null = null;
+
+    for (const s of scores) {
+      if (s.completedRuns === 0) continue;
+
+      const totalOpened = s.emailStats.transactional.opened + s.emailStats.broadcast.opened;
+      if (totalOpened > 0) {
+        const costPerOpen = s.totalCost / totalOpened;
+        if (!bestCostPerOpen || costPerOpen < bestCostPerOpen.value) {
+          bestCostPerOpen = { score: s, value: costPerOpen };
+        }
+      }
+
+      const totalReplied = s.emailStats.transactional.replied + s.emailStats.broadcast.replied;
+      if (totalReplied > 0) {
+        const costPerReply = s.totalCost / totalReplied;
+        if (!bestCostPerReply || costPerReply < bestCostPerReply.value) {
+          bestCostPerReply = { score: s, value: costPerReply };
+        }
+      }
+    }
+
+    function formatRecord(entry: { score: WorkflowScore; value: number } | null) {
+      if (!entry) return null;
+      return {
+        workflowId: entry.score.workflow.id,
+        workflowName: entry.score.workflow.name,
+        displayName: entry.score.workflow.displayName,
+        brandId: entry.score.workflow.brandId,
+        value: Math.round(entry.value * 100) / 100,
+      };
+    }
+
     res.json({
-      results: top.map((entry) => ({
-        workflow: {
-          id: entry.workflow.id,
-          name: entry.workflow.name,
-          displayName: entry.workflow.displayName,
-          category: entry.workflow.category,
-          channel: entry.workflow.channel,
-          audienceType: entry.workflow.audienceType,
-          signature: entry.workflow.signature,
-          signatureName: entry.workflow.signatureName,
-        },
-        dag: entry.workflow.dag,
-        stats: {
-          totalCostInUsdCents: entry.totalCost,
-          totalOutcomes: entry.totalOutcomes,
-          costPerOutcome: entry.costPerOutcome,
-          completedRuns: entry.completedRuns,
-          email: entry.emailStats,
-        },
-      })),
+      bestCostPerOpen: formatRecord(bestCostPerOpen),
+      bestCostPerReply: formatRecord(bestCostPerReply),
     });
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
-      return;
+    if (!handleExternalServiceError(err, res, "best")) {
+      console.error("[workflow-service] GET best error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
-    if (
-      err instanceof Error &&
-      (err.message.includes("RUNS_SERVICE_URL") ||
-        err.message.includes("EMAIL_GATEWAY_SERVICE_URL") ||
-        err.message.startsWith("email-gateway-service error:"))
-    ) {
-      console.error("[workflow-service] best: external service error:", err.message);
-      res.status(502).json({ error: err.message });
-      return;
-    }
-    console.error("[workflow-service] GET best error:", err);
-    res.status(500).json({ error: "Internal server error" });
   }
 });
 

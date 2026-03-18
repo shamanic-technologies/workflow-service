@@ -1004,6 +1004,53 @@
           "description"
         ]
       },
+      "WorkflowMetadata": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "$ref": "#/components/schemas/WorkflowCategory"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/WorkflowChannel"
+          },
+          "audienceType": {
+            "$ref": "#/components/schemas/WorkflowAudienceType"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "signatureName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "displayName",
+          "brandId",
+          "category",
+          "channel",
+          "audienceType",
+          "signature",
+          "signatureName"
+        ],
+        "description": "Workflow metadata."
+      },
       "EmailStats": {
         "type": "object",
         "properties": {
@@ -1052,7 +1099,7 @@
         ],
         "description": "Aggregated transactional email stats across all runs."
       },
-      "BestWorkflowStats": {
+      "WorkflowStats": {
         "type": "object",
         "properties": {
           "totalCostInUsdCents": {
@@ -1105,50 +1152,11 @@
         ],
         "description": "Aggregated performance stats for this workflow."
       },
-      "BestWorkflowResultItem": {
+      "RankedWorkflowItem": {
         "type": "object",
         "properties": {
           "workflow": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "name": {
-                "type": "string"
-              },
-              "displayName": {
-                "type": "string",
-                "nullable": true
-              },
-              "category": {
-                "$ref": "#/components/schemas/WorkflowCategory"
-              },
-              "channel": {
-                "$ref": "#/components/schemas/WorkflowChannel"
-              },
-              "audienceType": {
-                "$ref": "#/components/schemas/WorkflowAudienceType"
-              },
-              "signature": {
-                "type": "string"
-              },
-              "signatureName": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "name",
-              "displayName",
-              "category",
-              "channel",
-              "audienceType",
-              "signature",
-              "signatureName"
-            ],
-            "description": "Workflow metadata."
+            "$ref": "#/components/schemas/WorkflowMetadata"
           },
           "dag": {
             "allOf": [
@@ -1161,7 +1169,7 @@
             ]
           },
           "stats": {
-            "$ref": "#/components/schemas/BestWorkflowStats"
+            "$ref": "#/components/schemas/WorkflowStats"
           }
         },
         "required": [
@@ -1170,13 +1178,13 @@
           "stats"
         ]
       },
-      "BestWorkflowResponse": {
+      "RankedWorkflowResponse": {
         "type": "object",
         "properties": {
           "results": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/BestWorkflowResultItem"
+              "$ref": "#/components/schemas/RankedWorkflowItem"
             },
             "description": "Workflows ranked by performance, best first."
           }
@@ -1185,7 +1193,7 @@
           "results"
         ]
       },
-      "BestWorkflowObjective": {
+      "RankedWorkflowObjective": {
         "type": "string",
         "enum": [
           "replies",
@@ -1193,6 +1201,72 @@
         ],
         "default": "replies",
         "description": "Which metric to optimize for. Defaults to 'replies'."
+      },
+      "RankedWorkflowGroupBy": {
+        "type": "string",
+        "enum": [
+          "section"
+        ],
+        "description": "Group results by section. When omitted, returns a flat ranked list."
+      },
+      "BestWorkflowRecord": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "workflowId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "ID of the workflow holding the record."
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Name of the workflow."
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true,
+            "description": "Stable display name of the workflow family."
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Brand ID associated with the workflow."
+          },
+          "value": {
+            "type": "number",
+            "description": "The record value in USD cents."
+          }
+        },
+        "required": [
+          "workflowId",
+          "workflowName",
+          "displayName",
+          "brandId",
+          "value"
+        ],
+        "description": "Workflow with the lowest cost per email open. Null if no data."
+      },
+      "BestWorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "bestCostPerOpen": {
+            "$ref": "#/components/schemas/BestWorkflowRecord"
+          },
+          "bestCostPerReply": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BestWorkflowRecord"
+              },
+              {
+                "description": "Workflow with the lowest cost per reply. Null if no data."
+              }
+            ]
+          }
+        },
+        "required": [
+          "bestCostPerOpen",
+          "bestCostPerReply"
+        ]
       },
       "ExecuteByNameRequest": {
         "type": "object",
@@ -2831,10 +2905,10 @@
         }
       }
     },
-    "/workflows/best": {
+    "/workflows/ranked": {
       "get": {
-        "summary": "Get the best-performing workflows by cost-per-outcome",
-        "description": "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. Stats are aggregated across the full upgrade chain (deprecated predecessors included). Use `limit` to control how many results are returned (default 1). Workflows with no completed runs are included with zeroed stats.",
+        "summary": "Get workflows ranked by cost-per-outcome",
+        "description": "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. Stats are aggregated across the full upgrade chain (deprecated predecessors included). Use `groupBy=section` to group results by category-channel-audienceType with aggregated section stats. Workflows with no completed runs are included with zeroed stats.",
         "tags": [
           "Workflows"
         ],
@@ -2904,7 +2978,7 @@
           },
           {
             "schema": {
-              "$ref": "#/components/schemas/BestWorkflowObjective"
+              "$ref": "#/components/schemas/RankedWorkflowObjective"
             },
             "required": false,
             "description": "Which metric to optimize for. Defaults to 'replies'.",
@@ -2916,12 +2990,21 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 100,
-              "default": 1,
-              "description": "Number of workflows to return, ranked by performance. Defaults to 1."
+              "default": 10,
+              "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10."
             },
             "required": false,
-            "description": "Number of workflows to return, ranked by performance. Defaults to 1.",
+            "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10.",
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedWorkflowGroupBy"
+            },
+            "required": false,
+            "description": "Group results by section. When omitted, returns a flat ranked list.",
+            "name": "groupBy",
             "in": "query"
           },
           {
@@ -2987,11 +3070,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Best workflow found",
+            "description": "Ranked workflows (flat list or grouped by section)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BestWorkflowResponse"
+                  "$ref": "#/components/schemas/RankedWorkflowResponse"
                 }
               }
             }
@@ -3007,7 +3090,7 @@
             }
           },
           "404": {
-            "description": "No workflows found matching the criteria or no completed runs",
+            "description": "No workflows found matching the criteria",
             "content": {
               "application/json": {
                 "schema": {
@@ -3018,6 +3101,124 @@
           },
           "502": {
             "description": "External service (runs-service or email-gateway-service) unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/best": {
+      "get": {
+        "summary": "Get hero records — best cost-per-open and best cost-per-reply",
+        "description": "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. Stats are aggregated across the full upgrade chain. Use this for leaderboard hero/headline stats.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID. When omitted, searches across all orgs."
+            },
+            "required": false,
+            "description": "Organization ID. When omitted, searches across all orgs.",
+            "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+            },
+            "required": false,
+            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+            },
+            "required": false,
+            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "name": "x-workflow-name",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hero records found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BestWorkflowResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active workflows found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External service unavailable",
             "content": {
               "application/json": {
                 "schema": {
