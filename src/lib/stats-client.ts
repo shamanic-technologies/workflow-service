@@ -174,7 +174,65 @@ export async function fetchEmailStats(
     );
   }
 
-  return res.json() as Promise<EmailStatsResponse>;
+  const body = (await res.json()) as Record<string, unknown>;
+  const rawTransactional = (body.transactional ?? {}) as Record<string, unknown>;
+  const rawBroadcast = (body.broadcast ?? {}) as Record<string, unknown>;
+
+  return {
+    transactional: mapGatewayStats(rawTransactional),
+    broadcast: mapGatewayStats(rawBroadcast),
+  };
+}
+
+// --- Public: fetch email stats (no identity) ---
+
+/** Map email-gateway field names to our internal names. Handles both conventions:
+ *  emailsOpened (GET /stats, GET /stats/public) and opened (POST /stats) */
+export function mapGatewayStats(raw: Record<string, unknown>): EmailStats {
+  return {
+    sent: Number(raw.emailsSent ?? raw.sent ?? 0),
+    delivered: Number(raw.emailsDelivered ?? raw.delivered ?? 0),
+    opened: Number(raw.emailsOpened ?? raw.opened ?? 0),
+    clicked: Number(raw.emailsClicked ?? raw.clicked ?? 0),
+    replied: Number(raw.emailsReplied ?? raw.replied ?? 0),
+    bounced: Number(raw.emailsBounced ?? raw.bounced ?? 0),
+    unsubscribed: Number(raw.repliesUnsubscribe ?? raw.unsubscribed ?? 0),
+    recipients: Number(raw.recipients ?? 0),
+  };
+}
+
+export async function fetchEmailStatsPublic(
+  runIds: string[],
+): Promise<EmailStatsResponse> {
+  if (runIds.length === 0) {
+    return { transactional: { ...EMPTY_STATS }, broadcast: { ...EMPTY_STATS } };
+  }
+
+  const { baseUrl, apiKey } = getEmailGatewayConfig();
+
+  const res = await fetch(
+    `${baseUrl}/stats/public?runIds=${runIds.join(",")}`,
+    {
+      method: "GET",
+      headers: { "x-api-key": apiKey },
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `email-gateway-service error: GET /stats/public -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  const body = (await res.json()) as Record<string, unknown>;
+  const rawTransactional = (body.transactional ?? {}) as Record<string, unknown>;
+  const rawBroadcast = (body.broadcast ?? {}) as Record<string, unknown>;
+
+  return {
+    transactional: mapGatewayStats(rawTransactional),
+    broadcast: mapGatewayStats(rawBroadcast),
+  };
 }
 
 // --- Public: fetch email stats (no identity) ---
