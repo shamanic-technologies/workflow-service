@@ -1268,6 +1268,36 @@
           "bestCostPerReply"
         ]
       },
+      "PublicRankedWorkflowItem": {
+        "type": "object",
+        "properties": {
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowMetadata"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/WorkflowStats"
+          }
+        },
+        "required": [
+          "workflow",
+          "stats"
+        ]
+      },
+      "PublicRankedWorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicRankedWorkflowItem"
+            },
+            "description": "Workflows ranked by performance, best first."
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
       "ExecuteByNameRequest": {
         "type": "object",
         "properties": {
@@ -3194,6 +3224,201 @@
             "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
             "name": "x-workflow-name",
             "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hero records found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BestWorkflowResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active workflows found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/workflows/ranked": {
+      "get": {
+        "summary": "Public: Get workflows ranked by cost-per-outcome",
+        "description": "Public version of GET /workflows/ranked. No authentication required. Returns workflows ranked by performance with stats, but without DAG details. Stats are aggregated across the full upgrade chain. Use `groupBy=section` to group results by category-channel-audienceType.",
+        "tags": [
+          "Public"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID. When omitted, searches across all orgs."
+            },
+            "required": false,
+            "description": "Organization ID. When omitted, searches across all orgs.",
+            "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/WorkflowCategory"
+                },
+                {
+                  "description": "Filter workflows by category."
+                }
+              ]
+            },
+            "required": false,
+            "description": "Filter workflows by category.",
+            "name": "category",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/WorkflowChannel"
+                },
+                {
+                  "description": "Filter workflows by channel."
+                }
+              ]
+            },
+            "required": false,
+            "description": "Filter workflows by channel.",
+            "name": "channel",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/WorkflowAudienceType"
+                },
+                {
+                  "description": "Filter workflows by audience type."
+                }
+              ]
+            },
+            "required": false,
+            "description": "Filter workflows by audience type.",
+            "name": "audienceType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedWorkflowObjective"
+            },
+            "required": false,
+            "description": "Which metric to optimize for. Defaults to 'replies'.",
+            "name": "objective",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10,
+              "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10."
+            },
+            "required": false,
+            "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedWorkflowGroupBy"
+            },
+            "required": false,
+            "description": "Group results by section. When omitted, returns a flat ranked list.",
+            "name": "groupBy",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked workflows (flat list or grouped by section)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicRankedWorkflowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No workflows found matching the criteria",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/workflows/best": {
+      "get": {
+        "summary": "Public: Get hero records — best cost-per-open and best cost-per-reply",
+        "description": "Public version of GET /workflows/best. No authentication required. Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. Stats are aggregated across the full upgrade chain.",
+        "tags": [
+          "Public"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID. When omitted, searches across all orgs."
+            },
+            "required": false,
+            "description": "Organization ID. When omitted, searches across all orgs.",
+            "name": "orgId",
+            "in": "query"
           }
         ],
         "responses": {

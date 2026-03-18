@@ -474,6 +474,32 @@ export const RankedWorkflowGroupedResponseSchema = z
   })
   .openapi("RankedWorkflowGroupedResponse");
 
+// --- Public (no-auth) variants — same structure but without DAG ---
+
+export const PublicRankedWorkflowItemSchema = z
+  .object({
+    workflow: WorkflowMetadataSchema.describe("Workflow metadata."),
+    stats: WorkflowStatsSchema.describe("Aggregated performance stats for this workflow."),
+  })
+  .openapi("PublicRankedWorkflowItem");
+
+export const PublicRankedSectionSchema = z
+  .object({
+    sectionKey: z.string().describe("Section key in the format category-channel-audienceType."),
+    category: WorkflowCategorySchema,
+    channel: WorkflowChannelSchema,
+    audienceType: WorkflowAudienceTypeSchema,
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows in this section."),
+    workflows: z.array(PublicRankedWorkflowItemSchema).describe("Workflows in this section, ranked by performance."),
+  })
+  .openapi("PublicRankedSection");
+
+export const PublicRankedWorkflowResponseSchema = z
+  .object({
+    results: z.array(PublicRankedWorkflowItemSchema).describe("Workflows ranked by performance, best first."),
+  })
+  .openapi("PublicRankedWorkflowResponse");
+
 // --- Best Workflow schemas (hero records) ---
 
 export const BestWorkflowQuerySchema = z
@@ -1025,6 +1051,73 @@ registry.registerPath({
   security: [{ apiKey: [] }],
   request: {
     headers: IdentityHeaders,
+    query: BestWorkflowQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Hero records found",
+      content: {
+        "application/json": { schema: BestWorkflowResponseSchema },
+      },
+    },
+    404: {
+      description: "No active workflows found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "External service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+// --- Public endpoints (no auth, no identity headers) ---
+
+registry.registerPath({
+  method: "get",
+  path: "/public/workflows/ranked",
+  summary: "Public: Get workflows ranked by cost-per-outcome",
+  description:
+    "Public version of GET /workflows/ranked. No authentication required. " +
+    "Returns workflows ranked by performance with stats, but without DAG details. " +
+    "Stats are aggregated across the full upgrade chain. " +
+    "Use `groupBy=section` to group results by category-channel-audienceType.",
+  tags: ["Public"],
+  request: {
+    query: RankedWorkflowQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Ranked workflows (flat list or grouped by section)",
+      content: {
+        "application/json": { schema: PublicRankedWorkflowResponseSchema },
+      },
+    },
+    404: {
+      description: "No workflows found matching the criteria",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    400: {
+      description: "Missing or invalid query parameters",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "External service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/public/workflows/best",
+  summary: "Public: Get hero records — best cost-per-open and best cost-per-reply",
+  description:
+    "Public version of GET /workflows/best. No authentication required. " +
+    "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. " +
+    "Stats are aggregated across the full upgrade chain.",
+  tags: ["Public"],
+  request: {
     query: BestWorkflowQuerySchema,
   },
   responses: {
