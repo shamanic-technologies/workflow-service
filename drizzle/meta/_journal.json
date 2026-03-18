@@ -120,6 +120,13 @@
       "when": 1772448306410,
       "tag": "0016_add_forked_from",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1772534706410,
+      "tag": "0017_rename_brand_id_to_created_for_brand_id",
+      "breakpoints": true
     }
   ]
 }
