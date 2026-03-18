@@ -21,11 +21,10 @@ export function requireIdentity(
   const orgId = req.headers["x-org-id"] as string | undefined;
   const userId = req.headers["x-user-id"] as string | undefined;
   const runId = req.headers["x-run-id"] as string | undefined;
-  const brandId = req.headers["x-brand-id"] as string | undefined;
 
-  if (!orgId || !userId || !runId || !brandId) {
+  if (!orgId || !userId || !runId) {
     res.status(400).json({
-      error: "x-org-id, x-user-id, x-run-id, and x-brand-id headers are required",
+      error: "x-org-id, x-user-id, and x-run-id headers are required",
     });
     return;
   }
@@ -33,13 +32,30 @@ export function requireIdentity(
   res.locals.orgId = orgId;
   res.locals.userId = userId;
   res.locals.runId = runId;
-  res.locals.brandId = brandId;
 
-  // Optional tracking headers — read if present, never required
+  // Optional headers — read if present, never required
+  const brandId = req.headers["x-brand-id"] as string | undefined;
+  if (brandId) res.locals.brandId = brandId;
+
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
   const workflowName = req.headers["x-workflow-name"] as string | undefined;
   if (campaignId) res.locals.campaignId = campaignId;
   if (workflowName) res.locals.workflowName = workflowName;
 
+  next();
+}
+
+export function requireBrandId(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const brandId = req.headers["x-brand-id"] as string | undefined;
+  if (!brandId && !req.body?.inputs?.brandId) {
+    res.status(400).json({
+      error: "x-brand-id header or inputs.brandId is required for execution endpoints",
+    });
+    return;
+  }
   next();
 }
