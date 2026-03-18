@@ -389,8 +389,22 @@ export const BestWorkflowQuerySchema = z
     channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
     audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
     objective: BestWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
+    limit: z.coerce.number().int().min(1).max(100).default(1).describe("Number of workflows to return, ranked by performance. Defaults to 1."),
   })
   .openapi("BestWorkflowQuery");
+
+export const EmailStatsSchema = z
+  .object({
+    sent: z.number().describe("Total emails sent."),
+    delivered: z.number().describe("Total emails delivered."),
+    opened: z.number().describe("Total emails opened."),
+    clicked: z.number().describe("Total link clicks."),
+    replied: z.number().describe("Total replies received."),
+    bounced: z.number().describe("Total emails bounced."),
+    unsubscribed: z.number().describe("Total unsubscribes."),
+    recipients: z.number().describe("Total unique recipients."),
+  })
+  .openapi("EmailStats");
 
 export const BestWorkflowStatsSchema = z
   .object({
@@ -398,22 +412,33 @@ export const BestWorkflowStatsSchema = z
     totalOutcomes: z.number().describe("Total replies or clicks (depending on objective) across all runs."),
     costPerOutcome: z.number().nullable().describe("Cost per reply or cost per click in USD cents. Null if no outcomes yet."),
     completedRuns: z.number().describe("Number of completed runs used in the calculation."),
+    email: z.object({
+      transactional: EmailStatsSchema.describe("Aggregated transactional email stats across all runs."),
+      broadcast: EmailStatsSchema.describe("Aggregated broadcast email stats across all runs."),
+    }).describe("Detailed email engagement stats aggregated across the upgrade chain."),
   })
   .openapi("BestWorkflowStats");
 
-export const BestWorkflowResponseSchema = z
+export const BestWorkflowResultItemSchema = z
   .object({
     workflow: z.object({
       id: z.string().uuid(),
       name: z.string(),
+      displayName: z.string().nullable(),
       category: WorkflowCategorySchema,
       channel: WorkflowChannelSchema,
       audienceType: WorkflowAudienceTypeSchema,
       signature: z.string(),
       signatureName: z.string(),
-    }).describe("The best-performing workflow metadata."),
-    dag: DAGSchema.describe("The DAG definition of the best workflow."),
+    }).describe("Workflow metadata."),
+    dag: DAGSchema.describe("The DAG definition of the workflow."),
     stats: BestWorkflowStatsSchema.describe("Aggregated performance stats for this workflow."),
+  })
+  .openapi("BestWorkflowResultItem");
+
+export const BestWorkflowResponseSchema = z
+  .object({
+    results: z.array(BestWorkflowResultItemSchema).describe("Workflows ranked by performance, best first."),
   })
   .openapi("BestWorkflowResponse");
 
@@ -897,11 +922,12 @@ registry.registerPath({
 registry.registerPath({
   method: "get",
   path: "/workflows/best",
-  summary: "Get the best-performing workflow by cost-per-outcome",
+  summary: "Get the best-performing workflows by cost-per-outcome",
   description:
-    "Returns the single best workflow for the given category/channel/audienceType, " +
-    "ranked by lowest cost-per-reply or cost-per-click. " +
-    "Uses run cost data from runs-service and email engagement stats from email-gateway-service.",
+    "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. " +
+    "Stats are aggregated across the full upgrade chain (deprecated predecessors included). " +
+    "Use `limit` to control how many results are returned (default 1). " +
+    "Workflows with no completed runs are included with zeroed stats.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {

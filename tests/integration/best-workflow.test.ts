@@ -188,12 +188,16 @@ describe("GET /workflows/best", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.workflow.id).toBe("wf-a");
-    expect(res.body.dag).toBeDefined();
-    expect(res.body.stats.totalCostInUsdCents).toBe(300);
-    expect(res.body.stats.totalOutcomes).toBe(10);
-    expect(res.body.stats.costPerOutcome).toBe(30);
-    expect(res.body.stats.completedRuns).toBe(2);
+    expect(res.body.results).toHaveLength(1);
+    const best = res.body.results[0];
+    expect(best.workflow.id).toBe("wf-a");
+    expect(best.dag).toBeDefined();
+    expect(best.stats.totalCostInUsdCents).toBe(300);
+    expect(best.stats.totalOutcomes).toBe(10);
+    expect(best.stats.costPerOutcome).toBe(30);
+    expect(best.stats.completedRuns).toBe(2);
+    expect(best.stats.email.transactional.replied).toBe(10);
+    expect(best.stats.email.broadcast).toEqual(EMPTY_STATS);
   });
 
   it("uses clicks objective when specified", async () => {
@@ -215,8 +219,9 @@ describe("GET /workflows/best", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.stats.totalOutcomes).toBe(50);
-    expect(res.body.stats.costPerOutcome).toBe(10);
+    const best = res.body.results[0];
+    expect(best.stats.totalOutcomes).toBe(50);
+    expect(best.stats.costPerOutcome).toBe(10);
   });
 
   it("accepts partial filters (all optional)", async () => {
@@ -247,8 +252,8 @@ describe("GET /workflows/best", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.workflow.id).toBe("wf-nofilter");
-    expect(res.body.stats.totalOutcomes).toBe(5);
+    expect(res.body.results[0].workflow.id).toBe("wf-nofilter");
+    expect(res.body.results[0].stats.totalOutcomes).toBe(5);
   });
 
   it("returns 404 when no workflows match", async () => {
@@ -259,19 +264,6 @@ describe("GET /workflows/best", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/No workflows found/);
-  });
-
-  it("returns 404 when no completed runs exist", async () => {
-    mockWorkflowRows.push(makeWorkflow({ id: "wf-a" }));
-    // No runs in mockWorkflowRunRows
-
-    const res = await request
-      .get("/workflows/best")
-      .query(BASE_QUERY)
-      .set(AUTH);
-
-    expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/No completed runs/);
   });
 
   it("returns 502 when email-gateway-service fails", async () => {
@@ -332,8 +324,8 @@ describe("GET /workflows/best", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.stats.costPerOutcome).toBeNull();
-    expect(res.body.stats.completedRuns).toBe(1);
+    expect(res.body.results[0].stats.costPerOutcome).toBeNull();
+    expect(res.body.results[0].stats.completedRuns).toBe(1);
   });
 
   it("includes runs from deprecated predecessor in stats", async () => {
@@ -361,9 +353,9 @@ describe("GET /workflows/best", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.workflow.id).toBe("wf-active");
-    expect(res.body.stats.totalCostInUsdCents).toBe(300);
-    expect(res.body.stats.completedRuns).toBe(2);
+    expect(res.body.results[0].workflow.id).toBe("wf-active");
+    expect(res.body.results[0].stats.totalCostInUsdCents).toBe(300);
+    expect(res.body.results[0].stats.completedRuns).toBe(2);
   });
 
   it("aggregates across deep upgrade chain (3 levels)", async () => {
@@ -394,9 +386,9 @@ describe("GET /workflows/best", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.workflow.id).toBe("wf-v3");
-    expect(res.body.stats.totalCostInUsdCents).toBe(300);
-    expect(res.body.stats.completedRuns).toBe(3);
+    expect(res.body.results[0].workflow.id).toBe("wf-v3");
+    expect(res.body.results[0].stats.totalCostInUsdCents).toBe(300);
+    expect(res.body.results[0].stats.completedRuns).toBe(3);
   });
 
   it("returns only active workflow in response even when deprecated predecessors exist", async () => {
@@ -421,6 +413,121 @@ describe("GET /workflows/best", () => {
 
     expect(res.status).toBe(200);
     // The returned workflow is the active one, not the deprecated predecessor
-    expect(res.body.workflow.id).toBe("wf-active");
+    expect(res.body.results[0].workflow.id).toBe("wf-active");
+  });
+
+  it("returns multiple workflows when limit > 1", async () => {
+    const wfA = makeWorkflow({ id: "wf-a", signatureName: "alpha" });
+    const wfB = makeWorkflow({ id: "wf-b", signatureName: "beta" });
+    const wfC = makeWorkflow({ id: "wf-c", signatureName: "gamma" });
+    mockWorkflowRows.push(wfA, wfB, wfC);
+    mockWorkflowRunRows.push(
+      makeRun("wf-a", "ext-run-a"),
+      makeRun("wf-b", "ext-run-b"),
+      makeRun("wf-c", "ext-run-c"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-a", totalCostInUsdCents: 100 },
+      { runId: "ext-run-b", totalCostInUsdCents: 200 },
+      { runId: "ext-run-c", totalCostInUsdCents: 50 },
+    ]);
+    // wf-a: cost=100, replies=10, cpo=10
+    // wf-b: cost=200, replies=5, cpo=40
+    // wf-c: cost=50, replies=25, cpo=2
+    mockFetchEmailStats
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, replied: 10 }, broadcast: { ...EMPTY_STATS } })
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, replied: 5 }, broadcast: { ...EMPTY_STATS } })
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, replied: 25 }, broadcast: { ...EMPTY_STATS } });
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ ...BASE_QUERY, limit: "3" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(3);
+    // Sorted by costPerOutcome: wf-c (2), wf-a (10), wf-b (40)
+    expect(res.body.results[0].workflow.id).toBe("wf-c");
+    expect(res.body.results[1].workflow.id).toBe("wf-a");
+    expect(res.body.results[2].workflow.id).toBe("wf-b");
+  });
+
+  it("includes all active workflows with their stats when limit > 1", async () => {
+    // The mock DB returns all rows regardless of where clause, so both workflows
+    // get the same runs. This test verifies that all active workflows appear in results.
+    const wfA = makeWorkflow({ id: "wf-a-stats" });
+    const wfB = makeWorkflow({ id: "wf-b-stats" });
+    mockWorkflowRows.push(wfA, wfB);
+    mockWorkflowRunRows.push(
+      makeRun("wf-a-stats", "ext-run-1"),
+      makeRun("wf-b-stats", "ext-run-2"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-1", totalCostInUsdCents: 100 },
+      { runId: "ext-run-2", totalCostInUsdCents: 200 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ ...BASE_QUERY, limit: "10" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2);
+    // Both workflows should have email stats included
+    expect(res.body.results[0].stats.email.transactional.replied).toBe(5);
+    expect(res.body.results[1].stats.email.transactional.replied).toBe(5);
+  });
+
+  it("includes displayName in workflow response", async () => {
+    const wf = makeWorkflow({ id: "wf-dn", displayName: "sales-email-cold-outreach-jasmine" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-dn", "ext-run-dn"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-dn", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query(BASE_QUERY)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results[0].workflow.displayName).toBe("sales-email-cold-outreach-jasmine");
+  });
+
+  it("respects limit to cap results", async () => {
+    for (let i = 0; i < 5; i++) {
+      const wf = makeWorkflow({ id: `wf-${i}` });
+      mockWorkflowRows.push(wf);
+      mockWorkflowRunRows.push(makeRun(`wf-${i}`, `ext-run-${i}`));
+    }
+
+    mockFetchRunCosts.mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ runId: `ext-run-${i}`, totalCostInUsdCents: 100 }))
+    );
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ ...BASE_QUERY, limit: "2" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2);
   });
 });
