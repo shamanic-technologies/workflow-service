@@ -104,6 +104,7 @@ describe("POST /workflows", () => {
       .set(AUTH)
       .send({
         name: "Test Flow",
+        brandId: "brand-test-001",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -128,6 +129,7 @@ describe("POST /workflows", () => {
       .set(AUTH)
       .send({
         name: "Multi-Channel Flow",
+        brandId: "brand-test-001",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -145,6 +147,7 @@ describe("POST /workflows", () => {
       .set(AUTH)
       .send({
         name: "Bad Flow",
+        brandId: "brand-test-001",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -154,6 +157,40 @@ describe("POST /workflows", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Invalid DAG");
     expect(res.body.details).toBeDefined();
+  });
+
+  it("rejects deploy without brandId", async () => {
+    const res = await request
+      .put("/workflows/deploy")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            category: "sales",
+            channel: "email",
+            audienceType: "cold-outreach",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Validation error");
+  });
+
+  it("rejects POST /workflows without brandId", async () => {
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({
+        name: "No Brand",
+        category: "sales",
+        channel: "email",
+        audienceType: "cold-outreach",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(400);
   });
 
   it("requires authentication", async () => {
@@ -247,6 +284,7 @@ describe("GET /workflows", () => {
 });
 
 const DEPLOY_ITEM = {
+  brandId: "brand-test-001",
   category: "sales" as const,
   channel: "email" as const,
   audienceType: "cold-outreach" as const,

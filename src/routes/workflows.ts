@@ -514,6 +514,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           .update(workflows)
           .set({
             orgId,
+            brandId: wf.brandId,
             description: wf.description ?? existing.description,
             category: wf.category,
             channel: wf.channel,
@@ -568,6 +569,7 @@ router.put("/workflows/deploy", requireApiKey, async (req, res) => {
           .insert(workflows)
           .values({
             orgId,
+            brandId: wf.brandId,
             name,
             displayName: name,
             description: wf.description,
