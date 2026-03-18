@@ -650,7 +650,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, category, channel, audienceType, objective } = query.data;
+    const { orgId, category, channel, audienceType, objective, limit } = query.data;
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
@@ -711,18 +711,19 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       allRunIds.push(...runIds);
     }
 
-    if (allRunIds.length === 0) {
-      res.status(404).json({
-        error: "No completed runs found for any matching workflow",
-      });
-      return;
+    // 3. Batch fetch costs from runs-service (only if there are runs)
+    const costByRunId = new Map<string, number>();
+    if (allRunIds.length > 0) {
+      const runCosts = await fetchRunCosts(allRunIds, identity);
+      for (const c of runCosts) {
+        costByRunId.set(c.runId, c.totalCostInUsdCents);
+      }
     }
 
-    // 3. Batch fetch costs from runs-service
-    const runCosts = await fetchRunCosts(allRunIds, identity);
-    const costByRunId = new Map(
-      runCosts.map((c) => [c.runId, c.totalCostInUsdCents])
-    );
+    const EMPTY_EMAIL_STATS = {
+      sent: 0, delivered: 0, opened: 0, clicked: 0,
+      replied: 0, bounced: 0, unsubscribed: 0, recipients: 0,
+    };
 
     // 4. Per-workflow: compute cost + fetch email stats
     const workflowScores: Array<{
@@ -731,11 +732,23 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       totalOutcomes: number;
       costPerOutcome: number | null;
       completedRuns: number;
+      emailStats: { transactional: typeof EMPTY_EMAIL_STATS; broadcast: typeof EMPTY_EMAIL_STATS };
     }> = [];
 
     for (const wf of activeWorkflows) {
-      const runIds = workflowRunsByWfId[wf.id];
-      if (!runIds || runIds.length === 0) continue;
+      const runIds = workflowRunsByWfId[wf.id] ?? [];
+
+      if (runIds.length === 0) {
+        workflowScores.push({
+          workflow: wf,
+          totalCost: 0,
+          totalOutcomes: 0,
+          costPerOutcome: null,
+          completedRuns: 0,
+          emailStats: { transactional: { ...EMPTY_EMAIL_STATS }, broadcast: { ...EMPTY_EMAIL_STATS } },
+        });
+        continue;
+      }
 
       const totalCost = runIds.reduce(
         (sum, id) => sum + (costByRunId.get(id) ?? 0),
@@ -756,12 +769,11 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
         totalOutcomes: outcomes,
         costPerOutcome,
         completedRuns: runIds.length,
+        emailStats: {
+          transactional: stats.transactional ?? { ...EMPTY_EMAIL_STATS },
+          broadcast: stats.broadcast ?? { ...EMPTY_EMAIL_STATS },
+        },
       });
-    }
-
-    if (workflowScores.length === 0) {
-      res.status(404).json({ error: "No workflows with completed runs found" });
-      return;
     }
 
     // 5. Sort: lowest costPerOutcome first; null last (fallback: most runs)
@@ -774,25 +786,29 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       return b.completedRuns - a.completedRuns;
     });
 
-    // 6. Return the best workflow
-    const best = workflowScores[0];
+    // 6. Return ranked results up to limit
+    const top = workflowScores.slice(0, limit);
     res.json({
-      workflow: {
-        id: best.workflow.id,
-        name: best.workflow.name,
-        category: best.workflow.category,
-        channel: best.workflow.channel,
-        audienceType: best.workflow.audienceType,
-        signature: best.workflow.signature,
-        signatureName: best.workflow.signatureName,
-      },
-      dag: best.workflow.dag,
-      stats: {
-        totalCostInUsdCents: best.totalCost,
-        totalOutcomes: best.totalOutcomes,
-        costPerOutcome: best.costPerOutcome,
-        completedRuns: best.completedRuns,
-      },
+      results: top.map((entry) => ({
+        workflow: {
+          id: entry.workflow.id,
+          name: entry.workflow.name,
+          displayName: entry.workflow.displayName,
+          category: entry.workflow.category,
+          channel: entry.workflow.channel,
+          audienceType: entry.workflow.audienceType,
+          signature: entry.workflow.signature,
+          signatureName: entry.workflow.signatureName,
+        },
+        dag: entry.workflow.dag,
+        stats: {
+          totalCostInUsdCents: entry.totalCost,
+          totalOutcomes: entry.totalOutcomes,
+          costPerOutcome: entry.costPerOutcome,
+          completedRuns: entry.completedRuns,
+          email: entry.emailStats,
+        },
+      })),
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {

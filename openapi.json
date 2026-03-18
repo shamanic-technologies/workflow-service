@@ -1004,6 +1004,54 @@
           "description"
         ]
       },
+      "EmailStats": {
+        "type": "object",
+        "properties": {
+          "sent": {
+            "type": "number",
+            "description": "Total emails sent."
+          },
+          "delivered": {
+            "type": "number",
+            "description": "Total emails delivered."
+          },
+          "opened": {
+            "type": "number",
+            "description": "Total emails opened."
+          },
+          "clicked": {
+            "type": "number",
+            "description": "Total link clicks."
+          },
+          "replied": {
+            "type": "number",
+            "description": "Total replies received."
+          },
+          "bounced": {
+            "type": "number",
+            "description": "Total emails bounced."
+          },
+          "unsubscribed": {
+            "type": "number",
+            "description": "Total unsubscribes."
+          },
+          "recipients": {
+            "type": "number",
+            "description": "Total unique recipients."
+          }
+        },
+        "required": [
+          "sent",
+          "delivered",
+          "opened",
+          "clicked",
+          "replied",
+          "bounced",
+          "unsubscribed",
+          "recipients"
+        ],
+        "description": "Aggregated transactional email stats across all runs."
+      },
       "BestWorkflowStats": {
         "type": "object",
         "properties": {
@@ -1023,17 +1071,41 @@
           "completedRuns": {
             "type": "number",
             "description": "Number of completed runs used in the calculation."
+          },
+          "email": {
+            "type": "object",
+            "properties": {
+              "transactional": {
+                "$ref": "#/components/schemas/EmailStats"
+              },
+              "broadcast": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/EmailStats"
+                  },
+                  {
+                    "description": "Aggregated broadcast email stats across all runs."
+                  }
+                ]
+              }
+            },
+            "required": [
+              "transactional",
+              "broadcast"
+            ],
+            "description": "Detailed email engagement stats aggregated across the upgrade chain."
           }
         },
         "required": [
           "totalCostInUsdCents",
           "totalOutcomes",
           "costPerOutcome",
-          "completedRuns"
+          "completedRuns",
+          "email"
         ],
         "description": "Aggregated performance stats for this workflow."
       },
-      "BestWorkflowResponse": {
+      "BestWorkflowResultItem": {
         "type": "object",
         "properties": {
           "workflow": {
@@ -1045,6 +1117,10 @@
               },
               "name": {
                 "type": "string"
+              },
+              "displayName": {
+                "type": "string",
+                "nullable": true
               },
               "category": {
                 "$ref": "#/components/schemas/WorkflowCategory"
@@ -1065,13 +1141,14 @@
             "required": [
               "id",
               "name",
+              "displayName",
               "category",
               "channel",
               "audienceType",
               "signature",
               "signatureName"
             ],
-            "description": "The best-performing workflow metadata."
+            "description": "Workflow metadata."
           },
           "dag": {
             "allOf": [
@@ -1079,7 +1156,7 @@
                 "$ref": "#/components/schemas/DAG"
               },
               {
-                "description": "The DAG definition of the best workflow."
+                "description": "The DAG definition of the workflow."
               }
             ]
           },
@@ -1091,6 +1168,21 @@
           "workflow",
           "dag",
           "stats"
+        ]
+      },
+      "BestWorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BestWorkflowResultItem"
+            },
+            "description": "Workflows ranked by performance, best first."
+          }
+        },
+        "required": [
+          "results"
         ]
       },
       "BestWorkflowObjective": {
@@ -2741,8 +2833,8 @@
     },
     "/workflows/best": {
       "get": {
-        "summary": "Get the best-performing workflow by cost-per-outcome",
-        "description": "Returns the single best workflow for the given category/channel/audienceType, ranked by lowest cost-per-reply or cost-per-click. Uses run cost data from runs-service and email engagement stats from email-gateway-service.",
+        "summary": "Get the best-performing workflows by cost-per-outcome",
+        "description": "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. Stats are aggregated across the full upgrade chain (deprecated predecessors included). Use `limit` to control how many results are returned (default 1). Workflows with no completed runs are included with zeroed stats.",
         "tags": [
           "Workflows"
         ],
@@ -2817,6 +2909,19 @@
             "required": false,
             "description": "Which metric to optimize for. Defaults to 'replies'.",
             "name": "objective",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 1,
+              "description": "Number of workflows to return, ranked by performance. Defaults to 1."
+            },
+            "required": false,
+            "description": "Number of workflows to return, ranked by performance. Defaults to 1.",
+            "name": "limit",
             "in": "query"
           },
           {
