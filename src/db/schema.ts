@@ -30,6 +30,7 @@ export const workflows = pgTable(
     tags: jsonb("tags").default([]),
     status: text("status").notNull().default("active"),
     upgradedTo: uuid("upgraded_to"),
+    forkedFrom: uuid("forked_from"),
     createdByUserId: text("created_by_user_id"),
     createdByRunId: text("created_by_run_id"),
     windmillFlowPath: text("windmill_flow_path"),

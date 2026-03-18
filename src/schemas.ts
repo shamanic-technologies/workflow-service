@@ -153,6 +153,7 @@ export const WorkflowResponseSchema = z
     dag: z.unknown().describe("The DAG definition as submitted."),
     status: z.enum(["active", "deprecated"]).describe("Workflow lifecycle status. Only active workflows can be executed."),
     upgradedTo: z.string().uuid().nullable().describe("If deprecated, the ID of the replacement workflow."),
+    forkedFrom: z.string().uuid().nullable().describe("If this workflow was forked from another, the ID of the original workflow."),
     createdByUserId: z.string().nullable().describe("User ID that created this workflow."),
     createdByRunId: z.string().nullable().describe("Run ID that created this workflow."),
     windmillFlowPath: z.string().nullable().describe("Internal Windmill flow path (managed automatically)."),
@@ -607,7 +608,12 @@ registry.registerPath({
 registry.registerPath({
   method: "put",
   path: "/workflows/{id}",
-  summary: "Update a workflow",
+  summary: "Fork a workflow with modifications",
+  description:
+    "Creates a new workflow based on an existing one with a modified DAG. " +
+    "The original workflow remains active and unchanged. " +
+    "If only metadata (name, description, tags) is changed without a new DAG, the update is applied in-place. " +
+    "Returns the new forked workflow with a new name and signature.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
@@ -619,12 +625,20 @@ registry.registerPath({
     },
   },
   responses: {
+    201: {
+      description: "Workflow forked (new workflow created with modified DAG)",
+      content: { "application/json": { schema: WorkflowResponseSchema } },
+    },
     200: {
-      description: "Workflow updated",
+      description: "Workflow updated in-place (metadata only, no DAG change)",
       content: { "application/json": { schema: WorkflowResponseSchema } },
     },
     404: {
       description: "Not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "A workflow with this DAG signature already exists",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

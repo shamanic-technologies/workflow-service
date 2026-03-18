@@ -931,10 +931,11 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
   }
 });
 
-// PUT /workflows/:id — Update a workflow
+// PUT /workflows/:id — Fork a workflow (DAG change creates a new workflow; metadata-only updates in-place)
 router.put("/workflows/:id", requireApiKey, async (req, res) => {
   try {
     const body = UpdateWorkflowSchema.parse(req.body);
+    const orgId = res.locals.orgId as string;
 
     const [existing] = await db
       .select()
@@ -946,28 +947,42 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       return;
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (body.name) updates.name = body.name;
-    if (body.description !== undefined) updates.description = body.description;
-    if (body.tags !== undefined) updates.tags = body.tags;
+    // No DAG provided — metadata-only in-place update
+    if (!body.dag) {
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (body.name) updates.name = body.name;
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.tags !== undefined) updates.tags = body.tags;
 
-    if (body.dag) {
-      const dag = body.dag as DAG;
-      const validation = validateDAG(dag);
-      if (!validation.valid) {
-        res
-          .status(400)
-          .json({ error: "Invalid DAG", details: validation.errors });
-        return;
-      }
+      const [updated] = await db
+        .update(workflows)
+        .set(updates)
+        .where(eq(workflows.id, req.params.id))
+        .returning();
 
-      updates.dag = body.dag;
-      updates.signature = computeDAGSignature(body.dag);
+      res.json(formatWorkflow(updated));
+      return;
+    }
 
-      // Re-translate and update in Windmill
+    // DAG provided — validate it
+    const dag = body.dag as DAG;
+    const validation = validateDAG(dag);
+    if (!validation.valid) {
+      res.status(400).json({ error: "Invalid DAG", details: validation.errors });
+      return;
+    }
+
+    const newSignature = computeDAGSignature(body.dag);
+
+    // Same signature — no structural change, update in-place
+    if (newSignature === existing.signature) {
+      const updates: Record<string, unknown> = { updatedAt: new Date(), dag: body.dag };
+      if (body.name) updates.name = body.name;
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.tags !== undefined) updates.tags = body.tags;
+
       const flowName = body.name ?? existing.name;
       const openFlow = dagToOpenFlow(dag, flowName);
-
       if (existing.windmillFlowPath) {
         const client = getWindmillClient();
         if (client) {
@@ -978,28 +993,109 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
               schema: openFlow.schema,
             });
           } catch (err) {
-            console.error(
-              "[workflow-service] Failed to update flow in Windmill:",
-              err
-            );
+            console.error("[workflow-service] Failed to update flow in Windmill:", err);
           }
         }
       }
+
+      const [updated] = await db
+        .update(workflows)
+        .set(updates)
+        .where(eq(workflows.id, req.params.id))
+        .returning();
+
+      res.json(formatWorkflow(updated));
+      return;
     }
 
-    const [updated] = await db
-      .update(workflows)
-      .set(updates)
-      .where(eq(workflows.id, req.params.id))
+    // Different signature — FORK: create a new workflow, keep original untouched
+    // Check for existing active workflow with same signature (would violate unique index)
+    const [conflicting] = await db
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.signature, newSignature),
+          eq(workflows.status, "active"),
+        )
+      );
+
+    if (conflicting) {
+      res.status(409).json({
+        error: "A workflow with this DAG signature already exists",
+        existingWorkflowId: conflicting.id,
+        existingWorkflowName: conflicting.name,
+      });
+      return;
+    }
+
+    // Generate new signatureName
+    const existingWorkflows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows)
+      .where(eq(workflows.orgId, orgId));
+    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
+    const signatureName = pickSignatureName(newSignature, usedNames);
+
+    // Build new name from original's dimensions + new signatureName
+    const newName = `${existing.category}-${existing.channel}-${existing.audienceType}-${signatureName}`;
+
+    const openFlow = dagToOpenFlow(dag, newName);
+    const flowPath = generateFlowPath(orgId, newName);
+    const client = getWindmillClient();
+
+    if (client) {
+      try {
+        await client.createFlow({
+          path: flowPath,
+          summary: newName,
+          description: body.description ?? existing.description,
+          value: openFlow.value,
+          schema: openFlow.schema,
+        });
+      } catch (err) {
+        console.error("[workflow-service] Failed to create forked flow in Windmill:", err);
+      }
+    }
+
+    const [forked] = await db
+      .insert(workflows)
+      .values({
+        orgId: existing.orgId,
+        brandId: existing.brandId,
+        humanId: existing.humanId,
+        campaignId: existing.campaignId,
+        subrequestId: existing.subrequestId,
+        styleName: existing.styleName,
+        name: newName,
+        displayName: body.name ?? existing.displayName,
+        description: body.description ?? existing.description,
+        category: existing.category,
+        channel: existing.channel,
+        audienceType: existing.audienceType,
+        tags: body.tags ?? (existing.tags as string[]) ?? [],
+        signature: newSignature,
+        signatureName,
+        dag: body.dag,
+        status: "active",
+        forkedFrom: existing.id,
+        windmillFlowPath: flowPath,
+        createdByUserId: res.locals.userId as string,
+        createdByRunId: res.locals.runId as string,
+      })
       .returning();
 
-    res.json(formatWorkflow(updated));
+    console.log(
+      `[workflow-service] fork: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id})`,
+    );
+
+    res.status(201).json(formatWorkflow(forked));
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
       res.status(400).json({ error: "Validation error", details: err });
       return;
     }
-    console.error("[workflow-service] PUT error:", err);
+    console.error("[workflow-service] PUT fork error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
