@@ -807,6 +807,276 @@ describe("GET /workflows/:id/required-providers", () => {
   });
 });
 
+describe("PUT /workflows/:id — fork", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
+  });
+
+  it("forks a workflow when DAG changes (returns 201 with new ID)", async () => {
+    const originalWorkflow = {
+      id: "wf-original",
+      orgId: "org-1",
+      brandId: "brand-1",
+      humanId: null,
+      campaignId: "camp-1",
+      subrequestId: null,
+      styleName: null,
+      name: "sales-email-cold-outreach-jasmine",
+      displayName: "Jasmine Flow",
+      description: "Original description",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: ["email"],
+      signature: "aaa111",
+      signatureName: "jasmine",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: null,
+      windmillFlowPath: "f/workflows/org-1/sales_email_cold_outreach_jasmine",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Queue: 1st select = find existing workflow, 2nd = check conflicting signature, 3rd = get used signatureNames
+    mockSelectResponses.push(
+      [originalWorkflow],  // existing workflow lookup
+      [],                  // no conflicting signature
+      [{ signatureName: "jasmine" }],  // existing signatureNames in org
+    );
+
+    const res = await request
+      .put("/workflows/wf-original")
+      .set(AUTH)
+      .send({
+        dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+        description: "Forked with new DAG",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).not.toBe("wf-original");
+    expect(res.body.forkedFrom).toBe("wf-original");
+    expect(res.body.category).toBe("sales");
+    expect(res.body.channel).toBe("email");
+    expect(res.body.audienceType).toBe("cold-outreach");
+    expect(res.body.description).toBe("Forked with new DAG");
+    expect(res.body.status).toBe("active");
+    // Original should still be in mockDbRows unchanged
+    expect(originalWorkflow.status).toBe("active");
+  });
+
+  it("updates in-place when only metadata changes (no DAG)", async () => {
+    mockDbRows.push({
+      id: "wf-meta",
+      orgId: "org-1",
+      name: "sales-email-cold-outreach-maple",
+      description: "Old desc",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/wf-meta")
+      .set(AUTH)
+      .send({
+        description: "Updated description",
+        tags: ["updated"],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.description).toBe("Updated description");
+    expect(res.body.tags).toEqual(["updated"]);
+    // No forkedFrom — it's the same workflow
+    expect(res.body.forkedFrom).toBeUndefined();
+  });
+
+  it("updates in-place when DAG is provided but signature is unchanged", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(VALID_LINEAR_DAG);
+
+    mockDbRows.push({
+      id: "wf-same-sig",
+      orgId: "org-1",
+      name: "sales-email-cold-outreach-cedar",
+      signature: sig,
+      dag: VALID_LINEAR_DAG,
+      windmillFlowPath: "f/workflows/org-1/flow",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/wf-same-sig")
+      .set(AUTH)
+      .send({
+        dag: VALID_LINEAR_DAG,
+        description: "Same DAG, new desc",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.description).toBe("Same DAG, new desc");
+  });
+
+  it("returns 404 for non-existent workflow", async () => {
+    const res = await request
+      .put("/workflows/nonexistent-id")
+      .set(AUTH)
+      .send({ description: "test" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Workflow not found");
+  });
+
+  it("returns 409 when forked DAG conflicts with existing active workflow", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const conflictingSig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+
+    const originalWorkflow = {
+      id: "wf-src",
+      orgId: "org-1",
+      name: "sales-email-cold-outreach-oak",
+      signature: "different-sig",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [originalWorkflow],  // existing workflow lookup
+      [{ id: "wf-conflict", name: "sales-email-cold-outreach-birch", signature: conflictingSig, status: "active" }],  // conflicting workflow
+    );
+
+    const res = await request
+      .put("/workflows/wf-src")
+      .set(AUTH)
+      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("already exists");
+    expect(res.body.existingWorkflowId).toBe("wf-conflict");
+  });
+
+  it("forking a fork sets forkedFrom to immediate parent", async () => {
+    const fork1 = {
+      id: "wf-fork1",
+      orgId: "org-1",
+      brandId: null,
+      humanId: null,
+      campaignId: null,
+      subrequestId: null,
+      styleName: null,
+      name: "sales-email-cold-outreach-birch",
+      displayName: "Birch Flow",
+      description: "First fork",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: [],
+      signature: "bbb222",
+      signatureName: "birch",
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: "wf-original",
+      windmillFlowPath: "f/workflows/org-1/flow",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [fork1],             // existing workflow lookup
+      [],                  // no conflicting signature
+      [{ signatureName: "birch" }, { signatureName: "jasmine" }],  // existing signatureNames
+    );
+
+    const res = await request
+      .put("/workflows/wf-fork1")
+      .set(AUTH)
+      .send({ dag: VALID_LINEAR_DAG });
+
+    expect(res.status).toBe(201);
+    expect(res.body.forkedFrom).toBe("wf-fork1"); // immediate parent, not wf-original
+  });
+
+  it("inherits metadata from parent workflow", async () => {
+    const parent = {
+      id: "wf-parent",
+      orgId: "org-1",
+      brandId: "brand-xyz",
+      humanId: "human-abc",
+      campaignId: "camp-123",
+      subrequestId: "sub-456",
+      styleName: "hormozi",
+      name: "sales-email-cold-outreach-sequoia",
+      displayName: "Sequoia Flow",
+      description: "Parent description",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: ["inherited"],
+      signature: "ccc333",
+      signatureName: "sequoia",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: null,
+      windmillFlowPath: "f/workflows/org-1/flow",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [parent],
+      [],
+      [{ signatureName: "sequoia" }],
+    );
+
+    const res = await request
+      .put("/workflows/wf-parent")
+      .set(AUTH)
+      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    expect(res.status).toBe(201);
+    expect(res.body.brandId).toBe("brand-xyz");
+    expect(res.body.category).toBe("sales");
+    expect(res.body.channel).toBe("email");
+    expect(res.body.audienceType).toBe("cold-outreach");
+    expect(res.body.tags).toEqual(["inherited"]);
+  });
+
+  it("rejects invalid DAG on fork", async () => {
+    mockDbRows.push({
+      id: "wf-bad",
+      orgId: "org-1",
+      name: "sales-email-cold-outreach-pine",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .put("/workflows/wf-bad")
+      .set(AUTH)
+      .send({ dag: DAG_WITH_UNKNOWN_TYPE });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid DAG");
+  });
+});
+
 describe("POST /workflows/:id/validate", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
