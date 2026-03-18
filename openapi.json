@@ -1205,9 +1205,10 @@
       "RankedWorkflowGroupBy": {
         "type": "string",
         "enum": [
-          "section"
+          "section",
+          "brand"
         ],
-        "description": "Group results by section. When omitted, returns a flat ranked list."
+        "description": "Group results by section or brand. When omitted, returns a flat ranked list."
       },
       "BestWorkflowRecord": {
         "type": "object",
@@ -1267,6 +1268,15 @@
           "bestCostPerOpen",
           "bestCostPerReply"
         ]
+      },
+      "BestWorkflowBy": {
+        "type": "string",
+        "enum": [
+          "workflow",
+          "brand"
+        ],
+        "default": "workflow",
+        "description": "Granularity: best workflow or best brand. Defaults to 'workflow'."
       },
       "PublicRankedWorkflowItem": {
         "type": "object",
@@ -2938,7 +2948,7 @@
     "/workflows/ranked": {
       "get": {
         "summary": "Get workflows ranked by cost-per-outcome",
-        "description": "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. Stats are aggregated across the full upgrade chain (deprecated predecessors included). Use `groupBy=section` to group results by category-channel-audienceType with aggregated section stats. Workflows with no completed runs are included with zeroed stats.",
+        "description": "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. Stats are aggregated across the full upgrade chain (deprecated predecessors included). Use `groupBy=section` to group by category-channel-audienceType, or `groupBy=brand` to group by brandId. When groupBy=brand, workflows without a brandId are excluded. Workflows with no completed runs are included with zeroed stats.",
         "tags": [
           "Workflows"
         ],
@@ -2956,6 +2966,16 @@
             "required": false,
             "description": "Organization ID. When omitted, searches across all orgs.",
             "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter workflows by brand ID."
+            },
+            "required": false,
+            "description": "Filter workflows by brand ID.",
+            "name": "brandId",
             "in": "query"
           },
           {
@@ -3021,10 +3041,10 @@
               "minimum": 1,
               "maximum": 100,
               "default": 10,
-              "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10."
+              "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."
             },
             "required": false,
-            "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10.",
+            "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10.",
             "name": "limit",
             "in": "query"
           },
@@ -3033,7 +3053,7 @@
               "$ref": "#/components/schemas/RankedWorkflowGroupBy"
             },
             "required": false,
-            "description": "Group results by section. When omitted, returns a flat ranked list.",
+            "description": "Group results by section or brand. When omitted, returns a flat ranked list.",
             "name": "groupBy",
             "in": "query"
           },
@@ -3100,7 +3120,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Ranked workflows (flat list or grouped by section)",
+            "description": "Ranked workflows (flat list or grouped by section/brand)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3145,7 +3165,7 @@
     "/workflows/best": {
       "get": {
         "summary": "Get hero records — best cost-per-open and best cost-per-reply",
-        "description": "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. Stats are aggregated across the full upgrade chain. Use this for leaderboard hero/headline stats.",
+        "description": "Returns the single best workflow (or brand) for cost-per-open and cost-per-reply across all active workflows. Stats are aggregated across the full upgrade chain. Use `by=brand` to find the best brand instead of the best individual workflow. Use this for leaderboard hero/headline stats.",
         "tags": [
           "Workflows"
         ],
@@ -3163,6 +3183,25 @@
             "required": false,
             "description": "Organization ID. When omitted, searches across all orgs.",
             "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter workflows by brand ID."
+            },
+            "required": false,
+            "description": "Filter workflows by brand ID.",
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/BestWorkflowBy"
+            },
+            "required": false,
+            "description": "Granularity: best workflow or best brand. Defaults to 'workflow'.",
+            "name": "by",
             "in": "query"
           },
           {
@@ -3280,6 +3319,16 @@
           },
           {
             "schema": {
+              "type": "string",
+              "description": "Filter workflows by brand ID."
+            },
+            "required": false,
+            "description": "Filter workflows by brand ID.",
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
               "allOf": [
                 {
                   "$ref": "#/components/schemas/WorkflowCategory"
@@ -3341,10 +3390,10 @@
               "minimum": 1,
               "maximum": 100,
               "default": 10,
-              "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10."
+              "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."
             },
             "required": false,
-            "description": "Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10.",
+            "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10.",
             "name": "limit",
             "in": "query"
           },
@@ -3353,7 +3402,7 @@
               "$ref": "#/components/schemas/RankedWorkflowGroupBy"
             },
             "required": false,
-            "description": "Group results by section. When omitted, returns a flat ranked list.",
+            "description": "Group results by section or brand. When omitted, returns a flat ranked list.",
             "name": "groupBy",
             "in": "query"
           }
@@ -3418,6 +3467,25 @@
             "required": false,
             "description": "Organization ID. When omitted, searches across all orgs.",
             "name": "orgId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter workflows by brand ID."
+            },
+            "required": false,
+            "description": "Filter workflows by brand ID.",
+            "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/BestWorkflowBy"
+            },
+            "required": false,
+            "description": "Granularity: best workflow or best brand. Defaults to 'workflow'.",
+            "name": "by",
             "in": "query"
           }
         ],

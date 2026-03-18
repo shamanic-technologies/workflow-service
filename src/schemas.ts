@@ -425,21 +425,24 @@ export const RankedWorkflowObjectiveSchema = z
   .openapi("RankedWorkflowObjective");
 
 export const RankedWorkflowGroupBySchema = z
-  .enum(["section"])
+  .enum(["section", "brand"])
   .describe(
-    'Group results by section (category-channel-audienceType). Each section includes aggregated stats and its workflows ranked within.'
+    'Group results by section (category-channel-audienceType) or brand (brandId). ' +
+    'Each group includes aggregated stats and its workflows ranked within. ' +
+    'When groupBy=brand, workflows without a brandId are excluded.'
   )
   .openapi("RankedWorkflowGroupBy");
 
 export const RankedWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
+    brandId: z.string().optional().describe("Filter workflows by brand ID."),
     category: WorkflowCategorySchema.optional().describe("Filter workflows by category."),
     channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
     audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
     objective: RankedWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
-    limit: z.coerce.number().int().min(1).max(100).default(10).describe("Max workflows per section (when groupBy=section) or total (when flat). Defaults to 10."),
-    groupBy: RankedWorkflowGroupBySchema.optional().describe("Group results by section. When omitted, returns a flat ranked list."),
+    limit: z.coerce.number().int().min(1).max(100).default(10).describe("Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."),
+    groupBy: RankedWorkflowGroupBySchema.optional().describe("Group results by section or brand. When omitted, returns a flat ranked list."),
   })
   .openapi("RankedWorkflowQuery");
 
@@ -468,9 +471,18 @@ export const RankedWorkflowResponseSchema = z
   })
   .openapi("RankedWorkflowResponse");
 
+export const RankedBrandGroupSchema = z
+  .object({
+    brandId: z.string().describe("Brand ID."),
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows for this brand."),
+    workflows: z.array(RankedWorkflowItemSchema).describe("Workflows for this brand, ranked by performance."),
+  })
+  .openapi("RankedBrandGroup");
+
 export const RankedWorkflowGroupedResponseSchema = z
   .object({
-    sections: z.array(RankedSectionSchema).describe("Workflow sections grouped by category-channel-audienceType."),
+    sections: z.array(RankedSectionSchema).optional().describe("Workflow sections grouped by category-channel-audienceType."),
+    brands: z.array(RankedBrandGroupSchema).optional().describe("Workflow groups by brand ID."),
   })
   .openapi("RankedWorkflowGroupedResponse");
 
@@ -502,9 +514,19 @@ export const PublicRankedWorkflowResponseSchema = z
 
 // --- Best Workflow schemas (hero records) ---
 
+export const BestWorkflowBySchema = z
+  .enum(["workflow", "brand"])
+  .describe(
+    'Granularity for best records. "workflow" (default) finds the best individual workflow. ' +
+    '"brand" aggregates all workflows per brand and finds the best brand.'
+  )
+  .openapi("BestWorkflowBy");
+
 export const BestWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
+    brandId: z.string().optional().describe("Filter workflows by brand ID."),
+    by: BestWorkflowBySchema.default("workflow").describe("Granularity: best workflow or best brand. Defaults to 'workflow'."),
   })
   .openapi("BestWorkflowQuery");
 
@@ -518,12 +540,27 @@ export const BestWorkflowRecordSchema = z
   })
   .openapi("BestWorkflowRecord");
 
+export const BestBrandRecordSchema = z
+  .object({
+    brandId: z.string().describe("Brand ID holding the record."),
+    workflowCount: z.number().int().describe("Number of workflows aggregated for this brand."),
+    value: z.number().describe("The record value in USD cents."),
+  })
+  .openapi("BestBrandRecord");
+
 export const BestWorkflowResponseSchema = z
   .object({
     bestCostPerOpen: BestWorkflowRecordSchema.nullable().describe("Workflow with the lowest cost per email open. Null if no data."),
     bestCostPerReply: BestWorkflowRecordSchema.nullable().describe("Workflow with the lowest cost per reply. Null if no data."),
   })
   .openapi("BestWorkflowResponse");
+
+export const BestBrandResponseSchema = z
+  .object({
+    bestCostPerOpen: BestBrandRecordSchema.nullable().describe("Brand with the lowest cost per email open. Null if no data."),
+    bestCostPerReply: BestBrandRecordSchema.nullable().describe("Brand with the lowest cost per reply. Null if no data."),
+  })
+  .openapi("BestBrandResponse");
 
 // --- Provider Requirements schemas ---
 
@@ -1009,7 +1046,8 @@ registry.registerPath({
   description:
     "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. " +
     "Stats are aggregated across the full upgrade chain (deprecated predecessors included). " +
-    "Use `groupBy=section` to group results by category-channel-audienceType with aggregated section stats. " +
+    "Use `groupBy=section` to group by category-channel-audienceType, or `groupBy=brand` to group by brandId. " +
+    "When groupBy=brand, workflows without a brandId are excluded. " +
     "Workflows with no completed runs are included with zeroed stats.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
@@ -1019,7 +1057,7 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Ranked workflows (flat list or grouped by section)",
+      description: "Ranked workflows (flat list or grouped by section/brand)",
       content: {
         "application/json": { schema: RankedWorkflowResponseSchema },
       },
@@ -1044,8 +1082,9 @@ registry.registerPath({
   path: "/workflows/best",
   summary: "Get hero records — best cost-per-open and best cost-per-reply",
   description:
-    "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. " +
+    "Returns the single best workflow (or brand) for cost-per-open and cost-per-reply across all active workflows. " +
     "Stats are aggregated across the full upgrade chain. " +
+    "Use `by=brand` to find the best brand instead of the best individual workflow. " +
     "Use this for leaderboard hero/headline stats.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
