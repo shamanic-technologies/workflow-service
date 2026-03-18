@@ -151,7 +151,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
       let displayName: string;
       let styleName: string | null = null;
       let humanId: string | null = null;
-      let brandId: string | null = null;
+      let createdForBrandId: string | null = null;
 
       if (body.style) {
         styleName = body.style.name
@@ -178,7 +178,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
           humanId = body.style.humanId;
         }
         if (body.style.type === "brand" && body.style.brandId) {
-          brandId = body.style.brandId;
+          createdForBrandId = body.style.brandId;
         }
       } else {
         signatureName = pickSignatureName(signature, usedNames);
@@ -219,7 +219,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
           dag: generated.dag,
           windmillFlowPath: flowPath,
           humanId,
-          brandId,
+          createdForBrandId,
           styleName,
           createdByUserId: userId,
           createdByRunId: runId,
@@ -323,7 +323,7 @@ router.post("/workflows", requireApiKey, async (req, res) => {
       .insert(workflows)
       .values({
         orgId,
-        brandId: body.brandId,
+        createdForBrandId: body.createdForBrandId,
         campaignId: body.campaignId,
         subrequestId: body.subrequestId,
         name: body.name,
@@ -514,7 +514,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           .update(workflows)
           .set({
             orgId,
-            brandId: wf.brandId,
+            createdForBrandId: wf.createdForBrandId,
             description: wf.description ?? existing.description,
             category: wf.category,
             channel: wf.channel,
@@ -569,7 +569,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           .insert(workflows)
           .values({
             orgId,
-            brandId: wf.brandId,
+            createdForBrandId: wf.createdForBrandId,
             name,
             displayName: name,
             description: wf.description,
@@ -854,7 +854,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
           workflowId: entry.score.workflow.id,
           workflowName: entry.score.workflow.name,
           displayName: entry.score.workflow.displayName,
-          brandId: entry.score.workflow.brandId,
+          createdForBrandId: entry.score.workflow.createdForBrandId,
           value: Math.round(entry.value * 100) / 100,
         };
       }
@@ -888,7 +888,7 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       conditions.push(eq(workflows.orgId, orgId));
     }
     if (brandId && typeof brandId === "string") {
-      conditions.push(eq(workflows.brandId, brandId));
+      conditions.push(eq(workflows.createdForBrandId, brandId));
     }
     if (humanId && typeof humanId === "string") {
       conditions.push(eq(workflows.humanId, humanId));
@@ -1120,7 +1120,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       .insert(workflows)
       .values({
         orgId: existing.orgId,
-        brandId: existing.brandId,
+        createdForBrandId: existing.createdForBrandId,
         humanId: existing.humanId,
         campaignId: existing.campaignId,
         subrequestId: existing.subrequestId,

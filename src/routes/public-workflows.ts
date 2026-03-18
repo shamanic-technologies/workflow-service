@@ -239,7 +239,7 @@ router.get("/public/workflows/best", async (req, res) => {
           workflowId: entry.score.workflow.id,
           workflowName: entry.score.workflow.name,
           displayName: entry.score.workflow.displayName,
-          brandId: entry.score.workflow.brandId,
+          createdForBrandId: entry.score.workflow.createdForBrandId,
           value: Math.round(entry.value * 100) / 100,
         };
       }

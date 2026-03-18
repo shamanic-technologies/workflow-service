@@ -104,7 +104,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     orgId: "org1",
     name: "sales-email-cold-outreach-alpha",
     displayName: null,
-    brandId: null,
+    createdForBrandId: null,
     description: null,
     category: "sales",
     channel: "email",
@@ -383,8 +383,8 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.results[2].workflow.id).toBe("wf-b");
   });
 
-  it("includes displayName and brandId in workflow response", async () => {
-    const wf = makeWorkflow({ id: "wf-dn", displayName: "sales-email-cold-outreach-jasmine", brandId: "brand-123" });
+  it("includes displayName and createdForBrandId in workflow response", async () => {
+    const wf = makeWorkflow({ id: "wf-dn", displayName: "sales-email-cold-outreach-jasmine", createdForBrandId: "brand-123" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-dn", "ext-run-dn"));
 
@@ -403,7 +403,7 @@ describe("GET /workflows/ranked", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.results[0].workflow.displayName).toBe("sales-email-cold-outreach-jasmine");
-    expect(res.body.results[0].workflow.brandId).toBe("brand-123");
+    expect(res.body.results[0].workflow.createdForBrandId).toBe("brand-123");
   });
 
   it("respects limit to cap results", async () => {
@@ -569,7 +569,7 @@ describe("GET /workflows/best (hero records)", () => {
   });
 
   it("returns bestCostPerOpen and bestCostPerReply", async () => {
-    const wf = makeWorkflow({ id: "wf-hero", brandId: "brand-abc" });
+    const wf = makeWorkflow({ id: "wf-hero", createdForBrandId: "brand-abc" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-hero", "ext-run-hero"));
 
@@ -588,7 +588,7 @@ describe("GET /workflows/best (hero records)", () => {
     expect(res.status).toBe(200);
     expect(res.body.bestCostPerOpen).toBeDefined();
     expect(res.body.bestCostPerOpen.workflowId).toBe("wf-hero");
-    expect(res.body.bestCostPerOpen.brandId).toBe("brand-abc");
+    expect(res.body.bestCostPerOpen.createdForBrandId).toBe("brand-abc");
     expect(res.body.bestCostPerOpen.value).toBe(10); // 100 / 10 opens
     expect(res.body.bestCostPerReply).toBeDefined();
     expect(res.body.bestCostPerReply.workflowId).toBe("wf-hero");
@@ -656,8 +656,8 @@ describe("GET /workflows/best (hero records)", () => {
   });
 
   it("filters by brandId", async () => {
-    const wf1 = makeWorkflow({ id: "wf-b1", brandId: "brand-target" });
-    const wf2 = makeWorkflow({ id: "wf-b2", brandId: "brand-other" });
+    const wf1 = makeWorkflow({ id: "wf-b1", createdForBrandId: "brand-target" });
+    const wf2 = makeWorkflow({ id: "wf-b2", createdForBrandId: "brand-other" });
     mockWorkflowRows.push(wf1, wf2);
     mockWorkflowRunRows.push(
       makeRun("wf-b1", "ext-run-b1"),
@@ -678,7 +678,7 @@ describe("GET /workflows/best (hero records)", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen.brandId).toBe("brand-target");
+    expect(res.body.bestCostPerOpen.createdForBrandId).toBe("brand-target");
   });
 
   it("returns best brand with by=brand", async () => {
@@ -719,7 +719,7 @@ describe("GET /workflows/best (hero records)", () => {
   });
 
   it("returns null for by=brand when no branded workflows have outcomes", async () => {
-    const wf = makeWorkflow({ id: "wf-no-brand", brandId: null });
+    const wf = makeWorkflow({ id: "wf-no-brand", createdForBrandId: null });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-no-brand", "ext-run-nb"));
 

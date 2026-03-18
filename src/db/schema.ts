@@ -13,7 +13,7 @@ export const workflows = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: text("org_id").notNull(),
-    brandId: text("brand_id"),
+    createdForBrandId: text("created_for_brand_id"),
     humanId: text("human_id"),
     campaignId: text("campaign_id"),
     subrequestId: text("subrequest_id"),

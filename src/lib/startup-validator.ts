@@ -304,7 +304,7 @@ async function attemptUpgrade(
       .insert(workflows)
       .values({
         orgId: wf.orgId,
-        brandId: wf.brandId,
+        createdForBrandId: wf.createdForBrandId,
         humanId: wf.humanId,
         campaignId: wf.campaignId,
         subrequestId: wf.subrequestId,

@@ -103,7 +103,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     orgId: "org1",
     name: "sales-email-cold-outreach-alpha",
     displayName: null,
-    brandId: null,
+    createdForBrandId: null,
     description: null,
     category: "sales",
     channel: "email",
@@ -319,7 +319,7 @@ describe("GET /public/workflows/best", () => {
   });
 
   it("returns hero records without auth headers", async () => {
-    const wf = makeWorkflow({ id: "wf-hero-pub", brandId: "brand-abc" });
+    const wf = makeWorkflow({ id: "wf-hero-pub", createdForBrandId: "brand-abc" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-hero-pub", "ext-run-hero"));
 
@@ -337,7 +337,7 @@ describe("GET /public/workflows/best", () => {
     expect(res.status).toBe(200);
     expect(res.body.bestCostPerOpen).toBeDefined();
     expect(res.body.bestCostPerOpen.workflowId).toBe("wf-hero-pub");
-    expect(res.body.bestCostPerOpen.brandId).toBe("brand-abc");
+    expect(res.body.bestCostPerOpen.createdForBrandId).toBe("brand-abc");
     expect(res.body.bestCostPerOpen.value).toBe(10); // 100 / 10 opens
     expect(res.body.bestCostPerReply.workflowId).toBe("wf-hero-pub");
     expect(res.body.bestCostPerReply.value).toBe(20); // 100 / 5 replies
@@ -416,7 +416,7 @@ describe("GET /public/workflows/best", () => {
   });
 
   it("supports brandId filter", async () => {
-    const wf = makeWorkflow({ id: "wf-brand-filter", brandId: "brand-z" });
+    const wf = makeWorkflow({ id: "wf-brand-filter", createdForBrandId: "brand-z" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-brand-filter", "ext-run-bz"));
 
@@ -433,6 +433,6 @@ describe("GET /public/workflows/best", () => {
       .query({ brandId: "brand-z" });
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen.brandId).toBe("brand-z");
+    expect(res.body.bestCostPerOpen.createdForBrandId).toBe("brand-z");
   });
 });
