@@ -727,7 +727,7 @@ describe("GET /workflows/:id/required-providers", () => {
       id: "wf-legacy",
       orgId: "org-1",
       name: "Legacy Flow",
-      dag: VALID_LINEAR_DAG,
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
