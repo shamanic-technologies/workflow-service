@@ -3302,7 +3302,7 @@
     "/public/workflows/ranked": {
       "get": {
         "summary": "Public: Get workflows ranked by cost-per-outcome",
-        "description": "Public version of GET /workflows/ranked. No authentication required. Returns workflows ranked by performance with stats, but without DAG details. Stats are aggregated across the full upgrade chain. Use `groupBy=section` to group results by category-channel-audienceType.",
+        "description": "Public version of GET /workflows/ranked. No authentication required. Returns workflows ranked by performance with stats, but without DAG details. Stats are aggregated across the full upgrade chain. Use `groupBy=section` to group by category-channel-audienceType, or `groupBy=brand` to group by brandId. Use `brandId` to filter by a specific brand.",
         "tags": [
           "Public"
         ],
@@ -3454,7 +3454,7 @@
     "/public/workflows/best": {
       "get": {
         "summary": "Public: Get hero records — best cost-per-open and best cost-per-reply",
-        "description": "Public version of GET /workflows/best. No authentication required. Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. Stats are aggregated across the full upgrade chain.",
+        "description": "Public version of GET /workflows/best. No authentication required. Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. Stats are aggregated across the full upgrade chain. Use `by=brand` to find the best brand instead of the best workflow. Use `brandId` to filter by a specific brand.",
         "tags": [
           "Public"
         ],

@@ -512,6 +512,14 @@ export const PublicRankedWorkflowResponseSchema = z
   })
   .openapi("PublicRankedWorkflowResponse");
 
+export const PublicRankedBrandGroupSchema = z
+  .object({
+    brandId: z.string().describe("Brand ID."),
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows for this brand."),
+    workflows: z.array(PublicRankedWorkflowItemSchema).describe("Workflows for this brand, ranked by performance."),
+  })
+  .openapi("PublicRankedBrandGroup");
+
 // --- Best Workflow schemas (hero records) ---
 
 export const BestWorkflowBySchema = z
@@ -1120,7 +1128,8 @@ registry.registerPath({
     "Public version of GET /workflows/ranked. No authentication required. " +
     "Returns workflows ranked by performance with stats, but without DAG details. " +
     "Stats are aggregated across the full upgrade chain. " +
-    "Use `groupBy=section` to group results by category-channel-audienceType.",
+    "Use `groupBy=section` to group by category-channel-audienceType, or `groupBy=brand` to group by brandId. " +
+    "Use `brandId` to filter by a specific brand.",
   tags: ["Public"],
   request: {
     query: RankedWorkflowQuerySchema,
@@ -1154,7 +1163,9 @@ registry.registerPath({
   description:
     "Public version of GET /workflows/best. No authentication required. " +
     "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. " +
-    "Stats are aggregated across the full upgrade chain.",
+    "Stats are aggregated across the full upgrade chain. " +
+    "Use `by=brand` to find the best brand instead of the best workflow. " +
+    "Use `brandId` to filter by a specific brand.",
   tags: ["Public"],
   request: {
     query: BestWorkflowQuerySchema,
