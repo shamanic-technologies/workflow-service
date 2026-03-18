@@ -1049,7 +1049,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         await client.createFlow({
           path: flowPath,
           summary: newName,
-          description: body.description ?? existing.description,
+          description: body.description ?? existing.description ?? undefined,
           value: openFlow.value,
           schema: openFlow.schema,
         });

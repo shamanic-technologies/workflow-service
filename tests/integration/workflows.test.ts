@@ -1057,6 +1057,51 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.body.tags).toEqual(["inherited"]);
   });
 
+  it("forks successfully when existing workflow has null description", async () => {
+    const originalWorkflow = {
+      id: "wf-null-desc",
+      orgId: "org-1",
+      brandId: null,
+      humanId: null,
+      campaignId: null,
+      subrequestId: null,
+      styleName: null,
+      name: "sales-email-cold-outreach-cedar",
+      displayName: "Cedar Flow",
+      description: null,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: [],
+      signature: "ccc333",
+      signatureName: "cedar",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: null,
+      windmillFlowPath: "f/workflows/org-1/sales_email_cold_outreach_cedar",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [originalWorkflow],
+      [],
+      [{ signatureName: "cedar" }],
+    );
+
+    const res = await request
+      .put("/workflows/wf-null-desc")
+      .set(AUTH)
+      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    expect(res.status).toBe(201);
+    expect(res.body.forkedFrom).toBe("wf-null-desc");
+  });
+
   it("rejects invalid DAG on fork", async () => {
     mockDbRows.push({
       id: "wf-bad",
