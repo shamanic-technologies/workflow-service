@@ -428,6 +428,98 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.results).toHaveLength(2);
   });
 
+  it("filters by brandId", async () => {
+    // Note: the mock DB returns all rows regardless of .where(), so both workflows appear.
+    // This test verifies that brandId is accepted as a query param without error.
+    const wfBrand = makeWorkflow({ id: "wf-brand", brandId: "brand-1" });
+    mockWorkflowRows.push(wfBrand);
+    mockWorkflowRunRows.push(makeRun("wf-brand", "ext-run-brand"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-brand", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/ranked")
+      .query({ ...BASE_QUERY, brandId: "brand-1" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(1);
+    expect(res.body.results[0].workflow.brandId).toBe("brand-1");
+  });
+
+  it("returns grouped brands with groupBy=brand", async () => {
+    const wf1 = makeWorkflow({ id: "wf-b1a", brandId: "brand-A" });
+    const wf2 = makeWorkflow({ id: "wf-b1b", brandId: "brand-A" });
+    const wf3 = makeWorkflow({ id: "wf-b2", brandId: "brand-B" });
+    mockWorkflowRows.push(wf1, wf2, wf3);
+    mockWorkflowRunRows.push(
+      makeRun("wf-b1a", "ext-run-1"),
+      makeRun("wf-b1b", "ext-run-2"),
+      makeRun("wf-b2", "ext-run-3"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-1", totalCostInUsdCents: 100 },
+      { runId: "ext-run-2", totalCostInUsdCents: 200 },
+      { runId: "ext-run-3", totalCostInUsdCents: 50 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/ranked")
+      .query({ ...BASE_QUERY, groupBy: "brand" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.brands).toBeDefined();
+    expect(res.body.brands).toHaveLength(2);
+
+    const brandA = res.body.brands.find((b: { brandId: string }) => b.brandId === "brand-A");
+    const brandB = res.body.brands.find((b: { brandId: string }) => b.brandId === "brand-B");
+    expect(brandA).toBeDefined();
+    expect(brandA.workflows).toHaveLength(2);
+    expect(brandA.stats).toBeDefined();
+    expect(brandB).toBeDefined();
+    expect(brandB.workflows).toHaveLength(1);
+  });
+
+  it("excludes workflows without brandId when groupBy=brand", async () => {
+    const wfBranded = makeWorkflow({ id: "wf-branded", brandId: "brand-X" });
+    const wfNoBrand = makeWorkflow({ id: "wf-no-brand", brandId: null });
+    mockWorkflowRows.push(wfBranded, wfNoBrand);
+    mockWorkflowRunRows.push(
+      makeRun("wf-branded", "ext-run-1"),
+      makeRun("wf-no-brand", "ext-run-2"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-1", totalCostInUsdCents: 100 },
+      { runId: "ext-run-2", totalCostInUsdCents: 200 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/ranked")
+      .query({ ...BASE_QUERY, groupBy: "brand" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.brands).toHaveLength(1);
+    expect(res.body.brands[0].brandId).toBe("brand-X");
+  });
+
   it("returns grouped sections with groupBy=section", async () => {
     const wfSales = makeWorkflow({ id: "wf-sales", category: "sales", channel: "email", audienceType: "cold-outreach" });
     const wfSales2 = makeWorkflow({ id: "wf-sales2", category: "sales", channel: "email", audienceType: "cold-outreach" });
@@ -560,6 +652,97 @@ describe("GET /workflows/best (hero records)", () => {
     expect(res.status).toBe(200);
     expect(res.body.bestCostPerOpen.displayName).toBe("sales-email-cold-outreach-jasmine");
     expect(res.body.bestCostPerReply.displayName).toBe("sales-email-cold-outreach-jasmine");
+  });
+
+  it("filters by brandId", async () => {
+    const wf1 = makeWorkflow({ id: "wf-b1", brandId: "brand-target" });
+    const wf2 = makeWorkflow({ id: "wf-b2", brandId: "brand-other" });
+    mockWorkflowRows.push(wf1, wf2);
+    mockWorkflowRunRows.push(
+      makeRun("wf-b1", "ext-run-b1"),
+      makeRun("wf-b2", "ext-run-b2"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-b1", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ brandId: "brand-target" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.bestCostPerOpen.brandId).toBe("brand-target");
+  });
+
+  it("returns best brand with by=brand", async () => {
+    // Two brands: brand-A (2 workflows) and brand-B (1 workflow)
+    // The mock DB returns all runs for all workflows — each workflow sees all 3 run IDs.
+    // fetchRunCosts returns costs for all runs, so each workflow gets totalCost = 600.
+    // We use mockFetchEmailStats per-workflow to differentiate brands.
+    const wfA1 = makeWorkflow({ id: "wf-a1", brandId: "brand-A" });
+    const wfA2 = makeWorkflow({ id: "wf-a2", brandId: "brand-A" });
+    const wfB = makeWorkflow({ id: "wf-b", brandId: "brand-B" });
+    mockWorkflowRows.push(wfA1, wfA2, wfB);
+    mockWorkflowRunRows.push(
+      makeRun("wf-a1", "ext-run-a1"),
+      makeRun("wf-a2", "ext-run-a2"),
+      makeRun("wf-b", "ext-run-b"),
+    );
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-a1", totalCostInUsdCents: 50 },
+      { runId: "ext-run-a2", totalCostInUsdCents: 50 },
+      { runId: "ext-run-b", totalCostInUsdCents: 500 },
+    ]);
+    // Each workflow sees all 3 runs → totalCost per workflow = 600
+    // brand-A: 2 workflows × 600 = 1200 cost, 40 opens, 20 replies → 30/open, 60/reply
+    // brand-B: 1 workflow × 600 = 600 cost, 5 opens, 2 replies → 120/open, 300/reply
+    mockFetchEmailStats
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } })
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } })
+      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 5, replied: 2 }, broadcast: { ...EMPTY_STATS } });
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ by: "brand" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    // brand-A wins with lower cost-per-open (30 vs 120) and cost-per-reply (60 vs 300)
+    expect(res.body.bestCostPerOpen.brandId).toBe("brand-A");
+    expect(res.body.bestCostPerOpen.workflowCount).toBe(2);
+    expect(res.body.bestCostPerOpen.value).toBe(30); // 1200 / 40
+    expect(res.body.bestCostPerReply.brandId).toBe("brand-A");
+    expect(res.body.bestCostPerReply.value).toBe(60); // 1200 / 20
+  });
+
+  it("returns null for by=brand when no branded workflows have outcomes", async () => {
+    const wf = makeWorkflow({ id: "wf-no-brand", brandId: null });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-no-brand", "ext-run-nb"));
+
+    mockFetchRunCosts.mockResolvedValue([
+      { runId: "ext-run-nb", totalCostInUsdCents: 100 },
+    ]);
+    mockFetchEmailStats.mockResolvedValue({
+      transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
+      broadcast: { ...EMPTY_STATS },
+    });
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ by: "brand" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.bestCostPerOpen).toBeNull();
+    expect(res.body.bestCostPerReply).toBeNull();
   });
 
   it("picks the best from multiple workflows", async () => {
