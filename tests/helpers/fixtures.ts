@@ -9,11 +9,12 @@ export const VALID_LINEAR_DAG: DAG = {
     },
     {
       id: "email-gen",
-      type: "content-generation",
-      config: { contentType: "cold-email" },
+      type: "http.call",
+      config: { service: "content-generation", method: "POST", path: "/generate" },
       inputMapping: {
-        leadData: "$ref:lead-search.output.lead",
-        clientData: "$ref:flow_input.brandIntel",
+        "body.type": "cold-email",
+        "body.variables.leadData": "$ref:lead-search.output.lead",
+        "body.variables.clientData": "$ref:flow_input.brandIntel",
       },
     },
     {
@@ -36,7 +37,7 @@ export const VALID_LINEAR_DAG: DAG = {
 export const DAG_WITH_CYCLE: DAG = {
   nodes: [
     { id: "a", type: "lead-service" },
-    { id: "b", type: "content-generation" },
+    { id: "b", type: "brand-intel" },
     { id: "c", type: "outbound-sending" },
   ],
   edges: [
@@ -61,7 +62,7 @@ export const DAG_WITH_BAD_REF: DAG = {
     { id: "a", type: "lead-service" },
     {
       id: "b",
-      type: "content-generation",
+      type: "brand-intel",
       inputMapping: { data: "$ref:nonexistent.output.field" },
     },
   ],
@@ -71,7 +72,7 @@ export const DAG_WITH_BAD_REF: DAG = {
 export const DAG_WITH_DUPLICATE_IDS: DAG = {
   nodes: [
     { id: "a", type: "lead-service" },
-    { id: "a", type: "content-generation" },
+    { id: "a", type: "brand-intel" },
   ],
   edges: [],
 };
@@ -79,7 +80,7 @@ export const DAG_WITH_DUPLICATE_IDS: DAG = {
 export const DAG_NO_ENTRY_NODE: DAG = {
   nodes: [
     { id: "a", type: "lead-service" },
-    { id: "b", type: "content-generation" },
+    { id: "b", type: "brand-intel" },
   ],
   edges: [
     { from: "a", to: "b" },
@@ -394,10 +395,11 @@ export const DAG_WITH_STOP_AFTER_IF: DAG = {
     },
     {
       id: "email-gen",
-      type: "content-generation",
-      config: { contentType: "cold-email" },
+      type: "http.call",
+      config: { service: "content-generation", method: "POST", path: "/generate" },
       inputMapping: {
-        leadData: "$ref:fetch-lead.output.lead",
+        "body.type": "cold-email",
+        "body.variables.leadData": "$ref:fetch-lead.output.lead",
       },
     },
   ],

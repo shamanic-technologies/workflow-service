@@ -24,9 +24,7 @@ export interface TemplateContractResult {
 /**
  * Extracts content-generation template references from a DAG.
  *
- * Detects two patterns:
- * 1. http.call nodes with config.service = "content-generation" and config.path = "/generate"
- * 2. Legacy "content-generation" node type (uses body.type from inputMapping or config)
+ * Detects http.call nodes with config.service = "content-generation" and config.path = "/generate".
  */
 export function extractTemplateRefs(dag: DAG): TemplateRef[] {
   const refs: TemplateRef[] = [];
@@ -37,11 +35,9 @@ export function extractTemplateRefs(dag: DAG): TemplateRef[] {
       node.config?.service === "content-generation" &&
       node.config?.path === "/generate";
 
-    const isLegacyContentGen = node.type === "content-generation";
+    if (!isHttpCallToContentGen) continue;
 
-    if (!isHttpCallToContentGen && !isLegacyContentGen) continue;
-
-    // Extract template type from inputMapping["body.type"] or config.contentType
+    // Extract template type from inputMapping["body.type"] or config.body.type
     let templateType: string | undefined;
 
     if (node.inputMapping?.["body.type"]) {
@@ -52,8 +48,11 @@ export function extractTemplateRefs(dag: DAG): TemplateRef[] {
       }
     }
 
-    if (!templateType && typeof node.config?.contentType === "string") {
-      templateType = node.config.contentType;
+    if (!templateType) {
+      const body = node.config?.body as Record<string, unknown> | undefined;
+      if (typeof body?.type === "string") {
+        templateType = body.type;
+      }
     }
 
     if (!templateType) continue;

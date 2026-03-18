@@ -5,7 +5,6 @@
 export const NODE_TYPE_REGISTRY: Record<string, string | null> = {
   // Live services
   "lead-service": "f/nodes/lead_service",
-  "content-generation": "f/nodes/content_generation",
   "outbound-sending": "f/nodes/outbound_sending",
   "brand-intel": "f/nodes/brand_intel",
   "content-sentiment": "f/nodes/content_sentiment",

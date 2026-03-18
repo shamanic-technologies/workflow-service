@@ -104,7 +104,27 @@ describe("extractTemplateRefs", () => {
     expect(refs).toHaveLength(0);
   });
 
-  it("handles legacy content-generation node type", () => {
+  it("extracts template type from config.body.type when body.type is not in inputMapping", () => {
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "gen",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate", body: { type: "cold-email" } },
+          inputMapping: {
+            "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const refs = extractTemplateRefs(dag);
+    expect(refs).toHaveLength(1);
+    expect(refs[0].templateType).toBe("cold-email");
+  });
+
+  it("ignores legacy content-generation node type", () => {
     const dag: DAG = {
       nodes: [
         {
@@ -120,8 +140,7 @@ describe("extractTemplateRefs", () => {
     };
 
     const refs = extractTemplateRefs(dag);
-    expect(refs).toHaveLength(1);
-    expect(refs[0].templateType).toBe("cold-email");
+    expect(refs).toHaveLength(0);
   });
 
   it("handles multiple content-generation nodes in one DAG", () => {

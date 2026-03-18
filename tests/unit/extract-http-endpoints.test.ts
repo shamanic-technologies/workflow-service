@@ -1,14 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { extractHttpEndpoints } from "../../src/lib/extract-http-endpoints.js";
 import {
-  VALID_LINEAR_DAG,
+  DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
   DAG_WITH_HTTP_CALL,
   DAG_WITH_HTTP_CALL_CHAIN,
 } from "../helpers/fixtures.js";
 
 describe("extractHttpEndpoints", () => {
   it("returns empty array for DAG with no http.call nodes", () => {
-    const result = extractHttpEndpoints(VALID_LINEAR_DAG);
+    const result = extractHttpEndpoints(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
     expect(result).toEqual([]);
   });
 

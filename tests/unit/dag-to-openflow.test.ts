@@ -105,14 +105,9 @@ describe("dagToOpenFlow", () => {
         string,
         { type: string; expr?: string; value?: unknown }
       >;
-      expect(transforms.leadData).toEqual({
-        type: "javascript",
-        expr: "results.lead_search?.lead",
-      });
-      expect(transforms.clientData).toEqual({
-        type: "javascript",
-        expr: "flow_input.brandIntel",
-      });
+      // body is collapsed from dot-notation keys into a single javascript expression
+      expect(transforms.body).toBeDefined();
+      expect(transforms.body.type).toBe("javascript");
     }
   });
 
