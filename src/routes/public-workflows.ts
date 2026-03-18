@@ -12,7 +12,6 @@ import {
   formatPublicScoreItem,
   aggregateSectionStats,
   handleExternalServiceError,
-  SYSTEM_IDENTITY,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
 
@@ -47,7 +46,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
 
-    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, SYSTEM_IDENTITY);
+    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "public" as const, brandId, orgId });
 
     if (groupBy === "section") {
       const sectionMap = new Map<string, WorkflowScore[]>();
@@ -127,7 +126,7 @@ router.get("/public/workflows/best", async (req, res) => {
       return;
     }
 
-    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", SYSTEM_IDENTITY);
+    const scores = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", { kind: "public" as const, brandId, orgId });
 
     if (by === "brand") {
       // Aggregate scores by brandId, find the best brand for cost-per-open and cost-per-reply

@@ -1,7 +1,7 @@
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
-import { fetchRunCosts, fetchEmailStats } from "./stats-client.js";
+import { fetchRunCosts, fetchEmailStats, fetchRunCostsPublic, fetchEmailStatsPublic } from "./stats-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
 
 export const EMPTY_EMAIL_STATS = {
@@ -49,18 +49,27 @@ export function getUpgradeChainIds(
   return chainIds;
 }
 
+type ScoreMode =
+  | { kind: "auth"; identity: IdentityHeaders }
+  | { kind: "public"; brandId?: string; orgId?: string };
+
 export async function computeWorkflowScores(
   activeWorkflows: (typeof workflows.$inferSelect)[],
-  deprecatedWorkflows: { id: string; upgradedTo: string | null }[],
+  deprecatedWorkflows: (typeof workflows.$inferSelect)[],
   objective: "replies" | "clicks",
-  identity: IdentityHeaders,
+  mode: ScoreMode,
 ): Promise<WorkflowScore[]> {
   // 1. For each active workflow, get completed runs across entire upgrade chain
   const workflowRunsByWfId: Record<string, string[]> = {};
+  const chainWorkflowsById: Record<string, (typeof workflows.$inferSelect)[]> = {};
   const allRunIds: string[] = [];
 
   for (const wf of activeWorkflows) {
     const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
+    chainWorkflowsById[wf.id] = [
+      wf,
+      ...deprecatedWorkflows.filter((d) => chainIds.includes(d.id) && d.id !== wf.id),
+    ];
 
     const runs = chainIds.length === 1
       ? await db
@@ -90,12 +99,34 @@ export async function computeWorkflowScores(
     allRunIds.push(...runIds);
   }
 
-  // 2. Batch fetch costs from runs-service (only if there are runs)
+  // 2. Fetch costs (different strategy per mode)
   const costByRunId = new Map<string, number>();
+  const costByWorkflowId = new Map<string, number>();
+
   if (allRunIds.length > 0) {
-    const runCosts = await fetchRunCosts(allRunIds, identity);
-    for (const c of runCosts) {
-      costByRunId.set(c.runId, c.totalCostInUsdCents);
+    if (mode.kind === "auth") {
+      const runCosts = await fetchRunCosts(allRunIds, mode.identity);
+      for (const c of runCosts) {
+        costByRunId.set(c.runId, c.totalCostInUsdCents);
+      }
+    } else {
+      // Public: fetch costs aggregated by workflowName from runs-service
+      const costGroups = await fetchRunCostsPublic({
+        brandId: mode.brandId,
+        orgId: mode.orgId,
+      });
+      const costByName = new Map(costGroups.map((g) => [g.workflowName, g.totalCostInUsdCents]));
+
+      // Map aggregated costs to each active workflow via its upgrade chain names
+      for (const wf of activeWorkflows) {
+        const chainWfs = chainWorkflowsById[wf.id] ?? [];
+        const chainNames = new Set(chainWfs.map((w) => w.name));
+        let total = 0;
+        for (const name of chainNames) {
+          total += costByName.get(name) ?? 0;
+        }
+        costByWorkflowId.set(wf.id, total);
+      }
     }
   }
 
@@ -117,12 +148,14 @@ export async function computeWorkflowScores(
       continue;
     }
 
-    const totalCost = runIds.reduce(
-      (sum, id) => sum + (costByRunId.get(id) ?? 0),
-      0
-    );
+    const totalCost = mode.kind === "auth"
+      ? runIds.reduce((sum, id) => sum + (costByRunId.get(id) ?? 0), 0)
+      : costByWorkflowId.get(wf.id) ?? 0;
 
-    const stats = await fetchEmailStats(runIds, identity);
+    const stats = mode.kind === "auth"
+      ? await fetchEmailStats(runIds, mode.identity)
+      : await fetchEmailStatsPublic(runIds);
+
     const outcomes =
       objective === "replies"
         ? (stats.transactional?.replied ?? 0) + (stats.broadcast?.replied ?? 0)
@@ -236,9 +269,3 @@ export function handleExternalServiceError(err: unknown, res: import("express").
   return false;
 }
 
-/** System identity for public endpoints — used only for logging by downstream services */
-export const SYSTEM_IDENTITY = {
-  orgId: "system",
-  userId: "system",
-  runId: "system-public",
-};
