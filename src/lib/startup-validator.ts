@@ -310,7 +310,7 @@ async function attemptUpgrade(
         subrequestId: wf.subrequestId,
         styleName: wf.styleName,
         name: stableName,
-        displayName: wf.displayName ?? stableName,
+        displayName: stableName,
         description: result.description,
         category: result.category,
         channel: result.channel,
