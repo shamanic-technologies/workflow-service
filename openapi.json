@@ -437,6 +437,28 @@
           "providers"
         ]
       },
+      "WorkflowConflictResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "existingWorkflowId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "ID of the existing workflow that already has this DAG signature."
+          },
+          "existingWorkflowName": {
+            "type": "string",
+            "description": "Name of the existing workflow that already has this DAG signature."
+          }
+        },
+        "required": [
+          "error",
+          "existingWorkflowId",
+          "existingWorkflowName"
+        ]
+      },
       "UpdateWorkflowRequest": {
         "type": "object",
         "properties": {
@@ -1631,7 +1653,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/WorkflowConflictResponse"
                 }
               }
             }

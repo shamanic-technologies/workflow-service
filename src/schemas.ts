@@ -450,6 +450,16 @@ export const ProviderRequirementsResponseSchema = z
   })
   .openapi("ProviderRequirementsResponse");
 
+// --- Workflow conflict response (409 on PUT /workflows/:id) ---
+
+export const WorkflowConflictResponseSchema = z
+  .object({
+    error: z.string(),
+    existingWorkflowId: z.string().uuid().describe("ID of the existing workflow that already has this DAG signature."),
+    existingWorkflowName: z.string().describe("Name of the existing workflow that already has this DAG signature."),
+  })
+  .openapi("WorkflowConflictResponse");
+
 // --- Common ---
 
 export const ErrorResponseSchema = z
@@ -639,7 +649,7 @@ registry.registerPath({
     },
     409: {
       description: "A workflow with this DAG signature already exists",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: WorkflowConflictResponseSchema } },
     },
   },
 });
