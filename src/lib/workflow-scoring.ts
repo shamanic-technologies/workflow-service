@@ -1,7 +1,7 @@
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
-import { fetchRunCosts, fetchEmailStats, fetchRunCostsPublic, fetchEmailStatsPublic } from "./stats-client.js";
+import { fetchRunCostsAuth, fetchEmailStats, fetchRunCostsPublic, fetchEmailStatsPublic } from "./stats-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
 
 export const EMPTY_EMAIL_STATS = {
@@ -67,11 +67,8 @@ export async function computeWorkflowScores(
   objective: "replies" | "clicks",
   mode: ScoreMode,
 ): Promise<ScoreResult> {
-  // 1. For each active workflow, get completed runs across entire upgrade chain
-  const workflowRunsByWfId: Record<string, string[]> = {};
+  // 1. Build dynasty chains: for each active workflow, collect all workflow names in its upgrade chain
   const chainWorkflowsById: Record<string, (typeof workflows.$inferSelect)[]> = {};
-  const allRunIds: string[] = [];
-  const runBrandMap = new Map<string, string>();
 
   for (const wf of activeWorkflows) {
     const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
@@ -79,70 +76,49 @@ export async function computeWorkflowScores(
       wf,
       ...deprecatedWorkflows.filter((d) => chainIds.includes(d.id) && d.id !== wf.id),
     ];
+  }
 
+  // 2. Fetch costs aggregated by workflowName (no double-counting, no per-run calls)
+  const costGroups =
+    mode.kind === "auth"
+      ? await fetchRunCostsAuth(mode.identity)
+      : await fetchRunCostsPublic({ brandId: mode.brandId, orgId: mode.orgId });
+
+  const costByName = new Map(costGroups.map((g) => [g.workflowName, g.totalCostInUsdCents]));
+
+  // 3. For each active workflow, aggregate costs across the dynasty chain + get run IDs for email stats
+  const workflowRunsByWfId: Record<string, string[]> = {};
+  const costByWorkflowId = new Map<string, number>();
+  const runBrandMap = new Map<string, string>();
+
+  for (const wf of activeWorkflows) {
+    const chainWfs = chainWorkflowsById[wf.id] ?? [];
+    const chainIds = chainWfs.map((w) => w.id);
+    const chainNames = new Set(chainWfs.map((w) => w.name));
+
+    // Costs: aggregate across all dynasty workflow names
+    let totalCost = 0;
+    for (const name of chainNames) {
+      totalCost += costByName.get(name) ?? 0;
+    }
+    costByWorkflowId.set(wf.id, totalCost);
+
+    // Run IDs for email stats: from local workflow_runs table
+    // TODO: replace with email-gateway workflowName filter once available
     const runs = chainIds.length === 1
-      ? await db
-          .select()
-          .from(workflowRuns)
-          .where(
-            and(
-              eq(workflowRuns.workflowId, chainIds[0]),
-              eq(workflowRuns.status, "completed"),
-            )
-          )
-      : await db
-          .select()
-          .from(workflowRuns)
-          .where(
-            and(
-              inArray(workflowRuns.workflowId, chainIds),
-              eq(workflowRuns.status, "completed"),
-            )
-          );
-
-    const runIds: string[] = [];
+      ? await db.select().from(workflowRuns).where(
+          and(eq(workflowRuns.workflowId, chainIds[0]), eq(workflowRuns.status, "completed")))
+      : await db.select().from(workflowRuns).where(
+          and(inArray(workflowRuns.workflowId, chainIds), eq(workflowRuns.status, "completed")));
+    const runIds = runs.filter((r) => r.runId).map((r) => r.runId!);
     for (const r of runs) {
-      if (!r.runId) continue;
-      runIds.push(r.runId);
-      if (r.brandId) runBrandMap.set(r.runId, r.brandId);
+      if (r.runId && r.brandId) runBrandMap.set(r.runId, r.brandId);
     }
 
     workflowRunsByWfId[wf.id] = runIds;
-    allRunIds.push(...runIds);
   }
 
-  // 2. Fetch costs (different strategy per mode)
-  const costByRunId = new Map<string, number>();
-  const costByWorkflowId = new Map<string, number>();
-
-  if (allRunIds.length > 0) {
-    if (mode.kind === "auth") {
-      const runCosts = await fetchRunCosts(allRunIds, mode.identity);
-      for (const c of runCosts) {
-        costByRunId.set(c.runId, c.totalCostInUsdCents);
-      }
-    } else {
-      // Public: fetch costs aggregated by workflowName from runs-service
-      const costGroups = await fetchRunCostsPublic({
-        brandId: mode.brandId,
-        orgId: mode.orgId,
-      });
-      const costByName = new Map(costGroups.map((g) => [g.workflowName, g.totalCostInUsdCents]));
-
-      // Map aggregated costs to each active workflow via its upgrade chain names
-      for (const wf of activeWorkflows) {
-        const chainWfs = chainWorkflowsById[wf.id] ?? [];
-        const chainNames = new Set(chainWfs.map((w) => w.name));
-        let total = 0;
-        for (const name of chainNames) {
-          total += costByName.get(name) ?? 0;
-        }
-        costByWorkflowId.set(wf.id, total);
-      }
-    }
-  }
-
-  // 3. Per-workflow: compute cost + fetch email stats
+  // 4. Per-workflow: fetch email stats and compute outcomes
   const scores: WorkflowScore[] = [];
 
   for (const wf of activeWorkflows) {
@@ -160,9 +136,7 @@ export async function computeWorkflowScores(
       continue;
     }
 
-    const totalCost = mode.kind === "auth"
-      ? runIds.reduce((sum, id) => sum + (costByRunId.get(id) ?? 0), 0)
-      : costByWorkflowId.get(wf.id) ?? 0;
+    const totalCost = costByWorkflowId.get(wf.id) ?? 0;
 
     const stats = mode.kind === "auth"
       ? await fetchEmailStats(runIds, mode.identity)

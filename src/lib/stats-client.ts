@@ -47,43 +47,46 @@ export interface EmailStatsResponse {
   broadcast: EmailStats;
 }
 
-// --- Fetch run costs from runs-service ---
+// --- Fetch aggregated costs from runs-service (auth) ---
 
-export async function fetchRunCosts(runIds: string[], identity: IdentityHeaders): Promise<RunCost[]> {
-  if (runIds.length === 0) return [];
-
+export async function fetchRunCostsAuth(
+  identity: IdentityHeaders,
+): Promise<WorkflowNameCost[]> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
-  const costs: RunCost[] = [];
+  const params = new URLSearchParams({ groupBy: "workflowName" });
 
-  await Promise.all(
-    runIds.map(async (runId) => {
-      const res = await fetch(`${baseUrl}/v1/runs/${runId}`, {
-        method: "GET",
-        headers: {
-          "x-api-key": apiKey,
-          "x-org-id": identity.orgId,
-          "x-user-id": identity.userId,
-          "x-run-id": identity.runId,
-        },
-      });
-      if (!res.ok) {
-        console.warn(
-          `[stats-client] Failed to fetch run ${runId}: ${res.status}`
-        );
-        return;
-      }
-      const body = (await res.json()) as {
-        id: string;
-        totalCostInUsdCents: string;
-      };
-      costs.push({
-        runId: body.id,
-        totalCostInUsdCents: Number(body.totalCostInUsdCents) || 0,
-      });
-    })
-  );
+  const res = await fetch(`${baseUrl}/v1/stats/costs?${params}`, {
+    method: "GET",
+    headers: {
+      "x-api-key": apiKey,
+      "x-org-id": identity.orgId,
+      "x-user-id": identity.userId,
+      "x-run-id": identity.runId,
+    },
+  });
 
-  return costs;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `runs-service error: GET /v1/stats/costs -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  const body = (await res.json()) as {
+    groups: Array<{
+      dimensions: Record<string, string | null>;
+      totalCostInUsdCents: string;
+      runCount: number;
+    }>;
+  };
+
+  return body.groups
+    .filter((g) => g.dimensions.workflowName != null)
+    .map((g) => ({
+      workflowName: g.dimensions.workflowName!,
+      totalCostInUsdCents: Number(g.totalCostInUsdCents) || 0,
+      runCount: g.runCount,
+    }));
 }
 
 // --- Public: fetch aggregated costs from runs-service (no identity) ---
