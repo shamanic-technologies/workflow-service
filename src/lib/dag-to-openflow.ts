@@ -271,12 +271,32 @@ function buildConditionModule(
   const seenExprs = new Set<string>();
   const branches: Array<{ summary?: string; expr: string; modules: FlowModule[] }> = [];
 
-  for (const edge of outEdges) {
-    const expr = edge.condition!;
-    if (seenExprs.has(expr)) continue;
-    seenExprs.add(expr);
+  // Collect all DAG node IDs that contain hyphens so we can replace them in expressions
+  const hyphenatedIds = dag.nodes
+    .map((n) => n.id)
+    .filter((id) => id.includes("-"))
+    .sort((a, b) => b.length - a.length); // longest first to avoid partial replacements
 
-    const branchNodeIds = info.branchNodeSets.get(expr) ?? new Set();
+  for (const edge of outEdges) {
+    const rawExpr = edge.condition!;
+    if (seenExprs.has(rawExpr)) continue;
+    seenExprs.add(rawExpr);
+
+    // Transform condition expression: replace hyphenated node IDs with underscored
+    // versions so they match Windmill's module IDs.
+    // Handles both bracket notation (results['fetch-lead']) and dot notation.
+    let expr = rawExpr;
+    for (const id of hyphenatedIds) {
+      const underscored = id.replace(/-/g, "_");
+      // Replace bracket-notation references: results['node-id'] or results["node-id"]
+      expr = expr.replaceAll(`['${id}']`, `.${underscored}`);
+      expr = expr.replaceAll(`["${id}"]`, `.${underscored}`);
+      // Replace dot-notation references: results.node-id (invalid JS but could appear)
+      // Only replace when preceded by 'results.' to avoid false positives
+      expr = expr.replaceAll(`results.${id}`, `results.${underscored}`);
+    }
+
+    const branchNodeIds = info.branchNodeSets.get(rawExpr) ?? new Set();
     const branchNodes = orderedNodes.filter((n) => branchNodeIds.has(n.id));
     const branchModules: FlowModule[] = [];
     for (const bn of branchNodes) {
@@ -284,7 +304,7 @@ function buildConditionModule(
       if (mod) branchModules.push(mod);
     }
 
-    branches.push({ summary: expr, expr, modules: branchModules });
+    branches.push({ summary: rawExpr, expr, modules: branchModules });
   }
 
   return {

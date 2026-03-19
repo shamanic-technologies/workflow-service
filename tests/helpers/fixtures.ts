@@ -572,3 +572,42 @@ export const POLARITY_WELCOME_DAG: DAG = {
   ],
   edges: [],
 };
+
+/**
+ * Regression: condition expression uses bracket notation with hyphenated node IDs.
+ * e.g. results['fetch-lead'].found — must be transformed to results.fetch_lead.found
+ * when translating to Windmill OpenFlow.
+ */
+export const DAG_WITH_HYPHENATED_CONDITION: DAG = {
+  nodes: [
+    {
+      id: "fetch-lead",
+      type: "http.call",
+      config: { service: "lead", method: "POST", path: "/buffer/next" },
+      retries: 0,
+    },
+    { id: "check-lead", type: "condition" },
+    {
+      id: "email-gen",
+      type: "http.call",
+      config: { service: "ai", method: "POST", path: "/generate" },
+    },
+    {
+      id: "email-send",
+      type: "http.call",
+      config: { service: "email", method: "POST", path: "/send" },
+    },
+    {
+      id: "end-run",
+      type: "http.call",
+      config: { service: "runs", method: "POST", path: "/runs/end" },
+    },
+  ],
+  edges: [
+    { from: "fetch-lead", to: "check-lead" },
+    { from: "check-lead", to: "email-gen", condition: "results['fetch-lead'].found == true" },
+    { from: "email-gen", to: "email-send" },
+    { from: "email-send", to: "end-run" },
+    { from: "check-lead", to: "end-run" },
+  ],
+};
