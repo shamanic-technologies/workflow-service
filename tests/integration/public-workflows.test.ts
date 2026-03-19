@@ -56,16 +56,14 @@ vi.mock("../../src/db/index.js", () => ({
 }));
 
 // --- Mock stats-client ---
-const mockFetchRunIdsByWorkflow = vi.fn();
 const mockFetchRunCostsAuth = vi.fn();
-const mockFetchEmailStats = vi.fn();
+const mockFetchEmailStatsAuth = vi.fn();
 const mockFetchRunCostsPublic = vi.fn();
 const mockFetchEmailStatsPublic = vi.fn();
 
 vi.mock("../../src/lib/stats-client.js", () => ({
-  fetchRunIdsByWorkflow: (...args: unknown[]) => mockFetchRunIdsByWorkflow(...args),
   fetchRunCostsAuth: (...args: unknown[]) => mockFetchRunCostsAuth(...args),
-  fetchEmailStats: (...args: unknown[]) => mockFetchEmailStats(...args),
+  fetchEmailStatsAuth: (...args: unknown[]) => mockFetchEmailStatsAuth(...args),
   fetchRunCostsPublic: (...args: unknown[]) => mockFetchRunCostsPublic(...args),
   fetchEmailStatsPublic: (...args: unknown[]) => mockFetchEmailStatsPublic(...args),
 }));
@@ -146,15 +144,22 @@ function makeRun(workflowId: string, runId: string, brandId?: string | null) {
   };
 }
 
+function makeEmailGroup(workflowName: string, overrides: { transactional?: Partial<typeof EMPTY_STATS>; broadcast?: Partial<typeof EMPTY_STATS> } = {}) {
+  return {
+    workflowName,
+    transactional: { ...EMPTY_STATS, ...overrides.transactional },
+    broadcast: { ...EMPTY_STATS, ...overrides.broadcast },
+  };
+}
+
 // ==================== GET /public/workflows/ranked ====================
 
 describe("GET /public/workflows/ranked", () => {
   beforeEach(() => {
     mockWorkflowRows.length = 0;
     mockWorkflowRunRows.length = 0;
-    mockFetchRunIdsByWorkflow.mockReset();
     mockFetchRunCostsAuth.mockReset();
-    mockFetchEmailStats.mockReset();
+    mockFetchEmailStatsAuth.mockReset();
     mockFetchRunCostsPublic.mockReset();
     mockFetchEmailStatsPublic.mockReset();
   });
@@ -167,10 +172,9 @@ describe("GET /public/workflows/ranked", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 10 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 10 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/ranked")
@@ -191,10 +195,9 @@ describe("GET /public/workflows/ranked", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 50, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 5 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/ranked")
@@ -210,22 +213,18 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-sys", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([]);
 
     await request
       .get("/public/workflows/ranked")
       .query({ category: "sales", channel: "email", audienceType: "cold-outreach" });
 
-    // Verify public functions are called (no identity arg)
+    // Verify public functions are called
     expect(mockFetchRunCostsPublic).toHaveBeenCalled();
     expect(mockFetchEmailStatsPublic).toHaveBeenCalled();
     // Verify auth functions are NOT called
-    expect(mockFetchRunIdsByWorkflow).not.toHaveBeenCalled();
     expect(mockFetchRunCostsAuth).not.toHaveBeenCalled();
-    expect(mockFetchEmailStats).not.toHaveBeenCalled();
+    expect(mockFetchEmailStatsAuth).not.toHaveBeenCalled();
   });
 
   it("supports groupBy=section", async () => {
@@ -236,10 +235,9 @@ describe("GET /public/workflows/ranked", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 5, sent: 50 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 5, sent: 50 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/ranked")
@@ -271,10 +269,9 @@ describe("GET /public/workflows/ranked", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 350, runCount: 2 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 5 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/ranked")
@@ -296,10 +293,9 @@ describe("GET /public/workflows/ranked", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, replied: 10 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 10 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/ranked")
@@ -316,9 +312,8 @@ describe("GET /public/workflows/best", () => {
   beforeEach(() => {
     mockWorkflowRows.length = 0;
     mockWorkflowRunRows.length = 0;
-    mockFetchRunIdsByWorkflow.mockReset();
     mockFetchRunCostsAuth.mockReset();
-    mockFetchEmailStats.mockReset();
+    mockFetchEmailStatsAuth.mockReset();
     mockFetchRunCostsPublic.mockReset();
     mockFetchEmailStatsPublic.mockReset();
   });
@@ -331,10 +326,9 @@ describe("GET /public/workflows/best", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 10, replied: 5 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/best");
@@ -356,10 +350,9 @@ describe("GET /public/workflows/best", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME),
+    ]);
 
     const res = await request
       .get("/public/workflows/best");
@@ -382,18 +375,16 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-sys-best", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, opened: 10 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 10 } }),
+    ]);
 
     await request.get("/public/workflows/best");
 
     expect(mockFetchRunCostsPublic).toHaveBeenCalled();
     expect(mockFetchEmailStatsPublic).toHaveBeenCalled();
-    expect(mockFetchRunIdsByWorkflow).not.toHaveBeenCalled();
     expect(mockFetchRunCostsAuth).not.toHaveBeenCalled();
-    expect(mockFetchEmailStats).not.toHaveBeenCalled();
+    expect(mockFetchEmailStatsAuth).not.toHaveBeenCalled();
   });
 
   it("supports by=brand (from runs)", async () => {
@@ -407,8 +398,9 @@ describe("GET /public/workflows/best", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 600, runCount: 2 },
     ]);
-    mockFetchEmailStatsPublic
-      .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 20, replied: 10 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/best")
@@ -428,10 +420,9 @@ describe("GET /public/workflows/best", () => {
     mockFetchRunCostsPublic.mockResolvedValue([
       { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
-    mockFetchEmailStatsPublic.mockResolvedValue({
-      transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
-      broadcast: { ...EMPTY_STATS },
-    });
+    mockFetchEmailStatsPublic.mockResolvedValue([
+      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 10, replied: 5 } }),
+    ]);
 
     const res = await request
       .get("/public/workflows/best")
