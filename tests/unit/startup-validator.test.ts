@@ -257,10 +257,10 @@ describe("validateAndUpgradeWorkflows", () => {
       } as any,
     });
 
-    // Should have synced the valid workflow's flow to Windmill
+    // Should have synced using the stored windmillFlowPath (not a recalculated one)
     expect(mockUpdateFlow).toHaveBeenCalledTimes(1);
     expect(mockUpdateFlow).toHaveBeenCalledWith(
-      expect.stringContaining("f/workflows/org-1/"),
+      "f/workflows/org-1/flow", // exact path from DB, not recalculated
       expect.objectContaining({
         summary: VALID_WORKFLOW.name,
         value: expect.any(Object),
@@ -693,9 +693,11 @@ describe("validateAndUpgradeWorkflows", () => {
       } as any,
     });
 
-    // Should have tried updateFlow first, then fallen back to createFlow (upgrade + sync)
+    // Upgrade: updateFlow fails → createFlow fallback (1 each)
+    // Sync: updateFlow on the newly-created workflow (may fail, caught by sync loop)
     expect(mockUpdateFlow).toHaveBeenCalledTimes(2);
-    expect(mockCreateFlow).toHaveBeenCalledTimes(2);
+    // createFlow only called once — during upgrade. Sync uses updateFlow with stored path, no fallback.
+    expect(mockCreateFlow).toHaveBeenCalledTimes(1);
 
     expect(dbInserts.length).toBe(1);
     expect(dbInserts[0].status).toBe("active");

@@ -360,31 +360,21 @@ async function syncFlowToWindmill(
   wf: Workflow,
   windmillClient: WindmillClient,
 ): Promise<void> {
+  if (!wf.windmillFlowPath) {
+    return; // No flow deployed — nothing to sync
+  }
+
   const dag = wf.dag as DAG;
   const openFlow = dagToOpenFlow(dag, wf.name);
-  const flowPath = `f/workflows/${wf.orgId}/${wf.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
 
-  try {
-    await windmillClient.updateFlow(flowPath, {
-      summary: wf.name,
-      description: wf.description ?? "",
-      value: openFlow.value,
-      schema: openFlow.schema,
-    });
-  } catch (updateErr) {
-    const msg = updateErr instanceof Error ? updateErr.message : String(updateErr);
-    if (msg.includes("not found") || msg.includes("404")) {
-      await windmillClient.createFlow({
-        path: flowPath,
-        summary: wf.name,
-        description: wf.description ?? "",
-        value: openFlow.value,
-        schema: openFlow.schema,
-      });
-    } else {
-      throw updateErr;
-    }
-  }
+  // Use the actual stored flow path — NOT a recalculated one.
+  // The path in DB is the source of truth for where the flow lives in Windmill.
+  await windmillClient.updateFlow(wf.windmillFlowPath, {
+    summary: wf.name,
+    description: wf.description ?? "",
+    value: openFlow.value,
+    schema: openFlow.schema,
+  });
 }
 
 async function deprecateWorkflow(
