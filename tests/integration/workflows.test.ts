@@ -870,8 +870,8 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.body.audienceType).toBe("cold-outreach");
     expect(res.body.description).toBe("Forked with new DAG");
     expect(res.body.status).toBe("active");
-    // displayName stays as the parent's displayName (stable ancestor name)
-    expect(res.body.displayName).toBe("Jasmine Flow");
+    // displayName uses the new generated name (not the parent's)
+    expect(res.body.displayName).toBe(res.body.name);
     // Original should still be in mockDbRows unchanged
     expect(originalWorkflow.status).toBe("active");
   });
@@ -1107,6 +1107,54 @@ describe("PUT /workflows/:id — fork", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.forkedFrom).toBe("wf-null-desc");
+  });
+
+  it("forked workflow displayName uses new name, not parent displayName", async () => {
+    const originalWorkflow = {
+      id: "wf-display",
+      orgId: "org-1",
+      createdForBrandId: "brand-1",
+      humanId: null,
+      campaignId: null,
+      subrequestId: null,
+      styleName: null,
+      name: "sales-email-cold-outreach-jasmine",
+      displayName: "sales-email-cold-outreach-jasmine",
+      description: "Original",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: [],
+      signature: "old-sig-111",
+      signatureName: "jasmine",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: null,
+      windmillFlowPath: "f/workflows/org-1/sales_email_cold_outreach_jasmine",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [originalWorkflow],
+      [],
+      [{ signatureName: "jasmine" }],
+    );
+
+    const res = await request
+      .put("/workflows/wf-display")
+      .set(AUTH)
+      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    expect(res.status).toBe(201);
+    // The new displayName must match the new name (with new signatureName), NOT the parent's
+    expect(res.body.displayName).toBe(res.body.name);
+    expect(res.body.displayName).not.toBe("sales-email-cold-outreach-jasmine");
+    expect(res.body.signatureName).not.toBe("jasmine");
   });
 
   it("rejects invalid DAG on fork", async () => {
