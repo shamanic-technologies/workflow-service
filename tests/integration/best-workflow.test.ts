@@ -240,6 +240,32 @@ describe("GET /workflows/ranked", () => {
     expect(best.stats.completedRuns).toBe(2);
     expect(best.stats.email.transactional.replied).toBe(10);
     expect(best.stats.email.broadcast).toEqual(EMPTY_STATS);
+    // Verify workflowNames filter is passed to runs-service
+    expect(mockFetchRunCostsAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: "org-1" }),
+      [DEFAULT_WF_NAME],
+    );
+  });
+
+  it("passes all dynasty workflow names to costs endpoint", async () => {
+    const wfOldName = "sales-email-cold-outreach-old";
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-active" }),
+      makeWorkflow({ id: "wf-old", name: wfOldName, status: "deprecated", upgradedTo: "wf-active" }),
+    );
+    mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-active"), makeRun("wf-old", "ext-run-old"));
+
+    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
+    mockFetchEmailStats.mockResolvedValue({ transactional: { ...EMPTY_STATS, replied: 10 }, broadcast: { ...EMPTY_STATS } });
+
+    const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
+    expect(res.status).toBe(200);
+
+    // Both dynasty names should be passed to the costs endpoint
+    const calledNames = mockFetchRunCostsAuth.mock.calls[0][1] as string[];
+    expect(calledNames).toHaveLength(2);
+    expect(calledNames).toContain(DEFAULT_WF_NAME);
+    expect(calledNames).toContain(wfOldName);
   });
 
   it("uses clicks objective when specified", async () => {

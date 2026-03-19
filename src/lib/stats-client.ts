@@ -51,9 +51,11 @@ export interface EmailStatsResponse {
 
 export async function fetchRunCostsAuth(
   identity: IdentityHeaders,
+  workflowNames?: string[],
 ): Promise<WorkflowNameCost[]> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
   const params = new URLSearchParams({ groupBy: "workflowName" });
+  if (workflowNames?.length) params.set("workflowNames", workflowNames.join(","));
 
   const res = await fetch(`${baseUrl}/v1/stats/costs?${params}`, {
     method: "GET",
@@ -100,11 +102,13 @@ export interface WorkflowNameCost {
 export async function fetchRunCostsPublic(filters?: {
   brandId?: string;
   orgId?: string;
+  workflowNames?: string[];
 }): Promise<WorkflowNameCost[]> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
   const params = new URLSearchParams({ groupBy: "workflowName" });
   if (filters?.brandId) params.set("brandId", filters.brandId);
   if (filters?.orgId) params.set("orgId", filters.orgId);
+  if (filters?.workflowNames?.length) params.set("workflowNames", filters.workflowNames.join(","));
 
   const res = await fetch(`${baseUrl}/v1/stats/public/costs?${params}`, {
     method: "GET",
