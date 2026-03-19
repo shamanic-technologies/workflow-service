@@ -152,48 +152,6 @@ const EMPTY_STATS: EmailStats = {
   recipients: 0,
 };
 
-export async function fetchEmailStats(
-  runIds: string[],
-  identity: IdentityHeaders,
-): Promise<EmailStatsResponse> {
-  if (runIds.length === 0) {
-    return { transactional: { ...EMPTY_STATS }, broadcast: { ...EMPTY_STATS } };
-  }
-
-  const { baseUrl, apiKey } = getEmailGatewayConfig();
-
-  const res = await fetch(
-    `${baseUrl}/stats?runIds=${runIds.join(",")}`,
-    {
-      method: "GET",
-      headers: {
-        "x-api-key": apiKey,
-        "x-org-id": identity.orgId,
-        "x-user-id": identity.userId,
-        "x-run-id": identity.runId,
-      },
-    },
-  );
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `email-gateway-service error: GET /stats -> ${res.status} ${res.statusText}: ${text}`
-    );
-  }
-
-  const body = (await res.json()) as Record<string, unknown>;
-  const rawTransactional = (body.transactional ?? {}) as Record<string, unknown>;
-  const rawBroadcast = (body.broadcast ?? {}) as Record<string, unknown>;
-
-  return {
-    transactional: mapGatewayStats(rawTransactional),
-    broadcast: mapGatewayStats(rawBroadcast),
-  };
-}
-
-// --- Public: fetch email stats (no identity) ---
-
 /** Map email-gateway field names (emailsOpened etc.) to our internal names (opened etc.) */
 export function mapGatewayStats(raw: Record<string, unknown>): EmailStats {
   return {
@@ -208,22 +166,61 @@ export function mapGatewayStats(raw: Record<string, unknown>): EmailStats {
   };
 }
 
-export async function fetchEmailStatsPublic(
-  runIds: string[],
-): Promise<EmailStatsResponse> {
-  if (runIds.length === 0) {
-    return { transactional: { ...EMPTY_STATS }, broadcast: { ...EMPTY_STATS } };
-  }
+// --- Fetch email stats grouped by workflowName ---
+
+export interface EmailStatsGroup {
+  workflowName: string;
+  transactional: EmailStats;
+  broadcast: EmailStats;
+}
+
+export async function fetchEmailStatsAuth(
+  workflowNames: string[],
+  identity: IdentityHeaders,
+): Promise<EmailStatsGroup[]> {
+  if (workflowNames.length === 0) return [];
 
   const { baseUrl, apiKey } = getEmailGatewayConfig();
+  const params = new URLSearchParams({
+    groupBy: "workflowName",
+    workflowNames: workflowNames.join(","),
+  });
 
-  const res = await fetch(
-    `${baseUrl}/stats/public?runIds=${runIds.join(",")}`,
-    {
-      method: "GET",
-      headers: { "x-api-key": apiKey },
+  const res = await fetch(`${baseUrl}/stats?${params}`, {
+    method: "GET",
+    headers: {
+      "x-api-key": apiKey,
+      "x-org-id": identity.orgId,
+      "x-user-id": identity.userId,
+      "x-run-id": identity.runId,
     },
-  );
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `email-gateway-service error: GET /stats -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  return parseEmailStatsGroups(await res.json());
+}
+
+export async function fetchEmailStatsPublic(
+  workflowNames: string[],
+): Promise<EmailStatsGroup[]> {
+  if (workflowNames.length === 0) return [];
+
+  const { baseUrl, apiKey } = getEmailGatewayConfig();
+  const params = new URLSearchParams({
+    groupBy: "workflowName",
+    workflowNames: workflowNames.join(","),
+  });
+
+  const res = await fetch(`${baseUrl}/stats/public?${params}`, {
+    method: "GET",
+    headers: { "x-api-key": apiKey },
+  });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -232,13 +229,22 @@ export async function fetchEmailStatsPublic(
     );
   }
 
-  const body = (await res.json()) as Record<string, unknown>;
-  const rawTransactional = (body.transactional ?? {}) as Record<string, unknown>;
-  const rawBroadcast = (body.broadcast ?? {}) as Record<string, unknown>;
+  return parseEmailStatsGroups(await res.json());
+}
 
-  return {
-    transactional: mapGatewayStats(rawTransactional),
-    broadcast: mapGatewayStats(rawBroadcast),
+function parseEmailStatsGroups(body: unknown): EmailStatsGroup[] {
+  const { groups } = body as {
+    groups: Array<{
+      workflowName: string;
+      transactional?: Record<string, unknown>;
+      broadcast?: Record<string, unknown>;
+    }>;
   };
+
+  return (groups ?? []).map((g) => ({
+    workflowName: g.workflowName,
+    transactional: mapGatewayStats(g.transactional ?? {}),
+    broadcast: mapGatewayStats(g.broadcast ?? {}),
+  }));
 }
 

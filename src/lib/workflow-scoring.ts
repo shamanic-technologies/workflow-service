@@ -1,7 +1,7 @@
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
-import { fetchRunCostsAuth, fetchEmailStats, fetchRunCostsPublic, fetchEmailStatsPublic } from "./stats-client.js";
+import { fetchRunCostsAuth, fetchRunCostsPublic, fetchEmailStatsAuth, fetchEmailStatsPublic } from "./stats-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
 
 export const EMPTY_EMAIL_STATS = {
@@ -93,10 +93,18 @@ export async function computeWorkflowScores(
 
   const costByName = new Map(costGroups.map((g) => [g.workflowName, g.totalCostInUsdCents]));
 
-  // 3. For each active workflow, aggregate costs across the dynasty chain + get run IDs for email stats
+  // 4. Fetch email stats grouped by workflowName (1 call for all dynasty names)
+  const emailGroups =
+    mode.kind === "auth"
+      ? await fetchEmailStatsAuth(allChainNames, mode.identity)
+      : await fetchEmailStatsPublic(allChainNames);
+
+  const emailByName = new Map(emailGroups.map((g) => [g.workflowName, g]));
+
+  // 5. For each active workflow, aggregate costs + email stats across dynasty chain + build brand map
   const workflowRunsByWfId: Record<string, string[]> = {};
-  const costByWorkflowId = new Map<string, number>();
   const runBrandMap = new Map<string, string>();
+  const scores: WorkflowScore[] = [];
 
   for (const wf of activeWorkflows) {
     const chainWfs = chainWorkflowsById[wf.id] ?? [];
@@ -108,10 +116,20 @@ export async function computeWorkflowScores(
     for (const name of chainNames) {
       totalCost += costByName.get(name) ?? 0;
     }
-    costByWorkflowId.set(wf.id, totalCost);
 
-    // Run IDs for email stats: from local workflow_runs table
-    // TODO: replace with email-gateway workflowName filter once available
+    // Email stats: aggregate across all dynasty workflow names
+    const transactional = { ...EMPTY_EMAIL_STATS };
+    const broadcast = { ...EMPTY_EMAIL_STATS };
+    for (const name of chainNames) {
+      const eg = emailByName.get(name);
+      if (!eg) continue;
+      for (const key of Object.keys(EMPTY_EMAIL_STATS) as (keyof typeof EMPTY_EMAIL_STATS)[]) {
+        transactional[key] += eg.transactional[key];
+        broadcast[key] += eg.broadcast[key];
+      }
+    }
+
+    // Run IDs + brand map: still from local workflow_runs table (needed for brand grouping)
     const runs = chainIds.length === 1
       ? await db.select().from(workflowRuns).where(
           and(eq(workflowRuns.workflowId, chainIds[0]), eq(workflowRuns.status, "completed")))
@@ -121,38 +139,12 @@ export async function computeWorkflowScores(
     for (const r of runs) {
       if (r.runId && r.brandId) runBrandMap.set(r.runId, r.brandId);
     }
-
     workflowRunsByWfId[wf.id] = runIds;
-  }
-
-  // 4. Per-workflow: fetch email stats and compute outcomes
-  const scores: WorkflowScore[] = [];
-
-  for (const wf of activeWorkflows) {
-    const runIds = workflowRunsByWfId[wf.id] ?? [];
-
-    if (runIds.length === 0) {
-      scores.push({
-        workflow: wf,
-        totalCost: 0,
-        totalOutcomes: 0,
-        costPerOutcome: null,
-        completedRuns: 0,
-        emailStats: { transactional: { ...EMPTY_EMAIL_STATS }, broadcast: { ...EMPTY_EMAIL_STATS } },
-      });
-      continue;
-    }
-
-    const totalCost = costByWorkflowId.get(wf.id) ?? 0;
-
-    const stats = mode.kind === "auth"
-      ? await fetchEmailStats(runIds, mode.identity)
-      : await fetchEmailStatsPublic(runIds);
 
     const outcomes =
       objective === "replies"
-        ? (stats.transactional?.replied ?? 0) + (stats.broadcast?.replied ?? 0)
-        : (stats.transactional?.clicked ?? 0) + (stats.broadcast?.clicked ?? 0);
+        ? transactional.replied + broadcast.replied
+        : transactional.clicked + broadcast.clicked;
 
     const costPerOutcome = outcomes > 0 ? totalCost / outcomes : null;
 
@@ -162,10 +154,7 @@ export async function computeWorkflowScores(
       totalOutcomes: outcomes,
       costPerOutcome,
       completedRuns: runIds.length,
-      emailStats: {
-        transactional: stats.transactional ?? { ...EMPTY_EMAIL_STATS },
-        broadcast: stats.broadcast ?? { ...EMPTY_EMAIL_STATS },
-      },
+      emailStats: { transactional, broadcast },
     });
   }
 
