@@ -56,13 +56,15 @@ vi.mock("../../src/db/index.js", () => ({
 }));
 
 // --- Mock stats-client ---
-const mockFetchRunCosts = vi.fn();
+const mockFetchRunIdsByWorkflow = vi.fn();
+const mockFetchRunCostsAuth = vi.fn();
 const mockFetchEmailStats = vi.fn();
 const mockFetchRunCostsPublic = vi.fn();
 const mockFetchEmailStatsPublic = vi.fn();
 
 vi.mock("../../src/lib/stats-client.js", () => ({
-  fetchRunCosts: (...args: unknown[]) => mockFetchRunCosts(...args),
+  fetchRunIdsByWorkflow: (...args: unknown[]) => mockFetchRunIdsByWorkflow(...args),
+  fetchRunCostsAuth: (...args: unknown[]) => mockFetchRunCostsAuth(...args),
   fetchEmailStats: (...args: unknown[]) => mockFetchEmailStats(...args),
   fetchRunCostsPublic: (...args: unknown[]) => mockFetchRunCostsPublic(...args),
   fetchEmailStatsPublic: (...args: unknown[]) => mockFetchEmailStatsPublic(...args),
@@ -97,11 +99,13 @@ const EMPTY_STATS = {
   replied: 0, bounced: 0, unsubscribed: 0, recipients: 0,
 };
 
+const DEFAULT_WF_NAME = "sales-email-cold-outreach-alpha";
+
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     id: "wf-" + Math.random().toString(36).slice(2, 10),
     orgId: "org1",
-    name: "sales-email-cold-outreach-alpha",
+    name: DEFAULT_WF_NAME,
     displayName: null,
     createdForBrandId: null,
     description: null,
@@ -148,7 +152,8 @@ describe("GET /public/workflows/ranked", () => {
   beforeEach(() => {
     mockWorkflowRows.length = 0;
     mockWorkflowRunRows.length = 0;
-    mockFetchRunCosts.mockReset();
+    mockFetchRunIdsByWorkflow.mockReset();
+    mockFetchRunCostsAuth.mockReset();
     mockFetchEmailStats.mockReset();
     mockFetchRunCostsPublic.mockReset();
     mockFetchEmailStatsPublic.mockReset();
@@ -160,7 +165,7 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-pub", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 10 },
@@ -184,7 +189,7 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-nodag", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 50, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 50, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 5 },
@@ -218,7 +223,8 @@ describe("GET /public/workflows/ranked", () => {
     expect(mockFetchRunCostsPublic).toHaveBeenCalled();
     expect(mockFetchEmailStatsPublic).toHaveBeenCalled();
     // Verify auth functions are NOT called
-    expect(mockFetchRunCosts).not.toHaveBeenCalled();
+    expect(mockFetchRunIdsByWorkflow).not.toHaveBeenCalled();
+    expect(mockFetchRunCostsAuth).not.toHaveBeenCalled();
     expect(mockFetchEmailStats).not.toHaveBeenCalled();
   });
 
@@ -228,7 +234,7 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-sec", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 5, sent: 50 },
@@ -255,7 +261,6 @@ describe("GET /public/workflows/ranked", () => {
   });
 
   it("supports groupBy=brand (from runs)", async () => {
-    // Mock DB returns all runs for all workflows, so use 1 workflow with runs for different brands
     const wf1 = makeWorkflow({ id: "wf-1" });
     mockWorkflowRows.push(wf1);
     mockWorkflowRunRows.push(
@@ -264,7 +269,7 @@ describe("GET /public/workflows/ranked", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 350, runCount: 2 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 350, runCount: 2 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 5 },
@@ -282,7 +287,6 @@ describe("GET /public/workflows/ranked", () => {
   });
 
   it("supports brandId filter (from runs)", async () => {
-    // Mock DB returns all runs, so use 1 workflow with a run for brand-y
     const wf1 = makeWorkflow({ id: "wf-filtered" });
     mockWorkflowRows.push(wf1);
     mockWorkflowRunRows.push(
@@ -290,7 +294,7 @@ describe("GET /public/workflows/ranked", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, replied: 10 },
@@ -312,7 +316,8 @@ describe("GET /public/workflows/best", () => {
   beforeEach(() => {
     mockWorkflowRows.length = 0;
     mockWorkflowRunRows.length = 0;
-    mockFetchRunCosts.mockReset();
+    mockFetchRunIdsByWorkflow.mockReset();
+    mockFetchRunCostsAuth.mockReset();
     mockFetchEmailStats.mockReset();
     mockFetchRunCostsPublic.mockReset();
     mockFetchEmailStatsPublic.mockReset();
@@ -324,7 +329,7 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-hero-pub", "ext-run-hero"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
@@ -349,7 +354,7 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-no-out", "ext-run-no"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS },
@@ -386,12 +391,12 @@ describe("GET /public/workflows/best", () => {
 
     expect(mockFetchRunCostsPublic).toHaveBeenCalled();
     expect(mockFetchEmailStatsPublic).toHaveBeenCalled();
-    expect(mockFetchRunCosts).not.toHaveBeenCalled();
+    expect(mockFetchRunIdsByWorkflow).not.toHaveBeenCalled();
+    expect(mockFetchRunCostsAuth).not.toHaveBeenCalled();
     expect(mockFetchEmailStats).not.toHaveBeenCalled();
   });
 
   it("supports by=brand (from runs)", async () => {
-    // Mock DB returns all runs for all workflows, so use 1 workflow with runs for 2 brands
     const wf1 = makeWorkflow({ id: "wf-1" });
     mockWorkflowRows.push(wf1);
     mockWorkflowRunRows.push(
@@ -400,7 +405,7 @@ describe("GET /public/workflows/best", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 600, runCount: 2 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 600, runCount: 2 },
     ]);
     mockFetchEmailStatsPublic
       .mockResolvedValueOnce({ transactional: { ...EMPTY_STATS, opened: 20, replied: 10 }, broadcast: { ...EMPTY_STATS } });
@@ -421,7 +426,7 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-brand-filter", "ext-run-bz"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: "sales-email-cold-outreach-alpha", totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue({
       transactional: { ...EMPTY_STATS, opened: 10, replied: 5 },
