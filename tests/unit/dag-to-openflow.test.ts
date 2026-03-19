@@ -19,6 +19,7 @@ import {
   DAG_WITH_CONDITION_CHAIN,
   DAG_WITH_TWO_BRANCHES,
   DAG_WITH_PATH_PARAMS,
+  DAG_WITH_HYPHENATED_CONDITION,
 } from "../helpers/fixtures.js";
 
 describe("dagToOpenFlow", () => {
@@ -575,6 +576,29 @@ describe("dagToOpenFlow", () => {
       // Nested metadata should merge static source with dynamic emailGenerationId
       expect(expr).toContain('"source"');
       expect(expr).toContain("results.email_generate?.id");
+    }
+  });
+
+  it("regression: transforms hyphenated node IDs in condition expressions to underscores", () => {
+    const result = dagToOpenFlow(DAG_WITH_HYPHENATED_CONDITION, "Hyphen Condition");
+
+    // Top-level: fetch-lead, check-lead (branchone), end-run
+    expect(result.value.modules).toHaveLength(3);
+    expect(result.value.modules[1].id).toBe("check_lead");
+
+    const condModule = result.value.modules[1];
+    expect(condModule.value.type).toBe("branchone");
+
+    if (condModule.value.type === "branchone") {
+      expect(condModule.value.branches).toHaveLength(1);
+      // The expression must use underscored IDs for Windmill compatibility
+      expect(condModule.value.branches[0].expr).toBe("results.fetch_lead.found == true");
+      // The summary keeps the original expression for readability
+      expect(condModule.value.branches[0].summary).toBe("results['fetch-lead'].found == true");
+      // email-gen and email-send are inside the branch
+      expect(condModule.value.branches[0].modules).toHaveLength(2);
+      expect(condModule.value.branches[0].modules[0].id).toBe("email_gen");
+      expect(condModule.value.branches[0].modules[1].id).toBe("email_send");
     }
   });
 
