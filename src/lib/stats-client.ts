@@ -235,14 +235,14 @@ export async function fetchEmailStatsPublic(
 function parseEmailStatsGroups(body: unknown): EmailStatsGroup[] {
   const { groups } = body as {
     groups: Array<{
-      workflowName: string;
+      key: string;
       transactional?: Record<string, unknown>;
       broadcast?: Record<string, unknown>;
     }>;
   };
 
   return (groups ?? []).map((g) => ({
-    workflowName: g.workflowName,
+    workflowName: g.key,
     transactional: mapGatewayStats(g.transactional ?? {}),
     broadcast: mapGatewayStats(g.broadcast ?? {}),
   }));
