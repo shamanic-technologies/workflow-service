@@ -78,11 +78,18 @@ export async function computeWorkflowScores(
     ];
   }
 
-  // 2. Fetch costs aggregated by workflowName (no double-counting, no per-run calls)
+  // 2. Collect all unique workflow names across all dynasty chains
+  const allChainNames = [
+    ...new Set(
+      Object.values(chainWorkflowsById).flatMap((wfs) => wfs.map((w) => w.name))
+    ),
+  ];
+
+  // 3. Fetch costs aggregated by workflowName, filtered to dynasty names only
   const costGroups =
     mode.kind === "auth"
-      ? await fetchRunCostsAuth(mode.identity)
-      : await fetchRunCostsPublic({ brandId: mode.brandId, orgId: mode.orgId });
+      ? await fetchRunCostsAuth(mode.identity, allChainNames)
+      : await fetchRunCostsPublic({ brandId: mode.brandId, orgId: mode.orgId, workflowNames: allChainNames });
 
   const costByName = new Map(costGroups.map((g) => [g.workflowName, g.totalCostInUsdCents]));
 
