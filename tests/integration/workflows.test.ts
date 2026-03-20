@@ -1157,27 +1157,33 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.body.signatureName).not.toBe("jasmine");
   });
 
-  it("fork signature conflict check is org-scoped (cross-org same signature allowed)", async () => {
+  it("fork avoids signatureNames used by other orgs (global uniqueness)", async () => {
     const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
-    const newDagSig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+    const { pickSignatureName } = await import("../../src/lib/signature-words.js");
+
+    const newDag = DAG_WITH_TRANSACTIONAL_EMAIL_SEND;
+    const newSig = computeDAGSignature(newDag);
+
+    // Determine what signatureName pickSignatureName would pick if no names were used
+    const firstPick = pickSignatureName(newSig, new Set());
 
     const originalWorkflow = {
-      id: "wf-cross-org",
+      id: "wf-global-test",
       orgId: "org-1",
       createdForBrandId: null,
       humanId: null,
       campaignId: null,
       subrequestId: null,
       styleName: null,
-      name: "sales-email-cold-outreach-maple",
-      displayName: "Maple Flow",
+      name: "sales-email-cold-outreach-cedar",
+      displayName: "Cedar Flow",
       description: "Original",
       category: "sales",
       channel: "email",
       audienceType: "cold-outreach",
       tags: [],
-      signature: "old-sig-cross",
-      signatureName: "maple",
+      signature: "old-sig-global",
+      signatureName: "cedar",
       dag: VALID_LINEAR_DAG,
       status: "active",
       upgradedTo: null,
@@ -1190,20 +1196,23 @@ describe("PUT /workflows/:id — fork", () => {
       updatedAt: new Date(),
     };
 
+    // Mock: the signatureNames query returns the first-pick name as already used
+    // (simulating another org already having that signatureName globally)
     mockSelectResponses.push(
       [originalWorkflow],  // existing workflow lookup
-      [],                  // no conflicting signature IN SAME ORG (other org has same sig, but mock returns empty = no conflict)
-      [{ signatureName: "maple" }],  // existing signatureNames in org
+      [],                  // no conflicting signature
+      [{ signatureName: "cedar" }, { signatureName: firstPick }],  // globally used signatureNames
     );
 
     const res = await request
-      .put("/workflows/wf-cross-org")
+      .put("/workflows/wf-global-test")
       .set(AUTH)
-      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+      .send({ dag: newDag });
 
-    // Should succeed — a different org having the same signature should NOT block this fork
     expect(res.status).toBe(201);
-    expect(res.body.forkedFrom).toBe("wf-cross-org");
+    // Must NOT use the firstPick since it's globally taken
+    expect(res.body.signatureName).not.toBe(firstPick);
+    expect(res.body.signatureName).not.toBe("cedar");
   });
 
   it("rejects invalid DAG on fork", async () => {
