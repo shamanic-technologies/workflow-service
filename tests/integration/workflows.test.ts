@@ -1157,6 +1157,55 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.body.signatureName).not.toBe("jasmine");
   });
 
+  it("fork signature conflict check is org-scoped (cross-org same signature allowed)", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const newDagSig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
+
+    const originalWorkflow = {
+      id: "wf-cross-org",
+      orgId: "org-1",
+      createdForBrandId: null,
+      humanId: null,
+      campaignId: null,
+      subrequestId: null,
+      styleName: null,
+      name: "sales-email-cold-outreach-maple",
+      displayName: "Maple Flow",
+      description: "Original",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: [],
+      signature: "old-sig-cross",
+      signatureName: "maple",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: null,
+      windmillFlowPath: "f/workflows/org-1/flow",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockSelectResponses.push(
+      [originalWorkflow],  // existing workflow lookup
+      [],                  // no conflicting signature IN SAME ORG (other org has same sig, but mock returns empty = no conflict)
+      [{ signatureName: "maple" }],  // existing signatureNames in org
+    );
+
+    const res = await request
+      .put("/workflows/wf-cross-org")
+      .set(AUTH)
+      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    // Should succeed — a different org having the same signature should NOT block this fork
+    expect(res.status).toBe(201);
+    expect(res.body.forkedFrom).toBe("wf-cross-org");
+  });
+
   it("rejects invalid DAG on fork", async () => {
     mockDbRows.push({
       id: "wf-bad",

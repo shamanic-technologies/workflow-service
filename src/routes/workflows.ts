@@ -1073,6 +1073,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       .from(workflows)
       .where(
         and(
+          eq(workflows.orgId, orgId),
           eq(workflows.signature, newSignature),
           eq(workflows.status, "active"),
         )
@@ -1112,36 +1113,63 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
           schema: openFlow.schema,
         });
       } catch (err) {
-        console.error("[workflow-service] Failed to create forked flow in Windmill:", err);
+        // If flow already exists (e.g. retry after partial failure), update it instead
+        if (err instanceof Error && err.message.includes("already exists")) {
+          try {
+            await client.updateFlow(flowPath, {
+              summary: newName,
+              description: body.description ?? existing.description ?? undefined,
+              value: openFlow.value,
+              schema: openFlow.schema,
+            });
+          } catch (updateErr) {
+            console.error("[workflow-service] Failed to update existing forked flow in Windmill:", updateErr);
+          }
+        } else {
+          console.error("[workflow-service] Failed to create forked flow in Windmill:", err);
+        }
       }
     }
 
-    const [forked] = await db
-      .insert(workflows)
-      .values({
-        orgId: existing.orgId,
-        createdForBrandId: existing.createdForBrandId,
-        humanId: existing.humanId,
-        campaignId: existing.campaignId,
-        subrequestId: existing.subrequestId,
-        styleName: existing.styleName,
-        name: newName,
-        displayName: newName,
-        description: body.description ?? existing.description,
-        category: existing.category,
-        channel: existing.channel,
-        audienceType: existing.audienceType,
-        tags: body.tags ?? (existing.tags as string[]) ?? [],
-        signature: newSignature,
-        signatureName,
-        dag: body.dag,
-        status: "active",
-        forkedFrom: existing.id,
-        windmillFlowPath: flowPath,
-        createdByUserId: res.locals.userId as string,
-        createdByRunId: res.locals.runId as string,
-      })
-      .returning();
+    let forked;
+    try {
+      const [row] = await db
+        .insert(workflows)
+        .values({
+          orgId: existing.orgId,
+          createdForBrandId: existing.createdForBrandId,
+          humanId: existing.humanId,
+          campaignId: existing.campaignId,
+          subrequestId: existing.subrequestId,
+          styleName: existing.styleName,
+          name: newName,
+          displayName: newName,
+          description: body.description ?? existing.description,
+          category: existing.category,
+          channel: existing.channel,
+          audienceType: existing.audienceType,
+          tags: body.tags ?? (existing.tags as string[]) ?? [],
+          signature: newSignature,
+          signatureName,
+          dag: body.dag,
+          status: "active",
+          forkedFrom: existing.id,
+          windmillFlowPath: flowPath,
+          createdByUserId: res.locals.userId as string,
+          createdByRunId: res.locals.runId as string,
+        })
+        .returning();
+      forked = row;
+    } catch (dbErr: unknown) {
+      if (dbErr instanceof Error && "code" in dbErr && (dbErr as any).code === "23505") {
+        res.status(409).json({
+          error: "A workflow with this name already exists",
+          detail: (dbErr as any).detail,
+        });
+        return;
+      }
+      throw dbErr;
+    }
 
     console.log(
       `[workflow-service] fork: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id})`,
