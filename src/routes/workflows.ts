@@ -78,7 +78,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
       .from(workflows)
-      .where(eq(workflows.orgId, orgId));
+      .where(eq(workflows.status, "active"));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
     const [existing] = await db
@@ -314,7 +314,7 @@ router.post("/workflows", requireApiKey, async (req, res) => {
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
       .from(workflows)
-      .where(eq(workflows.orgId, orgId));
+      .where(eq(workflows.status, "active"));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(signature, usedNames);
 
@@ -467,7 +467,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
       .from(workflows)
-      .where(eq(workflows.orgId, orgId));
+      .where(eq(workflows.status, "active"));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
     const results: { id: string; name: string; category: string; channel: string; audienceType: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
@@ -1092,7 +1092,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
       .from(workflows)
-      .where(eq(workflows.orgId, orgId));
+      .where(eq(workflows.status, "active"));
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(newSignature, usedNames);
 
