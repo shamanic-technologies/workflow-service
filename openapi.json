@@ -665,7 +665,31 @@
           "error": {
             "type": "string",
             "nullable": true,
-            "description": "Error message (available when status is failed)."
+            "description": "Error message (available when status is failed). Raw Windmill error — use errorSummary for a clean version."
+          },
+          "errorSummary": {
+            "type": "object",
+            "properties": {
+              "failedStep": {
+                "type": "string",
+                "nullable": true,
+                "description": "Which workflow step failed (e.g. 'fetch_lead', 'send_email')."
+              },
+              "message": {
+                "type": "string",
+                "description": "Clean error message with stack traces stripped."
+              },
+              "rootCause": {
+                "type": "string",
+                "description": "Innermost root cause extracted from nested service error chains."
+              }
+            },
+            "required": [
+              "failedStep",
+              "message",
+              "rootCause"
+            ],
+            "description": "Parsed error summary (present only when status is 'failed'). Use rootCause for user-facing messages."
           },
           "startedAt": {
             "type": "string",

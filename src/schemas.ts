@@ -224,7 +224,12 @@ export const WorkflowRunResponseSchema = z
     status: z.string().describe("Run status: queued, running, completed, failed, or cancelled."),
     inputs: z.unknown().nullable().describe("The inputs that were passed at execution time."),
     result: z.unknown().nullable().describe("Workflow result (available when status is completed). Contains the output of the last node."),
-    error: z.string().nullable().describe("Error message (available when status is failed)."),
+    error: z.string().nullable().describe("Error message (available when status is failed). Raw Windmill error — use errorSummary for a clean version."),
+    errorSummary: z.object({
+      failedStep: z.string().nullable().describe("Which workflow step failed (e.g. 'fetch_lead', 'send_email')."),
+      message: z.string().describe("Clean error message with stack traces stripped."),
+      rootCause: z.string().describe("Innermost root cause extracted from nested service error chains."),
+    }).optional().describe("Parsed error summary (present only when status is 'failed'). Use rootCause for user-facing messages."),
     startedAt: z.string().nullable(),
     completedAt: z.string().nullable(),
     createdAt: z.string(),
