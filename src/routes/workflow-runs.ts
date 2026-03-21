@@ -7,16 +7,31 @@ import { getWindmillClient } from "../lib/windmill-client.js";
 import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
+import { parseWindmillError } from "../lib/error-parser.js";
 
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
-  return {
+  const base = {
     ...r,
     startedAt: r.startedAt?.toISOString() ?? null,
     completedAt: r.completedAt?.toISOString() ?? null,
     createdAt: r.createdAt?.toISOString() ?? null,
   };
+
+  if (r.status === "failed" && r.error) {
+    const parsed = parseWindmillError(r.error);
+    return {
+      ...base,
+      errorSummary: {
+        failedStep: parsed.failedStep,
+        message: parsed.message,
+        rootCause: parsed.rootCause,
+      },
+    };
+  }
+
+  return base;
 }
 
 // POST /workflows/by-name/:name/execute — Execute a workflow by name
