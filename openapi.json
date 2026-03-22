@@ -44,21 +44,25 @@
         "type": "string",
         "enum": [
           "sales",
-          "pr"
+          "pr",
+          "outlets",
+          "journalists"
         ],
         "description": "Workflow category."
       },
       "WorkflowChannel": {
         "type": "string",
         "enum": [
-          "email"
+          "email",
+          "database"
         ],
         "description": "Workflow distribution channel."
       },
       "WorkflowAudienceType": {
         "type": "string",
         "enum": [
-          "cold-outreach"
+          "cold-outreach",
+          "discovery"
         ],
         "description": "Workflow audience type."
       },

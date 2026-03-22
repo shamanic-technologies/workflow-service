@@ -326,6 +326,54 @@ describe("PUT /workflows/upgrade", () => {
     expect(wf.name).toBe(`sales-email-cold-outreach-${wf.signatureName}`);
   });
 
+  it("creates outlets-database-discovery workflow with correct name", async () => {
+    const res = await request
+      .put("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            category: "outlets" as const,
+            channel: "database" as const,
+            audienceType: "discovery" as const,
+            description: "outlets database discovery",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const wf = res.body.workflows[0];
+    expect(wf.category).toBe("outlets");
+    expect(wf.channel).toBe("database");
+    expect(wf.audienceType).toBe("discovery");
+    expect(wf.name).toBe(`outlets-database-discovery-${wf.signatureName}`);
+  });
+
+  it("creates journalists-database-discovery workflow with correct name", async () => {
+    const res = await request
+      .put("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            category: "journalists" as const,
+            channel: "database" as const,
+            audienceType: "discovery" as const,
+            description: "journalists database discovery",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const wf = res.body.workflows[0];
+    expect(wf.category).toBe("journalists");
+    expect(wf.channel).toBe("database");
+    expect(wf.audienceType).toBe("discovery");
+    expect(wf.name).toBe(`journalists-database-discovery-${wf.signatureName}`);
+  });
+
   it("stores orgId from x-org-id header in DB", async () => {
     const res = await request
       .put("/workflows/upgrade")
