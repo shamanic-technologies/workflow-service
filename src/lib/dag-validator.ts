@@ -30,6 +30,12 @@ export interface ValidationResult {
   errors: ValidationError[];
 }
 
+/**
+ * Service names that are banned in http.call nodes.
+ * api-service is a proxy — workflows must call the underlying services directly.
+ */
+const BANNED_HTTP_CALL_SERVICES = new Set(["api"]);
+
 export function validateDAG(dag: DAG): ValidationResult {
   const errors: ValidationError[] = [];
   const nodeIds = dag.nodes.map((n) => n.id);
@@ -105,7 +111,21 @@ export function validateDAG(dag: DAG): ValidationResult {
     });
   }
 
-  // 7. onError references an existing node
+  // 7. Banned service names in http.call nodes
+  for (const node of dag.nodes) {
+    if (node.type !== "http.call") continue;
+    const service = node.config?.service;
+    if (typeof service === "string" && BANNED_HTTP_CALL_SERVICES.has(service)) {
+      errors.push({
+        field: `nodes[${node.id}].config.service`,
+        message: `Banned service "${service}" in http.call node "${node.id}". ` +
+          `api-service is a proxy — call the underlying service directly ` +
+          `(e.g. "brand", "lead", "client").`,
+      });
+    }
+  }
+
+  // 8. onError references an existing node
   if (dag.onError && !nodeIdSet.has(dag.onError)) {
     errors.push({
       field: "onError",

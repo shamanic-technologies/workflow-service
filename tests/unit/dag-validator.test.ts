@@ -21,6 +21,7 @@ import {
   DAG_WITH_ON_ERROR,
   DAG_WITH_BAD_ON_ERROR,
   DAG_WITH_RETRIES_ZERO,
+  DAG_WITH_BANNED_API_SERVICE,
 } from "../helpers/fixtures.js";
 
 describe("validateDAG", () => {
@@ -150,5 +151,16 @@ describe("validateDAG", () => {
     const result = validateDAG(DAG_WITH_RETRIES_ZERO);
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
+  });
+
+  it("rejects a DAG with http.call using banned service 'api'", () => {
+    const result = validateDAG(DAG_WITH_BANNED_API_SERVICE);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.message.includes('Banned service "api"'))
+    ).toBe(true);
+    expect(
+      result.errors.some((e) => e.message.includes("call the underlying service directly"))
+    ).toBe(true);
   });
 });
