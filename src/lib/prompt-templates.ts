@@ -143,7 +143,7 @@ A workflow DAG has:
 ## Recommended Node Type: http.call
 
 Use "http.call" for all service calls. Config:
-- service (string): service name, maps to {SERVICE}_SERVICE_URL env var
+- service (string): service name, maps to {SERVICE}_SERVICE_URL env var. NEVER use "api" — api-service is a proxy. Call the underlying service directly (e.g. "brand", "lead", "client").
 - method (string): HTTP verb (GET, POST, PUT, DELETE)
 - path (string): endpoint path
 - body (object, optional): static request body parts

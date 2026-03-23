@@ -268,6 +268,17 @@ export const DAG_WITH_RETRIES_ZERO: DAG = {
   edges: [],
 };
 
+export const DAG_WITH_BANNED_API_SERVICE: DAG = {
+  nodes: [
+    {
+      id: "brand-profile",
+      type: "http.call",
+      config: { service: "api", method: "GET", path: "/brands/123/profile" },
+    },
+  ],
+  edges: [],
+};
+
 export const DAG_WITH_CUSTOM_RETRIES: DAG = {
   nodes: [
     {
