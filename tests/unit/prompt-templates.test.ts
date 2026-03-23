@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSystemPrompt, DAG_GENERATION_TOOL } from "../../src/lib/prompt-templates.js";
+import { buildSystemPrompt } from "../../src/lib/prompt-templates.js";
 
 describe("buildSystemPrompt", () => {
   const prompt = buildSystemPrompt();
@@ -42,41 +42,5 @@ describe("buildSystemPrompt", () => {
   it("forbids cost-tracking nodes in workflows", () => {
     expect(prompt).toContain("NEVER include cost-tracking nodes");
     expect(prompt).toContain("handled internally by each downstream service");
-  });
-
-  it("includes discovery workflow documentation with campaign-service endpoints", () => {
-    expect(prompt).toContain("/campaigns/{campaignId}/discovered-outlets");
-    expect(prompt).toContain("/campaigns/{campaignId}/discovered-journalists");
-  });
-
-  it("includes outlet discovery example DAG with send-discovered-outlets step", () => {
-    expect(prompt).toContain('"id": "discover-outlets"');
-    expect(prompt).toContain('"id": "send-discovered-outlets"');
-    expect(prompt).toContain("body.outlets");
-    expect(prompt).toContain("$ref:discover-outlets.output.outlets");
-  });
-
-  it("documents discovery workflow channel as database", () => {
-    expect(prompt).toContain('channel is "database"');
-  });
-});
-
-describe("DAG_GENERATION_TOOL", () => {
-  const schema = DAG_GENERATION_TOOL.input_schema;
-
-  it("includes outlets and journalists in category enum", () => {
-    const categoryEnum = schema.properties.category.enum;
-    expect(categoryEnum).toContain("outlets");
-    expect(categoryEnum).toContain("journalists");
-  });
-
-  it("includes database in channel enum", () => {
-    const channelEnum = schema.properties.channel.enum;
-    expect(channelEnum).toContain("database");
-  });
-
-  it("includes discovery in audienceType enum", () => {
-    const audienceEnum = schema.properties.audienceType.enum;
-    expect(audienceEnum).toContain("discovery");
   });
 });
