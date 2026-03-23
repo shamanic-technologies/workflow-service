@@ -12,17 +12,17 @@ export const DAG_GENERATION_TOOL = {
     properties: {
       category: {
         type: "string" as const,
-        enum: ["sales", "pr", "outlets", "journalists"],
+        enum: ["sales", "pr"],
         description: "Workflow category",
       },
       channel: {
         type: "string" as const,
-        enum: ["email", "database"],
+        enum: ["email"],
         description: "Distribution channel",
       },
       audienceType: {
         type: "string" as const,
-        enum: ["cold-outreach", "discovery"],
+        enum: ["cold-outreach"],
         description: "Audience type",
       },
       description: {
@@ -343,84 +343,6 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
   "onError": "end-run-error"
 }
 \`\`\`
-
-## Discovery Workflows (category: "outlets" or "journalists", audienceType: "discovery")
-
-Discovery workflows find outlets or journalists relevant to a brand. They follow the same chassis pattern, with an extra step before end-run that sends discovered results to campaign-service.
-
-Campaign-service discovery endpoints:
-- \`POST /campaigns/{campaignId}/discovered-outlets\` — body: \`{ outlets: [...] }\`
-- \`POST /campaigns/{campaignId}/discovered-journalists\` — body: \`{ journalists: [...] }\`
-- Headers: \`x-api-key\`, \`x-org-id\` (auto-injected by http.call)
-- The \`outlets\`/\`journalists\` arrays come from the upstream discover step output
-
-Discovery workflow channel is "database" (results are stored, not emailed).
-
-## Example: Outlet Discovery Workflow
-
-\`\`\`json
-{
-  "nodes": [
-    {
-      "id": "gate-check",
-      "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/gate-check", "stopAfterIf": "result.allowed == false" },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
-    },
-    {
-      "id": "start-run",
-      "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/start-run" },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
-    },
-    {
-      "id": "discover-outlets",
-      "type": "http.call",
-      "config": { "service": "outlets", "method": "POST", "path": "/outlets/discover" },
-      "inputMapping": {
-        "body.campaignId": "$ref:flow_input.campaignId",
-        "body.brandName": "$ref:start-run.output.brandDomain",
-        "body.brandDescription": "$ref:start-run.output.valueForTarget",
-        "body.industry": "$ref:start-run.output.targetOutcome",
-        "body.targetAudience": "$ref:start-run.output.targetAudience"
-      },
-      "retries": 0
-    },
-    {
-      "id": "send-discovered-outlets",
-      "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/campaigns/{campaignId}/discovered-outlets" },
-      "inputMapping": {
-        "params.campaignId": "$ref:flow_input.campaignId",
-        "body.outlets": "$ref:discover-outlets.output.outlets"
-      }
-    },
-    {
-      "id": "end-run",
-      "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true } },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId" }
-    },
-    {
-      "id": "end-run-error",
-      "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": false } },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId" }
-    }
-  ],
-  "edges": [
-    { "from": "gate-check", "to": "start-run" },
-    { "from": "start-run", "to": "discover-outlets" },
-    { "from": "discover-outlets", "to": "send-discovered-outlets" },
-    { "from": "send-discovered-outlets", "to": "end-run" }
-  ],
-  "onError": "end-run-error"
-}
-\`\`\`
-
-For journalist discovery, use the same pattern with:
-- category: "journalists", service: "journalists", path: "/journalists/discover"
-- \`POST /campaigns/{campaignId}/discovered-journalists\` with \`body.journalists\`
 
 ## Example: Simple For-Each Loop
 
