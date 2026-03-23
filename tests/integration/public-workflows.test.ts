@@ -250,12 +250,13 @@ describe("GET /public/workflows/ranked", () => {
     expect(res.body.sections[0].workflows[0]).not.toHaveProperty("dag");
   });
 
-  it("returns 404 when no workflows match", async () => {
+  it("returns 200 with empty results when no workflows match", async () => {
     const res = await request
       .get("/public/workflows/ranked")
       .query({ category: "sales", channel: "email", audienceType: "cold-outreach" });
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ results: [] });
   });
 
   it("supports groupBy=brand (from runs)", async () => {
@@ -362,11 +363,12 @@ describe("GET /public/workflows/best", () => {
     expect(res.body.bestCostPerReply).toBeNull();
   });
 
-  it("returns 404 when no active workflows exist", async () => {
+  it("returns 200 with null records when no active workflows exist", async () => {
     const res = await request
       .get("/public/workflows/best");
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ bestCostPerOpen: null, bestCostPerReply: null });
   });
 
   it("calls public fetch functions without identity", async () => {

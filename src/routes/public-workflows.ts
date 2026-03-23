@@ -41,7 +41,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
     const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
     if (activeWorkflows.length === 0) {
-      res.status(404).json({ error: "No workflows found matching the criteria" });
+      res.json({ results: [] });
       return;
     }
 
@@ -150,7 +150,7 @@ router.get("/public/workflows/best", async (req, res) => {
     const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
     if (activeWorkflows.length === 0) {
-      res.status(404).json({ error: "No active workflows found" });
+      res.json({ bestCostPerOpen: null, bestCostPerReply: null });
       return;
     }
 

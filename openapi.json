@@ -3171,16 +3171,6 @@
               }
             }
           },
-          "404": {
-            "description": "No workflows found matching the criteria",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "502": {
             "description": "External service (runs-service or email-gateway-service) unavailable",
             "content": {
@@ -3304,16 +3294,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BestWorkflowResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No active workflows found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3460,16 +3440,6 @@
               }
             }
           },
-          "404": {
-            "description": "No workflows found matching the criteria",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "502": {
             "description": "External service unavailable",
             "content": {
@@ -3528,16 +3498,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BestWorkflowResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No active workflows found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

@@ -300,10 +300,10 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.results[0].stats.costPerOutcome).toBe(10);
   });
 
-  it("returns 404 when no workflows match", async () => {
+  it("returns 200 with empty results when no workflows match", async () => {
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
-    expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/No workflows found/);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ results: [] });
   });
 
   it("returns 502 when email-gateway-service fails", async () => {
@@ -556,12 +556,13 @@ describe("GET /workflows/best (hero records)", () => {
     expect(res.body.bestCostPerReply).toBeNull();
   });
 
-  it("returns 404 when no active workflows exist", async () => {
+  it("returns 200 with null records when no active workflows exist", async () => {
     const res = await request
       .get("/workflows/best")
       .set(AUTH);
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ bestCostPerOpen: null, bestCostPerReply: null });
   });
 
   it("requires authentication", async () => {
