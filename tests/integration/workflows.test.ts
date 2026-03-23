@@ -1263,6 +1263,64 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.body.signatureName).not.toBe("cedar");
   });
 
+  it("fork avoids signatureNames used by deprecated workflows", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const { pickSignatureName } = await import("../../src/lib/signature-words.js");
+
+    const newDag = DAG_WITH_TRANSACTIONAL_EMAIL_SEND;
+    const newSig = computeDAGSignature(newDag);
+
+    // Determine what signatureName pickSignatureName would pick if no names were used
+    const firstPick = pickSignatureName(newSig, new Set());
+
+    const originalWorkflow = {
+      id: "wf-deprecated-test",
+      orgId: "org-1",
+      createdForBrandId: null,
+      humanId: null,
+      campaignId: null,
+      subrequestId: null,
+      styleName: null,
+      name: `sales-email-cold-outreach-aldebaran`,
+      displayName: `sales-email-cold-outreach-${firstPick}`,
+      description: "Original",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      tags: [],
+      signature: "old-sig-deprecated",
+      signatureName: "aldebaran",
+      dag: VALID_LINEAR_DAG,
+      status: "active",
+      upgradedTo: null,
+      forkedFrom: null,
+      windmillFlowPath: "f/workflows/org-1/flow",
+      windmillWorkspace: "prod",
+      createdByUserId: "user-1",
+      createdByRunId: "run-1",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Mock: the signatureNames query includes a DEPRECATED workflow using the firstPick name
+    // This simulates the bug where a deprecated workflow's signatureName was recycled
+    mockSelectResponses.push(
+      [originalWorkflow],  // existing workflow lookup
+      [],                  // no conflicting signature
+      [{ signatureName: "aldebaran" }, { signatureName: firstPick }],  // firstPick is taken (by deprecated wf)
+    );
+
+    const res = await request
+      .put("/workflows/wf-deprecated-test")
+      .set(AUTH)
+      .send({ dag: newDag });
+
+    expect(res.status).toBe(201);
+    // Must NOT reuse the firstPick even though the workflow using it is deprecated
+    expect(res.body.signatureName).not.toBe(firstPick);
+    expect(res.body.signatureName).not.toBe("aldebaran");
+  });
+
   it("rejects invalid DAG on fork", async () => {
     mockDbRows.push({
       id: "wf-bad",
