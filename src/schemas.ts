@@ -1076,10 +1076,6 @@ registry.registerPath({
         "application/json": { schema: RankedWorkflowResponseSchema },
       },
     },
-    404: {
-      description: "No workflows found matching the criteria",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
     400: {
       description: "Missing or invalid query parameters",
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -1113,10 +1109,6 @@ registry.registerPath({
         "application/json": { schema: BestWorkflowResponseSchema },
       },
     },
-    404: {
-      description: "No active workflows found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
     502: {
       description: "External service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -1146,10 +1138,6 @@ registry.registerPath({
       content: {
         "application/json": { schema: PublicRankedWorkflowResponseSchema },
       },
-    },
-    404: {
-      description: "No workflows found matching the criteria",
-      content: { "application/json": { schema: ErrorResponseSchema } },
     },
     400: {
       description: "Missing or invalid query parameters",
@@ -1182,10 +1170,6 @@ registry.registerPath({
       content: {
         "application/json": { schema: BestWorkflowResponseSchema },
       },
-    },
-    404: {
-      description: "No active workflows found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
     },
     502: {
       description: "External service unavailable",
