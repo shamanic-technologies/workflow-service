@@ -21,6 +21,7 @@ export async function main(
   campaignId?: string,
   brandId?: string,
   workflowName?: string,
+  featureSlug?: string,
 ) {
   // Convert service name to env var prefix: "transactional-email" → "TRANSACTIONAL_EMAIL"
   const envPrefix = service.toUpperCase().replace(/-/g, "_");
@@ -66,6 +67,7 @@ export async function main(
   if (campaignId) reqHeaders["x-campaign-id"] = campaignId;
   if (brandId) reqHeaders["x-brand-id"] = brandId;
   if (workflowName) reqHeaders["x-workflow-name"] = workflowName;
+  if (featureSlug) reqHeaders["x-feature-slug"] = featureSlug;
   // Caller-supplied headers can override identity headers
   if (headers) Object.assign(reqHeaders, headers);
   // Resolved x-api-key always takes precedence
