@@ -792,3 +792,89 @@ describe("POST /workflow-runs/:id/cancel", () => {
     expect(mockCancelJob).toHaveBeenCalled();
   });
 });
+
+describe("x-feature-slug tracking", () => {
+  beforeEach(() => {
+    mockWorkflows.length = 0;
+    mockRuns.length = 0;
+    mockSelectResponses.length = 0;
+    mockRunFlow.mockClear();
+    mockCreateRun.mockClear();
+    mockCreateRun.mockResolvedValue({ runId: "run-feat-1" });
+  });
+
+  const WORKFLOW_FIXTURE = {
+    id: "wf-feat",
+    orgId: "org-1",
+    name: "sales-email-cold-outreach-sequoia",
+    campaignId: null,
+    subrequestId: null,
+    createdForBrandId: null,
+    windmillFlowPath: "f/workflows/org_1/sales_email",
+    windmillWorkspace: "prod",
+    dag: VALID_LINEAR_DAG,
+  };
+
+  it("stores featureSlug from x-feature-slug header in the run (execute by name)", async () => {
+    mockWorkflows.push(WORKFLOW_FIXTURE);
+
+    const res = await request
+      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .set({ ...AUTH, "x-feature-slug": "sales-email-cold-outreach" })
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(201);
+    expect(res.body.featureSlug).toBe("sales-email-cold-outreach");
+  });
+
+  it("stores featureSlug from x-feature-slug header in the run (execute by id)", async () => {
+    mockWorkflows.push(WORKFLOW_FIXTURE);
+
+    const res = await request
+      .post("/workflows/wf-feat/execute")
+      .set({ ...AUTH, "x-feature-slug": "sales-email-cold-outreach" })
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(201);
+    expect(res.body.featureSlug).toBe("sales-email-cold-outreach");
+  });
+
+  it("prefers featureSlug from inputs over header", async () => {
+    mockWorkflows.push(WORKFLOW_FIXTURE);
+
+    const res = await request
+      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .set({ ...AUTH, "x-feature-slug": "from-header" })
+      .send({ inputs: { featureSlug: "from-inputs" } });
+
+    expect(res.status).toBe(201);
+    expect(res.body.featureSlug).toBe("from-inputs");
+  });
+
+  it("forwards featureSlug into Windmill flow inputs", async () => {
+    mockWorkflows.push(WORKFLOW_FIXTURE);
+
+    await request
+      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .set({ ...AUTH, "x-feature-slug": "sales-email-cold-outreach" })
+      .send({ inputs: { email: "test@example.com" } });
+
+    expect(mockRunFlow).toHaveBeenCalledWith(
+      "f/workflows/org_1/sales_email",
+      expect.objectContaining({ featureSlug: "sales-email-cold-outreach", email: "test@example.com" }),
+    );
+  });
+
+  it("featureSlug is undefined when header is not sent", async () => {
+    mockWorkflows.push(WORKFLOW_FIXTURE);
+
+    const res = await request
+      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(201);
+    // featureSlug should not be set (undefined → null in JSON or absent)
+    expect(res.body.featureSlug).toBeFalsy();
+  });
+});

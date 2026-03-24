@@ -10,7 +10,7 @@ function mockReqRes(headers: Record<string, string>, body?: Record<string, unkno
 }
 
 describe("requireIdentity – tracking headers", () => {
-  it("extracts x-brand-id and optional x-campaign-id, x-workflow-name into res.locals", () => {
+  it("extracts x-brand-id and optional x-campaign-id, x-workflow-name, x-feature-slug into res.locals", () => {
     const { req, res, locals } = mockReqRes({
       "x-org-id": "org-1",
       "x-user-id": "user-1",
@@ -18,6 +18,7 @@ describe("requireIdentity – tracking headers", () => {
       "x-brand-id": "brand-xyz",
       "x-campaign-id": "camp-abc",
       "x-workflow-name": "sales-email-cold-outreach",
+      "x-feature-slug": "sales-email-cold-outreach",
     });
 
     let called = false;
@@ -29,6 +30,7 @@ describe("requireIdentity – tracking headers", () => {
     expect(locals.brandId).toBe("brand-xyz");
     expect(locals.campaignId).toBe("camp-abc");
     expect(locals.workflowName).toBe("sales-email-cold-outreach");
+    expect(locals.featureSlug).toBe("sales-email-cold-outreach");
   });
 
   it("passes without x-brand-id (now optional on identity middleware)", () => {
@@ -47,6 +49,7 @@ describe("requireIdentity – tracking headers", () => {
     expect(locals).not.toHaveProperty("brandId");
     expect(locals).not.toHaveProperty("campaignId");
     expect(locals).not.toHaveProperty("workflowName");
+    expect(locals).not.toHaveProperty("featureSlug");
   });
 
   it("sets brandId in locals when x-brand-id header is present", () => {
