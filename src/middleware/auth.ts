@@ -39,8 +39,10 @@ export function requireIdentity(
 
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
   const workflowName = req.headers["x-workflow-name"] as string | undefined;
+  const featureSlug = req.headers["x-feature-slug"] as string | undefined;
   if (campaignId) res.locals.campaignId = campaignId;
   if (workflowName) res.locals.workflowName = workflowName;
+  if (featureSlug) res.locals.featureSlug = featureSlug;
 
   next();
 }

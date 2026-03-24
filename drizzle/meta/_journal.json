@@ -134,6 +134,13 @@
       "when": 1772621106410,
       "tag": "0018_scope_unique_indexes_by_org",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1772707506410,
+      "tag": "0019_add_feature_slug_to_runs",
+      "breakpoints": true
     }
   ]
 }

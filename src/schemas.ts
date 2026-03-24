@@ -215,6 +215,7 @@ export const WorkflowRunResponseSchema = z
     orgId: z.string(),
     campaignId: z.string().nullable(),
     brandId: z.string().nullable(),
+    featureSlug: z.string().nullable().describe("Feature slug from features-service. Used for per-feature analytics."),
     workflowName: z.string().nullable().describe("Name of the workflow that was executed."),
     subrequestId: z.string().nullable(),
     userId: z.string().nullable().describe("User ID from the execution context."),
@@ -646,6 +647,7 @@ const IdentityHeaders = z.object({
   "x-campaign-id": z.string().optional().describe("Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."),
   "x-brand-id": z.string().optional().describe("Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."),
   "x-workflow-name": z.string().optional().describe("Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."),
+  "x-feature-slug": z.string().optional().describe("Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."),
 });
 
 // --- Register Paths ---
@@ -951,6 +953,7 @@ registry.registerPath({
       workflowId: z.string().uuid().optional(),
       orgId: z.string().optional(),
       campaignId: z.string().optional(),
+      featureSlug: z.string().optional().describe("Filter runs by feature slug."),
       status: z.string().optional(),
     }),
   },
