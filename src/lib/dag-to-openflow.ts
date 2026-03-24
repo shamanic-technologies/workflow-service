@@ -75,6 +75,7 @@ export function dagToOpenFlow(dag: DAG, name: string): OpenFlow {
     campaignId: { type: "string", description: "Campaign identifier (auto-injected)" },
     brandId: { type: "string", description: "Brand identifier (auto-injected)" },
     workflowName: { type: "string", description: "Workflow name (auto-injected)" },
+    featureSlug: { type: "string", description: "Feature slug from features-service (auto-injected)" },
   };
   for (const node of dag.nodes) {
     if (!node.inputMapping) continue;
@@ -405,6 +406,7 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     campaignId: "flow_input.campaignId",
     brandId: "flow_input.brandId",
     workflowName: "flow_input.workflowName",
+    featureSlug: "flow_input.featureSlug",
   };
   for (const [key, expr] of Object.entries(autoInjects)) {
     if (!inputTransforms[key]) {
@@ -451,6 +453,7 @@ function buildFailureModule(node: DAGNode): FlowModule | null {
     campaignId: "flow_input.campaignId",
     brandId: "flow_input.brandId",
     workflowName: "flow_input.workflowName",
+    featureSlug: "flow_input.featureSlug",
   };
   for (const [key, expr] of Object.entries(failureAutoInjects)) {
     if (!inputTransforms[key]) {
