@@ -265,6 +265,44 @@ describe("node scripts inject identity headers", () => {
       expect(options.headers["x-run-id"]).toBe("run-uuid-1");
     });
 
+    it("sends empty object for searchParams when null (regression: lead-service 400)", async () => {
+      const { main } = await import("../../scripts/nodes/lead-service.js");
+      mockFetch.mockResolvedValueOnce(jsonResponse({ found: true, lead: { email: "a@b.com" } }));
+
+      await main(
+        "apollo",
+        null as any,                                                              // searchParams = null
+        { orgId: "ctx-org", brandId: "b1", campaignId: "c1", runId: "ctx-run" },
+        leadEnvs,
+        "org-uuid-1",
+        "user-uuid-1",
+        "run-uuid-1",
+      );
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.searchParams).toEqual({});
+    });
+
+    it("sends empty object for searchParams when undefined", async () => {
+      const { main } = await import("../../scripts/nodes/lead-service.js");
+      mockFetch.mockResolvedValueOnce(jsonResponse({ found: true, lead: { email: "a@b.com" } }));
+
+      await main(
+        "apollo",
+        undefined,
+        { orgId: "ctx-org", brandId: "b1", campaignId: "c1", runId: "ctx-run" },
+        leadEnvs,
+        "org-uuid-1",
+        "user-uuid-1",
+        "run-uuid-1",
+      );
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.searchParams).toEqual({});
+    });
+
     it("falls back to context.orgId and context.runId", async () => {
       const { main } = await import("../../scripts/nodes/lead-service.js");
       mockFetch.mockResolvedValueOnce(jsonResponse({ found: true, lead: { email: "a@b.com" } }));
