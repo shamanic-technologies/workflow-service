@@ -38,7 +38,7 @@ export async function main(
         campaignId: context.campaignId,
         brandId: context.brandId,
         parentRunId: resolvedRunId,
-        searchParams,
+        searchParams: searchParams ?? {},
       }),
     }
   );
