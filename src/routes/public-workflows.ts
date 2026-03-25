@@ -25,14 +25,11 @@ router.get("/public/workflows/ranked", async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, featureSlug, category, channel, audienceType, objective, limit, groupBy } = query.data;
+    const { orgId, brandId, featureSlug, objective, limit, groupBy } = query.data;
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
-    if (category) conditions.push(eq(workflows.category, category));
-    if (channel) conditions.push(eq(workflows.channel, channel));
-    if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -48,29 +45,25 @@ router.get("/public/workflows/ranked", async (req, res) => {
 
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "public" as const, brandId, orgId });
 
-    if (groupBy === "section") {
-      const sectionMap = new Map<string, WorkflowScore[]>();
+    if (groupBy === "feature") {
+      const featureMap = new Map<string, WorkflowScore[]>();
       for (const score of scores) {
-        const key = `${score.workflow.category}-${score.workflow.channel}-${score.workflow.audienceType}`;
-        const arr = sectionMap.get(key) ?? [];
+        const key = score.workflow.featureSlug;
+        const arr = featureMap.get(key) ?? [];
         arr.push(score);
-        sectionMap.set(key, arr);
+        featureMap.set(key, arr);
       }
 
-      const sections = [...sectionMap.entries()].map(([sectionKey, sectionScores]) => {
-        const ranked = rankScores(sectionScores).slice(0, limit);
-        const sample = sectionScores[0].workflow;
+      const features = [...featureMap.entries()].map(([featureSlug, featureScores]) => {
+        const ranked = rankScores(featureScores).slice(0, limit);
         return {
-          sectionKey,
-          category: sample.category,
-          channel: sample.channel,
-          audienceType: sample.audienceType,
-          stats: aggregateSectionStats(sectionScores),
+          featureSlug,
+          stats: aggregateSectionStats(featureScores),
           workflows: ranked.map(formatPublicScoreItem),
         };
       });
 
-      res.json({ sections });
+      res.json({ features });
     } else if (groupBy === "brand") {
       // Group by brandId from runs
       const brandRunIds = new Map<string, Set<string>>();

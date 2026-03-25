@@ -107,6 +107,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     displayName: null,
     createdForBrandId: null,
     description: null,
+    featureSlug: "sales-email-cold-outreach",
     category: "sales",
     channel: "email",
     audienceType: "cold-outreach",
@@ -227,7 +228,7 @@ describe("GET /public/workflows/ranked", () => {
     expect(mockFetchEmailStatsAuth).not.toHaveBeenCalled();
   });
 
-  it("supports groupBy=section", async () => {
+  it("supports groupBy=feature", async () => {
     const wf = makeWorkflow({ id: "wf-sec" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-sec", "ext-run-1"));
@@ -241,13 +242,13 @@ describe("GET /public/workflows/ranked", () => {
 
     const res = await request
       .get("/public/workflows/ranked")
-      .query({ groupBy: "section" });
+      .query({ groupBy: "feature" });
 
     expect(res.status).toBe(200);
-    expect(res.body.sections).toBeDefined();
-    expect(res.body.sections).toHaveLength(1);
-    expect(res.body.sections[0].sectionKey).toBe("sales-email-cold-outreach");
-    expect(res.body.sections[0].workflows[0]).not.toHaveProperty("dag");
+    expect(res.body.features).toBeDefined();
+    expect(res.body.features).toHaveLength(1);
+    expect(res.body.features[0].featureSlug).toBe("sales-email-cold-outreach");
+    expect(res.body.features[0].workflows[0]).not.toHaveProperty("dag");
   });
 
   it("returns 200 with empty results when no workflows match", async () => {

@@ -110,19 +110,17 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-outreach",
         description: "I want a cold email outreach workflow that finds leads and sends emails",
       });
 
     expect(res.status).toBe(200);
     expect(res.body.workflow).toBeDefined();
     expect(res.body.workflow.action).toBe("created");
-    expect(res.body.workflow.category).toBe("sales");
-    expect(res.body.workflow.name).toContain("sales-email-cold-outreach");
+    expect(res.body.workflow.featureSlug).toBe("cold-email-outreach");
+    expect(res.body.workflow.name).toContain("cold-email-outreach-");
     expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
-    expect(res.body.category).toBe("sales");
-    expect(res.body.channel).toBe("email");
-    expect(res.body.audienceType).toBe("cold-outreach");
     expect(mockFetchAnthropicKey).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", runId: "run-caller-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined, style: undefined },
@@ -143,6 +141,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "bad-workflow",
         description: "A workflow that does something impossible with bad types",
       });
 
@@ -156,6 +155,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(IDENTITY)
       .send({
+        featureSlug: "test-auth",
         description: "test workflow description here",
       });
 
@@ -175,7 +175,7 @@ describe("POST /workflows/generate", () => {
     const res = await request
       .post("/workflows/generate")
       .set(AUTH)
-      .send({ description: "hi" });
+      .send({ featureSlug: "test", description: "hi" });
 
     expect(res.status).toBe(400);
   });
@@ -193,6 +193,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-hints",
         description: "Cold email outreach with lead search",
         hints: { services: ["lead", "email-gateway"] },
       });
@@ -214,6 +215,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "test-error",
         description: "Some workflow description for testing errors",
       });
 
@@ -230,6 +232,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "test-key-error",
         description: "Some workflow description for testing key-service errors",
       });
 
@@ -252,6 +255,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-outreach",
         description: "Cold email outreach in the style of Alex Hormozi",
         style: { type: "human", humanId: "human-123", name: "Hormozi" },
       });
@@ -259,7 +263,7 @@ describe("POST /workflows/generate", () => {
     expect(res.status).toBe(200);
     expect(res.body.workflow.action).toBe("created");
     expect(res.body.workflow.signatureName).toBe("hormozi-v1");
-    expect(res.body.workflow.name).toBe("sales-email-cold-outreach-hormozi-v1");
+    expect(res.body.workflow.name).toBe("cold-email-outreach-hormozi-v1");
     // Verify style was passed through to generator
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -283,13 +287,14 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-outreach",
         description: "Cold email outreach in my brand style with good copy",
         style: { type: "brand", brandId: "brand-456", name: "My Brand" },
       });
 
     expect(res.status).toBe(200);
     expect(res.body.workflow.signatureName).toBe("my-brand-v1");
-    expect(res.body.workflow.name).toBe("sales-email-cold-outreach-my-brand-v1");
+    expect(res.body.workflow.name).toBe("cold-email-outreach-my-brand-v1");
   });
 
   it("rejects human style without humanId", async () => {
@@ -297,6 +302,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-outreach",
         description: "Cold email outreach in expert style",
         style: { type: "human", name: "Hormozi" },
       });
@@ -309,6 +315,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-outreach",
         description: "Cold email outreach in brand style long description",
         style: { type: "brand", name: "My Brand" },
       });
@@ -316,7 +323,7 @@ describe("POST /workflows/generate", () => {
     expect(res.status).toBe(400);
   });
 
-  it("generates workflow with old naming when no style provided", async () => {
+  it("generates workflow with random naming when no style provided", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
       category: "sales",
@@ -329,12 +336,13 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "cold-email-outreach",
         description: "Standard cold email outreach without any style preference",
       });
 
     expect(res.status).toBe(200);
     expect(res.body.workflow.signatureName).not.toContain("-v");
-    expect(res.body.workflow.name).toContain("sales-email-cold-outreach-");
+    expect(res.body.workflow.name).toContain("cold-email-outreach-");
     // signatureName should be a random word, not a versioned style name
     expect(res.body.workflow.signatureName).toMatch(/^[a-z]+$/);
   });
@@ -348,6 +356,7 @@ describe("POST /workflows/generate", () => {
       .post("/workflows/generate")
       .set(AUTH)
       .send({
+        featureSlug: "test-missing-config",
         description: "Some workflow description for testing missing config",
       });
 

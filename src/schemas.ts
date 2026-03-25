@@ -113,12 +113,12 @@ export const CreateWorkflowSchema = z
     subrequestId: z.string().optional().describe("Optional subrequest ID for cost tracking."),
     name: z.string().min(1).describe("Workflow name. Must be unique within the orgId. Used to execute by name later."),
     description: z.string().optional().describe("Human-readable description of what this workflow does."),
-    featureSlug: z.string().optional().describe("Feature slug from features-service. Links this workflow to a specific feature for dashboard display."),
-    category: WorkflowCategorySchema.describe("Workflow category."),
-    channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
-    audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
+    featureSlug: z.string().min(1).describe("Feature slug from features-service. Required — used to build the workflow name and for feature-level grouping."),
+    category: WorkflowCategorySchema.optional().describe("Optional workflow category tag."),
+    channel: WorkflowChannelSchema.optional().describe("Optional workflow channel tag."),
+    audienceType: WorkflowAudienceTypeSchema.optional().describe("Optional workflow audience type tag."),
     tags: z.array(z.string()).optional().describe(
-      "Free-form tags for filtering/grouping (e.g. channels used in the DAG: [\"email\", \"linkedin\"]). Complementary to category/channel/audienceType."
+      "Free-form tags for filtering/grouping (e.g. channels used in the DAG: [\"email\", \"linkedin\"])."
     ),
     dag: DAGSchema,
   })
@@ -137,7 +137,7 @@ export const WorkflowResponseSchema = z
   .object({
     id: z.string().uuid().describe("Workflow UUID."),
     orgId: z.string().describe("Organization ID."),
-    featureSlug: z.string().nullable().describe("Feature slug from features-service. Links this workflow to a specific feature."),
+    featureSlug: z.string().describe("Feature slug from features-service. Used for naming and feature-level grouping."),
     createdForBrandId: z.string().nullable(),
     humanId: z.string().nullable().describe("Human ID if this workflow was generated in a human expert's style."),
     campaignId: z.string().nullable(),
@@ -146,12 +146,12 @@ export const WorkflowResponseSchema = z
     name: z.string().describe("Workflow name. Use this with orgId to execute via /workflows/by-name/{name}/execute."),
     displayName: z.string().nullable().describe("Human-readable display name. Falls back to name if not set."),
     description: z.string().nullable(),
-    category: WorkflowCategorySchema.describe("Workflow category."),
-    channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
-    audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
+    category: WorkflowCategorySchema.nullable().describe("Optional workflow category tag."),
+    channel: WorkflowChannelSchema.nullable().describe("Optional workflow channel tag."),
+    audienceType: WorkflowAudienceTypeSchema.nullable().describe("Optional workflow audience type tag."),
     tags: z.array(z.string()).describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
-    signatureName: z.string().describe("Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same category/channel/audienceType."),
+    signatureName: z.string().describe("Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same feature."),
     dag: z.unknown().describe("The DAG definition as submitted."),
     status: z.enum(["active", "deprecated"]).describe("Workflow lifecycle status. Only active workflows can be executed."),
     upgradedTo: z.string().uuid().nullable().describe("If deprecated, the ID of the replacement workflow."),
@@ -244,11 +244,11 @@ export const WorkflowRunResponseSchema = z
 export const DeployWorkflowItemSchema = z
   .object({
     createdForBrandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
-    featureSlug: z.string().optional().describe("Feature slug from features-service. Links this workflow to a specific feature for dashboard display."),
+    featureSlug: z.string().min(1).describe("Feature slug from features-service. Required — used to build the workflow name."),
     description: z.string().optional().describe("Human-readable description."),
-    category: WorkflowCategorySchema.describe("Workflow category. Required — used to build the workflow name."),
-    channel: WorkflowChannelSchema.describe("Workflow distribution channel. Required — used to build the workflow name."),
-    audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type. Required — used to build the workflow name."),
+    category: WorkflowCategorySchema.optional().describe("Optional workflow category tag."),
+    channel: WorkflowChannelSchema.optional().describe("Optional workflow channel tag."),
+    audienceType: WorkflowAudienceTypeSchema.optional().describe("Optional workflow audience type tag."),
     tags: z.array(z.string()).optional().describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
     dag: DAGSchema,
   })
@@ -263,10 +263,8 @@ export const DeployWorkflowsSchema = z
 export const DeployWorkflowResultSchema = z
   .object({
     id: z.string().uuid(),
-    name: z.string().describe("Auto-generated workflow name: {category}-{channel}-{audienceType}-{signatureName}."),
-    category: WorkflowCategorySchema,
-    channel: WorkflowChannelSchema,
-    audienceType: WorkflowAudienceTypeSchema,
+    name: z.string().describe("Auto-generated workflow name: {featureSlug}-{signatureName}."),
+    featureSlug: z.string().describe("Feature slug used to build the name."),
     tags: z.array(z.string()).describe("Tags assigned to this workflow."),
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
     signatureName: z.string().describe("Human-readable name for this DAG variant (auto-generated by workflow-service)."),
@@ -358,6 +356,9 @@ export const GenerateWorkflowSchema = z
     description: z.string().min(10).describe(
       "Natural language description of the desired workflow. Be specific about the steps, services, and data flow."
     ),
+    featureSlug: z.string().min(1).describe(
+      "Feature slug from features-service. Required — used to build the workflow name."
+    ),
     hints: GenerateWorkflowHintsSchema.optional().describe(
       "Optional hints to guide generation."
     ),
@@ -374,9 +375,6 @@ export const GenerateWorkflowResponseSchema = z
       "The deployed workflow metadata."
     ),
     dag: DAGSchema.describe("The generated DAG definition."),
-    category: WorkflowCategorySchema,
-    channel: WorkflowChannelSchema,
-    audienceType: WorkflowAudienceTypeSchema,
     generatedDescription: z.string().describe(
       "LLM-generated description of what this workflow does."
     ),
@@ -417,9 +415,7 @@ export const WorkflowMetadataSchema = z
     name: z.string(),
     displayName: z.string().nullable(),
     createdForBrandId: z.string().nullable(),
-    category: WorkflowCategorySchema,
-    channel: WorkflowChannelSchema,
-    audienceType: WorkflowAudienceTypeSchema,
+    featureSlug: z.string().describe("Feature slug for grouping and naming."),
     signature: z.string(),
     signatureName: z.string(),
   })
@@ -435,9 +431,9 @@ export const RankedWorkflowObjectiveSchema = z
   .openapi("RankedWorkflowObjective");
 
 export const RankedWorkflowGroupBySchema = z
-  .enum(["section", "brand"])
+  .enum(["feature", "brand"])
   .describe(
-    'Group results by section (category-channel-audienceType) or brand (brandId). ' +
+    'Group results by feature (featureSlug) or brand (brandId). ' +
     'Each group includes aggregated stats and its workflows ranked within. ' +
     'When groupBy=brand, workflows without a brandId are excluded.'
   )
@@ -448,9 +444,6 @@ export const RankedWorkflowQuerySchema = z
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
     featureSlug: z.string().optional().describe("Filter workflows by feature slug."),
-    category: WorkflowCategorySchema.optional().describe("Filter workflows by category."),
-    channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
-    audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
     objective: RankedWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
     limit: z.coerce.number().int().min(1).max(100).default(10).describe("Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."),
     groupBy: RankedWorkflowGroupBySchema.optional().describe("Group results by section or brand. When omitted, returns a flat ranked list."),
@@ -465,16 +458,13 @@ export const RankedWorkflowItemSchema = z
   })
   .openapi("RankedWorkflowItem");
 
-export const RankedSectionSchema = z
+export const RankedFeatureGroupSchema = z
   .object({
-    sectionKey: z.string().describe("Section key in the format category-channel-audienceType."),
-    category: WorkflowCategorySchema,
-    channel: WorkflowChannelSchema,
-    audienceType: WorkflowAudienceTypeSchema,
-    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows in this section."),
-    workflows: z.array(RankedWorkflowItemSchema).describe("Workflows in this section, ranked by performance."),
+    featureSlug: z.string().describe("Feature slug used as the grouping key."),
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows in this feature."),
+    workflows: z.array(RankedWorkflowItemSchema).describe("Workflows in this feature, ranked by performance."),
   })
-  .openapi("RankedSection");
+  .openapi("RankedFeatureGroup");
 
 export const RankedWorkflowResponseSchema = z
   .object({
@@ -492,7 +482,7 @@ export const RankedBrandGroupSchema = z
 
 export const RankedWorkflowGroupedResponseSchema = z
   .object({
-    sections: z.array(RankedSectionSchema).optional().describe("Workflow sections grouped by category-channel-audienceType."),
+    features: z.array(RankedFeatureGroupSchema).optional().describe("Workflow groups by feature slug."),
     brands: z.array(RankedBrandGroupSchema).optional().describe("Workflow groups by brand ID."),
   })
   .openapi("RankedWorkflowGroupedResponse");
@@ -506,16 +496,13 @@ export const PublicRankedWorkflowItemSchema = z
   })
   .openapi("PublicRankedWorkflowItem");
 
-export const PublicRankedSectionSchema = z
+export const PublicRankedFeatureGroupSchema = z
   .object({
-    sectionKey: z.string().describe("Section key in the format category-channel-audienceType."),
-    category: WorkflowCategorySchema,
-    channel: WorkflowChannelSchema,
-    audienceType: WorkflowAudienceTypeSchema,
-    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows in this section."),
-    workflows: z.array(PublicRankedWorkflowItemSchema).describe("Workflows in this section, ranked by performance."),
+    featureSlug: z.string().describe("Feature slug used as the grouping key."),
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all workflows in this feature."),
+    workflows: z.array(PublicRankedWorkflowItemSchema).describe("Workflows in this feature, ranked by performance."),
   })
-  .openapi("PublicRankedSection");
+  .openapi("PublicRankedFeatureGroup");
 
 export const PublicRankedWorkflowResponseSchema = z
   .object({

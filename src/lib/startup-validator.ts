@@ -237,9 +237,9 @@ async function attemptUpgrade(
       anthropicApiKey,
       undefined,
       {
-        category: wf.category,
-        channel: wf.channel,
-        audienceType: wf.audienceType,
+        category: wf.category ?? "",
+        channel: wf.channel ?? "",
+        audienceType: wf.audienceType ?? "",
         description: wf.description ?? "",
       },
     );
