@@ -113,6 +113,7 @@ export const CreateWorkflowSchema = z
     subrequestId: z.string().optional().describe("Optional subrequest ID for cost tracking."),
     name: z.string().min(1).describe("Workflow name. Must be unique within the orgId. Used to execute by name later."),
     description: z.string().optional().describe("Human-readable description of what this workflow does."),
+    featureSlug: z.string().optional().describe("Feature slug from features-service. Links this workflow to a specific feature for dashboard display."),
     category: WorkflowCategorySchema.describe("Workflow category."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel."),
     audienceType: WorkflowAudienceTypeSchema.describe("Workflow audience type."),
@@ -136,6 +137,7 @@ export const WorkflowResponseSchema = z
   .object({
     id: z.string().uuid().describe("Workflow UUID."),
     orgId: z.string().describe("Organization ID."),
+    featureSlug: z.string().nullable().describe("Feature slug from features-service. Links this workflow to a specific feature."),
     createdForBrandId: z.string().nullable(),
     humanId: z.string().nullable().describe("Human ID if this workflow was generated in a human expert's style."),
     campaignId: z.string().nullable(),
@@ -242,6 +244,7 @@ export const WorkflowRunResponseSchema = z
 export const DeployWorkflowItemSchema = z
   .object({
     createdForBrandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
+    featureSlug: z.string().optional().describe("Feature slug from features-service. Links this workflow to a specific feature for dashboard display."),
     description: z.string().optional().describe("Human-readable description."),
     category: WorkflowCategorySchema.describe("Workflow category. Required — used to build the workflow name."),
     channel: WorkflowChannelSchema.describe("Workflow distribution channel. Required — used to build the workflow name."),
@@ -444,6 +447,7 @@ export const RankedWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
+    featureSlug: z.string().optional().describe("Filter workflows by feature slug."),
     category: WorkflowCategorySchema.optional().describe("Filter workflows by category."),
     channel: WorkflowChannelSchema.optional().describe("Filter workflows by channel."),
     audienceType: WorkflowAudienceTypeSchema.optional().describe("Filter workflows by audience type."),
@@ -703,6 +707,7 @@ registry.registerPath({
       brandId: z.string().optional(),
       humanId: z.string().optional(),
       campaignId: z.string().optional(),
+      featureSlug: z.string().optional().describe("Filter workflows by feature slug."),
       category: WorkflowCategorySchema.optional(),
       channel: WorkflowChannelSchema.optional(),
       audienceType: WorkflowAudienceTypeSchema.optional(),

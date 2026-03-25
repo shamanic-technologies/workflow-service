@@ -25,10 +25,11 @@ router.get("/public/workflows/ranked", async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, category, channel, audienceType, objective, limit, groupBy } = query.data;
+    const { orgId, brandId, featureSlug, category, channel, audienceType, objective, limit, groupBy } = query.data;
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
+    if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (category) conditions.push(eq(workflows.category, category));
     if (channel) conditions.push(eq(workflows.channel, channel));
     if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));

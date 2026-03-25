@@ -21,6 +21,7 @@ export const workflows = pgTable(
     name: text("name").notNull(),
     displayName: text("display_name"),
     description: text("description"),
+    featureSlug: text("feature_slug"),
     category: text("category").notNull(),
     channel: text("channel").notNull(),
     audienceType: text("audience_type").notNull(),
