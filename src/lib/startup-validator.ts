@@ -305,6 +305,7 @@ async function attemptUpgrade(
       .values({
         orgId: wf.orgId,
         createdForBrandId: wf.createdForBrandId,
+        featureSlug: wf.featureSlug,
         humanId: wf.humanId,
         campaignId: wf.campaignId,
         subrequestId: wf.subrequestId,

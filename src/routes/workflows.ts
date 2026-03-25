@@ -324,6 +324,7 @@ router.post("/workflows", requireApiKey, async (req, res) => {
       .values({
         orgId,
         createdForBrandId: body.createdForBrandId,
+        featureSlug: body.featureSlug,
         campaignId: body.campaignId,
         subrequestId: body.subrequestId,
         name: body.name,
@@ -515,6 +516,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           .set({
             orgId,
             createdForBrandId: wf.createdForBrandId,
+            featureSlug: wf.featureSlug ?? existing.featureSlug,
             description: wf.description ?? existing.description,
             category: wf.category,
             channel: wf.channel,
@@ -570,6 +572,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           .values({
             orgId,
             createdForBrandId: wf.createdForBrandId,
+            featureSlug: wf.featureSlug,
             name,
             displayName: name,
             description: wf.description,
@@ -625,7 +628,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, category, channel, audienceType, objective, limit, groupBy } = query.data;
+    const { orgId, brandId, featureSlug, category, channel, audienceType, objective, limit, groupBy } = query.data;
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
@@ -634,6 +637,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
+    if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (category) conditions.push(eq(workflows.category, category));
     if (channel) conditions.push(eq(workflows.channel, channel));
     if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));
@@ -875,7 +879,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
 // GET /workflows — List workflows (defaults to active only; ?status=all for all)
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, brandId, humanId, campaignId, category, channel, audienceType, tag, status } = req.query;
+    const { orgId, brandId, humanId, campaignId, featureSlug, category, channel, audienceType, tag, status } = req.query;
 
     const conditions: ReturnType<typeof eq>[] = [];
 
@@ -895,6 +899,9 @@ router.get("/workflows", requireApiKey, async (req, res) => {
     }
     if (campaignId && typeof campaignId === "string") {
       conditions.push(eq(workflows.campaignId, campaignId));
+    }
+    if (featureSlug && typeof featureSlug === "string") {
+      conditions.push(eq(workflows.featureSlug, featureSlug));
     }
     if (category && typeof category === "string") {
       conditions.push(eq(workflows.category, category));
@@ -1138,6 +1145,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         .values({
           orgId: existing.orgId,
           createdForBrandId: existing.createdForBrandId,
+          featureSlug: existing.featureSlug,
           humanId: existing.humanId,
           campaignId: existing.campaignId,
           subrequestId: existing.subrequestId,

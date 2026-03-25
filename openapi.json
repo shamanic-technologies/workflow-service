@@ -78,6 +78,11 @@
             "type": "string",
             "description": "Organization ID."
           },
+          "featureSlug": {
+            "type": "string",
+            "nullable": true,
+            "description": "Feature slug from features-service. Links this workflow to a specific feature."
+          },
           "createdForBrandId": {
             "type": "string",
             "nullable": true
@@ -190,6 +195,7 @@
         "required": [
           "id",
           "orgId",
+          "featureSlug",
           "createdForBrandId",
           "humanId",
           "campaignId",
@@ -341,6 +347,10 @@
           "description": {
             "type": "string",
             "description": "Human-readable description of what this workflow does."
+          },
+          "featureSlug": {
+            "type": "string",
+            "description": "Feature slug from features-service. Links this workflow to a specific feature for dashboard display."
           },
           "category": {
             "$ref": "#/components/schemas/WorkflowCategory"
@@ -847,6 +857,10 @@
           "createdForBrandId": {
             "type": "string",
             "description": "Optional brand ID — records which brand context created this workflow."
+          },
+          "featureSlug": {
+            "type": "string",
+            "description": "Feature slug from features-service. Links this workflow to a specific feature for dashboard display."
           },
           "description": {
             "type": "string",
@@ -1539,6 +1553,16 @@
             },
             "required": false,
             "name": "campaignId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter workflows by feature slug."
+            },
+            "required": false,
+            "description": "Filter workflows by feature slug.",
+            "name": "featureSlug",
             "in": "query"
           },
           {
@@ -3168,6 +3192,16 @@
           },
           {
             "schema": {
+              "type": "string",
+              "description": "Filter workflows by feature slug."
+            },
+            "required": false,
+            "description": "Filter workflows by feature slug.",
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
               "allOf": [
                 {
                   "$ref": "#/components/schemas/WorkflowCategory"
@@ -3513,6 +3547,16 @@
             "required": false,
             "description": "Filter workflows by brand ID.",
             "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter workflows by feature slug."
+            },
+            "required": false,
+            "description": "Filter workflows by feature slug.",
+            "name": "featureSlug",
             "in": "query"
           },
           {

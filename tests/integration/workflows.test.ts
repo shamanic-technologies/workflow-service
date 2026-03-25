@@ -222,6 +222,49 @@ describe("GET /workflows", () => {
     expect(res.body.workflows).toBeDefined();
   });
 
+  it("creates a workflow with featureSlug and returns it in response", async () => {
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({
+        name: "Feature Flow",
+        createdForBrandId: "brand-test-001",
+        featureSlug: "outlet-database-discovery",
+        category: "outlets",
+        channel: "database",
+        audienceType: "discovery",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.featureSlug).toBe("outlet-database-discovery");
+  });
+
+  it("filters workflows by featureSlug", async () => {
+    mockDbRows.push({
+      id: "wf-feature",
+      orgId: "org-1",
+      name: "outlets-database-discovery-sequoia",
+      featureSlug: "outlet-database-discovery",
+      category: "outlets",
+      channel: "database",
+      audienceType: "discovery",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ featureSlug: "outlet-database-discovery" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toBeDefined();
+    expect(res.body.workflows[0].featureSlug).toBe("outlet-database-discovery");
+  });
+
   it("returns dimensions in response", async () => {
     mockDbRows.push({
       id: "wf-1",
@@ -262,6 +305,25 @@ describe("PUT /workflows/upgrade", () => {
     mockSelectResponses.length = 0;
     mockFetchPromptTemplates.mockReset();
     mockFetchPromptTemplates.mockResolvedValue(new Map());
+  });
+
+  it("deploys a workflow with featureSlug", async () => {
+    const res = await request
+      .put("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflows: [
+          {
+            ...DEPLOY_ITEM,
+            featureSlug: "outlet-database-discovery",
+            dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    // featureSlug is stored in DB but deploy result only returns standard fields
+    expect(res.body.workflows).toHaveLength(1);
   });
 
   it("deploys a workflow with tags", async () => {
