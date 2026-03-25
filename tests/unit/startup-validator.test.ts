@@ -8,6 +8,7 @@ vi.mock("../../src/lib/api-registry-client.js", () => ({
   fetchServiceList: (...args: unknown[]) => mockFetchServiceList(...args),
   fetchSpecsForServices: (...args: unknown[]) => mockFetchSpecsForServices(...args),
   fetchLlmContext: vi.fn().mockResolvedValue({ services: [] }),
+  fetchServiceEndpoints: vi.fn().mockResolvedValue({ service: "", endpoints: [] }),
   fetchServiceSpec: vi.fn().mockResolvedValue({}),
 }));
 
