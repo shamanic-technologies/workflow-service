@@ -80,14 +80,32 @@ export const LIST_SERVICES_TOOL = {
   },
 };
 
+/** Tool for listing endpoints of a specific service */
+export const LIST_SERVICE_ENDPOINTS_TOOL = {
+  name: "list_service_endpoints" as const,
+  description:
+    "List all endpoints for a specific service with method, path, and summary. " +
+    "Call this after list_services to see what endpoints a service offers before diving into full details.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      service: {
+        type: "string" as const,
+        description: "The service name (e.g. 'lead', 'campaign', 'brand')",
+      },
+    },
+    required: ["service"],
+  },
+};
+
 /** Tool for getting detailed OpenAPI spec for a specific service */
 export const GET_SERVICE_ENDPOINTS_TOOL = {
   name: "get_service_endpoints" as const,
   description:
     "Get the full OpenAPI specification for a specific service, including all endpoints, " +
     "request/response schemas, required fields, and parameter details. " +
-    "Call this for EACH service you plan to use in the workflow to understand exact endpoint paths, " +
-    "required body fields, and response shapes. Do NOT guess — always verify.",
+    "Use this when you need exact request body schemas and response shapes for specific endpoints. " +
+    "Do NOT guess — always verify.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -103,6 +121,7 @@ export const GET_SERVICE_ENDPOINTS_TOOL = {
 /** All tools for agentic workflow generation */
 export const AGENTIC_TOOLS = [
   LIST_SERVICES_TOOL,
+  LIST_SERVICE_ENDPOINTS_TOOL,
   GET_SERVICE_ENDPOINTS_TOOL,
   DAG_GENERATION_TOOL,
 ];
@@ -124,9 +143,10 @@ export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
   const serviceSection = `## Service Discovery (MANDATORY)
 
 You have access to a live API registry via tools. Before generating the workflow, you MUST:
-1. Call list_services to see all available microservices and their endpoints
-2. Call get_service_endpoints for EACH service you plan to use in the workflow — this gives you exact endpoint paths, required request body fields, and response schemas
-3. Only then call create_workflow with an informed DAG based on verified endpoint specs
+1. Call list_services to see all available microservices (names, descriptions, endpoint counts)
+2. Call list_service_endpoints for services you're interested in — this shows method, path, and summary for each endpoint
+3. Call get_service_endpoints for EACH service you plan to use in the workflow — this gives you exact request body fields, response schemas, and parameter details
+4. Only then call create_workflow with an informed DAG based on verified endpoint specs
 
 Do NOT guess endpoint paths or request body fields. ALWAYS verify with get_service_endpoints first.
 If a service or endpoint you need does not exist, do NOT invent it — adjust the workflow to use only real endpoints.`;

@@ -13,10 +13,12 @@ import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 
 // Mock api-registry-client
 const mockFetchLlmContext = vi.fn();
+const mockFetchServiceEndpoints = vi.fn();
 const mockFetchServiceSpec = vi.fn();
 
 vi.mock("../../src/lib/api-registry-client.js", () => ({
   fetchLlmContext: (...args: unknown[]) => mockFetchLlmContext(...args),
+  fetchServiceEndpoints: (...args: unknown[]) => mockFetchServiceEndpoints(...args),
   fetchServiceSpec: (...args: unknown[]) => mockFetchServiceSpec(...args),
 }));
 
@@ -43,6 +45,7 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain("Service Discovery (MANDATORY)");
     expect(prompt).toContain("list_services");
+    expect(prompt).toContain("list_service_endpoints");
     expect(prompt).toContain("get_service_endpoints");
     expect(prompt).not.toContain("Available Services");
   });
@@ -159,23 +162,23 @@ const MOCK_LLM_CONTEXT = {
   services: [
     {
       service: "lead",
-      baseUrl: "https://lead.example.com",
-      title: "Lead Service",
       description: "Lead buffer management",
-      endpoints: [
-        { method: "POST", path: "/buffer/next", summary: "Get next lead" },
-        { method: "POST", path: "/buffer/push", summary: "Push lead" },
-      ],
+      endpointCount: 2,
     },
     {
       service: "campaign",
-      baseUrl: "https://campaign.example.com",
-      title: "Campaign Service",
       description: "Campaign lifecycle",
-      endpoints: [
-        { method: "POST", path: "/gate-check", summary: "Gate check" },
-      ],
+      endpointCount: 1,
     },
+  ],
+};
+
+const MOCK_SERVICE_ENDPOINTS = {
+  service: "lead",
+  description: "Lead buffer management",
+  endpoints: [
+    { method: "POST", path: "/buffer/next", summary: "Get next lead" },
+    { method: "POST", path: "/buffer/push", summary: "Push lead" },
   ],
 };
 
@@ -205,8 +208,10 @@ describe("generateWorkflow", () => {
     process.env.API_REGISTRY_SERVICE_URL = "http://fake-registry";
     process.env.API_REGISTRY_SERVICE_API_KEY = "test-key";
     mockFetchLlmContext.mockReset();
+    mockFetchServiceEndpoints.mockReset();
     mockFetchServiceSpec.mockReset();
     mockFetchLlmContext.mockResolvedValue(MOCK_LLM_CONTEXT);
+    mockFetchServiceEndpoints.mockResolvedValue(MOCK_SERVICE_ENDPOINTS);
     mockFetchServiceSpec.mockResolvedValue(MOCK_SERVICE_SPEC);
   });
 
@@ -340,15 +345,16 @@ describe("generateWorkflow", () => {
     expect(call.tool_choice).toEqual({ type: "auto" });
   });
 
-  it("provides all three tools", async () => {
+  it("provides all four tools", async () => {
     mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow({ description: "test workflow" }, TEST_API_KEY, TEST_IDENTITY);
 
     const call = mockCreate.mock.calls[0][0];
-    expect(call.tools).toHaveLength(3);
+    expect(call.tools).toHaveLength(4);
     const toolNames = call.tools.map((t: { name: string }) => t.name);
     expect(toolNames).toContain("list_services");
+    expect(toolNames).toContain("list_service_endpoints");
     expect(toolNames).toContain("get_service_endpoints");
     expect(toolNames).toContain("create_workflow");
   });

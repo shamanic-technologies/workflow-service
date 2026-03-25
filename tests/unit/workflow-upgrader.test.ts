@@ -8,12 +8,17 @@ vi.mock("../../src/lib/api-registry-client.js", () => ({
       {
         service: "campaign",
         description: "Campaign service",
-        endpoints: [
-          { method: "POST", path: "/gate-check", summary: "Gate check" },
-          { method: "POST", path: "/start-run", summary: "Start run" },
-          { method: "POST", path: "/end-run", summary: "End run" },
-        ],
+        endpointCount: 3,
       },
+    ],
+  }),
+  fetchServiceEndpoints: vi.fn().mockResolvedValue({
+    service: "campaign",
+    description: "Campaign service",
+    endpoints: [
+      { method: "POST", path: "/gate-check", summary: "Gate check" },
+      { method: "POST", path: "/start-run", summary: "Start run" },
+      { method: "POST", path: "/end-run", summary: "End run" },
     ],
   }),
   fetchServiceSpec: vi.fn().mockResolvedValue({

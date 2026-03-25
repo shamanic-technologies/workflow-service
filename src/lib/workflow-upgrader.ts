@@ -7,6 +7,7 @@ import {
 } from "./prompt-templates.js";
 import {
   fetchLlmContext,
+  fetchServiceEndpoints,
   fetchServiceSpec,
 } from "./api-registry-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
@@ -33,11 +34,15 @@ async function resolveToolCall(
       const context = await fetchLlmContext(identity);
       const summary = context.services.map((s) => ({
         name: s.service,
-        description: s.description ?? s.title ?? "",
-        endpointCount: s.endpoints.length,
-        endpoints: s.endpoints.map((e) => `${e.method} ${e.path}`),
+        description: s.description ?? "",
+        endpointCount: s.endpointCount,
       }));
       return { content: JSON.stringify(summary, null, 2) };
+    }
+    case "list_service_endpoints": {
+      const serviceName = toolInput.service as string;
+      const endpoints = await fetchServiceEndpoints(serviceName, identity);
+      return { content: JSON.stringify(endpoints, null, 2) };
     }
     case "get_service_endpoints": {
       const serviceName = toolInput.service as string;

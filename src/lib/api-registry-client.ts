@@ -2,23 +2,27 @@ import type { IdentityHeaders } from "./key-service-client.js";
 
 export interface LlmServiceSummary {
   service: string;
-  baseUrl: string;
-  title?: string;
   description?: string;
-  error?: string;
-  endpoints: Array<{
-    method: string;
-    path: string;
-    summary: string;
-    params?: Array<{ name: string; in: string; required: boolean; type?: string }>;
-    bodyFields?: string[];
-  }>;
+  endpointCount: number;
 }
 
 export interface LlmContextResponse {
   _description: string;
   _usage: string;
   services: LlmServiceSummary[];
+}
+
+export interface LlmServiceEndpoint {
+  method: string;
+  path: string;
+  summary: string;
+  responseFields?: string[];
+}
+
+export interface LlmServiceEndpointsResponse {
+  service: string;
+  description?: string;
+  endpoints: LlmServiceEndpoint[];
 }
 
 function getApiRegistryConfig(): { baseUrl: string; apiKey: string } {
@@ -61,6 +65,31 @@ export async function fetchLlmContext(identity?: IdentityHeaders): Promise<LlmCo
   }
 
   return res.json() as Promise<LlmContextResponse>;
+}
+
+/** GET /llm-context/:service — endpoints for a specific service (method, path, summary) */
+export async function fetchServiceEndpoints(
+  serviceName: string,
+  identity?: IdentityHeaders,
+): Promise<LlmServiceEndpointsResponse> {
+  const { baseUrl, apiKey } = getApiRegistryConfig();
+
+  const res = await fetch(
+    `${baseUrl}/llm-context/${encodeURIComponent(serviceName)}`,
+    {
+      method: "GET",
+      headers: buildHeaders(apiKey, identity),
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `api-registry error: GET /llm-context/${serviceName} -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  return res.json() as Promise<LlmServiceEndpointsResponse>;
 }
 
 /** GET /services — list all registered services (used for health check + enumeration) */
