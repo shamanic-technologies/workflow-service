@@ -105,6 +105,7 @@ describe("POST /workflows", () => {
       .send({
         name: "Test Flow",
         createdForBrandId: "brand-test-001",
+        featureSlug: "sales-cold-email-outreach",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -114,9 +115,7 @@ describe("POST /workflows", () => {
     expect(res.status).toBe(201);
     expect(res.body.name).toBe("Test Flow");
     expect(res.body.orgId).toBe("org-1");
-    expect(res.body.category).toBe("sales");
-    expect(res.body.channel).toBe("email");
-    expect(res.body.audienceType).toBe("cold-outreach");
+    expect(res.body.featureSlug).toBe("sales-cold-email-outreach");
     expect(res.body.tags).toEqual([]);
     expect(res.body.signature).toMatch(/^[a-f0-9]{64}$/);
     expect(res.body.signatureName).toBeTruthy();
@@ -130,6 +129,7 @@ describe("POST /workflows", () => {
       .send({
         name: "Multi-Channel Flow",
         createdForBrandId: "brand-test-001",
+        featureSlug: "sales-multi-channel",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -148,6 +148,7 @@ describe("POST /workflows", () => {
       .send({
         name: "Bad Flow",
         createdForBrandId: "brand-test-001",
+        featureSlug: "sales-bad-flow",
         category: "sales",
         channel: "email",
         audienceType: "cold-outreach",
@@ -269,8 +270,9 @@ describe("GET /workflows", () => {
     mockDbRows.push({
       id: "wf-1",
       orgId: "org-1",
-      name: "sales-email-cold-outreach-sequoia",
+      name: "sales-cold-email-outreach-sequoia",
       displayName: "Sales Flow",
+      featureSlug: "sales-cold-email-outreach",
       category: "sales",
       channel: "email",
       audienceType: "cold-outreach",
@@ -287,6 +289,8 @@ describe("GET /workflows", () => {
       .set(AUTH);
 
     expect(res.status).toBe(200);
+    expect(res.body.workflows[0].featureSlug).toBe("sales-cold-email-outreach");
+    // category, channel, audienceType are now optional — may or may not be present
     expect(res.body.workflows[0].category).toBe("sales");
     expect(res.body.workflows[0].channel).toBe("email");
     expect(res.body.workflows[0].audienceType).toBe("cold-outreach");
@@ -294,6 +298,7 @@ describe("GET /workflows", () => {
 });
 
 const DEPLOY_ITEM = {
+  featureSlug: "sales-cold-email-outreach",
   category: "sales" as const,
   channel: "email" as const,
   audienceType: "cold-outreach" as const,
@@ -380,12 +385,10 @@ describe("PUT /workflows/upgrade", () => {
     const wf = res.body.workflows[0];
     expect(wf.action).toBe("created");
     expect(wf.id).toBeDefined();
-    expect(wf.category).toBe("sales");
-    expect(wf.channel).toBe("email");
-    expect(wf.audienceType).toBe("cold-outreach");
+    expect(wf.featureSlug).toBe("sales-cold-email-outreach");
     expect(wf.signature).toMatch(/^[a-f0-9]{64}$/);
     expect(wf.signatureName).toBeTruthy();
-    expect(wf.name).toBe(`sales-email-cold-outreach-${wf.signatureName}`);
+    expect(wf.name).toBe(`sales-cold-email-outreach-${wf.signatureName}`);
   });
 
   it("creates outlets-database-discovery workflow with correct name", async () => {
@@ -395,6 +398,7 @@ describe("PUT /workflows/upgrade", () => {
       .send({
         workflows: [
           {
+            featureSlug: "outlet-database-discovery",
             category: "outlets" as const,
             channel: "database" as const,
             audienceType: "discovery" as const,
@@ -406,10 +410,8 @@ describe("PUT /workflows/upgrade", () => {
 
     expect(res.status).toBe(200);
     const wf = res.body.workflows[0];
-    expect(wf.category).toBe("outlets");
-    expect(wf.channel).toBe("database");
-    expect(wf.audienceType).toBe("discovery");
-    expect(wf.name).toBe(`outlets-database-discovery-${wf.signatureName}`);
+    expect(wf.featureSlug).toBe("outlet-database-discovery");
+    expect(wf.name).toBe(`outlet-database-discovery-${wf.signatureName}`);
   });
 
   it("creates journalists-database-discovery workflow with correct name", async () => {
@@ -419,6 +421,7 @@ describe("PUT /workflows/upgrade", () => {
       .send({
         workflows: [
           {
+            featureSlug: "journalist-database-discovery",
             category: "journalists" as const,
             channel: "database" as const,
             audienceType: "discovery" as const,
@@ -430,10 +433,8 @@ describe("PUT /workflows/upgrade", () => {
 
     expect(res.status).toBe(200);
     const wf = res.body.workflows[0];
-    expect(wf.category).toBe("journalists");
-    expect(wf.channel).toBe("database");
-    expect(wf.audienceType).toBe("discovery");
-    expect(wf.name).toBe(`journalists-database-discovery-${wf.signatureName}`);
+    expect(wf.featureSlug).toBe("journalist-database-discovery");
+    expect(wf.name).toBe(`journalist-database-discovery-${wf.signatureName}`);
   });
 
   it("stores orgId from x-org-id header in DB", async () => {
@@ -462,15 +463,16 @@ describe("PUT /workflows/upgrade", () => {
     mockDbRows.push({
       id: "wf-existing",
       orgId: "org-deploy",
-      name: "sales-email-cold-outreach-sequoia",
+      name: "sales-cold-email-outreach-sequoia",
       signatureName: "sequoia",
       signature: sig,
+      featureSlug: "sales-cold-email-outreach",
       category: "sales",
       channel: "email",
       audienceType: "cold-outreach",
       description: "Old description",
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
-      windmillFlowPath: "f/workflows/distribute/sales_email_cold_outreach_sequoia",
+      windmillFlowPath: "f/workflows/distribute/sales_cold_email_outreach_sequoia",
       windmillWorkspace: "prod",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -531,14 +533,17 @@ describe("PUT /workflows/upgrade", () => {
     expect(res2.body.workflows[0].signature).toBe(sig2);
   });
 
-  it("rejects missing dimensions", async () => {
+  it("rejects missing featureSlug", async () => {
     const res = await request
       .put("/workflows/upgrade")
       .set(AUTH)
       .send({
         workflows: [
           {
-            // Missing category, channel, audienceType
+            // Missing featureSlug (now required)
+            category: "sales",
+            channel: "email",
+            audienceType: "cold-outreach",
             dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
           },
         ],
@@ -554,6 +559,7 @@ describe("PUT /workflows/upgrade", () => {
       .send({
         workflows: [
           {
+            featureSlug: "sales-smoke-signal",
             category: "sales",
             channel: "smoke-signal",
             audienceType: "cold-outreach",
@@ -572,6 +578,7 @@ describe("PUT /workflows/upgrade", () => {
       .send({
         workflows: [
           {
+            featureSlug: "sales-lukewarm",
             category: "sales",
             channel: "email",
             audienceType: "lukewarm",
@@ -590,6 +597,7 @@ describe("PUT /workflows/upgrade", () => {
       .send({
         workflows: [
           {
+            featureSlug: "invalid-category-test",
             category: "invalid-category",
             channel: "email",
             audienceType: "cold-outreach",
@@ -603,9 +611,9 @@ describe("PUT /workflows/upgrade", () => {
 
   it("rejects removed enum values (utility, api, internal)", async () => {
     const cases = [
-      { category: "utility", channel: "email", audienceType: "cold-outreach" },
-      { category: "sales", channel: "api", audienceType: "cold-outreach" },
-      { category: "sales", channel: "email", audienceType: "internal" },
+      { featureSlug: "utility-test", category: "utility", channel: "email", audienceType: "cold-outreach" },
+      { featureSlug: "api-test", category: "sales", channel: "api", audienceType: "cold-outreach" },
+      { featureSlug: "internal-test", category: "sales", channel: "email", audienceType: "internal" },
     ];
 
     for (const dims of cases) {

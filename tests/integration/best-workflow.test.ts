@@ -131,9 +131,7 @@ const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
 const BASE_QUERY = {
   orgId: "org1",
-  category: "sales",
-  channel: "email",
-  audienceType: "cold-outreach",
+  featureSlug: "sales-cold-email-outreach",
   objective: "replies",
 };
 
@@ -147,6 +145,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     displayName: null,
     createdForBrandId: null,
     description: null,
+    featureSlug: "sales-cold-email-outreach",
     category: "sales",
     channel: "email",
     audienceType: "cold-outreach",
@@ -486,24 +485,24 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.brands[0].brandId).toBe("brand-X");
   });
 
-  it("returns grouped sections with groupBy=section", async () => {
-    const nameS1 = "sales-email-cold-outreach-s1";
-    const nameS2 = "sales-email-cold-outreach-s2";
+  it("returns grouped features with groupBy=feature", async () => {
+    const nameS1 = "sales-cold-email-outreach-s1";
+    const nameS2 = "sales-cold-email-outreach-s2";
     mockWorkflowRows.push(makeWorkflow({ id: "wf-sales", name: nameS1 }), makeWorkflow({ id: "wf-sales2", name: nameS2 }));
     mockWorkflowRunRows.push(makeRun("wf-sales", "ext-run-s1"), makeRun("wf-sales2", "ext-run-s2"));
 
     setupCostsMock({ [nameS1]: { cost: 100, runCount: 1 }, [nameS2]: { cost: 200, runCount: 1 } });
     setupEmailMock({ [nameS1]: { transactional: { replied: 5, sent: 50, opened: 20 } }, [nameS2]: { transactional: { replied: 5, sent: 50, opened: 20 } } });
 
-    const res = await request.get("/workflows/ranked").query({ ...BASE_QUERY, groupBy: "section" }).set(AUTH);
+    const res = await request.get("/workflows/ranked").query({ ...BASE_QUERY, groupBy: "feature" }).set(AUTH);
     expect(res.status).toBe(200);
-    expect(res.body.sections).toBeDefined();
-    expect(res.body.sections).toHaveLength(1);
-    const section = res.body.sections[0];
-    expect(section.sectionKey).toBe("sales-email-cold-outreach");
-    expect(section.stats).toBeDefined();
-    expect(section.stats.email).toBeDefined();
-    expect(section.workflows).toHaveLength(2);
+    expect(res.body.features).toBeDefined();
+    expect(res.body.features).toHaveLength(1);
+    const feature = res.body.features[0];
+    expect(feature.featureSlug).toBe("sales-cold-email-outreach");
+    expect(feature.stats).toBeDefined();
+    expect(feature.stats.email).toBeDefined();
+    expect(feature.workflows).toHaveLength(2);
   });
 });
 

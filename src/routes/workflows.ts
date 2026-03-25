@@ -95,9 +95,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
     type DeployResult = {
       id: string;
       name: string;
-      category: string;
-      channel: string;
-      audienceType: string;
+      featureSlug: string;
       tags: string[];
       signature: string;
       signatureName: string;
@@ -138,9 +136,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
       result = {
         id: updated.id,
         name: updated.name,
-        category: updated.category,
-        channel: updated.channel,
-        audienceType: updated.audienceType,
+        featureSlug: updated.featureSlug,
         tags: (updated.tags as string[]) ?? [],
         signature: updated.signature,
         signatureName: updated.signatureName,
@@ -182,10 +178,10 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
         }
       } else {
         signatureName = pickSignatureName(signature, usedNames);
-        displayName = `${generated.category}-${generated.channel}-${generated.audienceType}-${signatureName}`;
+        displayName = `${body.featureSlug}-${signatureName}`;
       }
 
-      const name = `${generated.category}-${generated.channel}-${generated.audienceType}-${signatureName}`;
+      const name = `${body.featureSlug}-${signatureName}`;
       const openFlow = dagToOpenFlow(dag, name);
       const flowPath = generateFlowPath(orgId, name);
       const client = getWindmillClient();
@@ -211,6 +207,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
           name,
           displayName,
           description: generated.description,
+          featureSlug: body.featureSlug,
           category: generated.category,
           channel: generated.channel,
           audienceType: generated.audienceType,
@@ -229,9 +226,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
       result = {
         id: created.id,
         name: created.name,
-        category: created.category,
-        channel: created.channel,
-        audienceType: created.audienceType,
+        featureSlug: created.featureSlug,
         tags: (created.tags as string[]) ?? [],
         signature: created.signature,
         signatureName: created.signatureName,
@@ -242,9 +237,6 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
     res.json({
       workflow: result,
       dag: generated.dag,
-      category: generated.category,
-      channel: generated.channel,
-      audienceType: generated.audienceType,
       generatedDescription: generated.description,
     });
   } catch (err: unknown) {
@@ -471,7 +463,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       .where(sql`true`);
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; name: string; category: string; channel: string; audienceType: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
+    const results: { id: string; name: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
@@ -531,9 +523,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         results.push({
           id: updated.id,
           name: updated.name,
-          category: updated.category,
-          channel: updated.channel,
-          audienceType: updated.audienceType,
+          featureSlug: updated.featureSlug,
           tags: (updated.tags as string[]) ?? [],
           signature: updated.signature,
           signatureName: updated.signatureName,
@@ -544,7 +534,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        const name = `${wf.category}-${wf.channel}-${wf.audienceType}-${signatureName}`;
+        const name = `${wf.featureSlug}-${signatureName}`;
         console.log(
           `[workflow-service] deploy: sig=${signature.slice(0, 12)} no active match -> create "${name}"`,
         );
@@ -592,9 +582,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         results.push({
           id: created.id,
           name: created.name,
-          category: created.category,
-          channel: created.channel,
-          audienceType: created.audienceType,
+          featureSlug: created.featureSlug,
           tags: (created.tags as string[]) ?? [],
           signature: created.signature,
           signatureName: created.signatureName,
@@ -628,7 +616,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, featureSlug, category, channel, audienceType, objective, limit, groupBy } = query.data;
+    const { orgId, brandId, featureSlug, objective, limit, groupBy } = query.data;
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
@@ -638,9 +626,6 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
-    if (category) conditions.push(eq(workflows.category, category));
-    if (channel) conditions.push(eq(workflows.channel, channel));
-    if (audienceType) conditions.push(eq(workflows.audienceType, audienceType));
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -656,30 +641,26 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
 
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", identity });
 
-    if (groupBy === "section") {
-      // Group by sectionKey = category-channel-audienceType
-      const sectionMap = new Map<string, WorkflowScore[]>();
+    if (groupBy === "feature") {
+      // Group by featureSlug
+      const featureMap = new Map<string, WorkflowScore[]>();
       for (const score of scores) {
-        const key = `${score.workflow.category}-${score.workflow.channel}-${score.workflow.audienceType}`;
-        const arr = sectionMap.get(key) ?? [];
+        const key = score.workflow.featureSlug;
+        const arr = featureMap.get(key) ?? [];
         arr.push(score);
-        sectionMap.set(key, arr);
+        featureMap.set(key, arr);
       }
 
-      const sections = [...sectionMap.entries()].map(([sectionKey, sectionScores]) => {
-        const ranked = rankScores(sectionScores).slice(0, limit);
-        const sample = sectionScores[0].workflow;
+      const features = [...featureMap.entries()].map(([featureSlug, featureScores]) => {
+        const ranked = rankScores(featureScores).slice(0, limit);
         return {
-          sectionKey,
-          category: sample.category,
-          channel: sample.channel,
-          audienceType: sample.audienceType,
-          stats: aggregateSectionStats(sectionScores),
+          featureSlug,
+          stats: aggregateSectionStats(featureScores),
           workflows: ranked.map(formatScoreItem),
         };
       });
 
-      res.json({ sections });
+      res.json({ features });
     } else if (groupBy === "brand") {
       // Group by brandId from runs — a workflow can appear under multiple brands
       const brandRunIds = new Map<string, Set<string>>();
@@ -879,7 +860,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
 // GET /workflows — List workflows (defaults to active only; ?status=all for all)
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, brandId, humanId, campaignId, featureSlug, category, channel, audienceType, tag, status } = req.query;
+    const { orgId, brandId, humanId, campaignId, featureSlug, tag, status } = req.query;
 
     const conditions: ReturnType<typeof eq>[] = [];
 
@@ -902,15 +883,6 @@ router.get("/workflows", requireApiKey, async (req, res) => {
     }
     if (featureSlug && typeof featureSlug === "string") {
       conditions.push(eq(workflows.featureSlug, featureSlug));
-    }
-    if (category && typeof category === "string") {
-      conditions.push(eq(workflows.category, category));
-    }
-    if (channel && typeof channel === "string") {
-      conditions.push(eq(workflows.channel, channel));
-    }
-    if (audienceType && typeof audienceType === "string") {
-      conditions.push(eq(workflows.audienceType, audienceType));
     }
     if (tag && typeof tag === "string") {
       conditions.push(sql`${workflows.tags} @> ${JSON.stringify([tag])}::jsonb`);
@@ -1103,8 +1075,8 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(newSignature, usedNames);
 
-    // Build new name from original's dimensions + new signatureName
-    const newName = `${existing.category}-${existing.channel}-${existing.audienceType}-${signatureName}`;
+    // Build new name from original's featureSlug + new signatureName
+    const newName = `${existing.featureSlug}-${signatureName}`;
 
     const openFlow = dagToOpenFlow(dag, newName);
     const flowPath = generateFlowPath(orgId, newName);
