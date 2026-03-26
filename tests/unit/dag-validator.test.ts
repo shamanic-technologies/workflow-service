@@ -22,6 +22,9 @@ import {
   DAG_WITH_BAD_ON_ERROR,
   DAG_WITH_RETRIES_ZERO,
   DAG_WITH_BANNED_API_SERVICE,
+  DAG_WITH_HTTP_CALL_MISSING_SERVICE,
+  DAG_WITH_HTTP_CALL_MISSING_METHOD,
+  DAG_WITH_HTTP_CALL_MISSING_PATH,
 } from "../helpers/fixtures.js";
 
 describe("validateDAG", () => {
@@ -151,6 +154,30 @@ describe("validateDAG", () => {
     const result = validateDAG(DAG_WITH_RETRIES_ZERO);
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
+  });
+
+  it("rejects http.call node missing 'service' config", () => {
+    const result = validateDAG(DAG_WITH_HTTP_CALL_MISSING_SERVICE);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.message.includes('missing required config field "service"'))
+    ).toBe(true);
+  });
+
+  it("rejects http.call node missing 'method' config", () => {
+    const result = validateDAG(DAG_WITH_HTTP_CALL_MISSING_METHOD);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.message.includes('missing required config field "method"'))
+    ).toBe(true);
+  });
+
+  it("rejects http.call node missing 'path' config", () => {
+    const result = validateDAG(DAG_WITH_HTTP_CALL_MISSING_PATH);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.message.includes('missing required config field "path"'))
+    ).toBe(true);
   });
 
   it("rejects a DAG with http.call using banned service 'api'", () => {
