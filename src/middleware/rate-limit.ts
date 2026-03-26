@@ -1,23 +1,44 @@
 import rateLimit from "express-rate-limit";
-import type { Request } from "express";
+import type { Request, Response, NextFunction } from "express";
+
+const isTest = process.env.NODE_ENV === "test";
+
+const orgKeyGenerator = (req: Request) =>
+  (req.res?.locals.orgId as string) ?? "unknown";
+
+const passthrough = (_req: Request, _res: Response, next: NextFunction) => next();
 
 /**
  * Rate limit for workflow execution endpoints.
- * 60 requests per minute per orgId — generous for normal use,
- * prevents abuse (e.g. spamming free-node workflows).
+ * 60 requests per minute per orgId.
  */
-export const executeRateLimit = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 60,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  keyGenerator: (req: Request) => {
-    // Rate limit per org — orgId is always set by requireIdentity middleware
-    // which runs before this middleware (applied at app.use level in index.ts).
-    // The fallback to "unknown" is defensive only.
-    return (req.res?.locals.orgId as string) ?? "unknown";
-  },
-  message: {
-    error: "Too many workflow executions — limit is 60 per minute per organization",
-  },
-});
+export const executeRateLimit = isTest
+  ? passthrough
+  : rateLimit({
+      windowMs: 60 * 1000,
+      limit: 60,
+      standardHeaders: "draft-7",
+      legacyHeaders: false,
+      keyGenerator: orgKeyGenerator,
+      message: {
+        error: "Too many workflow executions — limit is 60 per minute per organization",
+      },
+    });
+
+/**
+ * Rate limit for workflow creation/generation endpoints.
+ * 10 requests per minute per orgId — creation is an admin action,
+ * not something users call in tight loops.
+ */
+export const createRateLimit = isTest
+  ? passthrough
+  : rateLimit({
+      windowMs: 60 * 1000,
+      limit: 10,
+      standardHeaders: "draft-7",
+      legacyHeaders: false,
+      keyGenerator: orgKeyGenerator,
+      message: {
+        error: "Too many workflow creations — limit is 10 per minute per organization",
+      },
+    });
