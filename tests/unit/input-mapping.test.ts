@@ -169,6 +169,49 @@ describe("buildInputTransforms", () => {
     expect(result["path.id"].expr).toContain("results.start_run?.runId");
   });
 
+  it("uses bracket notation for numeric path segments", () => {
+    const result = buildInputTransforms(undefined, {
+      brand: "$ref:brand-profile.output.brands.0",
+    });
+
+    expect(result.brand).toEqual({
+      type: "javascript",
+      expr: 'results.brand_profile?.brands?.["0"]',
+    });
+
+    // Verify the expression is valid JavaScript
+    expect(() => new Function("results", `return ${result.brand.expr!}`)).not.toThrow();
+  });
+
+  it("uses bracket notation for numeric segments in deep paths", () => {
+    const result = buildInputTransforms(undefined, {
+      name: "$ref:brand-profile.output.brands.0.name",
+    });
+
+    expect(result.name).toEqual({
+      type: "javascript",
+      expr: 'results.brand_profile?.brands?.["0"]?.name',
+    });
+
+    expect(() => new Function("results", `return ${result.name.expr!}`)).not.toThrow();
+  });
+
+  it("regression: numeric index in collapsed body expression produces valid JS", () => {
+    const result = buildInputTransforms(
+      { body: { type: "pr-cold-email-v2" } },
+      {
+        "body.variables.brandProfile": "$ref:brand-profile.output.brands.0",
+        "body.variables.companyName": "$ref:brand-profile.output.brands.0.name",
+      },
+    );
+
+    expect(result.body).toBeDefined();
+    expect(result.body.type).toBe("javascript");
+    // The collapsed expression must be valid JavaScript
+    expect(() => new Function("results", "flow_input", `return ${result.body.expr!}`)).not.toThrow();
+    expect(result.body.expr).toContain('?.["0"]');
+  });
+
   it("leaves non-dot-notation keys untouched", () => {
     const result = buildInputTransforms(
       { service: "stripe", method: "GET" },

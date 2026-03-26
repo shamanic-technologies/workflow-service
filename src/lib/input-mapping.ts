@@ -48,8 +48,12 @@ export function buildInputTransforms(
           if (rest.length === 0) {
             expr = `results.${nodeId}`;
           } else {
-            // Optional chaining on node result + all intermediate properties
-            expr = `results.${nodeId}?.${rest.join("?.")}`;
+            // Optional chaining on node result + all intermediate properties.
+            // Numeric segments use bracket notation: ?.["0"] instead of ?.0
+            // because ?.0 is invalid JS (parsed as a decimal literal).
+            expr = `results.${nodeId}` + rest.map((seg) =>
+              /^\d+$/.test(seg) ? `?.["${seg}"]` : `?.${seg}`
+            ).join("");
           }
         }
 
