@@ -55,7 +55,23 @@ export const DAGNodeSchema = z
       "Set to 0 for non-idempotent operations (e.g., sending emails, consuming queue items) to prevent duplicates."
     ),
   })
-  .openapi("DAGNode");
+  .openapi("DAGNode", {
+    example: {
+      id: "fetch-lead",
+      type: "http.call",
+      config: {
+        service: "lead",
+        method: "POST",
+        path: "/buffer/next",
+        body: { sourceType: "journalist" },
+      },
+      inputMapping: {
+        "body.brandId": "$ref:start-run.output.brandId",
+        "body.campaignId": "$ref:flow_input.campaignId",
+      },
+      retries: 0,
+    },
+  });
 
 export const DAGEdgeSchema = z
   .object({
@@ -69,7 +85,13 @@ export const DAGEdgeSchema = z
       "Example: \"results.fetch_lead.found == true\""
     ),
   })
-  .openapi("DAGEdge");
+  .openapi("DAGEdge", {
+    example: {
+      from: "check-lead",
+      to: "brand-profile",
+      condition: "results['fetch-lead'].found == true",
+    },
+  });
 
 export const DAGSchema = z
   .object({
@@ -85,7 +107,23 @@ export const DAGSchema = z
       "Tip: check errorMessage to distinguish expected stops (e.g. 'validation failed: expected found=true') from real errors."
     ),
   })
-  .openapi("DAG");
+  .openapi("DAG", {
+    example: {
+      nodes: [
+        { id: "fetch-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/buffer/next" }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+        { id: "check-lead", type: "condition" },
+        { id: "send-email", type: "http.call", config: { service: "email-gateway", method: "POST", path: "/send" }, inputMapping: { "body.to": "$ref:fetch-lead.output.lead.email" }, retries: 0 },
+        { id: "end-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true } }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+      ],
+      edges: [
+        { from: "fetch-lead", to: "check-lead" },
+        { from: "check-lead", to: "send-email", condition: "results['fetch-lead'].found == true" },
+        { from: "check-lead", to: "end-run", condition: "results['fetch-lead'].found == false" },
+        { from: "send-email", to: "end-run" },
+      ],
+      onError: "end-run",
+    },
+  });
 
 // --- Workflow enums ---
 
@@ -131,7 +169,24 @@ export const UpdateWorkflowSchema = z
     tags: z.array(z.string()).optional().describe("Updated tags for filtering/grouping."),
     dag: DAGSchema.optional(),
   })
-  .openapi("UpdateWorkflowRequest");
+  .openapi("UpdateWorkflowRequest", {
+    example: {
+      dag: {
+        nodes: [
+          { id: "fetch-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/buffer/next", body: { sourceType: "journalist" } }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+          { id: "check-lead", type: "condition" },
+          { id: "send-email", type: "http.call", config: { service: "email-gateway", method: "POST", path: "/send" }, inputMapping: { "body.to": "$ref:fetch-lead.output.lead.email" }, retries: 0 },
+          { id: "end-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true } }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+        ],
+        edges: [
+          { from: "fetch-lead", to: "check-lead" },
+          { from: "check-lead", to: "send-email", condition: "results['fetch-lead'].found == true" },
+          { from: "check-lead", to: "end-run", condition: "results['fetch-lead'].found == false" },
+          { from: "send-email", to: "end-run" },
+        ],
+      },
+    },
+  });
 
 export const WorkflowResponseSchema = z
   .object({
@@ -173,7 +228,21 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
   _forkedFromName: z.string().optional().describe(
     "Only present when _action is 'forked'. The name of the original workflow that was forked."
   ),
-}).openapi("WorkflowMutationResponse");
+}).openapi("WorkflowMutationResponse", {
+  example: {
+    id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    orgId: "b645207b-d8e9-40b0-9391-072b777cd9a9",
+    name: "pr-cold-email-outreach-sequoia",
+    displayName: "pr-cold-email-outreach-sequoia",
+    featureSlug: "pr-cold-email-outreach",
+    signature: "abc123...",
+    signatureName: "sequoia",
+    status: "active",
+    forkedFrom: "original-workflow-uuid",
+    _action: "forked",
+    _forkedFromName: "pr-cold-email-outreach-ivory",
+  },
+});
 
 export const TemplateContractIssueSchema = z
   .object({
@@ -218,7 +287,17 @@ export const ExecuteWorkflowSchema = z
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
   })
-  .openapi("ExecuteWorkflowRequest");
+  .openapi("ExecuteWorkflowRequest", {
+    example: {
+      inputs: {
+        orgId: "b645207b-d8e9-40b0-9391-072b777cd9a9",
+        campaignId: "camp-123",
+        prAngle: "AI-powered PR automation",
+        newsHook: "Company raises Series A",
+        currentDate: "2026-03-26",
+      },
+    },
+  });
 
 export const WorkflowRunResponseSchema = z
   .object({
@@ -268,7 +347,34 @@ export const DeployWorkflowsSchema = z
   .object({
     workflows: z.array(DeployWorkflowItemSchema).min(1).describe("The workflows to deploy."),
   })
-  .openapi("DeployWorkflowsRequest");
+  .openapi("DeployWorkflowsRequest", {
+    example: {
+      workflows: [
+        {
+          featureSlug: "pr-cold-email-outreach",
+          description: "Cold outreach sequence for PR campaigns",
+          category: "pr",
+          channel: "email",
+          audienceType: "cold-outreach",
+          tags: ["email"],
+          dag: {
+            nodes: [
+              { id: "fetch-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/buffer/next", body: { sourceType: "journalist" } }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+              { id: "check-lead", type: "condition" },
+              { id: "send-email", type: "http.call", config: { service: "email-gateway", method: "POST", path: "/send" }, inputMapping: { "body.to": "$ref:fetch-lead.output.lead.email" }, retries: 0 },
+              { id: "end-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true } }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+            ],
+            edges: [
+              { from: "fetch-lead", to: "check-lead" },
+              { from: "check-lead", to: "send-email", condition: "results['fetch-lead'].found == true" },
+              { from: "check-lead", to: "end-run", condition: "results['fetch-lead'].found == false" },
+              { from: "send-email", to: "end-run" },
+            ],
+          },
+        },
+      ],
+    },
+  });
 
 export const DeployWorkflowResultSchema = z
   .object({
@@ -310,7 +416,18 @@ export const ExecuteByNameSchema = z
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
   })
-  .openapi("ExecuteByNameRequest");
+  .openapi("ExecuteByNameRequest", {
+    example: {
+      inputs: {
+        orgId: "b645207b-d8e9-40b0-9391-072b777cd9a9",
+        campaignId: "camp-123",
+        prAngle: "AI-powered PR automation",
+        newsHook: "Company raises Series A",
+        spokesperson: "Jane Doe, CEO",
+        currentDate: "2026-03-26",
+      },
+    },
+  });
 
 // --- Style schema ---
 
