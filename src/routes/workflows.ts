@@ -3,6 +3,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
+import { createRateLimit } from "../middleware/rate-limit.js";
 import { validateDAG, type DAG } from "../lib/dag-validator.js";
 import { dagToOpenFlow } from "../lib/dag-to-openflow.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
@@ -56,7 +57,7 @@ function generateFlowPath(scope: string, name: string): string {
 }
 
 // POST /workflows/generate — Generate a workflow from natural language
-router.post("/workflows/generate", requireApiKey, async (req, res) => {
+router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, res) => {
   try {
     const body = GenerateWorkflowSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
@@ -268,7 +269,7 @@ router.post("/workflows/generate", requireApiKey, async (req, res) => {
 });
 
 // POST /workflows — Create a new workflow
-router.post("/workflows", requireApiKey, async (req, res) => {
+router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
   try {
     const body = CreateWorkflowSchema.parse(req.body);
     const orgId = res.locals.orgId as string;

@@ -1,4 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
+
+// Override the rate-limit module to use real rate limiters (not the test passthrough)
+vi.mock("../../src/middleware/rate-limit.js", async () => {
+  const { default: rateLimit } = await import("express-rate-limit");
+  const keyGen = (req: import("express").Request) =>
+    (req.res?.locals.orgId as string) ?? "unknown";
+  return {
+    executeRateLimit: rateLimit({
+      windowMs: 60 * 1000,
+      limit: 60,
+      standardHeaders: "draft-7",
+      legacyHeaders: false,
+      keyGenerator: keyGen,
+      message: { error: "Too many workflow executions — limit is 60 per minute per organization" },
+    }),
+    createRateLimit: rateLimit({
+      windowMs: 60 * 1000,
+      limit: 10,
+      standardHeaders: "draft-7",
+      legacyHeaders: false,
+      keyGenerator: keyGen,
+      message: { error: "Too many workflow creations — limit is 10 per minute per organization" },
+    }),
+  };
+});
 
 // Mock DB, Windmill, and runs-client (required by app import)
 const mockWorkflows: Record<string, unknown>[] = [];
@@ -18,8 +44,10 @@ vi.mock("../../src/db/index.js", () => ({
     insert: () => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
-          id: "run-" + Math.random().toString(36).slice(2, 10),
+          id: "wf-" + Math.random().toString(36).slice(2, 10),
           ...row,
+          status: row.status ?? "active",
+          tags: row.tags ?? [],
           windmillWorkspace: row.windmillWorkspace ?? "prod",
           createdAt: new Date(),
           startedAt: null,
@@ -29,9 +57,10 @@ vi.mock("../../src/db/index.js", () => ({
         return { returning: () => Promise.resolve([newRow]) };
       },
     }),
-    select: () => ({
+    select: (cols?: Record<string, unknown>) => ({
       from: () => ({
         where: () => {
+          if (cols) return mockQueryResult([]);
           if (mockWorkflows.length > 0) return mockQueryResult([mockWorkflows[0]]);
           return mockQueryResult([]);
         },
@@ -50,7 +79,7 @@ vi.mock("../../src/db/index.js", () => ({
 
 vi.mock("../../src/lib/windmill-client.js", () => ({
   getWindmillClient: () => ({
-    createFlow: vi.fn(),
+    createFlow: vi.fn().mockResolvedValue("f/workflows/test/flow"),
     updateFlow: vi.fn(),
     deleteFlow: vi.fn(),
     runFlow: vi.fn().mockResolvedValue("job-uuid-123"),
@@ -93,7 +122,6 @@ describe("Execute endpoint rate limiting", () => {
   });
 
   it("returns 429 after exceeding 60 requests per minute for the same org", async () => {
-    // Send 61 requests — the 61st should be rate limited
     const promises = [];
     for (let i = 0; i < 61; i++) {
       promises.push(
@@ -107,16 +135,12 @@ describe("Execute endpoint rate limiting", () => {
     const results = await Promise.all(promises);
     const statuses = results.map((r) => r.status);
 
-    // At least one should be 429
     expect(statuses).toContain(429);
-
-    // Most should succeed (201)
     const successCount = statuses.filter((s) => s === 201).length;
     expect(successCount).toBe(60);
   });
 
   it("does not rate limit a different org", async () => {
-    // Exhaust org-rate-test's limit
     const exhaustPromises = [];
     for (let i = 0; i < 60; i++) {
       exhaustPromises.push(
@@ -128,7 +152,6 @@ describe("Execute endpoint rate limiting", () => {
     }
     await Promise.all(exhaustPromises);
 
-    // Different org should still work
     const res = await request
       .post("/workflows/wf-1/execute")
       .set({ ...AUTH, "x-org-id": "org-other" })
@@ -138,7 +161,6 @@ describe("Execute endpoint rate limiting", () => {
   });
 
   it("rate limits by-name execute endpoint too", async () => {
-    // Send 61 requests to the by-name endpoint
     const promises = [];
     for (let i = 0; i < 61; i++) {
       promises.push(
@@ -152,5 +174,54 @@ describe("Execute endpoint rate limiting", () => {
     const results = await Promise.all(promises);
     const statuses = results.map((r) => r.status);
     expect(statuses).toContain(429);
+  });
+});
+
+describe("Create endpoint rate limiting", () => {
+  beforeEach(() => {
+    mockWorkflows.length = 0;
+    mockRuns.length = 0;
+  });
+
+  const createBody = {
+    name: "Test Workflow",
+    description: "test",
+    featureSlug: "test-feature",
+    dag: VALID_LINEAR_DAG,
+  };
+
+  it("returns 429 after exceeding 10 creation requests per minute for the same org", async () => {
+    const promises = [];
+    for (let i = 0; i < 11; i++) {
+      promises.push(
+        request.post("/workflows").set(AUTH).send(createBody)
+      );
+    }
+
+    const results = await Promise.all(promises);
+    const statuses = results.map((r) => r.status);
+
+    expect(statuses).toContain(429);
+    const successCount = statuses.filter((s) => s === 201).length;
+    expect(successCount).toBe(10);
+  });
+
+  it("does not rate limit a different org for creation", async () => {
+    // Exhaust org-rate-test's create limit
+    const exhaustPromises = [];
+    for (let i = 0; i < 10; i++) {
+      exhaustPromises.push(
+        request.post("/workflows").set(AUTH).send(createBody)
+      );
+    }
+    await Promise.all(exhaustPromises);
+
+    // Different org should still work
+    const res = await request
+      .post("/workflows")
+      .set({ ...AUTH, "x-org-id": "org-create-other" })
+      .send(createBody);
+
+    expect(res.status).toBe(201);
   });
 });
