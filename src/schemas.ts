@@ -989,7 +989,7 @@ registry.registerPath({
   summary: "Upgrade (upsert) workflows by DAG signature",
   description:
     "Idempotent: creates new workflows or updates existing ones matched by (orgId + DAG signature). " +
-    "The workflow name is auto-generated as {category}-{channel}-{audienceType}-{signatureName}. " +
+    "The workflow name is auto-generated as {featureSlug}-{signatureName}. " +
     "signatureName is a human-readable word auto-assigned to each unique DAG. " +
     "After deploying, execute workflows via POST /workflows/by-name/{name}/execute.",
   tags: ["Workflows"],
