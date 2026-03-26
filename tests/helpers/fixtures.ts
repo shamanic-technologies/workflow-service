@@ -279,6 +279,39 @@ export const DAG_WITH_BANNED_API_SERVICE: DAG = {
   edges: [],
 };
 
+export const DAG_WITH_HTTP_CALL_MISSING_SERVICE: DAG = {
+  nodes: [
+    {
+      id: "fetch-data",
+      type: "http.call",
+      config: { method: "GET", path: "/data" },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_HTTP_CALL_MISSING_METHOD: DAG = {
+  nodes: [
+    {
+      id: "fetch-data",
+      type: "http.call",
+      config: { service: "brand", path: "/data" },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_HTTP_CALL_MISSING_PATH: DAG = {
+  nodes: [
+    {
+      id: "fetch-data",
+      type: "http.call",
+      config: { service: "brand", method: "GET" },
+    },
+  ],
+  edges: [],
+};
+
 export const DAG_WITH_CUSTOM_RETRIES: DAG = {
   nodes: [
     {

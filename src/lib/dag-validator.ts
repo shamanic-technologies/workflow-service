@@ -36,6 +36,9 @@ export interface ValidationResult {
  */
 const BANNED_HTTP_CALL_SERVICES = new Set(["api"]);
 
+/** Fields that every http.call node must have in its config. */
+const HTTP_CALL_REQUIRED_FIELDS = ["service", "method", "path"] as const;
+
 export function validateDAG(dag: DAG): ValidationResult {
   const errors: ValidationError[] = [];
   const nodeIds = dag.nodes.map((n) => n.id);
@@ -111,9 +114,21 @@ export function validateDAG(dag: DAG): ValidationResult {
     });
   }
 
-  // 7. Banned service names in http.call nodes
+  // 7. Validate http.call nodes: required fields + banned services
   for (const node of dag.nodes) {
     if (node.type !== "http.call") continue;
+
+    // Required config fields
+    for (const field of HTTP_CALL_REQUIRED_FIELDS) {
+      if (typeof node.config?.[field] !== "string" || !(node.config[field] as string).trim()) {
+        errors.push({
+          field: `nodes[${node.id}].config.${field}`,
+          message: `http.call node "${node.id}" is missing required config field "${field}"`,
+        });
+      }
+    }
+
+    // Banned service names
     const service = node.config?.service;
     if (typeof service === "string" && BANNED_HTTP_CALL_SERVICES.has(service)) {
       errors.push({

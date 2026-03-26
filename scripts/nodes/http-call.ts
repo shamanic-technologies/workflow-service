@@ -23,6 +23,13 @@ export async function main(
   workflowName?: string,
   featureSlug?: string,
 ) {
+  if (!service) {
+    throw new Error(
+      "http.call node is missing required config field \"service\". " +
+      "Re-deploy the workflow with service, method, and path in the node config."
+    );
+  }
+
   // Convert service name to env var prefix: "transactional-email" → "TRANSACTIONAL_EMAIL"
   const envPrefix = service.toUpperCase().replace(/-/g, "_");
   const urlKey = `${envPrefix}_SERVICE_URL`;
