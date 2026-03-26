@@ -983,6 +983,9 @@ describe("PUT /workflows/:id — fork", () => {
     expect(res.status).toBe(201);
     expect(res.body.id).not.toBe("wf-original");
     expect(res.body.forkedFrom).toBe("wf-original");
+    expect(res.body._action).toBe("forked");
+    expect(res.body._forkedFromName).toBe("sales-email-cold-outreach-jasmine");
+    expect(res.body.name).not.toBe("sales-email-cold-outreach-jasmine");
     expect(res.body.category).toBe("sales");
     expect(res.body.channel).toBe("email");
     expect(res.body.audienceType).toBe("cold-outreach");
@@ -1014,6 +1017,8 @@ describe("PUT /workflows/:id — fork", () => {
       });
 
     expect(res.status).toBe(200);
+    expect(res.body._action).toBe("updated");
+    expect(res.body._forkedFromName).toBeUndefined();
     expect(res.body.description).toBe("Updated description");
     expect(res.body.tags).toEqual(["updated"]);
     // No forkedFrom — it's the same workflow
@@ -1044,6 +1049,8 @@ describe("PUT /workflows/:id — fork", () => {
       });
 
     expect(res.status).toBe(200);
+    expect(res.body._action).toBe("updated");
+    expect(res.body._forkedFromName).toBeUndefined();
     expect(res.body.description).toBe("Same DAG, new desc");
   });
 

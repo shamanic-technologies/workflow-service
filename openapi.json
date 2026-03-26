@@ -452,6 +452,33 @@
           "providers"
         ]
       },
+      "WorkflowMutationResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WorkflowResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_action": {
+                "type": "string",
+                "enum": [
+                  "updated",
+                  "forked"
+                ],
+                "description": "What happened: 'updated' means the existing workflow was modified in-place, 'forked' means a new workflow was created (check the new name and id)."
+              },
+              "_forkedFromName": {
+                "type": "string",
+                "description": "Only present when _action is 'forked'. The name of the original workflow that was forked."
+              }
+            },
+            "required": [
+              "_action"
+            ]
+          }
+        ]
+      },
       "WorkflowConflictResponse": {
         "type": "object",
         "properties": {
@@ -1907,21 +1934,21 @@
         },
         "responses": {
           "200": {
-            "description": "Workflow updated in-place (metadata only, no DAG change)",
+            "description": "Workflow updated in-place (metadata only or same DAG signature). _action='updated'.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowResponse"
+                  "$ref": "#/components/schemas/WorkflowMutationResponse"
                 }
               }
             }
           },
           "201": {
-            "description": "Workflow forked (new workflow created with modified DAG)",
+            "description": "Workflow forked (new workflow created with modified DAG). Check _action='forked' and the new name.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowResponse"
+                  "$ref": "#/components/schemas/WorkflowMutationResponse"
                 }
               }
             }

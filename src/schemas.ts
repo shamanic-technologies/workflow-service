@@ -165,6 +165,16 @@ export const WorkflowResponseSchema = z
   })
   .openapi("WorkflowResponse");
 
+export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
+  _action: z.enum(["updated", "forked"]).describe(
+    "What happened: 'updated' means the existing workflow was modified in-place, " +
+    "'forked' means a new workflow was created (check the new name and id)."
+  ),
+  _forkedFromName: z.string().optional().describe(
+    "Only present when _action is 'forked'. The name of the original workflow that was forked."
+  ),
+}).openapi("WorkflowMutationResponse");
+
 export const TemplateContractIssueSchema = z
   .object({
     nodeId: z.string().describe("DAG node ID that calls content-generation."),
@@ -789,12 +799,12 @@ registry.registerPath({
   },
   responses: {
     201: {
-      description: "Workflow forked (new workflow created with modified DAG)",
-      content: { "application/json": { schema: WorkflowResponseSchema } },
+      description: "Workflow forked (new workflow created with modified DAG). Check _action='forked' and the new name.",
+      content: { "application/json": { schema: WorkflowMutationResponseSchema } },
     },
     200: {
-      description: "Workflow updated in-place (metadata only, no DAG change)",
-      content: { "application/json": { schema: WorkflowResponseSchema } },
+      description: "Workflow updated in-place (metadata only or same DAG signature). _action='updated'.",
+      content: { "application/json": { schema: WorkflowMutationResponseSchema } },
     },
     404: {
       description: "Not found",
