@@ -611,6 +611,29 @@ export const WorkflowConflictResponseSchema = z
   })
   .openapi("WorkflowConflictResponse");
 
+// --- Migrate feature slug (internal) ---
+
+export const MigrateFeatureSlugSchema = z
+  .object({
+    oldSlug: z.string().min(1).describe("The deprecated feature slug to migrate away from."),
+    newSlug: z.string().min(1).describe("The new active feature slug to migrate to."),
+  })
+  .openapi("MigrateFeatureSlugRequest");
+
+export const MigrateFeatureSlugResponseSchema = z
+  .object({
+    migrated: z.number().describe("Number of active workflows whose featureSlug was updated."),
+    workflows: z.array(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string(),
+        oldFeatureSlug: z.string(),
+        newFeatureSlug: z.string(),
+      })
+    ).describe("List of workflows that were migrated."),
+  })
+  .openapi("MigrateFeatureSlugResponse");
+
 // --- Common ---
 
 export const ErrorResponseSchema = z
@@ -1200,6 +1223,38 @@ registry.registerPath({
     },
     404: {
       description: "Workflow not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/migrate-feature-slug",
+  summary: "Migrate workflows from one feature slug to another",
+  description:
+    "Called by features-service when a feature is upgraded (metadata-only change that deprecates the old slug). " +
+    "Updates featureSlug on all active workflows matching oldSlug → newSlug. " +
+    "Workflow names are unchanged (execution by name is unaffected). " +
+    "Idempotent: re-calling with the same slugs is a no-op if already migrated.",
+  tags: ["Internal"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    body: {
+      required: true,
+      content: { "application/json": { schema: MigrateFeatureSlugSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Migration complete",
+      content: {
+        "application/json": { schema: MigrateFeatureSlugResponseSchema },
+      },
+    },
+    400: {
+      description: "Validation error",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

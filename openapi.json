@@ -1330,6 +1330,66 @@
             "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
           }
         }
+      },
+      "MigrateFeatureSlugResponse": {
+        "type": "object",
+        "properties": {
+          "migrated": {
+            "type": "number",
+            "description": "Number of active workflows whose featureSlug was updated."
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "oldFeatureSlug": {
+                  "type": "string"
+                },
+                "newFeatureSlug": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "oldFeatureSlug",
+                "newFeatureSlug"
+              ]
+            },
+            "description": "List of workflows that were migrated."
+          }
+        },
+        "required": [
+          "migrated",
+          "workflows"
+        ]
+      },
+      "MigrateFeatureSlugRequest": {
+        "type": "object",
+        "properties": {
+          "oldSlug": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The deprecated feature slug to migrate away from."
+          },
+          "newSlug": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The new active feature slug to migrate to."
+          }
+        },
+        "required": [
+          "oldSlug",
+          "newSlug"
+        ]
       }
     },
     "parameters": {}
@@ -3734,6 +3794,124 @@
           },
           "404": {
             "description": "Workflow not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/migrate-feature-slug": {
+      "post": {
+        "summary": "Migrate workflows from one feature slug to another",
+        "description": "Called by features-service when a feature is upgraded (metadata-only change that deprecates the old slug). Updates featureSlug on all active workflows matching oldSlug → newSlug. Workflow names are unchanged (execution by name is unaffected). Idempotent: re-calling with the same slugs is a no-op if already migrated.",
+        "tags": [
+          "Internal"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+            },
+            "required": false,
+            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+            },
+            "required": false,
+            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "name": "x-workflow-name",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFeatureSlugRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Migration complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrateFeatureSlugResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
