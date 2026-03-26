@@ -998,7 +998,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         .where(eq(workflows.id, req.params.id))
         .returning();
 
-      res.json(formatWorkflow(updated));
+      res.json({ ...formatWorkflow(updated), _action: "updated" as const });
       return;
     }
 
@@ -1042,7 +1042,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         .where(eq(workflows.id, req.params.id))
         .returning();
 
-      res.json(formatWorkflow(updated));
+      res.json({ ...formatWorkflow(updated), _action: "updated" as const });
       return;
     }
 
@@ -1156,7 +1156,11 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       `[workflow-service] fork: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id})`,
     );
 
-    res.status(201).json(formatWorkflow(forked));
+    res.status(201).json({
+      ...formatWorkflow(forked),
+      _action: "forked" as const,
+      _forkedFromName: existing.name,
+    });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
       res.status(400).json({ error: "Validation error", details: err });
