@@ -14,7 +14,6 @@ import {
   GenerateWorkflowSchema,
   RankedWorkflowQuerySchema,
   BestWorkflowQuerySchema,
-  MigrateFeatureSlugSchema,
 } from "../schemas.js";
 import {
   generateWorkflow,
@@ -1245,66 +1244,6 @@ router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[workflow-service] VALIDATE error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// POST /internal/migrate-feature-slug — Update featureSlug on all active workflows
-// Called by features-service when a feature is upgraded (old slug deprecated, new slug active)
-router.post("/internal/migrate-feature-slug", requireApiKey, async (req, res) => {
-  try {
-    const body = MigrateFeatureSlugSchema.parse(req.body);
-
-    if (body.oldSlug === body.newSlug) {
-      res.json({ migrated: 0, workflows: [] });
-      return;
-    }
-
-    // Find all active workflows with the old slug
-    const matching = await db
-      .select()
-      .from(workflows)
-      .where(
-        and(
-          eq(workflows.featureSlug, body.oldSlug),
-          eq(workflows.status, "active"),
-        )
-      );
-
-    if (matching.length === 0) {
-      res.json({ migrated: 0, workflows: [] });
-      return;
-    }
-
-    // Update all matching workflows
-    await db
-      .update(workflows)
-      .set({ featureSlug: body.newSlug, updatedAt: new Date() })
-      .where(
-        and(
-          eq(workflows.featureSlug, body.oldSlug),
-          eq(workflows.status, "active"),
-        )
-      );
-
-    const migrated = matching.map((w) => ({
-      id: w.id,
-      name: w.name,
-      oldFeatureSlug: body.oldSlug,
-      newFeatureSlug: body.newSlug,
-    }));
-
-    console.log(
-      `[workflow-service] migrate-feature-slug: "${body.oldSlug}" -> "${body.newSlug}" (${migrated.length} workflows)`,
-    );
-
-    res.json({ migrated: migrated.length, workflows: migrated });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
-      return;
-    }
-    console.error("[workflow-service] migrate-feature-slug error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
