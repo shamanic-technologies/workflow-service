@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey, requireBrandId } from "../middleware/auth.js";
+import { executeRateLimit } from "../middleware/rate-limit.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
 import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun } from "../lib/runs-client.js";
@@ -38,6 +39,7 @@ function formatRun(r: typeof workflowRuns.$inferSelect) {
 router.post(
   "/workflows/by-name/:name/execute",
   requireApiKey,
+  executeRateLimit,
   requireBrandId,
   async (req, res) => {
     try {
@@ -207,7 +209,7 @@ router.post(
 );
 
 // POST /workflows/:id/execute — Execute a workflow
-router.post("/workflows/:id/execute", requireApiKey, requireBrandId, async (req, res) => {
+router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBrandId, async (req, res) => {
   try {
     const body = ExecuteWorkflowSchema.parse(req.body ?? {});
     const orgId = res.locals.orgId as string;
