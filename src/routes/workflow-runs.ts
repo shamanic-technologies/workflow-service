@@ -124,9 +124,9 @@ router.post(
       const userId = res.locals.userId as string;
       const callerRunId = res.locals.runId as string;
 
-      // Extract tracking context: prefer request body inputs, fall back to headers
-      const campaignId = (body.inputs?.campaignId as string | undefined) ?? (res.locals.campaignId as string | undefined);
-      const brandId = (body.inputs?.brandId as string | undefined) ?? (res.locals.brandId as string | undefined);
+      // Extract tracking context: prefer request body inputs, fall back to headers, then workflow record
+      const campaignId = (body.inputs?.campaignId as string | undefined) ?? (res.locals.campaignId as string | undefined) ?? workflow.campaignId ?? undefined;
+      const brandId = (body.inputs?.brandId as string | undefined) ?? (res.locals.brandId as string | undefined) ?? workflow.createdForBrandId ?? undefined;
       const featureSlug = (body.inputs?.featureSlug as string | undefined) ?? (res.locals.featureSlug as string | undefined);
       const headerWorkflowName = res.locals.workflowName as string | undefined;
 
@@ -179,8 +179,8 @@ router.post(
           workflowId: workflow.id,
           orgId,
           userId,
-          campaignId: campaignId ?? workflow.campaignId,
-          brandId: brandId ?? workflow.createdForBrandId,
+          campaignId,
+          brandId,
           featureSlug,
           workflowName: workflow.name,
           subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
@@ -253,9 +253,9 @@ router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBr
     const executeUserId = res.locals.userId as string;
     const callerRunId = res.locals.runId as string;
 
-    // Extract tracking context: prefer request body inputs, fall back to headers
-    const execCampaignId = (body.inputs?.campaignId as string | undefined) ?? (res.locals.campaignId as string | undefined);
-    const execBrandId = (body.inputs?.brandId as string | undefined) ?? (res.locals.brandId as string | undefined);
+    // Extract tracking context: prefer request body inputs, fall back to headers, then workflow record
+    const execCampaignId = (body.inputs?.campaignId as string | undefined) ?? (res.locals.campaignId as string | undefined) ?? workflow.campaignId ?? undefined;
+    const execBrandId = (body.inputs?.brandId as string | undefined) ?? (res.locals.brandId as string | undefined) ?? workflow.createdForBrandId ?? undefined;
     const execFeatureSlug = (body.inputs?.featureSlug as string | undefined) ?? (res.locals.featureSlug as string | undefined);
 
     // Create a child run in runs-service (links to caller's run via parentRunId)
@@ -304,8 +304,8 @@ router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBr
         workflowId: workflow.id,
         orgId,
         userId: executeUserId,
-        campaignId: execCampaignId ?? workflow.campaignId,
-        brandId: execBrandId ?? workflow.createdForBrandId,
+        campaignId: execCampaignId,
+        brandId: execBrandId,
         featureSlug: execFeatureSlug,
         workflowName: workflow.name,
         subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,

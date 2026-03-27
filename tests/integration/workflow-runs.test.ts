@@ -297,6 +297,34 @@ describe("POST /workflows/:id/execute", () => {
     expect(res.body.subrequestId).toBe("sub-from-wf");
   });
 
+  it("propagates workflow record campaignId and brandId into Windmill flow inputs", async () => {
+    mockWorkflows.push({
+      id: "wf-1",
+      orgId: "org-1",
+      name: "Test Flow",
+      campaignId: "camp-from-wf",
+      createdForBrandId: "brand-from-wf",
+      subrequestId: null,
+      windmillFlowPath: "f/workflows/org_1/test_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    // Execute WITHOUT campaignId in inputs or headers — should fall back to workflow record
+    await request
+      .post("/workflows/wf-1/execute")
+      .set(AUTH)
+      .send({ inputs: { email: "test@example.com" } });
+
+    expect(mockRunFlow).toHaveBeenCalledWith(
+      "f/workflows/org_1/test_flow",
+      expect.objectContaining({
+        campaignId: "camp-from-wf",
+        brandId: "brand-1", // from x-brand-id header (takes priority over workflow record)
+      }),
+    );
+  });
+
   it("requires authentication", async () => {
     const res = await request
       .post("/workflows/wf-1/execute")
@@ -563,6 +591,34 @@ describe("POST /workflows/by-name/:name/execute", () => {
     expect(res.status).toBe(410);
     expect(res.body.error).toBe("Workflow has been deprecated");
     expect(res.body.upgradedTo).toBe("wf-missing");
+  });
+
+  it("propagates workflow record campaignId and brandId into Windmill flow inputs (by name)", async () => {
+    mockWorkflows.push({
+      id: "wf-1",
+      orgId: "deployer-org",
+      name: "campaign-flow",
+      campaignId: "camp-on-record",
+      createdForBrandId: "brand-on-record",
+      subrequestId: null,
+      windmillFlowPath: "f/workflows/org_1/campaign_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    // Execute WITHOUT campaignId in inputs — should fall back to workflow.campaignId
+    await request
+      .post("/workflows/by-name/campaign-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(mockRunFlow).toHaveBeenCalledWith(
+      "f/workflows/org_1/campaign_flow",
+      expect.objectContaining({
+        campaignId: "camp-on-record",
+        brandId: "brand-1", // from x-brand-id header (takes priority over workflow record)
+      }),
+    );
   });
 
   it("stores campaignId from inputs when following upgrade chain", async () => {
