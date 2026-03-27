@@ -923,6 +923,94 @@ describe("field validation — nested object detection in additionalProperties",
     expect(deepErrors).toHaveLength(0);
   });
 
+  it("accepts array-indexed output paths like results.0.value (regression: regulus false positive)", () => {
+    const BRAND_EXTRACT_SPEC: Record<string, unknown> = {
+      paths: {
+        "/brands/{brandId}/extract-fields": {
+          post: {
+            summary: "Extract fields from brand",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      fields: { type: "array" },
+                    },
+                    required: ["fields"],
+                  },
+                },
+              },
+            },
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        results: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              key: { type: "string" },
+                              value: { type: "string" },
+                            },
+                            required: ["key", "value"],
+                          },
+                        },
+                      },
+                      required: ["results"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "brand-extract",
+          type: "http.call",
+          config: { service: "brand", method: "POST", path: "/brands/{brandId}/extract-fields" },
+          inputMapping: {
+            "body.fields": "$ref:flow_input.fields",
+          },
+        },
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            "body.variables.industry": "$ref:brand-extract.output.results.0.value",
+            "body.variables.geography": "$ref:brand-extract.output.results.1.value",
+            "body.variables.audience": "$ref:brand-extract.output.results.2.value",
+          },
+        },
+      ],
+      edges: [{ from: "brand-extract", to: "email-generate" }],
+    };
+
+    const specs = new Map([
+      ["brand", BRAND_EXTRACT_SPEC],
+      ["content-generation", CONTENT_GEN_SPEC],
+    ]);
+
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    // These should NOT be flagged as errors — array index paths are valid
+    const deepErrors = result.fieldIssues.filter(
+      (i) => i.severity === "error" && i.reason.includes("does not exist under"),
+    );
+    expect(deepErrors).toHaveLength(0);
+  });
+
   it("skips nested object check when upstream spec is unavailable", () => {
     const dag: DAG = {
       nodes: [

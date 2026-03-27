@@ -107,15 +107,36 @@ export function walkSchemaPath(
   spec: Record<string, unknown>,
 ): WalkResult {
   let current: ResolvedSchema | null = schema;
+  // Track the raw schema alongside the resolved one so we can detect arrays
+  let currentRaw: Record<string, unknown> | null = null;
   const resolvedPath: string[] = [];
 
   for (const segment of path) {
     if (!current) {
+      // current is null — previous property was a primitive or unresolvable.
+      // But if we have a raw schema that is an array and the segment is numeric,
+      // we can traverse into items.
+      if (currentRaw && /^\d+$/.test(segment)) {
+        const arrayItems = resolveArrayItems(currentRaw, spec);
+        if (arrayItems) {
+          resolvedPath.push(segment);
+          if (resolvedPath.length === path.length) {
+            return { valid: true, resolvedPath };
+          }
+          current = arrayItems.resolved;
+          currentRaw = arrayItems.raw;
+          continue;
+        }
+      }
       return { valid: false, resolvedPath, availableAt: [] };
     }
 
     const prop = current.properties[segment];
     if (!prop) {
+      // If the segment is a numeric index and the current schema wraps an
+      // array (e.g. a top-level "results" that is type: array), we should
+      // not reach here because current would be ResolvedSchema (object).
+      // However, check if any property is an array we can descend into.
       return {
         valid: false,
         resolvedPath,
@@ -132,13 +153,42 @@ export function walkSchemaPath(
 
     // Try to descend into the property's schema
     if (typeof prop === "object" && prop !== null) {
-      current = resolveSchema(prop as Record<string, unknown>, spec);
+      const rawProp = resolveRawSchema(prop as Record<string, unknown>, spec);
+      current = resolveSchema(rawProp, spec);
+      currentRaw = rawProp;
     } else {
       current = null;
+      currentRaw = null;
     }
   }
 
   return { valid: true, resolvedPath };
+}
+
+/**
+ * Resolves $ref in a raw schema without requiring properties (unlike resolveSchema).
+ */
+function resolveRawSchema(
+  schema: Record<string, unknown>,
+  spec: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof schema.$ref === "string") {
+    const resolved = followRef(schema.$ref, spec);
+    return resolved ?? schema;
+  }
+  return schema;
+}
+
+/**
+ * If the schema is an array type, resolves its items schema.
+ */
+function resolveArrayItems(
+  rawSchema: Record<string, unknown>,
+  spec: Record<string, unknown>,
+): { resolved: ResolvedSchema | null; raw: Record<string, unknown> } | null {
+  if (rawSchema.type !== "array" || !rawSchema.items) return null;
+  const itemsRaw = resolveRawSchema(rawSchema.items as Record<string, unknown>, spec);
+  return { resolved: resolveSchema(itemsRaw, spec), raw: itemsRaw };
 }
 
 export function getRequestBodySchema(

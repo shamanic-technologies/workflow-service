@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveSchema,
+  walkSchemaPath,
   getRequestBodySchema,
   getResponseSchema,
 } from "../../src/lib/openapi-schema-resolver.js";
@@ -108,6 +109,116 @@ describe("resolveSchema", () => {
     const schema = { type: "object", properties: { foo: { type: "string" } } };
     const result = resolveSchema(schema, {});
     expect(result?.required).toEqual([]);
+  });
+});
+
+describe("walkSchemaPath", () => {
+  it("traverses array items when path segment is numeric (regression: results.0.value false positive)", () => {
+    // brand POST /brands/{brandId}/extract-fields returns { results: [{ key, value, ... }] }
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          results: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string" },
+                value: { type: "string" },
+              },
+              required: ["key", "value"],
+            },
+          },
+        },
+        required: ["results"],
+      },
+      {},
+    )!;
+
+    // results.0.value should be valid — array index 0, then object property "value"
+    const result = walkSchemaPath(schema, ["results", "0", "value"], {});
+    expect(result.valid).toBe(true);
+    expect(result.resolvedPath).toEqual(["results", "0", "value"]);
+  });
+
+  it("rejects non-numeric segment on array schema", () => {
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          results: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { key: { type: "string" } },
+            },
+          },
+        },
+      },
+      {},
+    )!;
+
+    const result = walkSchemaPath(schema, ["results", "foo"], {});
+    expect(result.valid).toBe(false);
+  });
+
+  it("traverses array items via $ref", () => {
+    const spec = {
+      components: {
+        schemas: {
+          ExtractResult: {
+            type: "object",
+            properties: {
+              key: { type: "string" },
+              value: { type: "string" },
+            },
+          },
+        },
+      },
+    };
+
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          results: {
+            type: "array",
+            items: { $ref: "#/components/schemas/ExtractResult" },
+          },
+        },
+      },
+      spec,
+    )!;
+
+    const result = walkSchemaPath(schema, ["results", "0", "value"], spec);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects invalid nested field after array index", () => {
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          results: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string" },
+                value: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+      {},
+    )!;
+
+    const result = walkSchemaPath(schema, ["results", "0", "nonexistent"], {});
+    expect(result.valid).toBe(false);
+    expect(result.availableAt).toContain("key");
+    expect(result.availableAt).toContain("value");
   });
 });
 
