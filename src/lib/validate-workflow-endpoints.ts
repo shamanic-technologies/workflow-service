@@ -1,6 +1,6 @@
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
-import { getRequestBodySchema, getResponseSchema, resolveSchema } from "./openapi-schema-resolver.js";
+import { getRequestBodySchema, getResponseSchema, resolveSchema, walkSchemaPath } from "./openapi-schema-resolver.js";
 
 export interface InvalidEndpoint {
   service: string;
@@ -124,8 +124,8 @@ export function extractBodyFields(node: DAGNode): string[] {
 export function extractOutputRefs(
   dag: DAG,
   sourceNodeId: string,
-): Array<{ downstreamNodeId: string; field: string }> {
-  const refs: Array<{ downstreamNodeId: string; field: string }> = [];
+): Array<{ downstreamNodeId: string; field: string; fullPath: string[] }> {
+  const refs: Array<{ downstreamNodeId: string; field: string; fullPath: string[] }> = [];
   const normalizedId = sourceNodeId.replace(/-/g, "_");
   const hyphenId = sourceNodeId;
 
@@ -141,10 +141,10 @@ export function extractOutputRefs(
       const refNodeId = parts[0];
       if (refNodeId !== hyphenId && refNodeId !== normalizedId) continue;
 
-      // Skip "output" keyword, get the actual field name
+      // Skip "output" keyword, get the actual field path
       const rest = parts.slice(1).filter((p) => p !== "output");
       if (rest.length > 0) {
-        refs.push({ downstreamNodeId: node.id, field: rest[0] });
+        refs.push({ downstreamNodeId: node.id, field: rest[0], fullPath: rest });
       }
       // If rest.length === 0, it's a whole-output reference — skip validation
     }
@@ -226,6 +226,24 @@ function validateFields(
             severity: "warning",
             reason: `Output field "${ref.field}" referenced by "${ref.downstreamNodeId}" not in ${service} ${method} ${path} response schema`,
           });
+          continue;
+        }
+
+        // Deep path validation: check nested fields (e.g. lead.firstName vs lead.data.firstName)
+        if (ref.fullPath.length > 1) {
+          const walkResult = walkSchemaPath(responseSchema, ref.fullPath, spec);
+          if (!walkResult.valid) {
+            const failedAt = walkResult.resolvedPath.join(".");
+            const triedField = ref.fullPath[walkResult.resolvedPath.length];
+            const available = walkResult.availableAt?.join(", ") ?? "none";
+            issues.push({
+              nodeId: node.id,
+              service, method, path,
+              field: ref.fullPath.join("."),
+              severity: "error",
+              reason: `Output path "${ref.fullPath.join(".")}" referenced by "${ref.downstreamNodeId}" is invalid: "${triedField}" does not exist under "${failedAt}" in ${service} ${method} ${path} response (available: ${available})`,
+            });
+          }
         }
       }
     }

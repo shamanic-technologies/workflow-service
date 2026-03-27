@@ -89,6 +89,58 @@ function followRef(
 /**
  * Extracts the requestBody schema for an endpoint from an OpenAPI spec.
  */
+export interface WalkResult {
+  valid: boolean;
+  /** The path segments that were successfully resolved */
+  resolvedPath: string[];
+  /** Available properties at the point of failure (empty if valid) */
+  availableAt?: string[];
+}
+
+/**
+ * Walks a nested path through a JSON Schema, resolving $refs along the way.
+ * Returns whether the full path resolves to an existing field.
+ */
+export function walkSchemaPath(
+  schema: ResolvedSchema,
+  path: string[],
+  spec: Record<string, unknown>,
+): WalkResult {
+  let current: ResolvedSchema | null = schema;
+  const resolvedPath: string[] = [];
+
+  for (const segment of path) {
+    if (!current) {
+      return { valid: false, resolvedPath, availableAt: [] };
+    }
+
+    const prop = current.properties[segment];
+    if (!prop) {
+      return {
+        valid: false,
+        resolvedPath,
+        availableAt: Object.keys(current.properties),
+      };
+    }
+
+    resolvedPath.push(segment);
+
+    // If this is the last segment, we're done — the field exists
+    if (resolvedPath.length === path.length) {
+      return { valid: true, resolvedPath };
+    }
+
+    // Try to descend into the property's schema
+    if (typeof prop === "object" && prop !== null) {
+      current = resolveSchema(prop as Record<string, unknown>, spec);
+    } else {
+      current = null;
+    }
+  }
+
+  return { valid: true, resolvedPath };
+}
+
 export function getRequestBodySchema(
   spec: Record<string, unknown>,
   path: string,

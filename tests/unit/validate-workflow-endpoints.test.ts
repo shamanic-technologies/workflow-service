@@ -803,6 +803,126 @@ describe("field validation — nested object detection in additionalProperties",
     expect(nestedErrors).toHaveLength(0);
   });
 
+  it("detects wrong nested output path lead.firstName instead of lead.data.firstName (regression: recipientFirstName missing)", () => {
+    const EMAIL_GATEWAY_SPEC: Record<string, unknown> = {
+      paths: {
+        "/send": {
+          post: {
+            summary: "Send email",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      type: { type: "string" },
+                      to: { type: "string" },
+                      subject: { type: "string" },
+                      sequence: { type: "array" },
+                      recipientFirstName: { type: "string" },
+                      recipientLastName: { type: "string" },
+                      recipientCompany: { type: "string" },
+                      leadId: { type: "string" },
+                      brandId: { type: "string" },
+                      campaignId: { type: "string" },
+                    },
+                    required: ["type", "to", "subject", "recipientFirstName", "recipientLastName", "recipientCompany"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "fetch-lead",
+          type: "http.call",
+          config: { service: "lead", method: "POST", path: "/buffer/next" },
+          inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" },
+        },
+        {
+          id: "email-send",
+          type: "http.call",
+          config: {
+            service: "email-gateway",
+            method: "POST",
+            path: "/send",
+            body: { type: "broadcast" },
+          },
+          inputMapping: {
+            "body.to": "$ref:fetch-lead.output.lead.email",
+            "body.subject": "$ref:email-gen.output.subject",
+            "body.recipientFirstName": "$ref:fetch-lead.output.lead.firstName",
+            "body.recipientLastName": "$ref:fetch-lead.output.lead.lastName",
+            "body.recipientCompany": "$ref:fetch-lead.output.lead.publicationName",
+            "body.leadId": "$ref:fetch-lead.output.lead.leadId",
+            "body.campaignId": "$ref:flow_input.campaignId",
+          },
+        },
+      ],
+      edges: [{ from: "fetch-lead", to: "email-send" }],
+    };
+
+    const specs = new Map([
+      ["lead", LEAD_SPEC_WITH_SCHEMAS],
+      ["email-gateway", EMAIL_GATEWAY_SPEC],
+    ]);
+
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    // lead.firstName doesn't exist — correct path is lead.data.firstName
+    const deepErrors = result.fieldIssues.filter(
+      (i) => i.severity === "error" && i.reason.includes("does not exist under"),
+    );
+    expect(deepErrors.length).toBeGreaterThanOrEqual(2);
+
+    const fieldPaths = deepErrors.map((e) => e.field);
+    expect(fieldPaths).toContain("lead.firstName");
+    expect(fieldPaths).toContain("lead.lastName");
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("passes deep path validation for correct path lead.data.firstName", () => {
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "fetch-lead",
+          type: "http.call",
+          config: { service: "lead", method: "POST", path: "/buffer/next" },
+          inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" },
+        },
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
+            "body.variables.leadLastName": "$ref:fetch-lead.output.lead.data.lastName",
+          },
+        },
+      ],
+      edges: [{ from: "fetch-lead", to: "email-generate" }],
+    };
+
+    const specs = new Map([
+      ["lead", LEAD_SPEC_WITH_SCHEMAS],
+      ["content-generation", CONTENT_GEN_SPEC],
+    ]);
+
+    const result = validateWorkflowEndpoints(dag, specs);
+
+    const deepErrors = result.fieldIssues.filter(
+      (i) => i.severity === "error" && i.reason.includes("does not exist under"),
+    );
+    expect(deepErrors).toHaveLength(0);
+  });
+
   it("skips nested object check when upstream spec is unavailable", () => {
     const dag: DAG = {
       nodes: [
