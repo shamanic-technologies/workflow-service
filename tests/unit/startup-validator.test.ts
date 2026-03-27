@@ -148,13 +148,15 @@ describe("validateAndUpgradeWorkflows", () => {
   let dbSelectResult: Record<string, unknown>[] = [];
   let dbUpdates: Array<{ values: Record<string, unknown>; id: string }> = [];
   let dbInserts: Record<string, unknown>[] = [];
+  // Controls what the signature-match dedup query returns (default: no match)
+  let dbSignatureMatchResult: Record<string, unknown>[] = [];
 
   let selectCallCount = 0;
 
   function createMockDb() {
     selectCallCount = 0;
     return {
-      select: () => ({
+      select: (selectArg?: any) => ({
         from: (table: unknown) => {
           selectCallCount++;
 
@@ -168,6 +170,14 @@ describe("validateAndUpgradeWorkflows", () => {
             };
             (emptyResult as any).groupBy = () => Promise.resolve([]);
             return emptyResult;
+          }
+
+          // Signature-match dedup query: select({ id: ... }).from(workflows).where(...)
+          // Distinguished by select arg having 'id' key but not 'signatureName'
+          if (selectArg && 'id' in selectArg && !('signatureName' in selectArg)) {
+            const promise = Promise.resolve(dbSignatureMatchResult);
+            (promise as any).where = () => Promise.resolve(dbSignatureMatchResult);
+            return promise;
           }
 
           // Non-where calls after the first return signatureName-only (for collision detection)
@@ -216,6 +226,7 @@ describe("validateAndUpgradeWorkflows", () => {
     dbSelectResult = [];
     dbUpdates = [];
     dbInserts = [];
+    dbSignatureMatchResult = [];
     delete process.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
     delete process.env.ADMIN_NOTIFICATION_EMAIL;
   });
@@ -756,6 +767,92 @@ describe("validateAndUpgradeWorkflows", () => {
     consoleSpy.mockRestore();
   });
 
+  it("deduplicates when upgraded signature matches an existing active workflow", async () => {
+    // Regression: two broken workflows upgrade to the same DAG signature.
+    // The second should deprecate + point to the first, not fail on unique constraint.
+    const BROKEN_A = {
+      ...BROKEN_WORKFLOW,
+      id: "wf-dup-a",
+      name: "sales-email-cold-outreach-DupA",
+      signatureName: "DupA",
+      signature: "old-sig-a",
+    };
+    const BROKEN_B = {
+      ...BROKEN_WORKFLOW,
+      id: "wf-dup-b",
+      name: "sales-email-cold-outreach-DupB",
+      signatureName: "DupB",
+      signature: "old-sig-b",
+    };
+
+    dbSelectResult = [BROKEN_A, BROKEN_B];
+    mockFetchSpecsForServices.mockResolvedValue(
+      new Map([["campaign", CAMPAIGN_SPEC]]),
+    );
+    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+    mockCreatePlatformRun.mockResolvedValue({ runId: "dedup-run-1" });
+    mockClosePlatformRun.mockResolvedValue(undefined);
+
+    const fixedDag = {
+      nodes: [
+        {
+          id: "gate-check",
+          type: "http.call",
+          config: { service: "campaign", method: "POST", path: "/gate-check" },
+        },
+      ],
+      edges: [],
+    };
+
+    mockUpgradeWorkflow.mockResolvedValue({
+      dag: fixedDag,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Fixed workflow",
+    });
+
+    // Use a custom mock DB where the insert side-effects set the signature
+    // match result, simulating what the real DB would do: after the first
+    // workflow is inserted, the second's signature-match query finds it.
+    const deduplicatingMockDb = createMockDb();
+    const originalInsert = deduplicatingMockDb.insert;
+    (deduplicatingMockDb as any).insert = () => {
+      const chain = originalInsert();
+      const originalValues = chain.values;
+      chain.values = (row: Record<string, unknown>) => {
+        // After inserting, future signature-match queries will find this workflow
+        dbSignatureMatchResult = [{ id: "wf-first-upgraded" }];
+        return originalValues(row);
+      };
+      return chain;
+    };
+
+    const consoleSpy = vi.spyOn(console, "log");
+
+    await validateAndUpgradeWorkflows({
+      db: deduplicatingMockDb as any,
+      windmillClient: null,
+    });
+
+    // Both workflows go through upgradeWorkflow (need the result DAG to compute signature)
+    // but only the first one inserts — the second deduplicates
+    expect(mockUpgradeWorkflow).toHaveBeenCalledTimes(2);
+    expect(dbInserts.length).toBe(1); // Only 1 insert, not 2
+
+    // Both should count as upgraded (not failed)
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("2 upgraded"),
+    );
+
+    // Second workflow should log the dedup path
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("upgraded by dedup"),
+    );
+
+    consoleSpy.mockRestore();
+  });
+
   it("upgrades workflows with recent runs before dormant ones", async () => {
     const DORMANT_BROKEN = {
       ...BROKEN_WORKFLOW,
@@ -794,7 +891,7 @@ describe("validateAndUpgradeWorkflows", () => {
     function createMockDbWithRuns() {
       let callCount = 0;
       return {
-        select: () => ({
+        select: (selectArg?: any) => ({
           from: (table: unknown) => {
             callCount++;
 
@@ -810,6 +907,13 @@ describe("validateAndUpgradeWorkflows", () => {
                 return grouped;
               };
               return result;
+            }
+
+            // Signature-match dedup query
+            if (selectArg && 'id' in selectArg && !('signatureName' in selectArg)) {
+              const promise = Promise.resolve(dbSignatureMatchResult);
+              (promise as any).where = () => Promise.resolve(dbSignatureMatchResult);
+              return promise;
             }
 
             const signatureData = () =>
