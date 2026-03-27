@@ -100,7 +100,15 @@ import supertest from "supertest";
 import app from "../../src/index.js";
 
 const request = supertest(app);
-const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
+const IDENTITY = {
+  "x-org-id": "org-1",
+  "x-user-id": "user-1",
+  "x-run-id": "run-caller-1",
+  "x-brand-id": "brand-1",
+  "x-campaign-id": "camp-1",
+  "x-workflow-name": "test-workflow",
+  "x-feature-slug": "test-feature",
+};
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
 describe("POST /workflows/:id/execute", () => {
@@ -156,6 +164,7 @@ describe("POST /workflows/:id/execute", () => {
       userId: "user-1",
       taskName: "execute-workflow",
       workflowName: "Test Flow",
+      campaignId: "camp-1",
       brandId: "brand-1",
     });
   });
@@ -206,6 +215,7 @@ describe("POST /workflows/:id/execute", () => {
       userId: "user-1",
       taskName: "execute-workflow",
       workflowName: "Test Flow",
+      campaignId: "camp-1",
       brandId: "brand-1",
     });
   });
@@ -253,12 +263,12 @@ describe("POST /workflows/:id/execute", () => {
     expect(res.body.upgradedTo).toBe("wf-new-id");
   });
 
-  it("stores campaignId from inputs, not from workflow record", async () => {
+  it("uses campaignId from header, not from workflow record or inputs", async () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "org-1",
       name: "Test Flow",
-      campaignId: null,
+      campaignId: "camp-from-wf",
       subrequestId: null,
       windmillFlowPath: "f/workflows/org_1/test_flow",
       windmillWorkspace: "prod",
@@ -267,62 +277,23 @@ describe("POST /workflows/:id/execute", () => {
 
     const res = await request
       .post("/workflows/wf-1/execute")
-      .set(AUTH)
-      .send({ inputs: { campaignId: "camp-from-input", subrequestId: "sub-from-input" } });
+      .set(AUTH) // x-campaign-id: "camp-1"
+      .send({ inputs: { campaignId: "camp-from-input" } });
 
     expect(res.status).toBe(201);
-    expect(res.body.campaignId).toBe("camp-from-input");
-    expect(res.body.subrequestId).toBe("sub-from-input");
+    expect(res.body.campaignId).toBe("camp-1"); // from header, not input or workflow record
   });
 
-  it("falls back to workflow record campaignId when not in inputs", async () => {
-    mockWorkflows.push({
-      id: "wf-1",
-      orgId: "org-1",
-      name: "Test Flow",
-      campaignId: "camp-from-wf",
-      subrequestId: "sub-from-wf",
-      windmillFlowPath: "f/workflows/org_1/test_flow",
-      windmillWorkspace: "prod",
-      dag: VALID_LINEAR_DAG,
-    });
-
+  it("returns 400 when required execution headers are missing", async () => {
     const res = await request
       .post("/workflows/wf-1/execute")
-      .set(AUTH)
-      .send({ inputs: { email: "test@example.com" } });
+      .set({ "x-api-key": "test-api-key", "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" })
+      .send({ inputs: {} });
 
-    expect(res.status).toBe(201);
-    expect(res.body.campaignId).toBe("camp-from-wf");
-    expect(res.body.subrequestId).toBe("sub-from-wf");
-  });
-
-  it("propagates workflow record campaignId and brandId into Windmill flow inputs", async () => {
-    mockWorkflows.push({
-      id: "wf-1",
-      orgId: "org-1",
-      name: "Test Flow",
-      campaignId: "camp-from-wf",
-      createdForBrandId: "brand-from-wf",
-      subrequestId: null,
-      windmillFlowPath: "f/workflows/org_1/test_flow",
-      windmillWorkspace: "prod",
-      dag: VALID_LINEAR_DAG,
-    });
-
-    // Execute WITHOUT campaignId in inputs or headers — should fall back to workflow record
-    await request
-      .post("/workflows/wf-1/execute")
-      .set(AUTH)
-      .send({ inputs: { email: "test@example.com" } });
-
-    expect(mockRunFlow).toHaveBeenCalledWith(
-      "f/workflows/org_1/test_flow",
-      expect.objectContaining({
-        campaignId: "camp-from-wf",
-        brandId: "brand-1", // from x-brand-id header (takes priority over workflow record)
-      }),
-    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Missing required headers");
+    expect(res.body.error).toContain("x-campaign-id");
+    expect(res.body.error).toContain("x-brand-id");
   });
 
   it("requires authentication", async () => {
@@ -389,6 +360,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
       userId: "user-1",
       taskName: "execute-workflow",
       workflowName: "create-user-flow",
+      campaignId: "camp-1",
       brandId: "brand-1",
     });
   });
@@ -432,12 +404,15 @@ describe("POST /workflows/by-name/:name/execute", () => {
       "x-user-id": "user-b",
       "x-run-id": "run-caller-b",
       "x-brand-id": "brand-b",
+      "x-campaign-id": "camp-b",
+      "x-workflow-name": "sales-outreach",
+      "x-feature-slug": "cold-outreach",
     };
 
     const res = await request
       .post("/workflows/by-name/sales-email-cold-outreach-pharaoh/execute")
       .set(CROSS_ORG_AUTH)
-      .send({ inputs: { campaignId: "camp-1" } });
+      .send({ inputs: {} });
 
     expect(res.status).toBe(201);
     expect(res.body.status).toBe("queued");
@@ -593,7 +568,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
     expect(res.body.upgradedTo).toBe("wf-missing");
   });
 
-  it("propagates workflow record campaignId and brandId into Windmill flow inputs (by name)", async () => {
+  it("uses campaignId from header into Windmill flow inputs (by name)", async () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org",
@@ -606,25 +581,35 @@ describe("POST /workflows/by-name/:name/execute", () => {
       dag: VALID_LINEAR_DAG,
     });
 
-    // Execute WITHOUT campaignId in inputs — should fall back to workflow.campaignId
     await request
       .post("/workflows/by-name/campaign-flow/execute")
-      .set(AUTH)
+      .set(AUTH) // x-campaign-id: "camp-1", x-brand-id: "brand-1"
       .send({ inputs: {} });
 
     expect(mockRunFlow).toHaveBeenCalledWith(
       "f/workflows/org_1/campaign_flow",
       expect.objectContaining({
-        campaignId: "camp-on-record",
-        brandId: "brand-1", // from x-brand-id header (takes priority over workflow record)
+        campaignId: "camp-1",
+        brandId: "brand-1",
       }),
     );
   });
 
-  it("stores campaignId from inputs when following upgrade chain", async () => {
+  it("returns 400 when required execution headers are missing (by name)", async () => {
+    const res = await request
+      .post("/workflows/by-name/some-flow/execute")
+      .set({ "x-api-key": "test-api-key", "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" })
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Missing required headers");
+    expect(res.body.error).toContain("x-campaign-id");
+  });
+
+  it("stores campaignId from header when following upgrade chain", async () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
-      [{   // 2. any-status lookup → deprecated workflow (campaignId is null)
+      [{   // 2. any-status lookup → deprecated workflow
         id: "wf-old",
         name: "old-flow",
         status: "deprecated",
@@ -632,7 +617,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
         subrequestId: null,
         upgradedTo: "wf-new",
       }],
-      [{   // 3. chain follow: replacement is active (campaignId also null)
+      [{   // 3. chain follow: replacement is active
         id: "wf-new",
         name: "new-flow",
         status: "active",
@@ -646,11 +631,11 @@ describe("POST /workflows/by-name/:name/execute", () => {
 
     const res = await request
       .post("/workflows/by-name/old-flow/execute")
-      .set(AUTH)
-      .send({ inputs: { campaignId: "camp-runtime", subrequestId: "sub-runtime" } });
+      .set(AUTH) // x-campaign-id: "camp-1"
+      .send({ inputs: { subrequestId: "sub-runtime" } });
 
     expect(res.status).toBe(201);
-    expect(res.body.campaignId).toBe("camp-runtime");
+    expect(res.body.campaignId).toBe("camp-1");
     expect(res.body.subrequestId).toBe("sub-runtime");
   });
 
@@ -895,7 +880,7 @@ describe("x-feature-slug tracking", () => {
     expect(res.body.featureSlug).toBe("sales-email-cold-outreach");
   });
 
-  it("prefers featureSlug from inputs over header", async () => {
+  it("uses featureSlug from header (inputs do not override)", async () => {
     mockWorkflows.push(WORKFLOW_FIXTURE);
 
     const res = await request
@@ -904,7 +889,7 @@ describe("x-feature-slug tracking", () => {
       .send({ inputs: { featureSlug: "from-inputs" } });
 
     expect(res.status).toBe(201);
-    expect(res.body.featureSlug).toBe("from-inputs");
+    expect(res.body.featureSlug).toBe("from-header");
   });
 
   it("forwards featureSlug into Windmill flow inputs", async () => {
@@ -921,16 +906,4 @@ describe("x-feature-slug tracking", () => {
     );
   });
 
-  it("featureSlug is undefined when header is not sent", async () => {
-    mockWorkflows.push(WORKFLOW_FIXTURE);
-
-    const res = await request
-      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
-      .set(AUTH)
-      .send({ inputs: {} });
-
-    expect(res.status).toBe(201);
-    // featureSlug should not be set (undefined → null in JSON or absent)
-    expect(res.body.featureSlug).toBeFalsy();
-  });
 });

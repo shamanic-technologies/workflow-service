@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
-import { requireApiKey, requireBrandId } from "../middleware/auth.js";
+import { requireApiKey, requireExecutionHeaders } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
 import { collectServiceEnvs } from "../lib/service-envs.js";
@@ -39,8 +39,8 @@ function formatRun(r: typeof workflowRuns.$inferSelect) {
 router.post(
   "/workflows/by-name/:name/execute",
   requireApiKey,
+  requireExecutionHeaders,
   executeRateLimit,
-  requireBrandId,
   async (req, res) => {
     try {
       const body = ExecuteByNameSchema.parse(req.body);
@@ -123,12 +123,10 @@ router.post(
 
       const userId = res.locals.userId as string;
       const callerRunId = res.locals.runId as string;
-
-      // Extract tracking context: prefer request body inputs, fall back to headers, then workflow record
-      const campaignId = (body.inputs?.campaignId as string | undefined) ?? (res.locals.campaignId as string | undefined) ?? workflow.campaignId ?? undefined;
-      const brandId = (body.inputs?.brandId as string | undefined) ?? (res.locals.brandId as string | undefined) ?? workflow.createdForBrandId ?? undefined;
-      const featureSlug = (body.inputs?.featureSlug as string | undefined) ?? (res.locals.featureSlug as string | undefined);
-      const headerWorkflowName = res.locals.workflowName as string | undefined;
+      const brandId = res.locals.brandId as string;
+      const campaignId = res.locals.campaignId as string;
+      const workflowNameHeader = res.locals.workflowName as string;
+      const featureSlug = res.locals.featureSlug as string;
 
       // Create a child run in runs-service (links to caller's run via parentRunId)
       let ownRunId: string | null = null;
@@ -149,7 +147,7 @@ router.post(
         return;
       }
 
-      // Run in Windmill — inject orgId, userId, runId, and tracking context so nodes can access them
+      // Run in Windmill — inject identity + tracking headers so every node receives them
       let windmillJobId: string | null = null;
       const client = getWindmillClient();
       if (client) {
@@ -172,7 +170,6 @@ router.post(
       }
 
       // Create workflow run in DB
-      // Prefer resolved campaignId/brandId (from inputs or headers) over workflow record
       const [run] = await db
         .insert(workflowRuns)
         .values({
@@ -209,7 +206,7 @@ router.post(
 );
 
 // POST /workflows/:id/execute — Execute a workflow
-router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBrandId, async (req, res) => {
+router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, executeRateLimit, async (req, res) => {
   try {
     const body = ExecuteWorkflowSchema.parse(req.body ?? {});
     const orgId = res.locals.orgId as string;
@@ -252,11 +249,10 @@ router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBr
 
     const executeUserId = res.locals.userId as string;
     const callerRunId = res.locals.runId as string;
-
-    // Extract tracking context: prefer request body inputs, fall back to headers, then workflow record
-    const execCampaignId = (body.inputs?.campaignId as string | undefined) ?? (res.locals.campaignId as string | undefined) ?? workflow.campaignId ?? undefined;
-    const execBrandId = (body.inputs?.brandId as string | undefined) ?? (res.locals.brandId as string | undefined) ?? workflow.createdForBrandId ?? undefined;
-    const execFeatureSlug = (body.inputs?.featureSlug as string | undefined) ?? (res.locals.featureSlug as string | undefined);
+    const execBrandId = res.locals.brandId as string;
+    const execCampaignId = res.locals.campaignId as string;
+    const execWorkflowName = res.locals.workflowName as string;
+    const execFeatureSlug = res.locals.featureSlug as string;
 
     // Create a child run in runs-service (links to caller's run via parentRunId)
     let ownRunId: string | null = null;
@@ -277,7 +273,7 @@ router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBr
       return;
     }
 
-    // Run in Windmill — inject orgId, userId, runId, and tracking context so nodes can access them
+    // Run in Windmill — inject identity + tracking headers so every node receives them
     let windmillJobId: string | null = null;
     const client = getWindmillClient();
     if (client) {
@@ -297,7 +293,6 @@ router.post("/workflows/:id/execute", requireApiKey, executeRateLimit, requireBr
     }
 
     // Create workflow run in DB
-    // Prefer resolved campaignId/brandId (from inputs or headers) over workflow record
     const [run] = await db
       .insert(workflowRuns)
       .values({
