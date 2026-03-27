@@ -212,6 +212,36 @@ describe("buildInputTransforms", () => {
     expect(result.body.expr).toContain('?.["0"]');
   });
 
+  it("regression: body.variables.* $ref expressions coalesce to empty string", () => {
+    const result = buildInputTransforms(
+      { body: { type: "cold-email" } },
+      {
+        "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
+        "body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview",
+        "body.brandId": "$ref:start-run.output.brandId",
+      },
+    );
+
+    expect(result.body).toBeDefined();
+    expect(result.body.type).toBe("javascript");
+
+    // body.variables.* expressions should coalesce undefined to ""
+    expect(result.body.expr).toContain('results.fetch_lead?.lead?.data?.firstName ?? ""');
+    expect(result.body.expr).toContain('results.brand_profile?.profile?.companyOverview ?? ""');
+
+    // Non-variables $ref should NOT coalesce
+    expect(result.body.expr).toMatch(/results\.start_run\?\.brandId(?!\s*\?\?)/);
+
+    // Expression should be valid JavaScript
+    expect(() => new Function("results", "flow_input", `return ${result.body.expr!}`)).not.toThrow();
+
+    // When upstream returns undefined, variables should be "" not undefined
+    const fn = new Function("results", "flow_input", `return ${result.body.expr!}`);
+    const output = fn({}, {});
+    expect(output.variables.leadFirstName).toBe("");
+    expect(output.variables.clientCompanyOverview).toBe("");
+  });
+
   it("leaves non-dot-notation keys untouched", () => {
     const result = buildInputTransforms(
       { service: "stripe", method: "GET" },
