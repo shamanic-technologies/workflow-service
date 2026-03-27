@@ -921,6 +921,30 @@ describe("GET /workflows/:id/required-providers", () => {
     expect(res.status).toBe(502);
   });
 
+  it("returns 502 when key-service is unreachable (network error)", async () => {
+    mockDbRows.push({
+      id: "wf-http",
+      orgId: "org-1",
+      name: "HTTP Flow",
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const err = new TypeError("fetch failed");
+    (err as unknown as { cause: { code: string } }).cause = {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    };
+    mockFetchProviderRequirements.mockRejectedValue(err);
+
+    const res = await request
+      .get("/workflows/wf-http/required-providers")
+      .set(AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe("key-service unreachable (UND_ERR_CONNECT_TIMEOUT)");
+  });
+
   it("requires authentication", async () => {
     const res = await request
       .get("/workflows/wf-1/required-providers")

@@ -964,6 +964,13 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
       res.status(502).json({ error: err.message });
       return;
     }
+    if (err instanceof TypeError && err.message === "fetch failed") {
+      const cause = (err as unknown as { cause?: { code?: string } }).cause;
+      const detail = cause?.code ? ` (${cause.code})` : "";
+      console.error(`[workflow-service] required-providers: key-service unreachable${detail}`, err);
+      res.status(502).json({ error: `key-service unreachable${detail}` });
+      return;
+    }
     console.error("[workflow-service] required-providers error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
