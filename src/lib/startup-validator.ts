@@ -247,6 +247,29 @@ async function attemptUpgrade(
     // Compute new signature
     const newSignature = computeDAGSignature(result.dag);
 
+    // Check if an active workflow with this signature already exists in the same org.
+    // This happens when multiple workflows upgrade to the same DAG — the second one
+    // should just deprecate and point to the already-upgraded workflow.
+    const [existingMatch] = await database
+      .select({ id: workflows.id })
+      .from(workflows)
+      .where(
+        sql`${workflows.orgId} = ${wf.orgId} AND ${workflows.signature} = ${newSignature} AND ${workflows.status} = 'active'`,
+      );
+
+    if (existingMatch) {
+      await deprecateWorkflow(database, wf.id, existingMatch.id);
+      console.log(
+        `[workflow-service] Workflow "${wf.name}" upgraded by dedup — points to existing ${existingMatch.id}`,
+      );
+
+      if (platformRunId) {
+        try { await closePlatformRun(platformRunId, "completed"); } catch { /* non-blocking */ }
+      }
+
+      return existingMatch.id;
+    }
+
     // Get used signature names to avoid collisions
     const existingWorkflows = await database
       .select({ signatureName: workflows.signatureName })
