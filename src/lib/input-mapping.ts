@@ -57,6 +57,15 @@ export function buildInputTransforms(
           }
         }
 
+        // Content-generation template variables (body.variables.*) are always
+        // strings.  When an upstream $ref resolves to undefined (e.g. brand
+        // profile missing a field), JSON.stringify strips the key entirely and
+        // content-generation rejects the request with "expected string, received
+        // undefined".  Coalesce to "" so the field is always present.
+        if (key.startsWith("body.variables.")) {
+          expr += ' ?? ""';
+        }
+
         transforms[key] = { type: "javascript", expr };
       } else {
         transforms[key] = { type: "static", value: ref };
