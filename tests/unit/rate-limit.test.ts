@@ -105,6 +105,9 @@ const AUTH = {
   "x-user-id": "user-1",
   "x-run-id": "run-1",
   "x-brand-id": "brand-1",
+  "x-campaign-id": "camp-1",
+  "x-workflow-name": "test-workflow",
+  "x-feature-slug": "test-feature",
 };
 
 describe("Execute endpoint rate limiting", () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Request, Response, NextFunction } from "express";
-import { requireIdentity, requireBrandId } from "../../src/middleware/auth.js";
+import { requireIdentity, requireBrandId, requireExecutionHeaders } from "../../src/middleware/auth.js";
 
 function mockReqRes(headers: Record<string, string>, body?: Record<string, unknown>) {
   const req = { headers, body: body ?? {} } as unknown as Request;
@@ -135,5 +135,82 @@ describe("requireBrandId – execution endpoints", () => {
     expect(errorBody).toEqual({
       error: "x-brand-id header or inputs.brandId is required for execution endpoints",
     });
+  });
+});
+
+describe("requireExecutionHeaders – all 7 headers required", () => {
+  it("passes when all 7 headers are present", () => {
+    const { req, res } = mockReqRes({
+      "x-org-id": "org-1",
+      "x-user-id": "user-1",
+      "x-run-id": "run-1",
+      "x-brand-id": "brand-1",
+      "x-campaign-id": "camp-1",
+      "x-workflow-name": "my-workflow",
+      "x-feature-slug": "my-feature",
+    });
+
+    let called = false;
+    const next: NextFunction = () => { called = true; };
+
+    requireExecutionHeaders(req, res, next);
+
+    expect(called).toBe(true);
+  });
+
+  it("rejects when tracking headers are missing", () => {
+    const req = { headers: { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" } } as unknown as Request;
+    let statusCode = 0;
+    let errorBody: Record<string, unknown> = {};
+    const res = {
+      locals: {},
+      status: (code: number) => {
+        statusCode = code;
+        return { json: (b: Record<string, unknown>) => { errorBody = b; } };
+      },
+    } as unknown as Response;
+
+    let called = false;
+    const next: NextFunction = () => { called = true; };
+
+    requireExecutionHeaders(req, res, next);
+
+    expect(called).toBe(false);
+    expect(statusCode).toBe(400);
+    expect(errorBody.error).toContain("x-brand-id");
+    expect(errorBody.error).toContain("x-campaign-id");
+    expect(errorBody.error).toContain("x-workflow-name");
+    expect(errorBody.error).toContain("x-feature-slug");
+  });
+
+  it("rejects when a single header is missing", () => {
+    const req = { headers: {
+      "x-org-id": "org-1",
+      "x-user-id": "user-1",
+      "x-run-id": "run-1",
+      "x-brand-id": "brand-1",
+      // x-campaign-id missing
+      "x-workflow-name": "my-workflow",
+      "x-feature-slug": "my-feature",
+    } } as unknown as Request;
+    let statusCode = 0;
+    let errorBody: Record<string, unknown> = {};
+    const res = {
+      locals: {},
+      status: (code: number) => {
+        statusCode = code;
+        return { json: (b: Record<string, unknown>) => { errorBody = b; } };
+      },
+    } as unknown as Response;
+
+    let called = false;
+    const next: NextFunction = () => { called = true; };
+
+    requireExecutionHeaders(req, res, next);
+
+    expect(called).toBe(false);
+    expect(statusCode).toBe(400);
+    expect(errorBody.error).toContain("x-campaign-id");
+    expect(errorBody.error).not.toContain("x-brand-id");
   });
 });

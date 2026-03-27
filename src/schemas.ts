@@ -790,10 +790,21 @@ const IdentityHeaders = z.object({
   "x-org-id": z.string().describe("Internal org UUID (from client-service). Required."),
   "x-user-id": z.string().describe("Internal user UUID (from client-service). Required."),
   "x-run-id": z.string().describe("Run ID for tracing across services. Required."),
-  "x-campaign-id": z.string().optional().describe("Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."),
-  "x-brand-id": z.string().optional().describe("Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."),
-  "x-workflow-name": z.string().optional().describe("Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."),
-  "x-feature-slug": z.string().optional().describe("Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."),
+  "x-campaign-id": z.string().optional().describe("Campaign ID for tracking. Optional on non-execute endpoints."),
+  "x-brand-id": z.string().optional().describe("Brand ID for tracking. Optional on non-execute endpoints."),
+  "x-workflow-name": z.string().optional().describe("Workflow name for tracking. Optional on non-execute endpoints."),
+  "x-feature-slug": z.string().optional().describe("Feature slug from features-service. Optional on non-execute endpoints."),
+});
+
+/** All 7 headers are required on execute endpoints — no fallbacks, no defaults. */
+const ExecutionHeaders = z.object({
+  "x-org-id": z.string().describe("Internal org UUID (from client-service). Required."),
+  "x-user-id": z.string().describe("Internal user UUID (from client-service). Required."),
+  "x-run-id": z.string().describe("Run ID for tracing across services. Required."),
+  "x-campaign-id": z.string().describe("Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes."),
+  "x-brand-id": z.string().describe("Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."),
+  "x-workflow-name": z.string().describe("Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes."),
+  "x-feature-slug": z.string().describe("Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes."),
 });
 
 // --- Register Paths ---
@@ -1009,7 +1020,7 @@ registry.registerPath({
   tags: ["Workflow Runs"],
   security: [{ apiKey: [] }],
   request: {
-    headers: IdentityHeaders,
+    headers: ExecutionHeaders,
     params: z.object({ id: z.string().uuid() }),
     body: {
       required: false,
@@ -1339,7 +1350,7 @@ registry.registerPath({
   tags: ["Workflow Runs"],
   security: [{ apiKey: [] }],
   request: {
-    headers: IdentityHeaders,
+    headers: ExecutionHeaders,
     params: z.object({ name: z.string() }),
     body: {
       required: true,

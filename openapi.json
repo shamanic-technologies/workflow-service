@@ -1771,40 +1771,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -1996,40 +1996,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2113,40 +2113,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2228,40 +2228,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2372,40 +2372,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2487,40 +2487,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2613,40 +2613,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2719,40 +2719,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "required": true,
+            "description": "Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "required": true,
+            "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "required": true,
+            "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "required": true,
+            "description": "Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2836,40 +2836,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -2943,40 +2943,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -3093,40 +3093,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -3210,40 +3210,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -3308,40 +3308,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -3426,40 +3426,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -3615,40 +3615,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -3762,40 +3762,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
             "name": "x-feature-slug",
             "in": "header"
           }
@@ -4044,40 +4044,40 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Campaign ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "required": true,
+            "description": "Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-campaign-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Brand ID for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "required": true,
+            "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-brand-id",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls."
+              "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Workflow name for tracking. Optional — auto-injected by workflow-service on all downstream calls.",
+            "required": true,
+            "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-workflow-name",
             "in": "header"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats."
+              "description": "Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
-            "required": false,
-            "description": "Feature slug from features-service. Optional — propagated by campaign-service for per-feature stats.",
+            "required": true,
+            "description": "Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-feature-slug",
             "in": "header"
           }

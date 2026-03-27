@@ -61,3 +61,30 @@ export function requireBrandId(
   }
   next();
 }
+
+const REQUIRED_EXECUTION_HEADERS = [
+  "x-org-id",
+  "x-user-id",
+  "x-run-id",
+  "x-brand-id",
+  "x-campaign-id",
+  "x-workflow-name",
+  "x-feature-slug",
+] as const;
+
+export function requireExecutionHeaders(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const missing = REQUIRED_EXECUTION_HEADERS.filter(
+    (h) => !req.headers[h],
+  );
+  if (missing.length > 0) {
+    res.status(400).json({
+      error: `Missing required headers for workflow execution: ${missing.join(", ")}`,
+    });
+    return;
+  }
+  next();
+}
