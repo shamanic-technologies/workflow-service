@@ -769,6 +769,20 @@ export const DynastySlugsResponseSchema = z
   })
   .openapi("DynastySlugsResponse");
 
+export const DynastyEntrySchema = z
+  .object({
+    dynastySlug: z.string().describe("Stable dynasty slug."),
+    dynastyName: z.string().describe("Human-readable dynasty name."),
+    slugs: z.array(z.string()).describe("All versioned workflow slugs in this dynasty."),
+  })
+  .openapi("DynastyEntry");
+
+export const DynastiesResponseSchema = z
+  .object({
+    dynasties: z.array(DynastyEntrySchema).describe("All dynasties with their versioned slugs."),
+  })
+  .openapi("DynastiesResponse");
+
 export const DynastyStatsResponseSchema = z
   .object({
     dynastySlug: z.string().describe("The dynasty slug."),
@@ -1286,6 +1300,28 @@ registry.registerPath({
 });
 
 // --- Dynasty endpoints ---
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/dynasties",
+  summary: "List all dynasties with their versioned slugs",
+  description:
+    "Returns all dynasties with the list of versioned workflow slugs for each. " +
+    "Useful for building a reverse map (slug → dynastySlug) to aggregate stats by dynasty.",
+  tags: ["Dynasty"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+  },
+  responses: {
+    200: {
+      description: "All dynasties",
+      content: {
+        "application/json": { schema: DynastiesResponseSchema },
+      },
+    },
+  },
+});
 
 registry.registerPath({
   method: "get",

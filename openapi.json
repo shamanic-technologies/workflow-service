@@ -1602,6 +1602,46 @@
         "default": "workflow",
         "description": "Granularity: best workflow or best brand. Defaults to 'workflow'."
       },
+      "DynastyEntry": {
+        "type": "object",
+        "properties": {
+          "dynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug."
+          },
+          "dynastyName": {
+            "type": "string",
+            "description": "Human-readable dynasty name."
+          },
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All versioned workflow slugs in this dynasty."
+          }
+        },
+        "required": [
+          "dynastySlug",
+          "dynastyName",
+          "slugs"
+        ]
+      },
+      "DynastiesResponse": {
+        "type": "object",
+        "properties": {
+          "dynasties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DynastyEntry"
+            },
+            "description": "All dynasties with their versioned slugs."
+          }
+        },
+        "required": [
+          "dynasties"
+        ]
+      },
       "DynastySlugsResponse": {
         "type": "object",
         "properties": {
@@ -3812,6 +3852,104 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasties": {
+      "get": {
+        "summary": "List all dynasties with their versioned slugs",
+        "description": "Returns all dynasties with the list of versioned workflow slugs for each. Useful for building a reverse map (slug → dynastySlug) to aggregate stats by dynasty.",
+        "tags": [
+          "Dynasty"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All dynasties",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynastiesResponse"
                 }
               }
             }
