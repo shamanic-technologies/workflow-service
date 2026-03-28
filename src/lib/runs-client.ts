@@ -23,7 +23,7 @@ export interface CreateRunResult {
  * @param opts.orgId - Organization ID
  * @param opts.userId - User ID
  * @param opts.taskName - Name of the task being executed
- * @param opts.workflowName - Optional workflow name for tracking
+ * @param opts.workflowSlug - Optional workflow name for tracking
  * @returns The newly created run's ID
  */
 export async function createRun(opts: {
@@ -31,7 +31,7 @@ export async function createRun(opts: {
   orgId: string;
   userId: string;
   taskName: string;
-  workflowName?: string;
+  workflowSlug?: string;
   campaignId?: string;
   brandId?: string;
 }): Promise<CreateRunResult> {
@@ -41,7 +41,7 @@ export async function createRun(opts: {
     serviceName: "workflow",
     taskName: opts.taskName,
   };
-  if (opts.workflowName) body.workflowName = opts.workflowName;
+  if (opts.workflowSlug) body.workflowSlug = opts.workflowSlug;
   if (opts.campaignId) body.campaignId = opts.campaignId;
   if (opts.brandId) body.brandId = opts.brandId;
 
@@ -54,7 +54,7 @@ export async function createRun(opts: {
   };
   if (opts.campaignId) headers["x-campaign-id"] = opts.campaignId;
   if (opts.brandId) headers["x-brand-id"] = opts.brandId;
-  if (opts.workflowName) headers["x-workflow-name"] = opts.workflowName;
+  if (opts.workflowSlug) headers["x-workflow-slug"] = opts.workflowSlug;
 
   const res = await fetch(`${baseUrl}/v1/runs`, {
     method: "POST",
@@ -77,7 +77,7 @@ export async function createRun(opts: {
 export async function createPlatformRun(opts: {
   serviceName: string;
   taskName: string;
-  workflowName?: string;
+  workflowSlug?: string;
 }): Promise<CreateRunResult> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
 
@@ -85,8 +85,8 @@ export async function createPlatformRun(opts: {
     serviceName: opts.serviceName,
     taskName: opts.taskName,
   };
-  if (opts.workflowName) {
-    body.workflowName = opts.workflowName;
+  if (opts.workflowSlug) {
+    body.workflowSlug = opts.workflowSlug;
   }
 
   const res = await fetch(`${baseUrl}/v1/platform-runs`, {

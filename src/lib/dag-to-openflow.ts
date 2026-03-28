@@ -74,7 +74,7 @@ export function dagToOpenFlow(dag: DAG, name: string): OpenFlow {
     serviceEnvs: { type: "object", description: "Service URLs and API keys injected by workflow-service" },
     campaignId: { type: "string", description: "Campaign identifier (auto-injected)" },
     brandId: { type: "string", description: "Brand identifier (auto-injected)" },
-    workflowName: { type: "string", description: "Workflow name (auto-injected)" },
+    workflowSlug: { type: "string", description: "Workflow slug (auto-injected)" },
     featureSlug: { type: "string", description: "Feature slug from features-service (auto-injected)" },
   };
   for (const node of dag.nodes) {
@@ -405,7 +405,7 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     serviceEnvs: "flow_input.serviceEnvs",
     campaignId: "flow_input.campaignId",
     brandId: "flow_input.brandId",
-    workflowName: "flow_input.workflowName",
+    workflowSlug: "flow_input.workflowSlug",
     featureSlug: "flow_input.featureSlug",
   };
   for (const [key, expr] of Object.entries(autoInjects)) {
@@ -452,7 +452,7 @@ function buildFailureModule(node: DAGNode): FlowModule | null {
     serviceEnvs: "flow_input.serviceEnvs",
     campaignId: "flow_input.campaignId",
     brandId: "flow_input.brandId",
-    workflowName: "flow_input.workflowName",
+    workflowSlug: "flow_input.workflowSlug",
     featureSlug: "flow_input.featureSlug",
   };
   for (const [key, expr] of Object.entries(failureAutoInjects)) {

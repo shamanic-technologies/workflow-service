@@ -351,7 +351,7 @@ describe("validateAndUpgradeWorkflows", () => {
     expect(mockCreatePlatformRun).toHaveBeenCalledWith({
       serviceName: "workflow",
       taskName: "startup-upgrade",
-      workflowName: "sales-email-cold-outreach-Broken",  // uses wf.slug
+      workflowSlug: "sales-email-cold-outreach-Broken",  // uses wf.slug
     });
 
     // Should have called upgradeWorkflow with the platform key and no identity

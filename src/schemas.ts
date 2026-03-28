@@ -320,7 +320,7 @@ export const WorkflowRunResponseSchema = z
     campaignId: z.string().nullable(),
     brandId: z.string().nullable(),
     featureSlug: z.string().nullable().describe("Feature slug from features-service. Used for per-feature analytics."),
-    workflowName: z.string().nullable().describe("Name of the workflow that was executed."),
+    workflowSlug: z.string().nullable().describe("Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{slug}/execute."),
     subrequestId: z.string().nullable(),
     userId: z.string().nullable().describe("User ID from the execution context."),
     runId: z.string().nullable().describe("Runs-service run ID for this execution (auto-created)."),
@@ -423,7 +423,7 @@ export const WorkflowDeprecatedResponseSchema = z
   })
   .openapi("WorkflowDeprecatedResponse");
 
-// --- Execute by name schema ---
+// --- Execute by slug schema ---
 
 export const ExecuteByNameSchema = z
   .object({
@@ -431,7 +431,7 @@ export const ExecuteByNameSchema = z
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
   })
-  .openapi("ExecuteByNameRequest", {
+  .openapi("ExecuteBySlugRequest", {
     example: {
       inputs: {
         orgId: "b645207b-d8e9-40b0-9391-072b777cd9a9",
@@ -554,8 +554,10 @@ export const WorkflowStatsSchema = z
 export const WorkflowMetadataSchema = z
   .object({
     id: z.string().uuid(),
-    name: z.string(),
-    displayName: z.string().nullable(),
+    slug: z.string().describe("Unique technical identifier."),
+    name: z.string().describe("Human-readable display name."),
+    dynastyName: z.string().describe("Stable lineage name (constant across versions)."),
+    version: z.number().int().describe("Version number within the dynasty."),
     createdForBrandId: z.string().nullable(),
     featureSlug: z.string().describe("Feature slug for grouping and naming."),
     signature: z.string(),
@@ -681,8 +683,8 @@ export const BestWorkflowQuerySchema = z
 export const BestWorkflowRecordSchema = z
   .object({
     workflowId: z.string().uuid().describe("ID of the workflow holding the record."),
-    workflowName: z.string().describe("Name of the workflow."),
-    displayName: z.string().nullable().describe("Stable display name of the workflow family."),
+    workflowSlug: z.string().describe("Unique technical identifier of the workflow."),
+    workflowName: z.string().describe("Human-readable display name of the workflow."),
     createdForBrandId: z.string().nullable().describe("Brand ID that created this workflow (creation context, not execution brand)."),
     value: z.number().describe("The record value in USD cents."),
   })
@@ -779,7 +781,7 @@ const IdentityHeaders = z.object({
   "x-run-id": z.string().describe("Run ID for tracing across services. Required."),
   "x-campaign-id": z.string().optional().describe("Campaign ID for tracking. Optional on non-execute endpoints."),
   "x-brand-id": z.string().optional().describe("Brand ID for tracking. Optional on non-execute endpoints."),
-  "x-workflow-name": z.string().optional().describe("Workflow name for tracking. Optional on non-execute endpoints."),
+  "x-workflow-slug": z.string().optional().describe("Workflow slug for tracking. Optional on non-execute endpoints."),
   "x-feature-slug": z.string().optional().describe("Feature slug from features-service. Optional on non-execute endpoints."),
 });
 
@@ -790,7 +792,7 @@ const ExecutionHeaders = z.object({
   "x-run-id": z.string().describe("Run ID for tracing across services. Required."),
   "x-campaign-id": z.string().describe("Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes."),
   "x-brand-id": z.string().describe("Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."),
-  "x-workflow-name": z.string().describe("Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes."),
+  "x-workflow-slug": z.string().describe("Workflow slug. Required on execute endpoints — propagated to all downstream http.call nodes."),
   "x-feature-slug": z.string().describe("Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes."),
 });
 
@@ -1136,9 +1138,11 @@ registry.registerPath({
   path: "/workflows/upgrade",
   summary: "Upgrade (upsert) workflows by DAG signature",
   description:
-    "Idempotent: creates new workflows or updates existing ones matched by (orgId + DAG signature). " +
-    "The workflow name is auto-generated as {featureSlug}-{signatureName}. " +
-    "signatureName is a human-readable word auto-assigned to each unique DAG. " +
+    "Idempotent: creates new workflows or updates existing ones matched by featureSlug. " +
+    "If the DAG signature is unchanged, updates metadata in-place. " +
+    "If the DAG signature changed, deprecates the old workflow and creates a new version. " +
+    "The workflow slug is auto-generated as {featureDynastySlug}-{signatureName}[-v{N}]. " +
+    "signatureName is a poetic word auto-assigned once per dynasty. " +
     "After deploying, execute workflows via POST /workflows/by-slug/{slug}/execute.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],

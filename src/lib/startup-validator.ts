@@ -219,7 +219,7 @@ async function attemptUpgrade(
     const run = await createPlatformRun({
       serviceName: "workflow",
       taskName: "startup-upgrade",
-      workflowName: wf.slug,
+      workflowSlug: wf.slug,
     });
     platformRunId = run.runId;
   } catch (err) {

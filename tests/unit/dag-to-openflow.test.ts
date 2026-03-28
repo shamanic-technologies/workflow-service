@@ -212,9 +212,9 @@ describe("dagToOpenFlow", () => {
           type: "javascript",
           expr: "flow_input.brandId",
         });
-        expect(transforms.workflowName).toEqual({
+        expect(transforms.workflowSlug).toEqual({
           type: "javascript",
-          expr: "flow_input.workflowName",
+          expr: "flow_input.workflowSlug",
         });
       }
     }

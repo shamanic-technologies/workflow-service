@@ -10,14 +10,14 @@ function mockReqRes(headers: Record<string, string>, body?: Record<string, unkno
 }
 
 describe("requireIdentity – tracking headers", () => {
-  it("extracts x-brand-id and optional x-campaign-id, x-workflow-name, x-feature-slug into res.locals", () => {
+  it("extracts x-brand-id and optional x-campaign-id, x-workflow-slug, x-feature-slug into res.locals", () => {
     const { req, res, locals } = mockReqRes({
       "x-org-id": "org-1",
       "x-user-id": "user-1",
       "x-run-id": "run-1",
       "x-brand-id": "brand-xyz",
       "x-campaign-id": "camp-abc",
-      "x-workflow-name": "sales-email-cold-outreach",
+      "x-workflow-slug": "sales-email-cold-outreach",
       "x-feature-slug": "sales-email-cold-outreach",
     });
 
@@ -29,7 +29,7 @@ describe("requireIdentity – tracking headers", () => {
     expect(called).toBe(true);
     expect(locals.brandId).toBe("brand-xyz");
     expect(locals.campaignId).toBe("camp-abc");
-    expect(locals.workflowName).toBe("sales-email-cold-outreach");
+    expect(locals.workflowSlug).toBe("sales-email-cold-outreach");
     expect(locals.featureSlug).toBe("sales-email-cold-outreach");
   });
 
@@ -48,7 +48,7 @@ describe("requireIdentity – tracking headers", () => {
     expect(called).toBe(true);
     expect(locals).not.toHaveProperty("brandId");
     expect(locals).not.toHaveProperty("campaignId");
-    expect(locals).not.toHaveProperty("workflowName");
+    expect(locals).not.toHaveProperty("workflowSlug");
     expect(locals).not.toHaveProperty("featureSlug");
   });
 
@@ -146,7 +146,7 @@ describe("requireExecutionHeaders – all 7 headers required", () => {
       "x-run-id": "run-1",
       "x-brand-id": "brand-1",
       "x-campaign-id": "camp-1",
-      "x-workflow-name": "my-workflow",
+      "x-workflow-slug": "my-workflow",
       "x-feature-slug": "my-feature",
     });
 
@@ -179,7 +179,7 @@ describe("requireExecutionHeaders – all 7 headers required", () => {
     expect(statusCode).toBe(400);
     expect(errorBody.error).toContain("x-brand-id");
     expect(errorBody.error).toContain("x-campaign-id");
-    expect(errorBody.error).toContain("x-workflow-name");
+    expect(errorBody.error).toContain("x-workflow-slug");
     expect(errorBody.error).toContain("x-feature-slug");
   });
 
@@ -190,7 +190,7 @@ describe("requireExecutionHeaders – all 7 headers required", () => {
       "x-run-id": "run-1",
       "x-brand-id": "brand-1",
       // x-campaign-id missing
-      "x-workflow-name": "my-workflow",
+      "x-workflow-slug": "my-workflow",
       "x-feature-slug": "my-feature",
     } } as unknown as Request;
     let statusCode = 0;

@@ -52,7 +52,7 @@ describe("createRun", () => {
     );
   });
 
-  it("includes workflowName in body when provided", async () => {
+  it("includes workflowSlug in body when provided", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -66,7 +66,7 @@ describe("createRun", () => {
       orgId: "org-1",
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -75,7 +75,7 @@ describe("createRun", () => {
         body: JSON.stringify({
           serviceName: "workflow",
           taskName: "execute-workflow",
-          workflowName: "sales-email-cold-outreach",
+          workflowSlug: "sales-email-cold-outreach",
         }),
       })
     );
@@ -95,7 +95,7 @@ describe("createRun", () => {
       orgId: "org-1",
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
       campaignId: "camp-123",
       brandId: "brand-456",
     });
@@ -106,12 +106,12 @@ describe("createRun", () => {
         headers: expect.objectContaining({
           "x-campaign-id": "camp-123",
           "x-brand-id": "brand-456",
-          "x-workflow-name": "sales-email-cold-outreach",
+          "x-workflow-slug": "sales-email-cold-outreach",
         }),
         body: JSON.stringify({
           serviceName: "workflow",
           taskName: "execute-workflow",
-          workflowName: "sales-email-cold-outreach",
+          workflowSlug: "sales-email-cold-outreach",
           campaignId: "camp-123",
           brandId: "brand-456",
         }),
@@ -138,7 +138,7 @@ describe("createRun", () => {
     const calledHeaders = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
     expect(calledHeaders).not.toHaveProperty("x-campaign-id");
     expect(calledHeaders).not.toHaveProperty("x-brand-id");
-    expect(calledHeaders).not.toHaveProperty("x-workflow-name");
+    expect(calledHeaders).not.toHaveProperty("x-workflow-slug");
   });
 
   it("does not send orgId, userId, or parentRunId in request body", async () => {
@@ -274,7 +274,7 @@ describe("createPlatformRun", () => {
     expect(calledHeaders).not.toHaveProperty("x-run-id");
   });
 
-  it("includes workflowName when provided", async () => {
+  it("includes workflowSlug when provided", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -286,7 +286,7 @@ describe("createPlatformRun", () => {
     await createPlatformRun({
       serviceName: "workflow",
       taskName: "startup-upgrade",
-      workflowName: "sales-email-cold-outreach",
+      workflowSlug: "sales-email-cold-outreach",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -295,7 +295,7 @@ describe("createPlatformRun", () => {
         body: JSON.stringify({
           serviceName: "workflow",
           taskName: "startup-upgrade",
-          workflowName: "sales-email-cold-outreach",
+          workflowSlug: "sales-email-cold-outreach",
         }),
       })
     );

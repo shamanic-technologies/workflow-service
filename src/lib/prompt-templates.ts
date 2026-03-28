@@ -236,7 +236,7 @@ When using content-generation service (\`POST /generate\`):
   - \`"body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview"\`
   - \`"body.variables.clientValueProposition": "$ref:brand-profile.output.profile.valueProposition"\`
   - \`"body.variables.clientTargetAudience": "$ref:brand-profile.output.profile.targetAudience"\`
-- Include tracking fields: \`body.brandId\`, \`body.campaignId\`, \`body.leadId\`, \`body.workflowName\`, \`body.apolloEnrichmentId\`
+- Include tracking fields: \`body.brandId\`, \`body.campaignId\`, \`body.leadId\`, \`body.workflowSlug\`, \`body.apolloEnrichmentId\`
 - Response contains \`subject\` (string) and \`sequence\` (array of { step, bodyHtml, bodyText, daysSinceLastStep })
 
 When sending via email-gateway (\`POST /send\` with \`type: "broadcast"\`):
@@ -305,7 +305,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
         "body.brandId": "$ref:start-run.output.brandId",
         "body.campaignId": "$ref:flow_input.campaignId",
         "body.leadId": "$ref:fetch-lead.output.lead.leadId",
-        "body.workflowName": "$ref:start-run.output.workflowName",
+        "body.workflowSlug": "$ref:start-run.output.workflowSlug",
         "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
         "body.variables.leadEmail": "$ref:fetch-lead.output.lead.data.email",
         "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
@@ -331,7 +331,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
         "body.leadId": "$ref:fetch-lead.output.lead.leadId",
         "body.brandId": "$ref:start-run.output.brandId",
         "body.campaignId": "$ref:flow_input.campaignId",
-        "body.workflowName": "$ref:start-run.output.workflowName",
+        "body.workflowSlug": "$ref:start-run.output.workflowSlug",
         "body.recipientFirstName": "$ref:fetch-lead.output.lead.data.firstName",
         "body.recipientLastName": "$ref:fetch-lead.output.lead.data.lastName",
         "body.recipientCompany": "$ref:fetch-lead.output.lead.data.organizationName"

@@ -825,10 +825,10 @@
             "nullable": true,
             "description": "Feature slug from features-service. Used for per-feature analytics."
           },
-          "workflowName": {
+          "workflowSlug": {
             "type": "string",
             "nullable": true,
-            "description": "Name of the workflow that was executed."
+            "description": "Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{slug}/execute."
           },
           "subrequestId": {
             "type": "string",
@@ -912,7 +912,7 @@
           "campaignId",
           "brandId",
           "featureSlug",
-          "workflowName",
+          "workflowSlug",
           "subrequestId",
           "userId",
           "runId",
@@ -1316,12 +1316,21 @@
             "type": "string",
             "format": "uuid"
           },
-          "name": {
-            "type": "string"
-          },
-          "displayName": {
+          "slug": {
             "type": "string",
-            "nullable": true
+            "description": "Unique technical identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable display name."
+          },
+          "dynastyName": {
+            "type": "string",
+            "description": "Stable lineage name (constant across versions)."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Version number within the dynasty."
           },
           "createdForBrandId": {
             "type": "string",
@@ -1340,8 +1349,10 @@
         },
         "required": [
           "id",
+          "slug",
           "name",
-          "displayName",
+          "dynastyName",
+          "version",
           "createdForBrandId",
           "featureSlug",
           "signature",
@@ -1517,14 +1528,13 @@
             "format": "uuid",
             "description": "ID of the workflow holding the record."
           },
+          "workflowSlug": {
+            "type": "string",
+            "description": "Unique technical identifier of the workflow."
+          },
           "workflowName": {
             "type": "string",
-            "description": "Name of the workflow."
-          },
-          "displayName": {
-            "type": "string",
-            "nullable": true,
-            "description": "Stable display name of the workflow family."
+            "description": "Human-readable display name of the workflow."
           },
           "createdForBrandId": {
             "type": "string",
@@ -1538,8 +1548,8 @@
         },
         "required": [
           "workflowId",
+          "workflowSlug",
           "workflowName",
-          "displayName",
           "createdForBrandId",
           "value"
         ],
@@ -1606,7 +1616,7 @@
           "results"
         ]
       },
-      "ExecuteByNameRequest": {
+      "ExecuteBySlugRequest": {
         "type": "object",
         "properties": {
           "inputs": {
@@ -1717,11 +1727,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1942,11 +1952,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2059,11 +2069,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2174,11 +2184,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2308,11 +2318,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2423,11 +2433,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2549,11 +2559,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2655,11 +2665,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes."
+              "description": "Workflow slug. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
             "required": true,
-            "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug. Required on execute endpoints — propagated to all downstream http.call nodes.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2772,11 +2782,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -2879,11 +2889,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3029,11 +3039,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3146,11 +3156,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3181,7 +3191,7 @@
     "/workflows/upgrade": {
       "put": {
         "summary": "Upgrade (upsert) workflows by DAG signature",
-        "description": "Idempotent: creates new workflows or updates existing ones matched by (orgId + DAG signature). The workflow name is auto-generated as {featureSlug}-{signatureName}. signatureName is a human-readable word auto-assigned to each unique DAG. After deploying, execute workflows via POST /workflows/by-slug/{slug}/execute.",
+        "description": "Idempotent: creates new workflows or updates existing ones matched by featureSlug. If the DAG signature is unchanged, updates metadata in-place. If the DAG signature changed, deprecates the old workflow and creates a new version. The workflow slug is auto-generated as {featureDynastySlug}-{signatureName}[-v{N}]. signatureName is a poetic word auto-assigned once per dynasty. After deploying, execute workflows via POST /workflows/by-slug/{slug}/execute.",
         "tags": [
           "Workflows"
         ],
@@ -3244,11 +3254,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3362,11 +3372,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3551,11 +3561,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3698,11 +3708,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for tracking. Optional on non-execute endpoints."
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Workflow name for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -3980,11 +3990,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes."
+              "description": "Workflow slug. Required on execute endpoints — propagated to all downstream http.call nodes."
             },
             "required": true,
-            "description": "Workflow name. Required on execute endpoints — propagated to all downstream http.call nodes.",
-            "name": "x-workflow-name",
+            "description": "Workflow slug. Required on execute endpoints — propagated to all downstream http.call nodes.",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -4003,7 +4013,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ExecuteByNameRequest"
+                "$ref": "#/components/schemas/ExecuteBySlugRequest"
               }
             }
           }
