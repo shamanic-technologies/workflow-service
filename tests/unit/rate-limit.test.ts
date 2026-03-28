@@ -163,12 +163,12 @@ describe("Execute endpoint rate limiting", () => {
     expect(res.status).toBe(201);
   });
 
-  it("rate limits by-name execute endpoint too", async () => {
+  it("rate limits by-slug execute endpoint too", async () => {
     const promises = [];
     for (let i = 0; i < 61; i++) {
       promises.push(
         request
-          .post("/workflows/by-name/Rate Test Flow/execute")
+          .post("/workflows/by-slug/rate-test-flow/execute")
           .set(AUTH)
           .send({ inputs: {} })
       );

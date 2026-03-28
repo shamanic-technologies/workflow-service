@@ -97,14 +97,16 @@ const EMPTY_STATS = {
   replied: 0, bounced: 0, unsubscribed: 0, recipients: 0,
 };
 
-const DEFAULT_WF_NAME = "sales-email-cold-outreach-alpha";
+const DEFAULT_WF_SLUG = "sales-email-cold-outreach-alpha";
 
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     id: "wf-" + Math.random().toString(36).slice(2, 10),
     orgId: "org1",
-    name: DEFAULT_WF_NAME,
-    displayName: null,
+    slug: DEFAULT_WF_SLUG,
+    name: "Sales Email Cold Outreach Alpha",
+    dynastyName: "Sales Email Cold Outreach Alpha",
+    version: 1,
     createdForBrandId: null,
     description: null,
     featureSlug: "sales-email-cold-outreach",
@@ -171,10 +173,10 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-pub", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 10 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 10 } }),
     ]);
 
     const res = await request
@@ -194,10 +196,10 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-nodag", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 50, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 50, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 5 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5 } }),
     ]);
 
     const res = await request
@@ -234,10 +236,10 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-sec", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 5, sent: 50 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5, sent: 50 } }),
     ]);
 
     const res = await request
@@ -269,10 +271,10 @@ describe("GET /public/workflows/ranked", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 350, runCount: 2 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 350, runCount: 2 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 5 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5 } }),
     ]);
 
     const res = await request
@@ -293,10 +295,10 @@ describe("GET /public/workflows/ranked", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { replied: 10 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 10 } }),
     ]);
 
     const res = await request
@@ -326,10 +328,10 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-hero-pub", "ext-run-hero"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 10, replied: 5 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 10, replied: 5 } }),
     ]);
 
     const res = await request
@@ -350,10 +352,10 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-no-out", "ext-run-no"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME),
+      makeEmailGroup(DEFAULT_WF_SLUG),
     ]);
 
     const res = await request
@@ -379,7 +381,7 @@ describe("GET /public/workflows/best", () => {
 
     mockFetchRunCostsPublic.mockResolvedValue([]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 10 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 10 } }),
     ]);
 
     await request.get("/public/workflows/best");
@@ -399,10 +401,10 @@ describe("GET /public/workflows/best", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 600, runCount: 2 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 600, runCount: 2 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 20, replied: 10 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 20, replied: 10 } }),
     ]);
 
     const res = await request
@@ -421,10 +423,10 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-brand-filter", "ext-run-bz"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_NAME, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_NAME, { transactional: { opened: 10, replied: 5 } }),
+      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 10, replied: 5 } }),
     ]);
 
     const res = await request

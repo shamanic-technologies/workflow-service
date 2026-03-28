@@ -118,7 +118,7 @@ describe("POST /workflows/generate", () => {
     expect(res.body.workflow).toBeDefined();
     expect(res.body.workflow.action).toBe("created");
     expect(res.body.workflow.featureSlug).toBe("cold-email-outreach");
-    expect(res.body.workflow.name).toContain("cold-email-outreach-");
+    expect(res.body.workflow.slug).toContain("cold-email-outreach-");
     expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
     expect(mockFetchAnthropicKey).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", runId: "run-caller-1" });
@@ -263,7 +263,7 @@ describe("POST /workflows/generate", () => {
     expect(res.status).toBe(200);
     expect(res.body.workflow.action).toBe("created");
     expect(res.body.workflow.signatureName).toBe("hormozi-v1");
-    expect(res.body.workflow.name).toBe("cold-email-outreach-hormozi-v1");
+    expect(res.body.workflow.slug).toBe("cold-email-outreach-hormozi-v1");
     // Verify style was passed through to generator
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -294,7 +294,7 @@ describe("POST /workflows/generate", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.workflow.signatureName).toBe("my-brand-v1");
-    expect(res.body.workflow.name).toBe("cold-email-outreach-my-brand-v1");
+    expect(res.body.workflow.slug).toBe("cold-email-outreach-my-brand-v1");
   });
 
   it("rejects human style without humanId", async () => {
@@ -342,7 +342,7 @@ describe("POST /workflows/generate", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.workflow.signatureName).not.toContain("-v");
-    expect(res.body.workflow.name).toContain("cold-email-outreach-");
+    expect(res.body.workflow.slug).toContain("cold-email-outreach-");
     // signatureName should be a random word, not a versioned style name
     expect(res.body.workflow.signatureName).toMatch(/^[a-z]+$/);
   });

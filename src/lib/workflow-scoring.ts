@@ -78,10 +78,10 @@ export async function computeWorkflowScores(
     ];
   }
 
-  // 2. Collect all unique workflow names across all dynasty chains
+  // 2. Collect all unique workflow slugs across all dynasty chains
   const allChainNames = [
     ...new Set(
-      Object.values(chainWorkflowsById).flatMap((wfs) => wfs.map((w) => w.name))
+      Object.values(chainWorkflowsById).flatMap((wfs) => wfs.map((w) => w.slug))
     ),
   ];
 
@@ -109,7 +109,7 @@ export async function computeWorkflowScores(
   for (const wf of activeWorkflows) {
     const chainWfs = chainWorkflowsById[wf.id] ?? [];
     const chainIds = chainWfs.map((w) => w.id);
-    const chainNames = new Set(chainWfs.map((w) => w.name));
+    const chainNames = new Set(chainWfs.map((w) => w.slug));
 
     // Costs: aggregate across all dynasty workflow names
     let totalCost = 0;
@@ -176,8 +176,10 @@ export function formatScoreItem(entry: WorkflowScore) {
   return {
     workflow: {
       id: entry.workflow.id,
+      slug: entry.workflow.slug,
       name: entry.workflow.name,
-      displayName: entry.workflow.displayName,
+      dynastyName: entry.workflow.dynastyName,
+      version: entry.workflow.version,
       createdForBrandId: entry.workflow.createdForBrandId,
       featureSlug: entry.workflow.featureSlug,
       signature: entry.workflow.signature,
@@ -192,8 +194,10 @@ export function formatPublicScoreItem(entry: WorkflowScore) {
   return {
     workflow: {
       id: entry.workflow.id,
+      slug: entry.workflow.slug,
       name: entry.workflow.name,
-      displayName: entry.workflow.displayName,
+      dynastyName: entry.workflow.dynastyName,
+      version: entry.workflow.version,
       createdForBrandId: entry.workflow.createdForBrandId,
       featureSlug: entry.workflow.featureSlug,
       signature: entry.workflow.signature,

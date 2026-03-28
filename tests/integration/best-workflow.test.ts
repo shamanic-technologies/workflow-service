@@ -135,14 +135,16 @@ const BASE_QUERY = {
   objective: "replies",
 };
 
-const DEFAULT_WF_NAME = "sales-email-cold-outreach-alpha";
+const DEFAULT_WF_SLUG = "sales-email-cold-outreach-alpha";
 
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     id: "wf-" + Math.random().toString(36).slice(2, 10),
     orgId: "org1",
-    name: DEFAULT_WF_NAME,
-    displayName: null,
+    slug: DEFAULT_WF_SLUG,
+    name: "Sales Email Cold Outreach Alpha",
+    dynastyName: "Sales Email Cold Outreach Alpha",
+    version: 1,
     createdForBrandId: null,
     description: null,
     featureSlug: "sales-cold-email-outreach",
@@ -232,8 +234,8 @@ describe("GET /workflows/ranked", () => {
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-a", "ext-run-1"), makeRun("wf-a", "ext-run-2"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 300, runCount: 2 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 10 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 300, runCount: 2 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 10 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
 
@@ -251,10 +253,10 @@ describe("GET /workflows/ranked", () => {
     // Verify workflowNames filter is passed to both endpoints
     expect(mockFetchRunCostsAuth).toHaveBeenCalledWith(
       expect.objectContaining({ orgId: "org-1" }),
-      [DEFAULT_WF_NAME],
+      [DEFAULT_WF_SLUG],
     );
     expect(mockFetchEmailStatsAuth).toHaveBeenCalledWith(
-      [DEFAULT_WF_NAME],
+      [DEFAULT_WF_SLUG],
       expect.objectContaining({ orgId: "org-1" }),
     );
   });
@@ -263,12 +265,12 @@ describe("GET /workflows/ranked", () => {
     const wfOldName = "sales-email-cold-outreach-old";
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-active" }),
-      makeWorkflow({ id: "wf-old", name: wfOldName, status: "deprecated", upgradedTo: "wf-active" }),
+      makeWorkflow({ id: "wf-old", slug: wfOldName, status: "deprecated", upgradedTo: "wf-active" }),
     );
     mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-active"), makeRun("wf-old", "ext-run-old"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } }, [wfOldName]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, [wfOldName]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
@@ -276,12 +278,12 @@ describe("GET /workflows/ranked", () => {
     // Both dynasty names should be passed to both endpoints
     const costNames = mockFetchRunCostsAuth.mock.calls[0][1] as string[];
     expect(costNames).toHaveLength(2);
-    expect(costNames).toContain(DEFAULT_WF_NAME);
+    expect(costNames).toContain(DEFAULT_WF_SLUG);
     expect(costNames).toContain(wfOldName);
 
     const emailNames = mockFetchEmailStatsAuth.mock.calls[0][0] as string[];
     expect(emailNames).toHaveLength(2);
-    expect(emailNames).toContain(DEFAULT_WF_NAME);
+    expect(emailNames).toContain(DEFAULT_WF_SLUG);
     expect(emailNames).toContain(wfOldName);
   });
 
@@ -289,8 +291,8 @@ describe("GET /workflows/ranked", () => {
     mockWorkflowRows.push(makeWorkflow({ id: "wf-a" }));
     mockWorkflowRunRows.push(makeRun("wf-a", "ext-run-1"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 500, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { clicked: 25 }, broadcast: { clicked: 25 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 500, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { clicked: 25 }, broadcast: { clicked: 25 } } });
 
     const res = await request.get("/workflows/ranked").query({ ...BASE_QUERY, objective: "clicks" }).set(AUTH);
 
@@ -309,7 +311,7 @@ describe("GET /workflows/ranked", () => {
     mockWorkflowRows.push(makeWorkflow({ id: "wf-a" }));
     mockWorkflowRunRows.push(makeRun("wf-a", "ext-run-1"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
     mockFetchEmailStatsAuth.mockRejectedValue(
       new Error("email-gateway-service error: GET /stats -> 500 Internal Server Error: boom")
     );
@@ -328,8 +330,8 @@ describe("GET /workflows/ranked", () => {
     mockWorkflowRows.push(makeWorkflow({ id: "wf-a" }));
     mockWorkflowRunRows.push(makeRun("wf-a", "ext-run-1"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: {} });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: {} });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
@@ -341,12 +343,12 @@ describe("GET /workflows/ranked", () => {
     const wfOldName = "sales-email-cold-outreach-old";
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-active" }),
-      makeWorkflow({ id: "wf-old", name: wfOldName, status: "deprecated", upgradedTo: "wf-active" }),
+      makeWorkflow({ id: "wf-old", slug: wfOldName, status: "deprecated", upgradedTo: "wf-active" }),
     );
     mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-active"), makeRun("wf-old", "ext-run-old"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } }, [wfOldName]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, [wfOldName]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
@@ -361,13 +363,13 @@ describe("GET /workflows/ranked", () => {
     const nameV1 = "sales-email-cold-outreach-v1";
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-v3" }),
-      makeWorkflow({ id: "wf-v2", name: nameV2, status: "deprecated", upgradedTo: "wf-v3" }),
-      makeWorkflow({ id: "wf-v1", name: nameV1, status: "deprecated", upgradedTo: "wf-v2" }),
+      makeWorkflow({ id: "wf-v2", slug: nameV2, status: "deprecated", upgradedTo: "wf-v3" }),
+      makeWorkflow({ id: "wf-v1", slug: nameV1, status: "deprecated", upgradedTo: "wf-v2" }),
     );
     mockWorkflowRunRows.push(makeRun("wf-v3", "ext-run-v3"), makeRun("wf-v2", "ext-run-v2"), makeRun("wf-v1", "ext-run-v1"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 50, runCount: 1 }, [nameV2]: { cost: 100, runCount: 1 }, [nameV1]: { cost: 150, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } }, [nameV2]: { transactional: { replied: 5 } }, [nameV1]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 50, runCount: 1 }, [nameV2]: { cost: 100, runCount: 1 }, [nameV1]: { cost: 150, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, [nameV2]: { transactional: { replied: 5 } }, [nameV1]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
@@ -382,9 +384,9 @@ describe("GET /workflows/ranked", () => {
     const nameB = "sales-email-cold-outreach-beta";
     const nameC = "sales-email-cold-outreach-gamma";
     mockWorkflowRows.push(
-      makeWorkflow({ id: "wf-a", name: nameA, signatureName: "alpha" }),
-      makeWorkflow({ id: "wf-b", name: nameB, signatureName: "beta" }),
-      makeWorkflow({ id: "wf-c", name: nameC, signatureName: "gamma" }),
+      makeWorkflow({ id: "wf-a", slug: nameA, signatureName: "alpha" }),
+      makeWorkflow({ id: "wf-b", slug: nameB, signatureName: "beta" }),
+      makeWorkflow({ id: "wf-c", slug: nameC, signatureName: "gamma" }),
     );
     mockWorkflowRunRows.push(makeRun("wf-a", "ext-run-a"), makeRun("wf-b", "ext-run-b"), makeRun("wf-c", "ext-run-c"));
 
@@ -403,16 +405,17 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.results[2].workflow.id).toBe("wf-b");
   });
 
-  it("includes displayName and createdForBrandId in workflow response", async () => {
-    mockWorkflowRows.push(makeWorkflow({ id: "wf-dn", displayName: "sales-email-cold-outreach-jasmine", createdForBrandId: "brand-123" }));
+  it("includes name, dynastyName and createdForBrandId in workflow response", async () => {
+    mockWorkflowRows.push(makeWorkflow({ id: "wf-dn", name: "Sales Email Cold Outreach Jasmine", dynastyName: "Sales Email Cold Outreach Jasmine", createdForBrandId: "brand-123" }));
     mockWorkflowRunRows.push(makeRun("wf-dn", "ext-run-dn"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
-    expect(res.body.results[0].workflow.displayName).toBe("sales-email-cold-outreach-jasmine");
+    expect(res.body.results[0].workflow.name).toBe("Sales Email Cold Outreach Jasmine");
+    expect(res.body.results[0].workflow.dynastyName).toBe("Sales Email Cold Outreach Jasmine");
     expect(res.body.results[0].workflow.createdForBrandId).toBe("brand-123");
   });
 
@@ -420,11 +423,11 @@ describe("GET /workflows/ranked", () => {
     const costs: Record<string, { cost: number; runCount: number }> = {};
     const emails: Record<string, { transactional?: StatsOverrides }> = {};
     for (let i = 0; i < 5; i++) {
-      const name = `sales-email-cold-outreach-wf${i}`;
-      mockWorkflowRows.push(makeWorkflow({ id: `wf-${i}`, name }));
+      const slug = `sales-email-cold-outreach-wf${i}`;
+      mockWorkflowRows.push(makeWorkflow({ id: `wf-${i}`, slug }));
       mockWorkflowRunRows.push(makeRun(`wf-${i}`, `ext-run-${i}`));
-      costs[name] = { cost: 100, runCount: 1 };
-      emails[name] = { transactional: { replied: 5 } };
+      costs[slug] = { cost: 100, runCount: 1 };
+      emails[slug] = { transactional: { replied: 5 } };
     }
 
     setupCostsMock(costs);
@@ -439,8 +442,8 @@ describe("GET /workflows/ranked", () => {
     mockWorkflowRows.push(makeWorkflow({ id: "wf-1", createdForBrandId: "brand-1" }));
     mockWorkflowRunRows.push(makeRun("wf-1", "ext-run-1", "brand-1"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query({ ...BASE_QUERY, brandId: "brand-1" }).set(AUTH);
     expect(res.status).toBe(200);
@@ -450,12 +453,12 @@ describe("GET /workflows/ranked", () => {
   it("returns grouped brands with groupBy=brand (from runs)", async () => {
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-1", createdForBrandId: "brand-A" }),
-      makeWorkflow({ id: "wf-2", name: "sales-email-cold-outreach-beta", createdForBrandId: "brand-B" }),
+      makeWorkflow({ id: "wf-2", slug: "sales-email-cold-outreach-beta", createdForBrandId: "brand-B" }),
     );
     mockWorkflowRunRows.push(makeRun("wf-1", "ext-run-1", "brand-A"), makeRun("wf-2", "ext-run-2", "brand-B"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-beta": { cost: 200, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } }, "sales-email-cold-outreach-beta": { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-beta": { cost: 200, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, "sales-email-cold-outreach-beta": { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query({ ...BASE_QUERY, groupBy: "brand" }).set(AUTH);
     expect(res.status).toBe(200);
@@ -472,12 +475,12 @@ describe("GET /workflows/ranked", () => {
   it("excludes runs without brandId when groupBy=brand", async () => {
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-branded", createdForBrandId: "brand-X" }),
-      makeWorkflow({ id: "wf-no-brand", name: "sales-email-cold-outreach-nobrand" }),
+      makeWorkflow({ id: "wf-no-brand", slug: "sales-email-cold-outreach-nobrand" }),
     );
     mockWorkflowRunRows.push(makeRun("wf-branded", "ext-run-1", "brand-X"), makeRun("wf-no-brand", "ext-run-2"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-nobrand": { cost: 200, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { replied: 5 } }, "sales-email-cold-outreach-nobrand": { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-nobrand": { cost: 200, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, "sales-email-cold-outreach-nobrand": { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query({ ...BASE_QUERY, groupBy: "brand" }).set(AUTH);
     expect(res.status).toBe(200);
@@ -488,7 +491,7 @@ describe("GET /workflows/ranked", () => {
   it("returns grouped features with groupBy=feature", async () => {
     const nameS1 = "sales-cold-email-outreach-s1";
     const nameS2 = "sales-cold-email-outreach-s2";
-    mockWorkflowRows.push(makeWorkflow({ id: "wf-sales", name: nameS1 }), makeWorkflow({ id: "wf-sales2", name: nameS2 }));
+    mockWorkflowRows.push(makeWorkflow({ id: "wf-sales", slug: nameS1 }), makeWorkflow({ id: "wf-sales2", slug: nameS2 }));
     mockWorkflowRunRows.push(makeRun("wf-sales", "ext-run-s1"), makeRun("wf-sales2", "ext-run-s2"));
 
     setupCostsMock({ [nameS1]: { cost: 100, runCount: 1 }, [nameS2]: { cost: 200, runCount: 1 } });
@@ -521,8 +524,8 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-hero", "ext-run-hero"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { opened: 10, replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } } });
 
     const res = await request
       .get("/workflows/best")
@@ -543,8 +546,8 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-no-outcomes", "ext-run-no"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: {} });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: {} });
 
     const res = await request
       .get("/workflows/best")
@@ -572,32 +575,32 @@ describe("GET /workflows/best (hero records)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("includes displayName in hero records", async () => {
-    const wf = makeWorkflow({ id: "wf-dn-hero", displayName: "sales-email-cold-outreach-jasmine" });
+  it("includes workflowName in hero records", async () => {
+    const wf = makeWorkflow({ id: "wf-dn-hero", name: "Sales Email Cold Outreach Jasmine" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-dn-hero", "ext-run-dn"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { opened: 10, replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } } });
 
     const res = await request
       .get("/workflows/best")
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen.displayName).toBe("sales-email-cold-outreach-jasmine");
-    expect(res.body.bestCostPerReply.displayName).toBe("sales-email-cold-outreach-jasmine");
+    expect(res.body.bestCostPerOpen.workflowName).toBe("Sales Email Cold Outreach Jasmine");
+    expect(res.body.bestCostPerReply.workflowName).toBe("Sales Email Cold Outreach Jasmine");
   });
 
   it("filters by brandId", async () => {
     const wf1 = makeWorkflow({ id: "wf-b1", createdForBrandId: "brand-target" });
-    const wf2 = makeWorkflow({ id: "wf-b2", name: "sales-email-cold-outreach-other", createdForBrandId: "brand-other" });
+    const wf2 = makeWorkflow({ id: "wf-b2", slug: "sales-email-cold-outreach-other", createdForBrandId: "brand-other" });
     mockWorkflowRows.push(wf1, wf2);
     mockWorkflowRunRows.push(makeRun("wf-b1", "ext-run-b1", "brand-target"), makeRun("wf-b2", "ext-run-b2", "brand-other"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-other": { cost: 200, runCount: 1 } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-other": { cost: 200, runCount: 1 } });
     setupEmailMock({
-      [DEFAULT_WF_NAME]: { transactional: { opened: 10, replied: 5 } },
+      [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } },
       "sales-email-cold-outreach-other": { transactional: { opened: 10, replied: 5 } },
     });
 
@@ -615,8 +618,8 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRows.push(wf1);
     mockWorkflowRunRows.push(makeRun("wf-1", "ext-run-a", "brand-A"), makeRun("wf-1", "ext-run-b", "brand-A"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 600, runCount: 2 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { opened: 20, replied: 10 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 600, runCount: 2 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 20, replied: 10 } } });
 
     const res = await request
       .get("/workflows/best")
@@ -636,8 +639,8 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-no-brand", "ext-run-nb"));
 
-    setupCostsMock({ [DEFAULT_WF_NAME]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_NAME]: { transactional: { opened: 10, replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } } });
 
     const res = await request
       .get("/workflows/best")
@@ -652,8 +655,8 @@ describe("GET /workflows/best (hero records)", () => {
   it("picks the best from multiple workflows", async () => {
     const nameExp = "sales-email-cold-outreach-expensive";
     const nameCheap = "sales-email-cold-outreach-cheap";
-    const wfExpensive = makeWorkflow({ id: "wf-expensive", name: nameExp });
-    const wfCheap = makeWorkflow({ id: "wf-cheap", name: nameCheap });
+    const wfExpensive = makeWorkflow({ id: "wf-expensive", slug: nameExp });
+    const wfCheap = makeWorkflow({ id: "wf-cheap", slug: nameCheap });
     mockWorkflowRows.push(wfExpensive, wfCheap);
     mockWorkflowRunRows.push(makeRun("wf-expensive", "ext-run-1"), makeRun("wf-cheap", "ext-run-2"));
 

@@ -2,11 +2,13 @@ import {
   pgTable,
   uuid,
   text,
+  integer,
   jsonb,
   timestamp,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const workflows = pgTable(
   "workflows",
@@ -18,8 +20,9 @@ export const workflows = pgTable(
     campaignId: text("campaign_id"),
     subrequestId: text("subrequest_id"),
     styleName: text("style_name"),
+    slug: text("slug").notNull(),
     name: text("name").notNull(),
-    displayName: text("display_name"),
+    dynastyName: text("dynasty_name").notNull(),
     description: text("description"),
     featureSlug: text("feature_slug").notNull(),
     category: text("category"),
@@ -27,6 +30,7 @@ export const workflows = pgTable(
     audienceType: text("audience_type"),
     signature: text("signature").notNull(),
     signatureName: text("signature_name").notNull(),
+    version: integer("version").notNull().default(1),
     dag: jsonb("dag").notNull(),
     tags: jsonb("tags").default([]),
     status: text("status").notNull().default("active"),
@@ -43,6 +47,8 @@ export const workflows = pgTable(
     index("idx_workflows_org").on(table.orgId),
     index("idx_workflows_campaign").on(table.campaignId),
     index("idx_workflows_org_style").on(table.orgId, table.styleName),
+    uniqueIndex("idx_workflows_slug_unique").on(table.slug),
+    uniqueIndex("idx_workflows_name_unique").on(table.name),
   ]
 );
 
@@ -56,7 +62,7 @@ export const workflowRuns = pgTable(
     campaignId: text("campaign_id"),
     brandId: text("brand_id"),
     featureSlug: text("feature_slug"),
-    workflowName: text("workflow_name"),
+    workflowSlug: text("workflow_slug"),
     subrequestId: text("subrequest_id"),
     runId: text("run_id"),
 

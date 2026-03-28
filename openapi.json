@@ -107,14 +107,17 @@
             "nullable": true,
             "description": "Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."
           },
+          "slug": {
+            "type": "string",
+            "description": "Unique technical identifier. Use this to execute via /workflows/by-slug/{slug}/execute."
+          },
           "name": {
             "type": "string",
-            "description": "Workflow name. Use this with orgId to execute via /workflows/by-name/{name}/execute."
+            "description": "Human-readable display name. Globally unique."
           },
-          "displayName": {
+          "dynastyName": {
             "type": "string",
-            "nullable": true,
-            "description": "Human-readable display name. Falls back to name if not set."
+            "description": "Stable name for the lineage. Constant across all versions of a dynasty."
           },
           "description": {
             "type": "string",
@@ -142,7 +145,11 @@
           },
           "signatureName": {
             "type": "string",
-            "description": "Human-readable name for this signature (e.g. 'Sequoia'). Used to distinguish workflow variants within the same feature."
+            "description": "Poetic word for this dynasty (e.g. 'sequoia'). Set once at dynasty creation."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Version number within the dynasty. Starts at 1."
           },
           "dag": {
             "nullable": true,
@@ -203,8 +210,9 @@
           "campaignId",
           "subrequestId",
           "styleName",
+          "slug",
           "name",
-          "displayName",
+          "dynastyName",
           "description",
           "category",
           "channel",
@@ -212,6 +220,7 @@
           "tags",
           "signature",
           "signatureName",
+          "version",
           "status",
           "upgradedTo",
           "forkedFrom",
@@ -432,11 +441,6 @@
             "type": "string",
             "description": "Optional subrequest ID for cost tracking."
           },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Workflow name. Must be unique within the orgId. Used to execute by name later."
-          },
           "description": {
             "type": "string",
             "description": "Human-readable description of what this workflow does."
@@ -444,7 +448,7 @@
           "featureSlug": {
             "type": "string",
             "minLength": 1,
-            "description": "Feature slug from features-service. Required — used to build the workflow name and for feature-level grouping."
+            "description": "Feature slug from features-service. Required — used to build the workflow slug/name and for feature-level grouping."
           },
           "category": {
             "$ref": "#/components/schemas/WorkflowCategory"
@@ -467,7 +471,6 @@
           }
         },
         "required": [
-          "name",
           "featureSlug",
           "dag"
         ]
@@ -554,14 +557,9 @@
               "_action": {
                 "type": "string",
                 "enum": [
-                  "updated",
-                  "forked"
+                  "updated"
                 ],
-                "description": "What happened: 'updated' means the existing workflow was modified in-place, 'forked' means a new workflow was created (check the new name and id)."
-              },
-              "_forkedFromName": {
-                "type": "string",
-                "description": "Only present when _action is 'forked'. The name of the original workflow that was forked."
+                "description": "What happened: 'updated' means the existing workflow was modified in-place (metadata only)."
               }
             },
             "required": [
@@ -577,8 +575,9 @@
           "campaignId": null,
           "subrequestId": null,
           "styleName": null,
-          "name": "pr-cold-email-outreach-sequoia",
-          "displayName": "pr-cold-email-outreach-sequoia",
+          "slug": "pr-cold-email-outreach-sequoia",
+          "name": "Pr Cold Email Outreach Sequoia",
+          "dynastyName": "Pr Cold Email Outreach Sequoia",
           "description": "Cold outreach sequence for PR campaigns",
           "featureSlug": "pr-cold-email-outreach",
           "category": "pr",
@@ -589,6 +588,7 @@
           ],
           "signature": "4c4239e8d9bec64c85a178cb12b6669d3a69b6e68bafc0cb45c1797377ce9a8a",
           "signatureName": "sequoia",
+          "version": 1,
           "dag": {
             "nodes": [
               {
@@ -642,41 +642,15 @@
           "windmillWorkspace": "prod",
           "createdAt": "2026-03-26T03:39:24.262Z",
           "updatedAt": "2026-03-26T06:23:27.287Z",
-          "_action": "forked",
-          "_forkedFromName": "pr-cold-email-outreach-ivory"
+          "_action": "updated"
         }
-      },
-      "WorkflowConflictResponse": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "existingWorkflowId": {
-            "type": "string",
-            "format": "uuid",
-            "description": "ID of the existing workflow that already has this DAG signature."
-          },
-          "existingWorkflowName": {
-            "type": "string",
-            "description": "Name of the existing workflow that already has this DAG signature."
-          }
-        },
-        "required": [
-          "error",
-          "existingWorkflowId",
-          "existingWorkflowName"
-        ]
       },
       "UpdateWorkflowRequest": {
         "type": "object",
         "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
           "description": {
-            "type": "string"
+            "type": "string",
+            "description": "Updated description."
           },
           "tags": {
             "type": "array",
@@ -686,81 +660,22 @@
             "description": "Updated tags for filtering/grouping."
           },
           "dag": {
-            "$ref": "#/components/schemas/DAG"
-          }
-        },
-        "example": {
-          "dag": {
-            "nodes": [
+            "allOf": [
               {
-                "id": "fetch-lead",
-                "type": "http.call",
-                "config": {
-                  "service": "lead",
-                  "method": "POST",
-                  "path": "/buffer/next",
-                  "body": {
-                    "sourceType": "journalist"
-                  }
-                },
-                "inputMapping": {
-                  "body.campaignId": "$ref:flow_input.campaignId"
-                }
+                "$ref": "#/components/schemas/DAG"
               },
               {
-                "id": "check-lead",
-                "type": "condition"
-              },
-              {
-                "id": "send-email",
-                "type": "http.call",
-                "config": {
-                  "service": "email-gateway",
-                  "method": "POST",
-                  "path": "/send"
-                },
-                "inputMapping": {
-                  "body.to": "$ref:fetch-lead.output.lead.email"
-                },
-                "retries": 0
-              },
-              {
-                "id": "end-run",
-                "type": "http.call",
-                "config": {
-                  "service": "campaign",
-                  "method": "POST",
-                  "path": "/end-run",
-                  "body": {
-                    "success": true
-                  }
-                },
-                "inputMapping": {
-                  "body.campaignId": "$ref:flow_input.campaignId"
-                }
-              }
-            ],
-            "edges": [
-              {
-                "from": "fetch-lead",
-                "to": "check-lead"
-              },
-              {
-                "from": "check-lead",
-                "to": "send-email",
-                "condition": "results['fetch-lead'].found == true"
-              },
-              {
-                "from": "check-lead",
-                "to": "end-run",
-                "condition": "results['fetch-lead'].found == false"
-              },
-              {
-                "from": "send-email",
-                "to": "end-run"
+                "description": "DAG changes are NOT allowed via PUT on individual workflows. Use PUT /workflows/upgrade for structural changes. This field will be rejected if provided."
               }
             ]
           }
+        },
+        "example": {
+          "description": "Updated workflow description",
+          "tags": [
+            "email",
+            "outreach"
+          ]
         }
       },
       "TemplateRef": {
@@ -1066,9 +981,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "slug": {
+            "type": "string",
+            "description": "Unique technical identifier: {featureDynastySlug}-{signatureName}[-v{N}]."
+          },
           "name": {
             "type": "string",
-            "description": "Auto-generated workflow name: {featureSlug}-{signatureName}."
+            "description": "Human-readable name: {dynastyName}[ v{N}]."
           },
           "featureSlug": {
             "type": "string",
@@ -1087,23 +1006,30 @@
           },
           "signatureName": {
             "type": "string",
-            "description": "Human-readable name for this DAG variant (auto-generated by workflow-service)."
+            "description": "Poetic word for this dynasty (auto-generated by workflow-service)."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Version number within the dynasty."
           },
           "action": {
             "type": "string",
             "enum": [
               "created",
-              "updated"
+              "updated",
+              "deprecated-to-existing"
             ]
           }
         },
         "required": [
           "id",
+          "slug",
           "name",
           "featureSlug",
           "tags",
           "signature",
           "signatureName",
+          "version",
           "action"
         ]
       },
@@ -2175,8 +2101,8 @@
         }
       },
       "put": {
-        "summary": "Fork a workflow with modifications",
-        "description": "Creates a new workflow based on an existing one with a modified DAG. The original workflow remains active and unchanged. If only metadata (name, description, tags) is changed without a new DAG, the update is applied in-place. Returns the new forked workflow with a new name and signature.",
+        "summary": "Update workflow metadata",
+        "description": "Updates metadata (description, tags) on an existing workflow. DAG changes are NOT allowed — use PUT /workflows/upgrade for structural changes. Slug and name are immutable and cannot be changed.",
         "tags": [
           "Workflows"
         ],
@@ -2278,7 +2204,7 @@
         },
         "responses": {
           "200": {
-            "description": "Workflow updated in-place (metadata only or same DAG signature). _action='updated'.",
+            "description": "Workflow updated in-place (metadata only). _action='updated'.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2287,12 +2213,12 @@
               }
             }
           },
-          "201": {
-            "description": "Workflow forked (new workflow created with modified DAG). Check _action='forked' and the new name.",
+          "400": {
+            "description": "DAG changes not allowed via this endpoint",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowMutationResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2303,16 +2229,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "A workflow with this DAG signature already exists",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowConflictResponse"
                 }
               }
             }
@@ -3265,7 +3181,7 @@
     "/workflows/upgrade": {
       "put": {
         "summary": "Upgrade (upsert) workflows by DAG signature",
-        "description": "Idempotent: creates new workflows or updates existing ones matched by (orgId + DAG signature). The workflow name is auto-generated as {featureSlug}-{signatureName}. signatureName is a human-readable word auto-assigned to each unique DAG. After deploying, execute workflows via POST /workflows/by-name/{name}/execute.",
+        "description": "Idempotent: creates new workflows or updates existing ones matched by (orgId + DAG signature). The workflow name is auto-generated as {featureSlug}-{signatureName}. signatureName is a human-readable word auto-assigned to each unique DAG. After deploying, execute workflows via POST /workflows/by-slug/{slug}/execute.",
         "tags": [
           "Workflows"
         ],
@@ -3990,9 +3906,9 @@
         }
       }
     },
-    "/workflows/by-name/{name}/execute": {
+    "/workflows/by-slug/{slug}/execute": {
       "post": {
-        "summary": "Execute a workflow by name",
+        "summary": "Execute a workflow by slug",
         "description": "Starts an async execution of a previously deployed workflow. Returns a run object with an ID — poll GET /workflow-runs/{id} for status (queued → running → completed/failed). Pass runtime data via inputs (accessible in nodes as $ref:flow_input.fieldName).",
         "tags": [
           "Workflow Runs"
@@ -4008,7 +3924,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "name",
+            "name": "slug",
             "in": "path"
           },
           {

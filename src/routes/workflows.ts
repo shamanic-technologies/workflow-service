@@ -37,6 +37,7 @@ import {
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
+import { resolveFeatureDynasty } from "../lib/features-client.js";
 
 const router = Router();
 
@@ -48,12 +49,22 @@ function formatWorkflow(w: typeof workflows.$inferSelect) {
   };
 }
 
-function generateFlowPath(scope: string, name: string): string {
-  const slug = name
+function generateFlowPath(scope: string, slug: string): string {
+  const sanitized = slug
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
-  return `f/workflows/${scope}/${slug}`;
+  return `f/workflows/${scope}/${sanitized}`;
+}
+
+/** Compose slug with version suffix: no -v1 for v1, -v2 for v2+. */
+function composeSlug(base: string, version: number): string {
+  return version >= 2 ? `${base}-v${version}` : base;
+}
+
+/** Compose display name with version suffix: no v1 for v1, v2 for v2+. */
+function composeName(base: string, version: number): string {
+  return version >= 2 ? `${base} v${version}` : base;
 }
 
 // POST /workflows/generate — Generate a workflow from natural language
@@ -82,19 +93,20 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       .where(sql`true`);
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
+    // Match by featureSlug — one active workflow per featureSlug
     const [existing] = await db
       .select()
       .from(workflows)
       .where(
         and(
-          eq(workflows.orgId, orgId),
-          eq(workflows.signature, signature),
+          eq(workflows.featureSlug, body.featureSlug),
           eq(workflows.status, "active"),
         )
       );
 
     type DeployResult = {
       id: string;
+      slug: string;
       name: string;
       featureSlug: string;
       tags: string[];
@@ -105,13 +117,13 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
     let result: DeployResult;
 
-    if (existing) {
-      const openFlow = dagToOpenFlow(dag, existing.name);
+    if (existing && existing.signature === signature) {
+      const openFlow = dagToOpenFlow(dag, existing.slug);
       const client = getWindmillClient();
       if (client && existing.windmillFlowPath) {
         try {
           await client.updateFlow(existing.windmillFlowPath, {
-            summary: existing.name,
+            summary: existing.slug,
             description: generated.description,
             value: openFlow.value,
             schema: openFlow.schema,
@@ -136,6 +148,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
       result = {
         id: updated.id,
+        slug: updated.slug,
         name: updated.name,
         featureSlug: updated.featureSlug,
         tags: (updated.tags as string[]) ?? [],
@@ -145,7 +158,6 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       };
     } else {
       let signatureName: string;
-      let displayName: string;
       let styleName: string | null = null;
       let humanId: string | null = null;
       let createdForBrandId: string | null = null;
@@ -169,7 +181,6 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         const version = sameStyle.length + 1;
 
         signatureName = `${styleName}-v${version}`;
-        displayName = `${body.style.name} v${version}`;
 
         if (body.style.type === "human" && body.style.humanId) {
           humanId = body.style.humanId;
@@ -179,19 +190,23 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         }
       } else {
         signatureName = pickSignatureName(signature, usedNames);
-        displayName = `${body.featureSlug}-${signatureName}`;
       }
 
-      const name = `${body.featureSlug}-${signatureName}`;
-      const openFlow = dagToOpenFlow(dag, name);
-      const flowPath = generateFlowPath(orgId, name);
+      const dynasty = await resolveFeatureDynasty(body.featureSlug);
+      const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+      const newVersion = existing ? existing.version + 1 : 1;
+      const slug = composeSlug(`${dynasty.featureDynastySlug}-${signatureName}`, newVersion);
+      const name = composeName(dynastyName, newVersion);
+
+      const openFlow = dagToOpenFlow(dag, slug);
+      const flowPath = generateFlowPath(orgId, slug);
       const client = getWindmillClient();
 
       if (client) {
         try {
           await client.createFlow({
             path: flowPath,
-            summary: name,
+            summary: slug,
             description: generated.description,
             value: openFlow.value,
             schema: openFlow.schema,
@@ -201,12 +216,21 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         }
       }
 
+      // Deprecate existing if upgrading
+      if (existing) {
+        await db
+          .update(workflows)
+          .set({ status: "deprecated", updatedAt: new Date() })
+          .where(eq(workflows.id, existing.id));
+      }
+
       const [created] = await db
         .insert(workflows)
         .values({
           orgId,
+          slug,
           name,
-          displayName,
+          dynastyName,
           description: generated.description,
           featureSlug: body.featureSlug,
           category: generated.category,
@@ -214,6 +238,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
           audienceType: generated.audienceType,
           signature,
           signatureName,
+          version: newVersion,
           dag: generated.dag,
           windmillFlowPath: flowPath,
           humanId,
@@ -224,14 +249,23 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         })
         .returning();
 
+      // Set upgradedTo pointer on the deprecated workflow
+      if (existing) {
+        await db
+          .update(workflows)
+          .set({ upgradedTo: created.id })
+          .where(eq(workflows.id, existing.id));
+      }
+
       result = {
         id: created.id,
+        slug: created.slug,
         name: created.name,
         featureSlug: created.featureSlug,
         tags: (created.tags as string[]) ?? [],
         signature: created.signature,
         signatureName: created.signatureName,
-        action: "created",
+        action: existing ? "updated" : "created",
       };
     }
 
@@ -282,9 +316,23 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
       return;
     }
 
+    // Compute signature and naming
+    const signature = computeDAGSignature(body.dag);
+    const existingWorkflows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows)
+      .where(eq(workflows.status, "active"));
+    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
+    const signatureName = pickSignatureName(signature, usedNames);
+
+    const dynasty = await resolveFeatureDynasty(body.featureSlug);
+    const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const slug = `${dynasty.featureDynastySlug}-${signatureName}`;
+    const name = dynastyName;
+
     // Translate to OpenFlow
-    const openFlow = dagToOpenFlow(dag, body.name);
-    const flowPath = generateFlowPath(orgId, body.name);
+    const openFlow = dagToOpenFlow(dag, slug);
+    const flowPath = generateFlowPath(orgId, slug);
 
     // Push to Windmill (if configured)
     const client = getWindmillClient();
@@ -292,7 +340,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
       try {
         await client.createFlow({
           path: flowPath,
-          summary: body.name,
+          summary: slug,
           description: body.description,
           value: openFlow.value,
           schema: openFlow.schema,
@@ -301,15 +349,6 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         console.error("[workflow-service] Failed to create flow in Windmill:", err);
       }
     }
-
-    // Compute signature
-    const signature = computeDAGSignature(body.dag);
-    const existingWorkflows = await db
-      .select({ signatureName: workflows.signatureName })
-      .from(workflows)
-      .where(eq(workflows.status, "active"));
-    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
-    const signatureName = pickSignatureName(signature, usedNames);
 
     // Store in DB
     const [workflow] = await db
@@ -320,7 +359,9 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         featureSlug: body.featureSlug,
         campaignId: body.campaignId,
         subrequestId: body.subrequestId,
-        name: body.name,
+        slug,
+        name,
+        dynastyName,
         description: body.description,
         category: body.category,
         channel: body.channel,
@@ -328,6 +369,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         tags: body.tags ?? [],
         signature,
         signatureName,
+        version: 1,
         dag: body.dag,
         windmillFlowPath: flowPath,
         createdByUserId: res.locals.userId as string,
@@ -464,36 +506,35 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       .where(sql`true`);
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; name: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; action: "created" | "updated" }[] = [];
+    const results: { id: string; slug: string; name: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
       const signature = computeDAGSignature(wf.dag);
 
-      // Check if workflow already exists for this (orgId, signature) — only active
-      const [existing] = await db
+      // Match by featureSlug — one active workflow per featureSlug
+      const [activeForFeature] = await db
         .select()
         .from(workflows)
         .where(
           and(
-            eq(workflows.orgId, orgId),
-            eq(workflows.signature, signature),
+            eq(workflows.featureSlug, wf.featureSlug),
             eq(workflows.status, "active"),
           )
         );
 
-      if (existing) {
-        // Same DAG already deployed — update metadata
+      if (activeForFeature && activeForFeature.signature === signature) {
+        // Same DAG already deployed — update metadata in-place
         console.log(
-          `[workflow-service] deploy: sig=${signature.slice(0, 12)} matched "${existing.name}" (${existing.id}) -> update`,
+          `[workflow-service] deploy: sig=${signature.slice(0, 12)} matched "${activeForFeature.slug}" (${activeForFeature.id}) -> update`,
         );
-        const openFlow = dagToOpenFlow(dag, existing.name);
+        const openFlow = dagToOpenFlow(dag, activeForFeature.slug);
         const client = getWindmillClient();
 
-        if (client && existing.windmillFlowPath) {
+        if (client && activeForFeature.windmillFlowPath) {
           try {
-            await client.updateFlow(existing.windmillFlowPath, {
-              summary: existing.name,
+            await client.updateFlow(activeForFeature.windmillFlowPath, {
+              summary: activeForFeature.slug,
               description: wf.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -503,14 +544,14 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           }
         }
 
-        const updatedTags = wf.tags ?? (existing.tags as string[]) ?? [];
+        const updatedTags = wf.tags ?? (activeForFeature.tags as string[]) ?? [];
         const [updated] = await db
           .update(workflows)
           .set({
             orgId,
             createdForBrandId: wf.createdForBrandId,
-            featureSlug: wf.featureSlug ?? existing.featureSlug,
-            description: wf.description ?? existing.description,
+            featureSlug: wf.featureSlug ?? activeForFeature.featureSlug,
+            description: wf.description ?? activeForFeature.description,
             category: wf.category,
             channel: wf.channel,
             audienceType: wf.audienceType,
@@ -518,37 +559,167 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             dag: wf.dag,
             updatedAt: new Date(),
           })
-          .where(eq(workflows.id, existing.id))
+          .where(eq(workflows.id, activeForFeature.id))
           .returning();
 
         results.push({
           id: updated.id,
+          slug: updated.slug,
           name: updated.name,
           featureSlug: updated.featureSlug,
           tags: (updated.tags as string[]) ?? [],
           signature: updated.signature,
           signatureName: updated.signatureName,
+          version: updated.version,
           action: "updated",
         });
+      } else if (activeForFeature) {
+        // DAG changed — check if another active workflow already has this signature (convergence)
+        const [convergenceTarget] = await db
+          .select()
+          .from(workflows)
+          .where(
+            and(
+              eq(workflows.featureSlug, wf.featureSlug),
+              eq(workflows.signature, signature),
+              eq(workflows.status, "active"),
+            )
+          );
+
+        if (convergenceTarget) {
+          // Convergence: deprecate our predecessor, point to the existing active
+          console.log(
+            `[workflow-service] deploy: convergence — "${activeForFeature.slug}" -> existing "${convergenceTarget.slug}"`,
+          );
+
+          await db
+            .update(workflows)
+            .set({
+              status: "deprecated",
+              upgradedTo: convergenceTarget.id,
+              updatedAt: new Date(),
+            })
+            .where(eq(workflows.id, activeForFeature.id));
+
+          results.push({
+            id: convergenceTarget.id,
+            slug: convergenceTarget.slug,
+            name: convergenceTarget.name,
+            featureSlug: convergenceTarget.featureSlug,
+            tags: (convergenceTarget.tags as string[]) ?? [],
+            signature: convergenceTarget.signature,
+            signatureName: convergenceTarget.signatureName,
+            version: convergenceTarget.version,
+            action: "deprecated-to-existing",
+          });
+        } else {
+          // Upgrade: deprecate old, create new version in the same dynasty
+          const newVersion = activeForFeature.version + 1;
+          const dynastyName = activeForFeature.dynastyName;
+          const signatureName = activeForFeature.signatureName;
+
+          // Build slug base from dynasty slug (feature_dynasty_slug + signatureName)
+          // Extract the base slug by stripping version suffix from the existing slug
+          const baseSlug = activeForFeature.slug.replace(/-v\d+$/, "");
+          const newSlug = composeSlug(baseSlug, newVersion);
+          const newName = composeName(dynastyName, newVersion);
+
+          console.log(
+            `[workflow-service] deploy: sig=${signature.slice(0, 12)} upgrade "${activeForFeature.slug}" -> "${newSlug}" (v${newVersion})`,
+          );
+
+          const openFlow = dagToOpenFlow(dag, newSlug);
+          const flowPath = generateFlowPath(orgId, newSlug);
+          const client = getWindmillClient();
+
+          if (client) {
+            try {
+              await client.createFlow({
+                path: flowPath,
+                summary: newSlug,
+                description: wf.description,
+                value: openFlow.value,
+                schema: openFlow.schema,
+              });
+            } catch (err) {
+              console.error("[workflow-service] deploy: failed to create Windmill flow:", err);
+            }
+          }
+
+          // Deprecate old workflow FIRST
+          await db
+            .update(workflows)
+            .set({
+              status: "deprecated",
+              updatedAt: new Date(),
+            })
+            .where(eq(workflows.id, activeForFeature.id));
+
+          const [created] = await db
+            .insert(workflows)
+            .values({
+              orgId,
+              createdForBrandId: wf.createdForBrandId,
+              featureSlug: wf.featureSlug,
+              slug: newSlug,
+              name: newName,
+              dynastyName,
+              description: wf.description,
+              category: wf.category,
+              channel: wf.channel,
+              audienceType: wf.audienceType,
+              tags: wf.tags ?? [],
+              signature,
+              signatureName,
+              version: newVersion,
+              dag: wf.dag,
+              windmillFlowPath: flowPath,
+              createdByUserId: res.locals.userId as string,
+              createdByRunId: res.locals.runId as string,
+            })
+            .returning();
+
+          // Set upgradedTo pointer on the deprecated workflow
+          await db
+            .update(workflows)
+            .set({ upgradedTo: created.id })
+            .where(eq(workflows.id, activeForFeature.id));
+
+          results.push({
+            id: created.id,
+            slug: created.slug,
+            name: created.name,
+            featureSlug: created.featureSlug,
+            tags: (created.tags as string[]) ?? [],
+            signature: created.signature,
+            signatureName: created.signatureName,
+            version: created.version,
+            action: "created",
+          });
+        }
       } else {
-        // New DAG — generate signatureName and build name
+        // No active workflow for this featureSlug — new dynasty
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        const name = `${wf.featureSlug}-${signatureName}`;
+        const dynasty = await resolveFeatureDynasty(wf.featureSlug);
+        const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+        const slug = `${dynasty.featureDynastySlug}-${signatureName}`;
+        const name = dynastyName;
+
         console.log(
-          `[workflow-service] deploy: sig=${signature.slice(0, 12)} no active match -> create "${name}"`,
+          `[workflow-service] deploy: sig=${signature.slice(0, 12)} new dynasty -> "${slug}"`,
         );
 
-        const openFlow = dagToOpenFlow(dag, name);
-        const flowPath = generateFlowPath(orgId, name);
+        const openFlow = dagToOpenFlow(dag, slug);
+        const flowPath = generateFlowPath(orgId, slug);
         const client = getWindmillClient();
 
         if (client) {
           try {
             await client.createFlow({
               path: flowPath,
-              summary: name,
+              summary: slug,
               description: wf.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -564,8 +735,9 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             orgId,
             createdForBrandId: wf.createdForBrandId,
             featureSlug: wf.featureSlug,
+            slug,
             name,
-            displayName: name,
+            dynastyName,
             description: wf.description,
             category: wf.category,
             channel: wf.channel,
@@ -573,6 +745,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             tags: wf.tags ?? [],
             signature,
             signatureName,
+            version: 1,
             dag: wf.dag,
             windmillFlowPath: flowPath,
             createdByUserId: res.locals.userId as string,
@@ -582,11 +755,13 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
         results.push({
           id: created.id,
+          slug: created.slug,
           name: created.name,
           featureSlug: created.featureSlug,
           tags: (created.tags as string[]) ?? [],
           signature: created.signature,
           signatureName: created.signatureName,
+          version: created.version,
           action: "created",
         });
       }
@@ -838,8 +1013,8 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
         if (!entry) return null;
         return {
           workflowId: entry.score.workflow.id,
+          workflowSlug: entry.score.workflow.slug,
           workflowName: entry.score.workflow.name,
-          displayName: entry.score.workflow.displayName,
           createdForBrandId: entry.score.workflow.createdForBrandId,
           value: Math.round(entry.value * 100) / 100,
         };
@@ -976,11 +1151,17 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
   }
 });
 
-// PUT /workflows/:id — Fork a workflow (DAG change creates a new workflow; metadata-only updates in-place)
+// PUT /workflows/:id — Metadata-only update (DAG changes are forbidden; use PUT /workflows/upgrade for structural changes)
 router.put("/workflows/:id", requireApiKey, async (req, res) => {
   try {
     const body = UpdateWorkflowSchema.parse(req.body);
-    const orgId = res.locals.orgId as string;
+
+    if (body.dag) {
+      res.status(400).json({
+        error: "DAG changes are not allowed via PATCH/PUT on individual workflows. Use PUT /workflows/upgrade for structural changes.",
+      });
+      return;
+    }
 
     const [existing] = await db
       .select()
@@ -992,188 +1173,24 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       return;
     }
 
-    // No DAG provided — metadata-only in-place update
-    if (!body.dag) {
-      const updates: Record<string, unknown> = { updatedAt: new Date() };
-      if (body.name) updates.name = body.name;
-      if (body.description !== undefined) updates.description = body.description;
-      if (body.tags !== undefined) updates.tags = body.tags;
+    // Metadata-only in-place update
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.description !== undefined) updates.description = body.description;
+    if (body.tags !== undefined) updates.tags = body.tags;
 
-      const [updated] = await db
-        .update(workflows)
-        .set(updates)
-        .where(eq(workflows.id, req.params.id))
-        .returning();
+    const [updated] = await db
+      .update(workflows)
+      .set(updates)
+      .where(eq(workflows.id, req.params.id))
+      .returning();
 
-      res.json({ ...formatWorkflow(updated), _action: "updated" as const });
-      return;
-    }
-
-    // DAG provided — validate it
-    const dag = body.dag as DAG;
-    const validation = validateDAG(dag);
-    if (!validation.valid) {
-      res.status(400).json({ error: "Invalid DAG", details: validation.errors });
-      return;
-    }
-
-    const newSignature = computeDAGSignature(body.dag);
-
-    // Same signature — no structural change, update in-place
-    if (newSignature === existing.signature) {
-      const updates: Record<string, unknown> = { updatedAt: new Date(), dag: body.dag };
-      if (body.name) updates.name = body.name;
-      if (body.description !== undefined) updates.description = body.description;
-      if (body.tags !== undefined) updates.tags = body.tags;
-
-      const flowName = body.name ?? existing.name;
-      const openFlow = dagToOpenFlow(dag, flowName);
-      if (existing.windmillFlowPath) {
-        const client = getWindmillClient();
-        if (client) {
-          try {
-            await client.updateFlow(existing.windmillFlowPath, {
-              summary: flowName,
-              value: openFlow.value,
-              schema: openFlow.schema,
-            });
-          } catch (err) {
-            console.error("[workflow-service] Failed to update flow in Windmill:", err);
-          }
-        }
-      }
-
-      const [updated] = await db
-        .update(workflows)
-        .set(updates)
-        .where(eq(workflows.id, req.params.id))
-        .returning();
-
-      res.json({ ...formatWorkflow(updated), _action: "updated" as const });
-      return;
-    }
-
-    // Different signature — FORK: create a new workflow, keep original untouched
-    // Check for existing active workflow with same signature (would violate unique index)
-    const [conflicting] = await db
-      .select()
-      .from(workflows)
-      .where(
-        and(
-          eq(workflows.orgId, orgId),
-          eq(workflows.signature, newSignature),
-          eq(workflows.status, "active"),
-        )
-      );
-
-    if (conflicting) {
-      res.status(409).json({
-        error: "A workflow with this DAG signature already exists",
-        existingWorkflowId: conflicting.id,
-        existingWorkflowName: conflicting.name,
-      });
-      return;
-    }
-
-    // Generate new signatureName (include deprecated to avoid recycling names)
-    const existingWorkflows = await db
-      .select({ signatureName: workflows.signatureName })
-      .from(workflows)
-      .where(sql`true`);
-    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
-    const signatureName = pickSignatureName(newSignature, usedNames);
-
-    // Build new name from original's featureSlug + new signatureName
-    const newName = `${existing.featureSlug}-${signatureName}`;
-
-    const openFlow = dagToOpenFlow(dag, newName);
-    const flowPath = generateFlowPath(orgId, newName);
-    const client = getWindmillClient();
-
-    if (client) {
-      try {
-        await client.createFlow({
-          path: flowPath,
-          summary: newName,
-          description: body.description ?? existing.description ?? undefined,
-          value: openFlow.value,
-          schema: openFlow.schema,
-        });
-      } catch (err) {
-        // If flow already exists (e.g. retry after partial failure), update it instead
-        if (err instanceof Error && err.message.includes("already exists")) {
-          try {
-            await client.updateFlow(flowPath, {
-              summary: newName,
-              description: body.description ?? existing.description ?? undefined,
-              value: openFlow.value,
-              schema: openFlow.schema,
-            });
-          } catch (updateErr) {
-            console.error("[workflow-service] Failed to update existing forked flow in Windmill:", updateErr);
-          }
-        } else {
-          console.error("[workflow-service] Failed to create forked flow in Windmill:", err);
-        }
-      }
-    }
-
-    let forked;
-    try {
-      const [row] = await db
-        .insert(workflows)
-        .values({
-          orgId: existing.orgId,
-          createdForBrandId: existing.createdForBrandId,
-          featureSlug: existing.featureSlug,
-          humanId: existing.humanId,
-          campaignId: existing.campaignId,
-          subrequestId: existing.subrequestId,
-          styleName: existing.styleName,
-          name: newName,
-          displayName: newName,
-          description: body.description ?? existing.description,
-          category: existing.category,
-          channel: existing.channel,
-          audienceType: existing.audienceType,
-          tags: body.tags ?? (existing.tags as string[]) ?? [],
-          signature: newSignature,
-          signatureName,
-          dag: body.dag,
-          status: "active",
-          forkedFrom: existing.id,
-          windmillFlowPath: flowPath,
-          createdByUserId: res.locals.userId as string,
-          createdByRunId: res.locals.runId as string,
-        })
-        .returning();
-      forked = row;
-    } catch (dbErr: unknown) {
-      if (dbErr instanceof Error && "code" in dbErr && (dbErr as any).code === "23505") {
-        res.status(409).json({
-          error: "A workflow with this name already exists",
-          detail: (dbErr as any).detail,
-        });
-        return;
-      }
-      throw dbErr;
-    }
-
-    console.log(
-      `[workflow-service] fork: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id})`,
-    );
-
-    res.status(201).json({
-      ...formatWorkflow(forked),
-      _action: "forked" as const,
-      _forkedFromName: existing.name,
-    });
+    res.json({ ...formatWorkflow(updated), _action: "updated" as const });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
       res.status(400).json({ error: "Validation error", details: err });
       return;
     }
-    console.error("[workflow-service] PUT fork error:", err);
+    console.error("[workflow-service] PUT update error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
