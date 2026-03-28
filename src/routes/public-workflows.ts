@@ -36,14 +36,14 @@ router.get("/public/workflows/ranked", async (req, res) => {
       : await db.select().from(workflows);
 
     const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
-    const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
     if (activeWorkflows.length === 0) {
       res.json({ results: [] });
       return;
     }
 
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "public" as const, brandId, orgId });
+    // Slug-level stats only — no dynasty chain aggregation
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objective, { kind: "public" as const, brandId, orgId });
 
     if (groupBy === "feature") {
       const featureMap = new Map<string, WorkflowScore[]>();
@@ -141,14 +141,14 @@ router.get("/public/workflows/best", async (req, res) => {
       : await db.select().from(workflows);
 
     const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
-    const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
     if (activeWorkflows.length === 0) {
       res.json({ bestCostPerOpen: null, bestCostPerReply: null });
       return;
     }
 
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", { kind: "public" as const, brandId, orgId });
+    // Slug-level stats only — no dynasty chain aggregation
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], "replies", { kind: "public" as const, brandId, orgId });
 
     if (by === "brand") {
       // Aggregate by brandId from runs

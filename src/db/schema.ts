@@ -23,6 +23,7 @@ export const workflows = pgTable(
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     dynastyName: text("dynasty_name").notNull(),
+    dynastySlug: text("dynasty_slug").notNull(),
     description: text("description"),
     featureSlug: text("feature_slug").notNull(),
     category: text("category"),
@@ -49,6 +50,7 @@ export const workflows = pgTable(
     index("idx_workflows_org_style").on(table.orgId, table.styleName),
     uniqueIndex("idx_workflows_slug_unique").on(table.slug),
     uniqueIndex("idx_workflows_name_unique").on(table.name),
+    index("idx_workflows_dynasty_slug").on(table.dynastySlug),
   ]
 );
 

@@ -144,6 +144,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     slug: DEFAULT_WF_SLUG,
     name: "Sales Email Cold Outreach Alpha",
     dynastyName: "Sales Email Cold Outreach Alpha",
+    dynastySlug: "sales-email-cold-outreach-alpha",
     version: 1,
     createdForBrandId: null,
     description: null,
@@ -261,7 +262,7 @@ describe("GET /workflows/ranked", () => {
     );
   });
 
-  it("passes all dynasty workflow names to costs and email endpoints", async () => {
+  it("passes only active workflow slug to costs and email endpoints (no dynasty aggregation)", async () => {
     const wfOldName = "sales-email-cold-outreach-old";
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-active" }),
@@ -269,22 +270,20 @@ describe("GET /workflows/ranked", () => {
     );
     mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-active"), makeRun("wf-old", "ext-run-old"));
 
-    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, [wfOldName]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
 
-    // Both dynasty names should be passed to both endpoints
+    // Only active workflow slug is passed — no dynasty chain aggregation
     const costNames = mockFetchRunCostsAuth.mock.calls[0][1] as string[];
-    expect(costNames).toHaveLength(2);
+    expect(costNames).toHaveLength(1);
     expect(costNames).toContain(DEFAULT_WF_SLUG);
-    expect(costNames).toContain(wfOldName);
 
     const emailNames = mockFetchEmailStatsAuth.mock.calls[0][0] as string[];
-    expect(emailNames).toHaveLength(2);
+    expect(emailNames).toHaveLength(1);
     expect(emailNames).toContain(DEFAULT_WF_SLUG);
-    expect(emailNames).toContain(wfOldName);
   });
 
   it("uses clicks objective when specified", async () => {
@@ -339,26 +338,27 @@ describe("GET /workflows/ranked", () => {
     expect(res.body.results[0].stats.completedRuns).toBe(1);
   });
 
-  it("includes runs from deprecated predecessor in stats", async () => {
+  it("excludes deprecated predecessor stats (slug-level only)", async () => {
     const wfOldName = "sales-email-cold-outreach-old";
     mockWorkflowRows.push(
       makeWorkflow({ id: "wf-active" }),
       makeWorkflow({ id: "wf-old", slug: wfOldName, status: "deprecated", upgradedTo: "wf-active" }),
     );
-    mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-active"), makeRun("wf-old", "ext-run-old"));
+    mockWorkflowRunRows.push(makeRun("wf-active", "ext-run-active"));
 
-    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, [wfOldName]: { cost: 200, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, [wfOldName]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
     expect(res.body.results[0].workflow.id).toBe("wf-active");
-    expect(res.body.results[0].stats.totalCostInUsdCents).toBe(300);
-    expect(res.body.results[0].stats.totalOutcomes).toBe(10);
-    expect(res.body.results[0].stats.completedRuns).toBe(2);
+    // Only active slug's stats — no dynasty aggregation
+    expect(res.body.results[0].stats.totalCostInUsdCents).toBe(100);
+    expect(res.body.results[0].stats.totalOutcomes).toBe(5);
+    expect(res.body.results[0].stats.completedRuns).toBe(1);
   });
 
-  it("aggregates across deep upgrade chain (3 levels)", async () => {
+  it("returns only active slug stats even with deep upgrade chain", async () => {
     const nameV2 = "sales-email-cold-outreach-v2";
     const nameV1 = "sales-email-cold-outreach-v1";
     mockWorkflowRows.push(
@@ -366,17 +366,18 @@ describe("GET /workflows/ranked", () => {
       makeWorkflow({ id: "wf-v2", slug: nameV2, status: "deprecated", upgradedTo: "wf-v3" }),
       makeWorkflow({ id: "wf-v1", slug: nameV1, status: "deprecated", upgradedTo: "wf-v2" }),
     );
-    mockWorkflowRunRows.push(makeRun("wf-v3", "ext-run-v3"), makeRun("wf-v2", "ext-run-v2"), makeRun("wf-v1", "ext-run-v1"));
+    mockWorkflowRunRows.push(makeRun("wf-v3", "ext-run-v3"));
 
-    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 50, runCount: 1 }, [nameV2]: { cost: 100, runCount: 1 }, [nameV1]: { cost: 150, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } }, [nameV2]: { transactional: { replied: 5 } }, [nameV1]: { transactional: { replied: 5 } } });
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 50, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
 
     const res = await request.get("/workflows/ranked").query(BASE_QUERY).set(AUTH);
     expect(res.status).toBe(200);
     expect(res.body.results[0].workflow.id).toBe("wf-v3");
-    expect(res.body.results[0].stats.totalCostInUsdCents).toBe(300);
-    expect(res.body.results[0].stats.totalOutcomes).toBe(15);
-    expect(res.body.results[0].stats.completedRuns).toBe(3);
+    // Only v3 stats — no dynasty chain aggregation
+    expect(res.body.results[0].stats.totalCostInUsdCents).toBe(50);
+    expect(res.body.results[0].stats.totalOutcomes).toBe(5);
+    expect(res.body.results[0].stats.completedRuns).toBe(1);
   });
 
   it("returns multiple workflows ranked when limit > 1", async () => {
@@ -674,5 +675,82 @@ describe("GET /workflows/best (hero records)", () => {
     // wf-cheap has lower cost-per-open (500/100=5 vs 500/2=250) and cost-per-reply
     expect(res.body.bestCostPerOpen.workflowId).toBe("wf-cheap");
     expect(res.body.bestCostPerReply.workflowId).toBe("wf-cheap");
+  });
+});
+
+describe("GET /workflows/dynasty/slugs", () => {
+  beforeEach(() => {
+    mockWorkflowRows.length = 0;
+    mockWorkflowRunRows.length = 0;
+  });
+
+  it("returns all slugs for a dynasty", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-v1", slug: "cold-email-sequoia", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia", version: 1, status: "deprecated" }),
+      makeWorkflow({ id: "wf-v2", slug: "cold-email-sequoia-v2", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia", version: 2, status: "deprecated" }),
+      makeWorkflow({ id: "wf-v3", slug: "cold-email-sequoia-v3", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia", version: 3, status: "active" }),
+    );
+
+    const res = await request.get("/workflows/dynasty/slugs").query({ dynastySlug: "cold-email-sequoia" }).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.dynastySlug).toBe("cold-email-sequoia");
+    expect(res.body.dynastyName).toBe("Cold Email Sequoia");
+    expect(res.body.slugs).toHaveLength(3);
+    expect(res.body.slugs).toContain("cold-email-sequoia");
+    expect(res.body.slugs).toContain("cold-email-sequoia-v2");
+    expect(res.body.slugs).toContain("cold-email-sequoia-v3");
+  });
+
+  it("returns 400 when dynastySlug is missing", async () => {
+    const res = await request.get("/workflows/dynasty/slugs").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/dynastySlug/);
+  });
+
+  it("returns 404 when no workflows match", async () => {
+    const res = await request.get("/workflows/dynasty/slugs").query({ dynastySlug: "nonexistent" }).set(AUTH);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /workflows/dynasty/stats", () => {
+  beforeEach(() => {
+    mockWorkflowRows.length = 0;
+    mockWorkflowRunRows.length = 0;
+    mockFetchRunCostsAuth.mockReset();
+    mockFetchEmailStatsAuth.mockReset();
+  });
+
+  it("aggregates stats across dynasty chain", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-v2", slug: "cold-email-sequoia-v2", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia", version: 2, status: "active" }),
+      makeWorkflow({ id: "wf-v1", slug: "cold-email-sequoia", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia", version: 1, status: "deprecated", upgradedTo: "wf-v2" }),
+    );
+    mockWorkflowRunRows.push(makeRun("wf-v2", "ext-run-v2"), makeRun("wf-v1", "ext-run-v1"));
+
+    setupCostsMock({ "cold-email-sequoia-v2": { cost: 100, runCount: 1 }, "cold-email-sequoia": { cost: 200, runCount: 1 } });
+    setupEmailMock({ "cold-email-sequoia-v2": { transactional: { replied: 5 } }, "cold-email-sequoia": { transactional: { replied: 10 } } });
+
+    const res = await request.get("/workflows/dynasty/stats").query({ dynastySlug: "cold-email-sequoia" }).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.dynastySlug).toBe("cold-email-sequoia");
+    expect(res.body.dynastyName).toBe("Cold Email Sequoia");
+    // Dynasty-level: aggregated across both versions
+    expect(res.body.stats.totalCostInUsdCents).toBe(300);
+    expect(res.body.stats.totalOutcomes).toBe(15);
+    expect(res.body.stats.completedRuns).toBe(2);
+  });
+
+  it("returns 400 when dynastySlug is missing", async () => {
+    const res = await request.get("/workflows/dynasty/stats").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/dynastySlug/);
+  });
+
+  it("returns 404 when no workflows match", async () => {
+    const res = await request.get("/workflows/dynasty/stats").query({ dynastySlug: "nonexistent" }).set(AUTH);
+    expect(res.status).toBe(404);
   });
 });
