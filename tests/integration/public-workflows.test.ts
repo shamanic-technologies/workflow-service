@@ -147,9 +147,9 @@ function makeRun(workflowId: string, runId: string, brandId?: string | null) {
   };
 }
 
-function makeEmailGroup(workflowName: string, overrides: { transactional?: Partial<typeof EMPTY_STATS>; broadcast?: Partial<typeof EMPTY_STATS> } = {}) {
+function makeEmailGroup(workflowSlug: string, overrides: { transactional?: Partial<typeof EMPTY_STATS>; broadcast?: Partial<typeof EMPTY_STATS> } = {}) {
   return {
-    workflowName,
+    workflowSlug,
     transactional: { ...EMPTY_STATS, ...overrides.transactional },
     broadcast: { ...EMPTY_STATS, ...overrides.broadcast },
   };
@@ -173,7 +173,7 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-pub", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 10 } }),
@@ -196,7 +196,7 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-nodag", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 50, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 50, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5 } }),
@@ -236,7 +236,7 @@ describe("GET /public/workflows/ranked", () => {
     mockWorkflowRunRows.push(makeRun("wf-sec", "ext-run-1"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5, sent: 50 } }),
@@ -271,7 +271,7 @@ describe("GET /public/workflows/ranked", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 350, runCount: 2 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 350, runCount: 2 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5 } }),
@@ -295,7 +295,7 @@ describe("GET /public/workflows/ranked", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 10 } }),
@@ -328,7 +328,7 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-hero-pub", "ext-run-hero"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 10, replied: 5 } }),
@@ -352,7 +352,7 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-no-out", "ext-run-no"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG),
@@ -401,7 +401,7 @@ describe("GET /public/workflows/best", () => {
     );
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 600, runCount: 2 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 600, runCount: 2 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 20, replied: 10 } }),
@@ -423,7 +423,7 @@ describe("GET /public/workflows/best", () => {
     mockWorkflowRunRows.push(makeRun("wf-brand-filter", "ext-run-bz"));
 
     mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowName: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
+      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
     ]);
     mockFetchEmailStatsPublic.mockResolvedValue([
       makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { opened: 10, replied: 5 } }),

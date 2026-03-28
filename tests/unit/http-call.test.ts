@@ -60,7 +60,7 @@ describe("http-call script", () => {
     expect(options.headers["x-run-id"]).toBe("run-uuid-3");
   });
 
-  it("auto-injects tracking headers (x-campaign-id, x-brand-id, x-workflow-name, x-feature-slug) when provided", async () => {
+  it("auto-injects tracking headers (x-campaign-id, x-brand-id, x-workflow-slug, x-feature-slug) when provided", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 
     await main(
@@ -83,7 +83,7 @@ describe("http-call script", () => {
     const [, options] = mockFetch.mock.calls[0];
     expect(options.headers["x-campaign-id"]).toBe("camp-123");
     expect(options.headers["x-brand-id"]).toBe("brand-456");
-    expect(options.headers["x-workflow-name"]).toBe("sales-email-cold-outreach");
+    expect(options.headers["x-workflow-slug"]).toBe("sales-email-cold-outreach");
     expect(options.headers["x-feature-slug"]).toBe("sales-email-cold-outreach");
   });
 
@@ -177,7 +177,7 @@ describe("http-call script", () => {
 
       await main(
         "brand", "POST", "/brands/{brandId}/sales-profile",
-        { workflowName: "test" },
+        { workflowSlug: "test" },
         undefined,
         brandServiceEnvs,
         undefined,

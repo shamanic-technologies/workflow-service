@@ -85,21 +85,21 @@ export async function computeWorkflowScores(
     ),
   ];
 
-  // 3. Fetch costs aggregated by workflowName, filtered to dynasty names only
+  // 3. Fetch costs aggregated by workflowSlug, filtered to dynasty slugs only
   const costGroups =
     mode.kind === "auth"
       ? await fetchRunCostsAuth(mode.identity, allChainNames)
-      : await fetchRunCostsPublic({ brandId: mode.brandId, orgId: mode.orgId, workflowNames: allChainNames });
+      : await fetchRunCostsPublic({ brandId: mode.brandId, orgId: mode.orgId, workflowSlugs: allChainNames });
 
-  const costByName = new Map(costGroups.map((g) => [g.workflowName, g.totalCostInUsdCents]));
+  const costBySlug = new Map(costGroups.map((g) => [g.workflowSlug, g.totalCostInUsdCents]));
 
-  // 4. Fetch email stats grouped by workflowName (1 call for all dynasty names)
+  // 4. Fetch email stats grouped by workflowSlug (1 call for all dynasty slugs)
   const emailGroups =
     mode.kind === "auth"
       ? await fetchEmailStatsAuth(allChainNames, mode.identity)
       : await fetchEmailStatsPublic(allChainNames);
 
-  const emailByName = new Map(emailGroups.map((g) => [g.workflowName, g]));
+  const emailBySlug = new Map(emailGroups.map((g) => [g.workflowSlug, g]));
 
   // 5. For each active workflow, aggregate costs + email stats across dynasty chain + build brand map
   const workflowRunsByWfId: Record<string, string[]> = {};
@@ -111,17 +111,17 @@ export async function computeWorkflowScores(
     const chainIds = chainWfs.map((w) => w.id);
     const chainNames = new Set(chainWfs.map((w) => w.slug));
 
-    // Costs: aggregate across all dynasty workflow names
+    // Costs: aggregate across all dynasty workflow slugs
     let totalCost = 0;
     for (const name of chainNames) {
-      totalCost += costByName.get(name) ?? 0;
+      totalCost += costBySlug.get(name) ?? 0;
     }
 
-    // Email stats: aggregate across all dynasty workflow names
+    // Email stats: aggregate across all dynasty workflow slugs
     const transactional = { ...EMPTY_EMAIL_STATS };
     const broadcast = { ...EMPTY_EMAIL_STATS };
     for (const name of chainNames) {
-      const eg = emailByName.get(name);
+      const eg = emailBySlug.get(name);
       if (!eg) continue;
       for (const key of Object.keys(EMPTY_EMAIL_STATS) as (keyof typeof EMPTY_EMAIL_STATS)[]) {
         transactional[key] += eg.transactional[key];

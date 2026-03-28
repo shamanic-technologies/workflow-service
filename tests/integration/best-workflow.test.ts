@@ -196,12 +196,12 @@ function makeRun(workflowId: string, runId: string, brandId?: string | null) {
   };
 }
 
-// Helper: setup email stats mock grouped by workflowName
+// Helper: setup email stats mock grouped by workflowSlug
 type StatsOverrides = { sent?: number; delivered?: number; opened?: number; clicked?: number; replied?: number; bounced?: number; unsubscribed?: number; recipients?: number };
-function setupEmailMock(statsByName: Record<string, { transactional?: StatsOverrides; broadcast?: StatsOverrides }>) {
+function setupEmailMock(statsBySlug: Record<string, { transactional?: StatsOverrides; broadcast?: StatsOverrides }>) {
   mockFetchEmailStatsAuth.mockResolvedValue(
-    Object.entries(statsByName).map(([workflowName, s]) => ({
-      workflowName,
+    Object.entries(statsBySlug).map(([workflowSlug, s]) => ({
+      workflowSlug,
       transactional: { ...EMPTY_STATS, ...s.transactional },
       broadcast: { ...EMPTY_STATS, ...s.broadcast },
     }))
@@ -209,10 +209,10 @@ function setupEmailMock(statsByName: Record<string, { transactional?: StatsOverr
 }
 
 // Helper: setup cost mocks from runs-service
-function setupCostsMock(costsByName: Record<string, { cost: number; runCount: number }>) {
+function setupCostsMock(costsBySlug: Record<string, { cost: number; runCount: number }>) {
   mockFetchRunCostsAuth.mockResolvedValue(
-    Object.entries(costsByName).map(([workflowName, { cost, runCount }]) => ({
-      workflowName,
+    Object.entries(costsBySlug).map(([workflowSlug, { cost, runCount }]) => ({
+      workflowSlug,
       totalCostInUsdCents: cost,
       runCount,
     }))
