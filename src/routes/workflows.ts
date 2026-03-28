@@ -14,6 +14,7 @@ import {
   GenerateWorkflowSchema,
   RankedWorkflowQuerySchema,
   BestWorkflowQuerySchema,
+  RankedWorkflowObjectiveSchema,
 } from "../schemas.js";
 import {
   generateWorkflow,
@@ -194,8 +195,9 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
       const dynasty = await resolveFeatureDynasty(body.featureSlug);
       const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+      const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
       const newVersion = existing ? existing.version + 1 : 1;
-      const slug = composeSlug(`${dynasty.featureDynastySlug}-${signatureName}`, newVersion);
+      const slug = composeSlug(dynastySlug, newVersion);
       const name = composeName(dynastyName, newVersion);
 
       const openFlow = dagToOpenFlow(dag, slug);
@@ -231,6 +233,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
           slug,
           name,
           dynastyName,
+          dynastySlug,
           description: generated.description,
           featureSlug: body.featureSlug,
           category: generated.category,
@@ -327,7 +330,8 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
 
     const dynasty = await resolveFeatureDynasty(body.featureSlug);
     const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-    const slug = `${dynasty.featureDynastySlug}-${signatureName}`;
+    const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
+    const slug = dynastySlug;
     const name = dynastyName;
 
     // Translate to OpenFlow
@@ -362,6 +366,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         slug,
         name,
         dynastyName,
+        dynastySlug,
         description: body.description,
         category: body.category,
         channel: body.channel,
@@ -506,7 +511,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       .where(sql`true`);
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; slug: string; name: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
+    const results: { id: string; slug: string; name: string; dynastySlug: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
@@ -566,6 +571,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           id: updated.id,
           slug: updated.slug,
           name: updated.name,
+          dynastySlug: updated.dynastySlug,
           featureSlug: updated.featureSlug,
           tags: (updated.tags as string[]) ?? [],
           signature: updated.signature,
@@ -605,6 +611,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             id: convergenceTarget.id,
             slug: convergenceTarget.slug,
             name: convergenceTarget.name,
+            dynastySlug: convergenceTarget.dynastySlug,
             featureSlug: convergenceTarget.featureSlug,
             tags: (convergenceTarget.tags as string[]) ?? [],
             signature: convergenceTarget.signature,
@@ -616,11 +623,11 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           // Upgrade: deprecate old, create new version in the same dynasty
           const newVersion = activeForFeature.version + 1;
           const dynastyName = activeForFeature.dynastyName;
+          const dynastySlug = activeForFeature.dynastySlug;
           const signatureName = activeForFeature.signatureName;
 
-          // Build slug base from dynasty slug (feature_dynasty_slug + signatureName)
-          // Extract the base slug by stripping version suffix from the existing slug
-          const baseSlug = activeForFeature.slug.replace(/-v\d+$/, "");
+          // Use dynastySlug as the base for versioned slugs
+          const baseSlug = dynastySlug;
           const newSlug = composeSlug(baseSlug, newVersion);
           const newName = composeName(dynastyName, newVersion);
 
@@ -664,6 +671,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
               slug: newSlug,
               name: newName,
               dynastyName,
+              dynastySlug,
               description: wf.description,
               category: wf.category,
               channel: wf.channel,
@@ -689,6 +697,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             id: created.id,
             slug: created.slug,
             name: created.name,
+            dynastySlug: created.dynastySlug,
             featureSlug: created.featureSlug,
             tags: (created.tags as string[]) ?? [],
             signature: created.signature,
@@ -704,7 +713,8 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
         const dynasty = await resolveFeatureDynasty(wf.featureSlug);
         const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-        const slug = `${dynasty.featureDynastySlug}-${signatureName}`;
+        const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
+        const slug = dynastySlug;
         const name = dynastyName;
 
         console.log(
@@ -738,6 +748,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             slug,
             name,
             dynastyName,
+            dynastySlug,
             description: wf.description,
             category: wf.category,
             channel: wf.channel,
@@ -757,6 +768,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           id: created.id,
           slug: created.slug,
           name: created.name,
+          dynastySlug: created.dynastySlug,
           featureSlug: created.featureSlug,
           tags: (created.tags as string[]) ?? [],
           signature: created.signature,
@@ -808,14 +820,14 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       : await db.select().from(workflows);
 
     const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
-    const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
     if (activeWorkflows.length === 0) {
       res.json({ results: [] });
       return;
     }
 
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", identity });
+    // Slug-level stats only — no dynasty chain aggregation
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objective, { kind: "auth", identity });
 
     if (groupBy === "feature") {
       // Group by featureSlug
@@ -920,15 +932,14 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       : await db.select().from(workflows);
 
     const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
-    const deprecatedWorkflows = allMatchingWorkflows.filter((w) => w.status === "deprecated");
 
     if (activeWorkflows.length === 0) {
       res.json({ bestCostPerOpen: null, bestCostPerReply: null });
       return;
     }
 
-    // Use "replies" as objective — we compute both cost-per-open and cost-per-reply from email stats
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, "replies", { kind: "auth", identity });
+    // Slug-level stats only — no dynasty chain aggregation
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], "replies", { kind: "auth", identity });
 
     if (by === "brand") {
       // Aggregate by brandId from runs, find the best brand for cost-per-open and cost-per-reply
@@ -1028,6 +1039,104 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
   } catch (err: unknown) {
     if (!handleExternalServiceError(err, res, "best")) {
       console.error("[workflow-service] GET best error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+});
+
+// GET /workflows/dynasty/slugs — Resolve a dynasty slug to all versioned workflow slugs
+router.get("/workflows/dynasty/slugs", requireApiKey, async (req, res) => {
+  try {
+    const dynastySlug = req.query.dynastySlug;
+    if (!dynastySlug || typeof dynastySlug !== "string") {
+      res.status(400).json({ error: "Missing required query parameter: dynastySlug" });
+      return;
+    }
+
+    const matching = await db
+      .select({ slug: workflows.slug, dynastyName: workflows.dynastyName })
+      .from(workflows)
+      .where(eq(workflows.dynastySlug, dynastySlug));
+
+    if (matching.length === 0) {
+      res.status(404).json({ error: `No workflows found for dynastySlug: ${dynastySlug}` });
+      return;
+    }
+
+    res.json({
+      dynastySlug,
+      dynastyName: matching[0].dynastyName,
+      slugs: matching.map((w) => w.slug),
+    });
+  } catch (err) {
+    console.error("[workflow-service] GET dynasty/slugs error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /workflows/dynasty/stats — Aggregated stats for a dynasty (full upgrade chain)
+router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
+  try {
+    const dynastySlug = req.query.dynastySlug;
+    if (!dynastySlug || typeof dynastySlug !== "string") {
+      res.status(400).json({ error: "Missing required query parameter: dynastySlug" });
+      return;
+    }
+
+    const objectiveParam = req.query.objective;
+    const objectiveResult = RankedWorkflowObjectiveSchema.safeParse(objectiveParam ?? "replies");
+    const objective = objectiveResult.success ? objectiveResult.data : "replies" as const;
+
+    const identity = {
+      orgId: res.locals.orgId as string,
+      userId: res.locals.userId as string,
+      runId: res.locals.runId as string,
+    };
+
+    const allDynastyWorkflows = await db
+      .select()
+      .from(workflows)
+      .where(eq(workflows.dynastySlug, dynastySlug));
+
+    if (allDynastyWorkflows.length === 0) {
+      res.status(404).json({ error: `No workflows found for dynastySlug: ${dynastySlug}` });
+      return;
+    }
+
+    const activeWorkflows = allDynastyWorkflows.filter((w) => w.status === "active");
+    const deprecatedWorkflows = allDynastyWorkflows.filter((w) => w.status === "deprecated");
+
+    if (activeWorkflows.length === 0) {
+      res.json({
+        dynastySlug,
+        dynastyName: allDynastyWorkflows[0].dynastyName,
+        stats: {
+          totalCostInUsdCents: 0,
+          totalOutcomes: 0,
+          costPerOutcome: null,
+          completedRuns: 0,
+          email: {
+            transactional: { sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, recipients: 0 },
+            broadcast: { sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, recipients: 0 },
+          },
+        },
+      });
+      return;
+    }
+
+    // Dynasty-level: pass all deprecated workflows so chain aggregation happens
+    const { scores } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", identity });
+
+    const stats = aggregateSectionStats(scores);
+
+    res.json({
+      dynastySlug,
+      dynastyName: allDynastyWorkflows[0].dynastyName,
+      stats,
+    });
+  } catch (err: unknown) {
+    if (!handleExternalServiceError(err, res, "dynasty/stats")) {
+      console.error("[workflow-service] GET dynasty/stats error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   }

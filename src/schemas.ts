@@ -187,6 +187,7 @@ export const WorkflowResponseSchema = z
     slug: z.string().describe("Unique technical identifier. Use this to execute via /workflows/by-slug/{slug}/execute."),
     name: z.string().describe("Human-readable display name. Globally unique."),
     dynastyName: z.string().describe("Stable name for the lineage. Constant across all versions of a dynasty."),
+    dynastySlug: z.string().describe("Stable slug for the lineage. Constant across all versions of a dynasty. Use this as key for dynasty-level lookups."),
     description: z.string().nullable(),
     category: WorkflowCategorySchema.nullable().describe("Optional workflow category tag."),
     channel: WorkflowChannelSchema.nullable().describe("Optional workflow channel tag."),
@@ -224,6 +225,7 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     slug: "pr-cold-email-outreach-sequoia",
     name: "Pr Cold Email Outreach Sequoia",
     dynastyName: "Pr Cold Email Outreach Sequoia",
+    dynastySlug: "pr-cold-email-outreach-sequoia",
     description: "Cold outreach sequence for PR campaigns",
     featureSlug: "pr-cold-email-outreach",
     category: "pr",
@@ -394,6 +396,7 @@ export const DeployWorkflowResultSchema = z
     id: z.string().uuid(),
     slug: z.string().describe("Unique technical identifier: {featureDynastySlug}-{signatureName}[-v{N}]."),
     name: z.string().describe("Human-readable name: {dynastyName}[ v{N}]."),
+    dynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
     featureSlug: z.string().describe("Feature slug used to build the name."),
     tags: z.array(z.string()).describe("Tags assigned to this workflow."),
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
@@ -557,6 +560,7 @@ export const WorkflowMetadataSchema = z
     slug: z.string().describe("Unique technical identifier."),
     name: z.string().describe("Human-readable display name."),
     dynastyName: z.string().describe("Stable lineage name (constant across versions)."),
+    dynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
     version: z.number().int().describe("Version number within the dynasty."),
     createdForBrandId: z.string().nullable(),
     featureSlug: z.string().describe("Feature slug for grouping and naming."),
@@ -754,6 +758,24 @@ export const WorkflowConflictResponseSchema = z
     existingWorkflowSlug: z.string().describe("Slug of the existing workflow that already has this DAG signature."),
   })
   .openapi("WorkflowConflictResponse");
+
+// --- Dynasty lookup schemas ---
+
+export const DynastySlugsResponseSchema = z
+  .object({
+    dynastySlug: z.string().describe("The dynasty slug used for lookup."),
+    dynastyName: z.string().describe("Human-readable dynasty name."),
+    slugs: z.array(z.string()).describe("All workflow slugs in this dynasty (all versions, all statuses)."),
+  })
+  .openapi("DynastySlugsResponse");
+
+export const DynastyStatsResponseSchema = z
+  .object({
+    dynastySlug: z.string().describe("The dynasty slug."),
+    dynastyName: z.string().describe("Human-readable dynasty name."),
+    stats: WorkflowStatsSchema.describe("Aggregated stats across all versions of this dynasty."),
+  })
+  .openapi("DynastyStatsResponse");
 
 // --- Common ---
 
@@ -1255,6 +1277,79 @@ registry.registerPath({
       content: {
         "application/json": { schema: BestWorkflowResponseSchema },
       },
+    },
+    502: {
+      description: "External service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+// --- Dynasty endpoints ---
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/dynasty/slugs",
+  summary: "Resolve a dynasty slug to all versioned workflow slugs",
+  description:
+    "Returns all workflow slugs (across all versions and statuses) that belong to the given dynasty. " +
+    "Use this to aggregate stats across all versions of a workflow in external services.",
+  tags: ["Dynasty"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    query: z.object({
+      dynastySlug: z.string().describe("The dynasty slug to resolve."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Dynasty slugs resolved",
+      content: {
+        "application/json": { schema: DynastySlugsResponseSchema },
+      },
+    },
+    400: {
+      description: "Missing dynastySlug query parameter",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No workflows found for this dynasty slug",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/dynasty/stats",
+  summary: "Get aggregated stats for a dynasty",
+  description:
+    "Returns performance stats aggregated across all versions of the given dynasty. " +
+    "This includes costs, email metrics, and completed runs from the entire upgrade chain.",
+  tags: ["Dynasty"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    query: z.object({
+      dynastySlug: z.string().describe("The dynasty slug to get stats for."),
+      objective: RankedWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Dynasty stats",
+      content: {
+        "application/json": { schema: DynastyStatsResponseSchema },
+      },
+    },
+    400: {
+      description: "Missing dynastySlug query parameter",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No workflows found for this dynasty slug",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
     502: {
       description: "External service unavailable",

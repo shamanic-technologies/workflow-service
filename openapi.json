@@ -119,6 +119,10 @@
             "type": "string",
             "description": "Stable name for the lineage. Constant across all versions of a dynasty."
           },
+          "dynastySlug": {
+            "type": "string",
+            "description": "Stable slug for the lineage. Constant across all versions of a dynasty. Use this as key for dynasty-level lookups."
+          },
           "description": {
             "type": "string",
             "nullable": true
@@ -213,6 +217,7 @@
           "slug",
           "name",
           "dynastyName",
+          "dynastySlug",
           "description",
           "category",
           "channel",
@@ -578,6 +583,7 @@
           "slug": "pr-cold-email-outreach-sequoia",
           "name": "Pr Cold Email Outreach Sequoia",
           "dynastyName": "Pr Cold Email Outreach Sequoia",
+          "dynastySlug": "pr-cold-email-outreach-sequoia",
           "description": "Cold outreach sequence for PR campaigns",
           "featureSlug": "pr-cold-email-outreach",
           "category": "pr",
@@ -989,6 +995,10 @@
             "type": "string",
             "description": "Human-readable name: {dynastyName}[ v{N}]."
           },
+          "dynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug (constant across versions)."
+          },
           "featureSlug": {
             "type": "string",
             "description": "Feature slug used to build the name."
@@ -1025,6 +1035,7 @@
           "id",
           "slug",
           "name",
+          "dynastySlug",
           "featureSlug",
           "tags",
           "signature",
@@ -1328,6 +1339,10 @@
             "type": "string",
             "description": "Stable lineage name (constant across versions)."
           },
+          "dynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug (constant across versions)."
+          },
           "version": {
             "type": "integer",
             "description": "Version number within the dynasty."
@@ -1352,6 +1367,7 @@
           "slug",
           "name",
           "dynastyName",
+          "dynastySlug",
           "version",
           "createdForBrandId",
           "featureSlug",
@@ -1585,6 +1601,59 @@
         ],
         "default": "workflow",
         "description": "Granularity: best workflow or best brand. Defaults to 'workflow'."
+      },
+      "DynastySlugsResponse": {
+        "type": "object",
+        "properties": {
+          "dynastySlug": {
+            "type": "string",
+            "description": "The dynasty slug used for lookup."
+          },
+          "dynastyName": {
+            "type": "string",
+            "description": "Human-readable dynasty name."
+          },
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All workflow slugs in this dynasty (all versions, all statuses)."
+          }
+        },
+        "required": [
+          "dynastySlug",
+          "dynastyName",
+          "slugs"
+        ]
+      },
+      "DynastyStatsResponse": {
+        "type": "object",
+        "properties": {
+          "dynastySlug": {
+            "type": "string",
+            "description": "The dynasty slug."
+          },
+          "dynastyName": {
+            "type": "string",
+            "description": "Human-readable dynasty name."
+          },
+          "stats": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowStats"
+              },
+              {
+                "description": "Aggregated stats across all versions of this dynasty."
+              }
+            ]
+          }
+        },
+        "required": [
+          "dynastySlug",
+          "dynastyName",
+          "stats"
+        ]
       },
       "PublicRankedWorkflowItem": {
         "type": "object",
@@ -3733,6 +3802,281 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BestWorkflowResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasty/slugs": {
+      "get": {
+        "summary": "Resolve a dynasty slug to all versioned workflow slugs",
+        "description": "Returns all workflow slugs (across all versions and statuses) that belong to the given dynasty. Use this to aggregate stats across all versions of a workflow in external services.",
+        "tags": [
+          "Dynasty"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The dynasty slug to resolve."
+            },
+            "required": true,
+            "description": "The dynasty slug to resolve.",
+            "name": "dynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dynasty slugs resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynastySlugsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing dynastySlug query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No workflows found for this dynasty slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasty/stats": {
+      "get": {
+        "summary": "Get aggregated stats for a dynasty",
+        "description": "Returns performance stats aggregated across all versions of the given dynasty. This includes costs, email metrics, and completed runs from the entire upgrade chain.",
+        "tags": [
+          "Dynasty"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The dynasty slug to get stats for."
+            },
+            "required": true,
+            "description": "The dynasty slug to get stats for.",
+            "name": "dynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/RankedWorkflowObjective"
+            },
+            "required": false,
+            "description": "Which metric to optimize for. Defaults to 'replies'.",
+            "name": "objective",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dynasty stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynastyStatsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing dynastySlug query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No workflows found for this dynasty slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

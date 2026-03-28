@@ -88,6 +88,7 @@ describe("validateAndUpgradeWorkflows", () => {
     slug: "sales-email-cold-outreach-Sequoia",
     name: "Sales Cold Outreach Sequoia",
     dynastyName: "Sales Cold Outreach Sequoia",
+    dynastySlug: "sales-email-cold-outreach-Sequoia",
     version: 1,
     featureSlug: "sales-email-cold-outreach",
     category: "sales",
@@ -128,6 +129,7 @@ describe("validateAndUpgradeWorkflows", () => {
     slug: "sales-email-cold-outreach-Broken",
     name: "Sales Cold Outreach Broken",
     dynastyName: "Sales Cold Outreach Broken",
+    dynastySlug: "sales-email-cold-outreach-Broken",
     signatureName: "Broken",
     dag: {
       nodes: [

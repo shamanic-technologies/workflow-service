@@ -280,7 +280,7 @@ async function attemptUpgrade(
 
     // Build the new slug from the dynasty; increment version
     const newVersion = wf.version + 1;
-    const baseSlug = wf.slug.replace(/-v\d+$/, "");
+    const baseSlug = wf.dynastySlug;
     const newSlug = newVersion >= 2 ? `${baseSlug}-v${newVersion}` : baseSlug;
     const newName = newVersion >= 2 ? `${wf.dynastyName} v${newVersion}` : wf.dynastyName;
 
@@ -336,6 +336,7 @@ async function attemptUpgrade(
         slug: newSlug,
         name: newName,
         dynastyName: wf.dynastyName,
+        dynastySlug: wf.dynastySlug,
         description: result.description,
         category: result.category,
         channel: result.channel,
