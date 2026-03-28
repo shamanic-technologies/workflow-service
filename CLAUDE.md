@@ -121,6 +121,6 @@ This means: if dynasty A and dynasty B converge, the active workflow's stats inc
 Workflow-service needs `feature_dynasty_name` and `feature_dynasty_slug` from features-service. These are the stable, unversioned identifiers for a feature (as opposed to `feature_name`/`feature_slug` which may carry version suffixes).
 
 - Workflow-service receives only `feature_slug` from clients in requests.
-- It must call features-service to resolve `feature_dynasty_name` and `feature_dynasty_slug`.
-- This endpoint may not exist yet in features-service — it needs to be created.
-- Until features-service exposes this, workflow-service cannot fully implement the naming scheme.
+- It calls `GET /features/dynasty?slug=<featureSlug>` on features-service to resolve `feature_dynasty_name` and `feature_dynasty_slug`.
+- Falls back to slug derivation (strip `-v{N}`, capitalize words) if features-service is not configured or unreachable.
+- Requires env vars: `FEATURES_SERVICE_URL`, `FEATURES_SERVICE_API_KEY`.

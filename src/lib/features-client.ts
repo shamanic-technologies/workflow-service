@@ -1,9 +1,9 @@
 /**
  * Client for features-service dynasty resolution.
  *
- * Workflow-service needs the stable (unversioned) dynasty identifiers for a feature
- * to compose workflow names/slugs. Until features-service exposes
- * GET /features/dynasty?slug=..., we fall back to deriving them from the featureSlug.
+ * Calls GET /features/dynasty?slug=<featureSlug> to get the stable (unversioned)
+ * dynasty identifiers for a feature. Falls back to slug derivation if
+ * features-service is not configured or unreachable.
  */
 
 export interface FeatureDynasty {
@@ -21,9 +21,11 @@ function getFeaturesServiceConfig(): { baseUrl: string; apiKey: string } | null 
 /**
  * Resolve the stable dynasty identifiers for a feature.
  *
- * Tries features-service first. Falls back to deriving from featureSlug:
- * - Strip trailing version suffixes like "-v2", "-v3"
- * - Capitalize words for the display name
+ * Calls features-service GET /features/dynasty?slug=... which returns
+ * { feature_dynasty_name, feature_dynasty_slug }.
+ *
+ * Falls back to deriving from featureSlug if features-service is
+ * not configured or unreachable.
  */
 export async function resolveFeatureDynasty(
   featureSlug: string,
@@ -42,17 +44,15 @@ export async function resolveFeatureDynasty(
 
       if (res.ok) {
         const data = (await res.json()) as {
-          feature_dynasty_name?: string;
-          feature_dynasty_slug?: string;
-          featureDynastyName?: string;
-          featureDynastySlug?: string;
+          feature_dynasty_name: string;
+          feature_dynasty_slug: string;
         };
 
-        const dynastyName = data.featureDynastyName ?? data.feature_dynasty_name;
-        const dynastySlug = data.featureDynastySlug ?? data.feature_dynasty_slug;
-
-        if (dynastyName && dynastySlug) {
-          return { featureDynastyName: dynastyName, featureDynastySlug: dynastySlug };
+        if (data.feature_dynasty_name && data.feature_dynasty_slug) {
+          return {
+            featureDynastyName: data.feature_dynasty_name,
+            featureDynastySlug: data.feature_dynasty_slug,
+          };
         }
       }
 
@@ -75,10 +75,8 @@ export async function resolveFeatureDynasty(
  * Strips trailing -v{N} suffix and capitalizes words.
  */
 function deriveFromSlug(featureSlug: string): FeatureDynasty {
-  // Strip trailing version suffix like "-v2", "-v3"
   const dynastySlug = featureSlug.replace(/-v\d+$/, "");
 
-  // Capitalize each word for display name
   const dynastyName = dynastySlug
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
