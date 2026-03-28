@@ -1044,6 +1044,36 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
   }
 });
 
+// GET /workflows/dynasties — List all dynasties with their versioned slugs
+router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
+  try {
+    const allWorkflows = await db
+      .select({ slug: workflows.slug, dynastySlug: workflows.dynastySlug, dynastyName: workflows.dynastyName })
+      .from(workflows);
+
+    const dynastyMap = new Map<string, { dynastyName: string; slugs: string[] }>();
+    for (const w of allWorkflows) {
+      const entry = dynastyMap.get(w.dynastySlug);
+      if (entry) {
+        entry.slugs.push(w.slug);
+      } else {
+        dynastyMap.set(w.dynastySlug, { dynastyName: w.dynastyName, slugs: [w.slug] });
+      }
+    }
+
+    const dynasties = [...dynastyMap.entries()].map(([dynastySlug, { dynastyName, slugs }]) => ({
+      dynastySlug,
+      dynastyName,
+      slugs,
+    }));
+
+    res.json({ dynasties });
+  } catch (err) {
+    console.error("[workflow-service] GET dynasties error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // GET /workflows/dynasty/slugs — Resolve a dynasty slug to all versioned workflow slugs
 router.get("/workflows/dynasty/slugs", requireApiKey, async (req, res) => {
   try {

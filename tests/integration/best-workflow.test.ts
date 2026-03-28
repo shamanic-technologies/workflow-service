@@ -678,6 +678,42 @@ describe("GET /workflows/best (hero records)", () => {
   });
 });
 
+describe("GET /workflows/dynasties", () => {
+  beforeEach(() => {
+    mockWorkflowRows.length = 0;
+  });
+
+  it("returns all dynasties grouped with their slugs", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-1", slug: "cold-email-sequoia", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia" }),
+      makeWorkflow({ id: "wf-2", slug: "cold-email-sequoia-v2", dynastySlug: "cold-email-sequoia", dynastyName: "Cold Email Sequoia" }),
+      makeWorkflow({ id: "wf-3", slug: "warm-intro", dynastySlug: "warm-intro", dynastyName: "Warm Intro" }),
+    );
+
+    const res = await request.get("/workflows/dynasties").set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.dynasties).toHaveLength(2);
+
+    const coldEmail = res.body.dynasties.find((d: { dynastySlug: string }) => d.dynastySlug === "cold-email-sequoia");
+    expect(coldEmail).toBeDefined();
+    expect(coldEmail.dynastyName).toBe("Cold Email Sequoia");
+    expect(coldEmail.slugs).toHaveLength(2);
+    expect(coldEmail.slugs).toContain("cold-email-sequoia");
+    expect(coldEmail.slugs).toContain("cold-email-sequoia-v2");
+
+    const warmIntro = res.body.dynasties.find((d: { dynastySlug: string }) => d.dynastySlug === "warm-intro");
+    expect(warmIntro).toBeDefined();
+    expect(warmIntro.slugs).toEqual(["warm-intro"]);
+  });
+
+  it("returns empty array when no workflows exist", async () => {
+    const res = await request.get("/workflows/dynasties").set(AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.dynasties).toEqual([]);
+  });
+});
+
 describe("GET /workflows/dynasty/slugs", () => {
   beforeEach(() => {
     mockWorkflowRows.length = 0;
