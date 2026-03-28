@@ -106,7 +106,7 @@ const IDENTITY = {
   "x-run-id": "run-caller-1",
   "x-brand-id": "brand-1",
   "x-campaign-id": "camp-1",
-  "x-workflow-name": "test-workflow",
+  "x-workflow-slug": "test-workflow",
   "x-feature-slug": "test-feature",
 };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
@@ -169,7 +169,7 @@ describe("POST /workflows/:id/execute", () => {
       orgId: "org-1",
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "test-flow",
+      workflowSlug: "test-flow",
       campaignId: "camp-1",
       brandId: "brand-1",
     });
@@ -226,7 +226,7 @@ describe("POST /workflows/:id/execute", () => {
       orgId: "org-1", // from header
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "test-flow",
+      workflowSlug: "test-flow",
       campaignId: "camp-1",
       brandId: "brand-1",
     });
@@ -383,7 +383,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
       orgId: "org-1",
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "create-user-flow",
+      workflowSlug: "create-user-flow",
       campaignId: "camp-1",
       brandId: "brand-1",
     });
@@ -435,7 +435,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
       "x-run-id": "run-caller-b",
       "x-brand-id": "brand-b",
       "x-campaign-id": "camp-b",
-      "x-workflow-name": "sales-outreach",
+      "x-workflow-slug": "sales-outreach",
       "x-feature-slug": "cold-outreach",
     };
 

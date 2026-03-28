@@ -135,7 +135,7 @@ router.post(
           orgId,
           userId,
           taskName: "execute-workflow",
-          workflowName: workflow.slug,
+          workflowSlug: workflow.slug,
           campaignId,
           brandId,
         });
@@ -151,7 +151,7 @@ router.post(
       const client = getWindmillClient();
       if (client) {
         try {
-          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowName: workflow.slug, campaignId, brandId, featureSlug, serviceEnvs: collectServiceEnvs() };
+          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowSlug: workflow.slug, campaignId, brandId, featureSlug, serviceEnvs: collectServiceEnvs() };
           windmillJobId = await client.runFlow(
             workflow.windmillFlowPath,
             flowInputs
@@ -260,7 +260,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         orgId,
         userId: executeUserId,
         taskName: "execute-workflow",
-        workflowName: workflow.slug,
+        workflowSlug: workflow.slug,
         campaignId: execCampaignId,
         brandId: execBrandId,
       });
@@ -276,7 +276,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
     const client = getWindmillClient();
     if (client) {
       try {
-        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowName: workflow.slug, campaignId: execCampaignId, brandId: execBrandId, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
+        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowSlug: workflow.slug, campaignId: execCampaignId, brandId: execBrandId, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
         windmillJobId = await client.runFlow(
           workflow.windmillFlowPath,
           flowInputs
