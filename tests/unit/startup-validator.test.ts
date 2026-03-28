@@ -85,7 +85,11 @@ describe("validateAndUpgradeWorkflows", () => {
   const VALID_WORKFLOW = {
     id: "wf-1",
     orgId: "org-1",
-    name: "sales-email-cold-outreach-Sequoia",
+    slug: "sales-email-cold-outreach-Sequoia",
+    name: "Sales Cold Outreach Sequoia",
+    dynastyName: "Sales Cold Outreach Sequoia",
+    version: 1,
+    featureSlug: "sales-email-cold-outreach",
     category: "sales",
     channel: "email",
     audienceType: "cold-outreach",
@@ -111,7 +115,6 @@ describe("validateAndUpgradeWorkflows", () => {
     campaignId: null,
     subrequestId: null,
     styleName: null,
-    displayName: null,
     upgradedTo: null,
     createdByUserId: null,
     createdByRunId: null,
@@ -122,7 +125,9 @@ describe("validateAndUpgradeWorkflows", () => {
   const BROKEN_WORKFLOW = {
     ...VALID_WORKFLOW,
     id: "wf-2",
-    name: "sales-email-cold-outreach-Broken",
+    slug: "sales-email-cold-outreach-Broken",
+    name: "Sales Cold Outreach Broken",
+    dynastyName: "Sales Cold Outreach Broken",
     signatureName: "Broken",
     dag: {
       nodes: [
@@ -274,7 +279,7 @@ describe("validateAndUpgradeWorkflows", () => {
     expect(mockUpdateFlow).toHaveBeenCalledWith(
       "f/workflows/org-1/flow", // exact path from DB, not recalculated
       expect.objectContaining({
-        summary: VALID_WORKFLOW.name,
+        summary: VALID_WORKFLOW.slug,
         value: expect.any(Object),
         schema: expect.any(Object),
       }),
@@ -346,7 +351,7 @@ describe("validateAndUpgradeWorkflows", () => {
     expect(mockCreatePlatformRun).toHaveBeenCalledWith({
       serviceName: "workflow",
       taskName: "startup-upgrade",
-      workflowName: "sales-email-cold-outreach-Broken",
+      workflowName: "sales-email-cold-outreach-Broken",  // uses wf.slug
     });
 
     // Should have called upgradeWorkflow with the platform key and no identity
@@ -359,13 +364,14 @@ describe("validateAndUpgradeWorkflows", () => {
       expect.objectContaining({ category: "sales" }),
     );
 
-    // Should have inserted a new workflow with a NEW name (using new signatureName)
+    // Should have inserted a new workflow with a NEW slug (versioned)
     expect(dbInserts.length).toBe(1);
     expect(dbInserts[0].status).toBe("active");
-    expect(dbInserts[0].name).toMatch(/^sales-email-cold-outreach-/);
-    expect(dbInserts[0].name).not.toBe(BROKEN_WORKFLOW.name); // name must change with new signature
-    // displayName stays as the ancestor's name (stable display identity)
-    expect(dbInserts[0].displayName).toBe(BROKEN_WORKFLOW.displayName ?? BROKEN_WORKFLOW.name);
+    expect(dbInserts[0].slug).toMatch(/^sales-email-cold-outreach-/);
+    expect(dbInserts[0].slug).not.toBe(BROKEN_WORKFLOW.slug); // slug must change with new version
+    // name is the human-readable display name (dynasty name + version suffix)
+    expect(dbInserts[0].name).toMatch(/^Sales Cold Outreach Broken/);
+    expect(dbInserts[0].dynastyName).toBe(BROKEN_WORKFLOW.dynastyName);
     expect(dbInserts[0].createdByUserId).toBe("workflow-service");
     expect(dbInserts[0].createdByRunId).toBe("platform-run-123");
 
@@ -398,7 +404,9 @@ describe("validateAndUpgradeWorkflows", () => {
     const FIELD_ISSUES_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-field",
-      name: "sales-email-cold-outreach-FieldIssue",
+      slug: "sales-email-cold-outreach-FieldIssue",
+      name: "Sales Cold Outreach FieldIssue",
+      dynastyName: "Sales Cold Outreach FieldIssue",
       signatureName: "FieldIssue",
       dag: {
         nodes: [
@@ -496,7 +504,9 @@ describe("validateAndUpgradeWorkflows", () => {
     const WARNING_ONLY_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-warning",
-      name: "sales-email-cold-outreach-WarningOnly",
+      slug: "sales-email-cold-outreach-WarningOnly",
+      name: "Sales Cold Outreach WarningOnly",
+      dynastyName: "Sales Cold Outreach WarningOnly",
       signatureName: "WarningOnly",
       dag: {
         nodes: [
@@ -773,14 +783,18 @@ describe("validateAndUpgradeWorkflows", () => {
     const BROKEN_A = {
       ...BROKEN_WORKFLOW,
       id: "wf-dup-a",
-      name: "sales-email-cold-outreach-DupA",
+      slug: "sales-email-cold-outreach-DupA",
+      name: "Sales Cold Outreach DupA",
+      dynastyName: "Sales Cold Outreach DupA",
       signatureName: "DupA",
       signature: "old-sig-a",
     };
     const BROKEN_B = {
       ...BROKEN_WORKFLOW,
       id: "wf-dup-b",
-      name: "sales-email-cold-outreach-DupB",
+      slug: "sales-email-cold-outreach-DupB",
+      name: "Sales Cold Outreach DupB",
+      dynastyName: "Sales Cold Outreach DupB",
       signatureName: "DupB",
       signature: "old-sig-b",
     };
@@ -857,13 +871,17 @@ describe("validateAndUpgradeWorkflows", () => {
     const DORMANT_BROKEN = {
       ...BROKEN_WORKFLOW,
       id: "wf-dormant",
-      name: "sales-email-cold-outreach-Dormant",
+      slug: "sales-email-cold-outreach-Dormant",
+      name: "Sales Cold Outreach Dormant",
+      dynastyName: "Sales Cold Outreach Dormant",
       signatureName: "Dormant",
     };
     const ACTIVE_BROKEN = {
       ...BROKEN_WORKFLOW,
       id: "wf-active",
-      name: "sales-email-cold-outreach-Active",
+      slug: "sales-email-cold-outreach-Active",
+      name: "Sales Cold Outreach Active",
+      dynastyName: "Sales Cold Outreach Active",
       signatureName: "Active",
     };
 

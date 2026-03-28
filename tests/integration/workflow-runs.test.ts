@@ -125,7 +125,10 @@ describe("POST /workflows/:id/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "org-1",
+      slug: "test-flow",
       name: "Test Flow",
+      dynastyName: "Test Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/test_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
@@ -147,7 +150,10 @@ describe("POST /workflows/:id/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "org-1",
+      slug: "test-flow",
       name: "Test Flow",
+      dynastyName: "Test Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/test_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
@@ -163,7 +169,7 @@ describe("POST /workflows/:id/execute", () => {
       orgId: "org-1",
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "Test Flow",
+      workflowName: "test-flow",
       campaignId: "camp-1",
       brandId: "brand-1",
     });
@@ -173,7 +179,10 @@ describe("POST /workflows/:id/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "org-1",
+      slug: "test-flow",
       name: "Test Flow",
+      dynastyName: "Test Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/test_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
@@ -194,7 +203,10 @@ describe("POST /workflows/:id/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org-different",
+      slug: "test-flow",
       name: "Test Flow",
+      dynastyName: "Test Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/test_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
@@ -214,7 +226,7 @@ describe("POST /workflows/:id/execute", () => {
       orgId: "org-1", // from header
       userId: "user-1",
       taskName: "execute-workflow",
-      workflowName: "Test Flow",
+      workflowName: "test-flow",
       campaignId: "camp-1",
       brandId: "brand-1",
     });
@@ -228,7 +240,10 @@ describe("POST /workflows/:id/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "org-1",
+      slug: "test-flow",
       name: "Test Flow",
+      dynastyName: "Test Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/test_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
@@ -267,7 +282,10 @@ describe("POST /workflows/:id/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "org-1",
+      slug: "test-flow",
       name: "Test Flow",
+      dynastyName: "Test Flow Obsidian",
+      version: 1,
       campaignId: "camp-from-wf",
       subrequestId: null,
       windmillFlowPath: "f/workflows/org_1/test_flow",
@@ -306,7 +324,7 @@ describe("POST /workflows/:id/execute", () => {
   });
 });
 
-describe("POST /workflows/by-name/:name/execute", () => {
+describe("POST /workflows/by-slug/:slug/execute", () => {
   beforeEach(() => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
@@ -316,18 +334,21 @@ describe("POST /workflows/by-name/:name/execute", () => {
     mockCreateRun.mockResolvedValue({ runId: "run-own-456" });
   });
 
-  it("executes a workflow by name (name-only lookup, no org filter)", async () => {
+  it("executes a workflow by slug (slug-only lookup, no org filter)", async () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org",
-      name: "newsletter-subscribe",
+      slug: "newsletter-subscribe",
+      name: "Newsletter Subscribe",
+      dynastyName: "Newsletter Subscribe Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org-1/newsletter_subscribe",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
     });
 
     const res = await request
-      .post("/workflows/by-name/newsletter-subscribe/execute")
+      .post("/workflows/by-slug/newsletter-subscribe/execute")
       .set(AUTH)
       .send({ inputs: { email: "test@example.com" } });
 
@@ -342,14 +363,17 @@ describe("POST /workflows/by-name/:name/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org",
-      name: "create-user-flow",
+      slug: "create-user-flow",
+      name: "Create User Flow",
+      dynastyName: "Create User Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/create_user_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
     });
 
     await request
-      .post("/workflows/by-name/create-user-flow/execute")
+      .post("/workflows/by-slug/create-user-flow/execute")
       .set(AUTH)
       .send({ inputs: {} });
 
@@ -369,14 +393,17 @@ describe("POST /workflows/by-name/:name/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org",
-      name: "create-user-flow",
+      slug: "create-user-flow",
+      name: "Create User Flow",
+      dynastyName: "Create User Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/create_user_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
     });
 
     await request
-      .post("/workflows/by-name/create-user-flow/execute")
+      .post("/workflows/by-slug/create-user-flow/execute")
       .set(AUTH)
       .send({ inputs: { email: "user@test.com" } });
 
@@ -391,7 +418,10 @@ describe("POST /workflows/by-name/:name/execute", () => {
     mockWorkflows.push({
       id: "wf-cross",
       orgId: "8c734aed-45ac-4780-a4ee-1fdcbbedeab1",
-      name: "sales-email-cold-outreach-pharaoh",
+      slug: "sales-email-cold-outreach-pharaoh",
+      name: "Sales Email Cold Outreach Pharaoh",
+      dynastyName: "Sales Email Cold Outreach Pharaoh",
+      version: 1,
       windmillFlowPath: "f/workflows/upgradeer/sales_email_cold_outreach_pharaoh",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
@@ -410,7 +440,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
     };
 
     const res = await request
-      .post("/workflows/by-name/sales-email-cold-outreach-pharaoh/execute")
+      .post("/workflows/by-slug/sales-email-cold-outreach-pharaoh/execute")
       .set(CROSS_ORG_AUTH)
       .send({ inputs: {} });
 
@@ -425,14 +455,17 @@ describe("POST /workflows/by-name/:name/execute", () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org",
-      name: "simple-flow",
+      slug: "simple-flow",
+      name: "Simple Flow",
+      dynastyName: "Simple Flow Obsidian",
+      version: 1,
       windmillFlowPath: "f/workflows/org_1/simple_flow",
       windmillWorkspace: "prod",
       dag: VALID_LINEAR_DAG,
     });
 
     const res = await request
-      .post("/workflows/by-name/simple-flow/execute")
+      .post("/workflows/by-slug/simple-flow/execute")
       .set(AUTH)
       .send({ inputs: {} }); // no orgId in body
 
@@ -441,9 +474,9 @@ describe("POST /workflows/by-name/:name/execute", () => {
     expect(res.body.orgId).toBe("org-1");
   });
 
-  it("returns 404 for unknown workflow name", async () => {
+  it("returns 404 for unknown workflow slug", async () => {
     const res = await request
-      .post("/workflows/by-name/nonexistent/execute")
+      .post("/workflows/by-slug/nonexistent/execute")
       .set(AUTH)
       .send({});
 
@@ -456,13 +489,19 @@ describe("POST /workflows/by-name/:name/execute", () => {
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated workflow
         id: "wf-old",
-        name: "deprecated-flow",
+        slug: "deprecated-flow",
+        name: "Deprecated Flow",
+        dynastyName: "Deprecated Flow Obsidian",
+        version: 1,
         status: "deprecated",
         upgradedTo: "wf-new",
       }],
       [{   // 3. chain follow: replacement is active → execute it
         id: "wf-new",
-        name: "replacement-flow",
+        slug: "replacement-flow",
+        name: "Replacement Flow",
+        dynastyName: "Replacement Flow Obsidian",
+        version: 2,
         status: "active",
         windmillFlowPath: "f/workflows/org_1/replacement_flow",
         windmillWorkspace: "prod",
@@ -471,7 +510,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
     );
 
     const res = await request
-      .post("/workflows/by-name/deprecated-flow/execute")
+      .post("/workflows/by-slug/deprecated-flow/execute")
       .set(AUTH)
       .send({ inputs: {} });
 
@@ -488,19 +527,28 @@ describe("POST /workflows/by-name/:name/execute", () => {
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated v1
         id: "wf-v1",
-        name: "old-flow",
+        slug: "old-flow",
+        name: "Old Flow",
+        dynastyName: "Old Flow Obsidian",
+        version: 1,
         status: "deprecated",
         upgradedTo: "wf-v2",
       }],
       [{   // 3. chain hop 1: v2 is also deprecated
         id: "wf-v2",
-        name: "mid-flow",
+        slug: "mid-flow",
+        name: "Mid Flow",
+        dynastyName: "Mid Flow Obsidian",
+        version: 2,
         status: "deprecated",
         upgradedTo: "wf-v3",
       }],
       [{   // 4. chain hop 2: v3 is active → execute it
         id: "wf-v3",
-        name: "current-flow",
+        slug: "current-flow",
+        name: "Current Flow",
+        dynastyName: "Current Flow Obsidian",
+        version: 3,
         status: "active",
         windmillFlowPath: "f/workflows/org_1/current_flow",
         windmillWorkspace: "prod",
@@ -509,7 +557,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
     );
 
     const res = await request
-      .post("/workflows/by-name/old-flow/execute")
+      .post("/workflows/by-slug/old-flow/execute")
       .set(AUTH)
       .send({ inputs: { key: "value" } });
 
@@ -526,21 +574,24 @@ describe("POST /workflows/by-name/:name/execute", () => {
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated, no replacement
         id: "wf-dead",
-        name: "dead-flow",
+        slug: "dead-flow",
+        name: "Dead Flow",
+        dynastyName: "Dead Flow Obsidian",
+        version: 1,
         status: "deprecated",
         upgradedTo: null,
       }],
     );
 
     const res = await request
-      .post("/workflows/by-name/dead-flow/execute")
+      .post("/workflows/by-slug/dead-flow/execute")
       .set(AUTH)
       .send({ inputs: {} });
 
     expect(res.status).toBe(410);
     expect(res.body.error).toBe("Workflow has been deprecated");
     expect(res.body.upgradedTo).toBeNull();
-    expect(res.body.upgradedToName).toBeNull();
+    expect(res.body.upgradedToSlug).toBeNull();
   });
 
   it("returns 410 when upgrade chain points to missing workflow", async () => {
@@ -548,18 +599,21 @@ describe("POST /workflows/by-name/:name/execute", () => {
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated with upgradedTo
         id: "wf-old",
-        name: "orphan-flow",
+        slug: "orphan-flow",
+        name: "Orphan Flow",
+        dynastyName: "Orphan Flow Obsidian",
+        version: 1,
         status: "deprecated",
         upgradedTo: "wf-missing",
       }],
       [],  // 3. chain follow: replacement not found → dead end
-      [{   // 4. 410 replacement name lookup → not found
+      [{   // 4. 410 replacement slug lookup → not found
         // empty — replacement doesn't exist
       }],
     );
 
     const res = await request
-      .post("/workflows/by-name/orphan-flow/execute")
+      .post("/workflows/by-slug/orphan-flow/execute")
       .set(AUTH)
       .send({ inputs: {} });
 
@@ -568,11 +622,14 @@ describe("POST /workflows/by-name/:name/execute", () => {
     expect(res.body.upgradedTo).toBe("wf-missing");
   });
 
-  it("uses campaignId from header into Windmill flow inputs (by name)", async () => {
+  it("uses campaignId from header into Windmill flow inputs (by slug)", async () => {
     mockWorkflows.push({
       id: "wf-1",
       orgId: "deployer-org",
-      name: "campaign-flow",
+      slug: "campaign-flow",
+      name: "Campaign Flow",
+      dynastyName: "Campaign Flow Obsidian",
+      version: 1,
       campaignId: "camp-on-record",
       createdForBrandId: "brand-on-record",
       subrequestId: null,
@@ -582,7 +639,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
     });
 
     await request
-      .post("/workflows/by-name/campaign-flow/execute")
+      .post("/workflows/by-slug/campaign-flow/execute")
       .set(AUTH) // x-campaign-id: "camp-1", x-brand-id: "brand-1"
       .send({ inputs: {} });
 
@@ -595,9 +652,9 @@ describe("POST /workflows/by-name/:name/execute", () => {
     );
   });
 
-  it("returns 400 when required execution headers are missing (by name)", async () => {
+  it("returns 400 when required execution headers are missing (by slug)", async () => {
     const res = await request
-      .post("/workflows/by-name/some-flow/execute")
+      .post("/workflows/by-slug/some-flow/execute")
       .set({ "x-api-key": "test-api-key", "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" })
       .send({ inputs: {} });
 
@@ -611,7 +668,10 @@ describe("POST /workflows/by-name/:name/execute", () => {
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated workflow
         id: "wf-old",
-        name: "old-flow",
+        slug: "old-flow",
+        name: "Old Flow",
+        dynastyName: "Old Flow Obsidian",
+        version: 1,
         status: "deprecated",
         campaignId: null,
         subrequestId: null,
@@ -619,7 +679,10 @@ describe("POST /workflows/by-name/:name/execute", () => {
       }],
       [{   // 3. chain follow: replacement is active
         id: "wf-new",
-        name: "new-flow",
+        slug: "new-flow",
+        name: "New Flow",
+        dynastyName: "New Flow Obsidian",
+        version: 2,
         status: "active",
         campaignId: null,
         subrequestId: null,
@@ -630,7 +693,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
     );
 
     const res = await request
-      .post("/workflows/by-name/old-flow/execute")
+      .post("/workflows/by-slug/old-flow/execute")
       .set(AUTH) // x-campaign-id: "camp-1"
       .send({ inputs: { subrequestId: "sub-runtime" } });
 
@@ -641,7 +704,7 @@ describe("POST /workflows/by-name/:name/execute", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .post("/workflows/by-name/test-flow/execute")
+      .post("/workflows/by-slug/test-flow/execute")
       .set(IDENTITY)
       .send({});
 
@@ -847,7 +910,10 @@ describe("x-feature-slug tracking", () => {
   const WORKFLOW_FIXTURE = {
     id: "wf-feat",
     orgId: "org-1",
-    name: "sales-email-cold-outreach-sequoia",
+    slug: "sales-email-cold-outreach-sequoia",
+    name: "Sales Email Cold Outreach Sequoia",
+    dynastyName: "Sales Email Cold Outreach Sequoia",
+    version: 1,
     campaignId: null,
     subrequestId: null,
     createdForBrandId: null,
@@ -856,11 +922,11 @@ describe("x-feature-slug tracking", () => {
     dag: VALID_LINEAR_DAG,
   };
 
-  it("stores featureSlug from x-feature-slug header in the run (execute by name)", async () => {
+  it("stores featureSlug from x-feature-slug header in the run (execute by slug)", async () => {
     mockWorkflows.push(WORKFLOW_FIXTURE);
 
     const res = await request
-      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .post("/workflows/by-slug/sales-email-cold-outreach-sequoia/execute")
       .set({ ...AUTH, "x-feature-slug": "sales-email-cold-outreach" })
       .send({ inputs: {} });
 
@@ -884,7 +950,7 @@ describe("x-feature-slug tracking", () => {
     mockWorkflows.push(WORKFLOW_FIXTURE);
 
     const res = await request
-      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .post("/workflows/by-slug/sales-email-cold-outreach-sequoia/execute")
       .set({ ...AUTH, "x-feature-slug": "from-header" })
       .send({ inputs: { featureSlug: "from-inputs" } });
 
@@ -896,7 +962,7 @@ describe("x-feature-slug tracking", () => {
     mockWorkflows.push(WORKFLOW_FIXTURE);
 
     await request
-      .post("/workflows/by-name/sales-email-cold-outreach-sequoia/execute")
+      .post("/workflows/by-slug/sales-email-cold-outreach-sequoia/execute")
       .set({ ...AUTH, "x-feature-slug": "sales-email-cold-outreach" })
       .send({ inputs: { email: "test@example.com" } });
 

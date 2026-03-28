@@ -104,14 +104,14 @@ export async function validateAndUpgradeWorkflows(
 
     if (result.fieldIssues.length > 0) {
       console.warn(
-        `[workflow-service] Workflow "${wf.name}" (${wf.id}) has ${result.fieldIssues.length} field issue(s):`,
+        `[workflow-service] Workflow "${wf.slug}" (${wf.id}) has ${result.fieldIssues.length} field issue(s):`,
         result.fieldIssues.map((f) => f.reason).join("; "),
       );
     }
 
     if (result.invalidEndpoints.length > 0) {
       console.warn(
-        `[workflow-service] Workflow "${wf.name}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
+        `[workflow-service] Workflow "${wf.slug}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
         result.invalidEndpoints.map((ep) => `${ep.method} ${ep.service}${ep.path}`).join(", "),
       );
     }
@@ -130,20 +130,20 @@ export async function validateAndUpgradeWorkflows(
       if (upgraded) {
         upgradedCount++;
         console.log(
-          `[workflow-service] Workflow "${wf.name}" upgraded successfully -> new ID: ${upgraded}`,
+          `[workflow-service] Workflow "${wf.slug}" upgraded successfully -> new ID: ${upgraded}`,
         );
       } else {
         // Upgrade skipped (no Anthropic key available) — keep workflow active
         failedCount++;
         console.warn(
-          `[workflow-service] Workflow "${wf.name}" has broken endpoints but upgrade skipped (platform key not available) — keeping active`,
+          `[workflow-service] Workflow "${wf.slug}" has broken endpoints but upgrade skipped (platform key not available) — keeping active`,
         );
       }
     } catch (err) {
       // Upgrade failed — keep workflow active rather than breaking all campaigns
       failedCount++;
       console.error(
-        `[workflow-service] Workflow "${wf.name}" upgrade failed — keeping active:`,
+        `[workflow-service] Workflow "${wf.slug}" upgrade failed — keeping active:`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -153,7 +153,7 @@ export async function validateAndUpgradeWorkflows(
       await sendAdminNotification(wf, result.invalidEndpoints, upgradedCount > failedCount);
     } catch {
       // Non-blocking — log and continue
-      console.warn(`[workflow-service] Failed to send admin notification for "${wf.name}"`);
+      console.warn(`[workflow-service] Failed to send admin notification for "${wf.slug}"`);
     }
   }
 
@@ -183,7 +183,7 @@ export async function validateAndUpgradeWorkflows(
         synced++;
       } catch (err) {
         console.warn(
-          `[workflow-service] Failed to sync flow for "${wf.name}":`,
+          `[workflow-service] Failed to sync flow for "${wf.slug}":`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -219,7 +219,7 @@ async function attemptUpgrade(
     const run = await createPlatformRun({
       serviceName: "workflow",
       taskName: "startup-upgrade",
-      workflowName: wf.name,
+      workflowName: wf.slug,
     });
     platformRunId = run.runId;
   } catch (err) {
@@ -260,7 +260,7 @@ async function attemptUpgrade(
     if (existingMatch) {
       await deprecateWorkflow(database, wf.id, existingMatch.id);
       console.log(
-        `[workflow-service] Workflow "${wf.name}" upgraded by dedup — points to existing ${existingMatch.id}`,
+        `[workflow-service] Workflow "${wf.slug}" upgraded by dedup — points to existing ${existingMatch.id}`,
       );
 
       if (platformRunId) {
@@ -278,21 +278,21 @@ async function attemptUpgrade(
 
     const newSignatureName = pickSignatureName(newSignature, usedNames);
 
-    // Build the new name with the new signatureName; displayName stays as the ancestor's name
-    const newName = `${result.category}-${result.channel}-${result.audienceType}-${newSignatureName}`;
+    // Build the new slug from the dynasty; increment version
+    const newVersion = wf.version + 1;
+    const baseSlug = wf.slug.replace(/-v\d+$/, "");
+    const newSlug = newVersion >= 2 ? `${baseSlug}-v${newVersion}` : baseSlug;
+    const newName = newVersion >= 2 ? `${wf.dynastyName} v${newVersion}` : wf.dynastyName;
 
     // Deploy to Windmill
-    const openFlow = dagToOpenFlow(result.dag, newName);
-    const flowPath = `f/workflows/${wf.orgId}/${newName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+    const openFlow = dagToOpenFlow(result.dag, newSlug);
+    const flowPath = `f/workflows/${wf.orgId}/${newSlug.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
     let windmillFlowPath: string | null = null;
 
     if (windmillClient) {
-      // Try updateFlow first (flow usually exists from previous startup).
-      // Only fall back to createFlow if the flow doesn't exist yet.
-      // This avoids Windmill logging noisy 400 "already exists" errors.
       try {
         await windmillClient.updateFlow(flowPath, {
-          summary: newName,
+          summary: newSlug,
           description: result.description,
           value: openFlow.value,
           schema: openFlow.schema,
@@ -304,7 +304,7 @@ async function attemptUpgrade(
           try {
             await windmillClient.createFlow({
               path: flowPath,
-              summary: newName,
+              summary: newSlug,
               description: result.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -319,10 +319,10 @@ async function attemptUpgrade(
       }
     }
 
-    // Deprecate old workflow FIRST (frees the unique name index for the replacement)
+    // Deprecate old workflow FIRST (frees the unique slug index for the replacement)
     await deprecateWorkflow(database, wf.id, null);
 
-    // Insert new active workflow with the same name
+    // Insert new active workflow with incremented version
     const [created] = await database
       .insert(workflows)
       .values({
@@ -333,14 +333,16 @@ async function attemptUpgrade(
         campaignId: wf.campaignId,
         subrequestId: wf.subrequestId,
         styleName: wf.styleName,
+        slug: newSlug,
         name: newName,
-        displayName: wf.displayName ?? wf.name,
+        dynastyName: wf.dynastyName,
         description: result.description,
         category: result.category,
         channel: result.channel,
         audienceType: result.audienceType,
         signature: newSignature,
-        signatureName: newSignatureName,
+        signatureName: wf.signatureName,
+        version: newVersion,
         dag: result.dag,
         tags: wf.tags as string[],
         status: "active",
@@ -389,12 +391,10 @@ async function syncFlowToWindmill(
   }
 
   const dag = wf.dag as DAG;
-  const openFlow = dagToOpenFlow(dag, wf.name);
+  const openFlow = dagToOpenFlow(dag, wf.slug);
 
-  // Use the actual stored flow path — NOT a recalculated one.
-  // The path in DB is the source of truth for where the flow lives in Windmill.
   await windmillClient.updateFlow(wf.windmillFlowPath, {
-    summary: wf.name,
+    summary: wf.slug,
     description: wf.description ?? "",
     value: openFlow.value,
     schema: openFlow.schema,
@@ -434,10 +434,10 @@ async function sendAdminNotification(
     .join("\n");
 
   const subject = upgraded
-    ? `[Workflow Service] Workflow "${wf.name}" auto-upgraded`
-    : `[Workflow Service] Workflow "${wf.name}" deprecated — manual intervention required`;
+    ? `[Workflow Service] Workflow "${wf.slug}" auto-upgraded`
+    : `[Workflow Service] Workflow "${wf.slug}" deprecated — manual intervention required`;
 
-  const body = `Workflow: ${wf.name} (${wf.id})
+  const body = `Workflow: ${wf.slug} (${wf.id})
 Org ID: ${wf.orgId}
 Status: ${upgraded ? "Auto-upgraded successfully" : "Deprecated — upgrade failed"}
 

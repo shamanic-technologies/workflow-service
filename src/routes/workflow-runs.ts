@@ -35,9 +35,9 @@ function formatRun(r: typeof workflowRuns.$inferSelect) {
   return base;
 }
 
-// POST /workflows/by-name/:name/execute — Execute a workflow by name
+// POST /workflows/by-slug/:slug/execute — Execute a workflow by slug
 router.post(
-  "/workflows/by-name/:name/execute",
+  "/workflows/by-slug/:slug/execute",
   requireApiKey,
   requireExecutionHeaders,
   executeRateLimit,
@@ -46,13 +46,13 @@ router.post(
       const body = ExecuteByNameSchema.parse(req.body);
       const orgId = res.locals.orgId as string;
 
-      // Look up workflow by name — only active workflows can be executed
+      // Look up workflow by slug — only active workflows can be executed
       let [workflow] = await db
         .select()
         .from(workflows)
         .where(
           and(
-            eq(workflows.name, req.params.name),
+            eq(workflows.slug, req.params.slug),
             eq(workflows.status, "active"),
           )
         );
@@ -62,7 +62,7 @@ router.post(
         const [deprecated] = await db
           .select()
           .from(workflows)
-          .where(eq(workflows.name, req.params.name));
+          .where(eq(workflows.slug, req.params.slug));
 
         if (deprecated && deprecated.status === "deprecated") {
           // Follow upgrade chain to the latest active version
@@ -78,7 +78,7 @@ router.post(
             if (candidate.status === "active") {
               workflow = candidate;
               console.log(
-                `[workflow-service] Execute by name: "${req.params.name}" is deprecated, following upgrade chain to "${candidate.name}" (${candidate.id})`,
+                `[workflow-service] Execute by slug: "${req.params.slug}" is deprecated, following upgrade chain to "${candidate.slug}" (${candidate.id})`,
               );
               break;
             }
@@ -88,27 +88,27 @@ router.post(
 
           if (!workflow) {
             // Dead end — no active workflow at the end of the chain
-            let upgradedToName: string | null = null;
+            let upgradedToSlug: string | null = null;
             if (deprecated.upgradedTo) {
               const [replacement] = await db
                 .select()
                 .from(workflows)
                 .where(eq(workflows.id, deprecated.upgradedTo));
-              upgradedToName = replacement?.name ?? null;
+              upgradedToSlug = replacement?.slug ?? null;
             }
             res.status(410).json({
               error: "Workflow has been deprecated",
               upgradedTo: deprecated.upgradedTo,
-              upgradedToName,
+              upgradedToSlug,
             });
             return;
           }
         } else {
           console.warn(
-            `[workflow-service] Execute by name: workflow "${req.params.name}" not found (no active workflow with this name)`,
+            `[workflow-service] Execute by slug: workflow "${req.params.slug}" not found (no active workflow with this slug)`,
           );
           res.status(404).json({
-            error: `Workflow "${req.params.name}" not found`,
+            error: `Workflow "${req.params.slug}" not found`,
           });
           return;
         }
@@ -125,7 +125,6 @@ router.post(
       const callerRunId = res.locals.runId as string;
       const brandId = res.locals.brandId as string;
       const campaignId = res.locals.campaignId as string;
-      const workflowNameHeader = res.locals.workflowName as string;
       const featureSlug = res.locals.featureSlug as string;
 
       // Create a child run in runs-service (links to caller's run via parentRunId)
@@ -136,7 +135,7 @@ router.post(
           orgId,
           userId,
           taskName: "execute-workflow",
-          workflowName: workflow.name,
+          workflowName: workflow.slug,
           campaignId,
           brandId,
         });
@@ -152,7 +151,7 @@ router.post(
       const client = getWindmillClient();
       if (client) {
         try {
-          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowName: workflow.name, campaignId, brandId, featureSlug, serviceEnvs: collectServiceEnvs() };
+          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowName: workflow.slug, campaignId, brandId, featureSlug, serviceEnvs: collectServiceEnvs() };
           windmillJobId = await client.runFlow(
             workflow.windmillFlowPath,
             flowInputs
@@ -179,7 +178,7 @@ router.post(
           campaignId,
           brandId,
           featureSlug,
-          workflowName: workflow.name,
+          workflowSlug: workflow.slug,
           subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
           runId: ownRunId,
           windmillJobId,
@@ -190,7 +189,7 @@ router.post(
         .returning();
 
       console.log(
-        `[workflow-service] Workflow "${workflow.name}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
+        `[workflow-service] Workflow "${workflow.slug}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
       );
 
       res.status(201).json(formatRun(run));
@@ -199,7 +198,7 @@ router.post(
         res.status(400).json({ error: "Validation error", details: err });
         return;
       }
-      console.error("[workflow-service] POST execute-by-name error:", err);
+      console.error("[workflow-service] POST execute-by-slug error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   }
@@ -251,7 +250,6 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
     const callerRunId = res.locals.runId as string;
     const execBrandId = res.locals.brandId as string;
     const execCampaignId = res.locals.campaignId as string;
-    const execWorkflowName = res.locals.workflowName as string;
     const execFeatureSlug = res.locals.featureSlug as string;
 
     // Create a child run in runs-service (links to caller's run via parentRunId)
@@ -262,7 +260,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         orgId,
         userId: executeUserId,
         taskName: "execute-workflow",
-        workflowName: workflow.name,
+        workflowName: workflow.slug,
         campaignId: execCampaignId,
         brandId: execBrandId,
       });
@@ -278,7 +276,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
     const client = getWindmillClient();
     if (client) {
       try {
-        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowName: workflow.name, campaignId: execCampaignId, brandId: execBrandId, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
+        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowName: workflow.slug, campaignId: execCampaignId, brandId: execBrandId, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
         windmillJobId = await client.runFlow(
           workflow.windmillFlowPath,
           flowInputs
@@ -302,7 +300,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         campaignId: execCampaignId,
         brandId: execBrandId,
         featureSlug: execFeatureSlug,
-        workflowName: workflow.name,
+        workflowSlug: workflow.slug,
         subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
         runId: ownRunId,
         windmillJobId,
