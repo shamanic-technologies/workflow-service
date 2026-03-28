@@ -20,7 +20,7 @@ export async function main(
   params?: Record<string, string>,
   campaignId?: string,
   brandId?: string,
-  workflowName?: string,
+  workflowSlug?: string,
   featureSlug?: string,
 ) {
   if (!service) {
@@ -73,7 +73,7 @@ export async function main(
   if (runId) reqHeaders["x-run-id"] = runId;
   if (campaignId) reqHeaders["x-campaign-id"] = campaignId;
   if (brandId) reqHeaders["x-brand-id"] = brandId;
-  if (workflowName) reqHeaders["x-workflow-name"] = workflowName;
+  if (workflowSlug) reqHeaders["x-workflow-slug"] = workflowSlug;
   if (featureSlug) reqHeaders["x-feature-slug"] = featureSlug;
   // Caller-supplied headers can override identity headers
   if (headers) Object.assign(reqHeaders, headers);

@@ -51,11 +51,11 @@ export interface EmailStatsResponse {
 
 export async function fetchRunCostsAuth(
   identity: IdentityHeaders,
-  workflowNames?: string[],
-): Promise<WorkflowNameCost[]> {
+  workflowSlugs?: string[],
+): Promise<WorkflowSlugCost[]> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
-  const params = new URLSearchParams({ groupBy: "workflowName" });
-  if (workflowNames?.length) params.set("workflowNames", workflowNames.join(","));
+  const params = new URLSearchParams({ groupBy: "workflowSlug" });
+  if (workflowSlugs?.length) params.set("workflowSlugs", workflowSlugs.join(","));
 
   const res = await fetch(`${baseUrl}/v1/stats/costs?${params}`, {
     method: "GET",
@@ -83,9 +83,9 @@ export async function fetchRunCostsAuth(
   };
 
   return body.groups
-    .filter((g) => g.dimensions.workflowName != null)
+    .filter((g) => g.dimensions.workflowSlug != null)
     .map((g) => ({
-      workflowName: g.dimensions.workflowName!,
+      workflowSlug: g.dimensions.workflowSlug!,
       totalCostInUsdCents: Number(g.totalCostInUsdCents) || 0,
       runCount: g.runCount,
     }));
@@ -93,8 +93,8 @@ export async function fetchRunCostsAuth(
 
 // --- Public: fetch aggregated costs from runs-service (no identity) ---
 
-export interface WorkflowNameCost {
-  workflowName: string;
+export interface WorkflowSlugCost {
+  workflowSlug: string;
   totalCostInUsdCents: number;
   runCount: number;
 }
@@ -102,13 +102,13 @@ export interface WorkflowNameCost {
 export async function fetchRunCostsPublic(filters?: {
   brandId?: string;
   orgId?: string;
-  workflowNames?: string[];
-}): Promise<WorkflowNameCost[]> {
+  workflowSlugs?: string[];
+}): Promise<WorkflowSlugCost[]> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
-  const params = new URLSearchParams({ groupBy: "workflowName" });
+  const params = new URLSearchParams({ groupBy: "workflowSlug" });
   if (filters?.brandId) params.set("brandId", filters.brandId);
   if (filters?.orgId) params.set("orgId", filters.orgId);
-  if (filters?.workflowNames?.length) params.set("workflowNames", filters.workflowNames.join(","));
+  if (filters?.workflowSlugs?.length) params.set("workflowSlugs", filters.workflowSlugs.join(","));
 
   const res = await fetch(`${baseUrl}/v1/stats/public/costs?${params}`, {
     method: "GET",
@@ -131,9 +131,9 @@ export async function fetchRunCostsPublic(filters?: {
   };
 
   return body.groups
-    .filter((g) => g.dimensions.workflowName != null)
+    .filter((g) => g.dimensions.workflowSlug != null)
     .map((g) => ({
-      workflowName: g.dimensions.workflowName!,
+      workflowSlug: g.dimensions.workflowSlug!,
       totalCostInUsdCents: Number(g.totalCostInUsdCents) || 0,
       runCount: g.runCount,
     }));
@@ -166,24 +166,24 @@ export function mapGatewayStats(raw: Record<string, unknown>): EmailStats {
   };
 }
 
-// --- Fetch email stats grouped by workflowName ---
+// --- Fetch email stats grouped by workflowSlug ---
 
 export interface EmailStatsGroup {
-  workflowName: string;
+  workflowSlug: string;
   transactional: EmailStats;
   broadcast: EmailStats;
 }
 
 export async function fetchEmailStatsAuth(
-  workflowNames: string[],
+  workflowSlugs: string[],
   identity: IdentityHeaders,
 ): Promise<EmailStatsGroup[]> {
-  if (workflowNames.length === 0) return [];
+  if (workflowSlugs.length === 0) return [];
 
   const { baseUrl, apiKey } = getEmailGatewayConfig();
   const params = new URLSearchParams({
-    groupBy: "workflowName",
-    workflowNames: workflowNames.join(","),
+    groupBy: "workflowSlug",
+    workflowSlugs: workflowSlugs.join(","),
   });
 
   const res = await fetch(`${baseUrl}/stats?${params}`, {
@@ -207,14 +207,14 @@ export async function fetchEmailStatsAuth(
 }
 
 export async function fetchEmailStatsPublic(
-  workflowNames: string[],
+  workflowSlugs: string[],
 ): Promise<EmailStatsGroup[]> {
-  if (workflowNames.length === 0) return [];
+  if (workflowSlugs.length === 0) return [];
 
   const { baseUrl, apiKey } = getEmailGatewayConfig();
   const params = new URLSearchParams({
-    groupBy: "workflowName",
-    workflowNames: workflowNames.join(","),
+    groupBy: "workflowSlug",
+    workflowSlugs: workflowSlugs.join(","),
   });
 
   const res = await fetch(`${baseUrl}/stats/public?${params}`, {
@@ -242,7 +242,7 @@ function parseEmailStatsGroups(body: unknown): EmailStatsGroup[] {
   };
 
   return (groups ?? []).map((g) => ({
-    workflowName: g.key,
+    workflowSlug: g.key,
     transactional: mapGatewayStats(g.transactional ?? {}),
     broadcast: mapGatewayStats(g.broadcast ?? {}),
   }));
