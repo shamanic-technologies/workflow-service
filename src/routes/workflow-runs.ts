@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { eq, and } from "drizzle-orm";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey, requireExecutionHeaders } from "../middleware/auth.js";
@@ -206,6 +208,10 @@ router.post(
 
 // POST /workflows/:id/execute — Execute a workflow
 router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, executeRateLimit, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid workflow ID format" });
+    return;
+  }
   try {
     const body = ExecuteWorkflowSchema.parse(req.body ?? {});
     const orgId = res.locals.orgId as string;
@@ -323,6 +329,10 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
 
 // GET /workflow-runs/:id — Get a workflow run (with live poll if running)
 router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid run ID format" });
+    return;
+  }
   try {
     const [run] = await db
       .select()
@@ -427,6 +437,10 @@ router.get("/workflow-runs", requireApiKey, async (req, res) => {
 
 // GET /workflow-runs/:id/debug — Get per-step execution details from Windmill
 router.get("/workflow-runs/:id/debug", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid run ID format" });
+    return;
+  }
   try {
     const [run] = await db
       .select()
@@ -466,6 +480,10 @@ router.get("/workflow-runs/:id/debug", requireApiKey, async (req, res) => {
 
 // POST /workflow-runs/:id/cancel — Cancel a run
 router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid run ID format" });
+    return;
+  }
   try {
     const [run] = await db
       .select()

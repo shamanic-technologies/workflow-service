@@ -22,7 +22,7 @@ vi.mock("../../src/db/index.js", () => ({
     insert: () => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
-          id: "run-" + Math.random().toString(36).slice(2, 10),
+          id: crypto.randomUUID(),
           ...row,
           windmillWorkspace: row.windmillWorkspace ?? "prod",
           createdAt: new Date(),
@@ -111,6 +111,22 @@ const IDENTITY = {
 };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
+// Valid UUID test IDs
+const WF_ID = "00000000-0000-4000-8000-000000000001";
+const WF_OLD_ID = "00000000-0000-4000-8000-000000000002";
+const WF_NEW_ID = "00000000-0000-4000-8000-000000000003";
+const WF_CROSS_ID = "00000000-0000-4000-8000-000000000004";
+const WF_V1_ID = "00000000-0000-4000-8000-000000000005";
+const WF_V2_ID = "00000000-0000-4000-8000-000000000006";
+const WF_V3_ID = "00000000-0000-4000-8000-000000000007";
+const WF_DEAD_ID = "00000000-0000-4000-8000-000000000008";
+const WF_MISSING_ID = "00000000-0000-4000-8000-000000000009";
+const WF_FEAT_ID = "00000000-0000-4000-8000-00000000000a";
+const RUN_1_ID = "00000000-0000-4000-8000-000000000010";
+const RUN_DEBUG_ID = "00000000-0000-4000-8000-000000000011";
+const RUN_NO_JOB_ID = "00000000-0000-4000-8000-000000000012";
+const RUN_SIMPLE_ID = "00000000-0000-4000-8000-000000000013";
+
 describe("POST /workflows/:id/execute", () => {
   beforeEach(() => {
     mockWorkflows.length = 0;
@@ -123,7 +139,7 @@ describe("POST /workflows/:id/execute", () => {
 
   it("executes a workflow and returns a run", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "test-flow",
       name: "Test Flow",
@@ -135,7 +151,7 @@ describe("POST /workflows/:id/execute", () => {
     });
 
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(AUTH)
       .send({ inputs: { key: "value" } });
 
@@ -148,7 +164,7 @@ describe("POST /workflows/:id/execute", () => {
 
   it("creates a child run in runs-service with caller's runId as parentRunId", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "test-flow",
       name: "Test Flow",
@@ -160,7 +176,7 @@ describe("POST /workflows/:id/execute", () => {
     });
 
     await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(AUTH)
       .send({ inputs: {} });
 
@@ -177,7 +193,7 @@ describe("POST /workflows/:id/execute", () => {
 
   it("forwards orgId, userId, and own runId into Windmill flow inputs", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "test-flow",
       name: "Test Flow",
@@ -189,7 +205,7 @@ describe("POST /workflows/:id/execute", () => {
     });
 
     await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(AUTH)
       .send({ inputs: { email: "user@test.com" } });
 
@@ -201,7 +217,7 @@ describe("POST /workflows/:id/execute", () => {
 
   it("uses x-org-id header (not workflow.orgId) for run attribution", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "deployer-org-different",
       slug: "test-flow",
       name: "Test Flow",
@@ -213,7 +229,7 @@ describe("POST /workflows/:id/execute", () => {
     });
 
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(AUTH) // x-org-id: "org-1"
       .send({ inputs: {} });
 
@@ -238,7 +254,7 @@ describe("POST /workflows/:id/execute", () => {
     );
 
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "test-flow",
       name: "Test Flow",
@@ -250,7 +266,7 @@ describe("POST /workflows/:id/execute", () => {
     });
 
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(AUTH)
       .send({ inputs: {} });
 
@@ -262,25 +278,25 @@ describe("POST /workflows/:id/execute", () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated
-        id: "wf-old-id",
+        id: WF_OLD_ID,
         status: "deprecated",
-        upgradedTo: "wf-new-id",
+        upgradedTo: WF_NEW_ID,
       }],
     );
 
     const res = await request
-      .post("/workflows/wf-old-id/execute")
+      .post(`/workflows/${WF_OLD_ID}/execute`)
       .set(AUTH)
       .send({ inputs: {} });
 
     expect(res.status).toBe(410);
     expect(res.body.error).toBe("Workflow has been deprecated");
-    expect(res.body.upgradedTo).toBe("wf-new-id");
+    expect(res.body.upgradedTo).toBe(WF_NEW_ID);
   });
 
   it("uses campaignId from header, not from workflow record or inputs", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "test-flow",
       name: "Test Flow",
@@ -294,7 +310,7 @@ describe("POST /workflows/:id/execute", () => {
     });
 
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(AUTH) // x-campaign-id: "camp-1"
       .send({ inputs: { campaignId: "camp-from-input" } });
 
@@ -304,7 +320,7 @@ describe("POST /workflows/:id/execute", () => {
 
   it("returns 400 when required execution headers are missing", async () => {
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set({ "x-api-key": "test-api-key", "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" })
       .send({ inputs: {} });
 
@@ -316,7 +332,7 @@ describe("POST /workflows/:id/execute", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/${WF_ID}/execute`)
       .set(IDENTITY)
       .send({ inputs: {} });
 
@@ -336,7 +352,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
 
   it("executes a workflow by slug (slug-only lookup, no org filter)", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "deployer-org",
       slug: "newsletter-subscribe",
       name: "Newsletter Subscribe",
@@ -361,7 +377,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
 
   it("uses x-org-id header (not body orgId) for run attribution", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "deployer-org",
       slug: "create-user-flow",
       name: "Create User Flow",
@@ -391,7 +407,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
 
   it("forwards header orgId, userId, and own runId into Windmill flow inputs", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "deployer-org",
       slug: "create-user-flow",
       name: "Create User Flow",
@@ -416,7 +432,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
   it("cross-org: workflow deployed by org-A can be executed by org-B", async () => {
     // Workflow deployed by a completely different org
     mockWorkflows.push({
-      id: "wf-cross",
+      id: WF_CROSS_ID,
       orgId: "8c734aed-45ac-4780-a4ee-1fdcbbedeab1",
       slug: "sales-email-cold-outreach-pharaoh",
       name: "Sales Email Cold Outreach Pharaoh",
@@ -453,7 +469,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
 
   it("uses x-org-id header for identity (orgId not in body)", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "deployer-org",
       slug: "simple-flow",
       name: "Simple Flow",
@@ -488,16 +504,16 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated workflow
-        id: "wf-old",
+        id: WF_OLD_ID,
         slug: "deprecated-flow",
         name: "Deprecated Flow",
         dynastyName: "Deprecated Flow Obsidian",
         version: 1,
         status: "deprecated",
-        upgradedTo: "wf-new",
+        upgradedTo: WF_NEW_ID,
       }],
       [{   // 3. chain follow: replacement is active → execute it
-        id: "wf-new",
+        id: WF_NEW_ID,
         slug: "replacement-flow",
         name: "Replacement Flow",
         dynastyName: "Replacement Flow Obsidian",
@@ -526,25 +542,25 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated v1
-        id: "wf-v1",
+        id: WF_V1_ID,
         slug: "old-flow",
         name: "Old Flow",
         dynastyName: "Old Flow Obsidian",
         version: 1,
         status: "deprecated",
-        upgradedTo: "wf-v2",
+        upgradedTo: WF_V2_ID,
       }],
       [{   // 3. chain hop 1: v2 is also deprecated
-        id: "wf-v2",
+        id: WF_V2_ID,
         slug: "mid-flow",
         name: "Mid Flow",
         dynastyName: "Mid Flow Obsidian",
         version: 2,
         status: "deprecated",
-        upgradedTo: "wf-v3",
+        upgradedTo: WF_V3_ID,
       }],
       [{   // 4. chain hop 2: v3 is active → execute it
-        id: "wf-v3",
+        id: WF_V3_ID,
         slug: "current-flow",
         name: "Current Flow",
         dynastyName: "Current Flow Obsidian",
@@ -573,7 +589,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated, no replacement
-        id: "wf-dead",
+        id: WF_DEAD_ID,
         slug: "dead-flow",
         name: "Dead Flow",
         dynastyName: "Dead Flow Obsidian",
@@ -598,13 +614,13 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated with upgradedTo
-        id: "wf-old",
+        id: WF_OLD_ID,
         slug: "orphan-flow",
         name: "Orphan Flow",
         dynastyName: "Orphan Flow Obsidian",
         version: 1,
         status: "deprecated",
-        upgradedTo: "wf-missing",
+        upgradedTo: WF_MISSING_ID,
       }],
       [],  // 3. chain follow: replacement not found → dead end
       [{   // 4. 410 replacement slug lookup → not found
@@ -619,12 +635,12 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
 
     expect(res.status).toBe(410);
     expect(res.body.error).toBe("Workflow has been deprecated");
-    expect(res.body.upgradedTo).toBe("wf-missing");
+    expect(res.body.upgradedTo).toBe(WF_MISSING_ID);
   });
 
   it("uses campaignId from header into Windmill flow inputs (by slug)", async () => {
     mockWorkflows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "deployer-org",
       slug: "campaign-flow",
       name: "Campaign Flow",
@@ -667,7 +683,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
       [{   // 2. any-status lookup → deprecated workflow
-        id: "wf-old",
+        id: WF_OLD_ID,
         slug: "old-flow",
         name: "Old Flow",
         dynastyName: "Old Flow Obsidian",
@@ -675,10 +691,10 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
         status: "deprecated",
         campaignId: null,
         subrequestId: null,
-        upgradedTo: "wf-new",
+        upgradedTo: WF_NEW_ID,
       }],
       [{   // 3. chain follow: replacement is active
-        id: "wf-new",
+        id: WF_NEW_ID,
         slug: "new-flow",
         name: "New Flow",
         dynastyName: "New Flow Obsidian",
@@ -720,8 +736,8 @@ describe("GET /workflow-runs/:id", () => {
 
   it("returns a completed run after polling Windmill", async () => {
     mockRuns.push({
-      id: "run-1",
-      workflowId: "wf-1",
+      id: RUN_1_ID,
+      workflowId: WF_ID,
       orgId: "org-1",
       status: "running",
       windmillJobId: "job-uuid-123",
@@ -734,7 +750,7 @@ describe("GET /workflow-runs/:id", () => {
       createdAt: new Date(),
     });
 
-    const res = await request.get("/workflow-runs/run-1").set(AUTH);
+    const res = await request.get(`/workflow-runs/${RUN_1_ID}`).set(AUTH);
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("completed");
@@ -767,8 +783,8 @@ describe("GET /workflow-runs/:id/debug", () => {
     });
 
     mockRuns.push({
-      id: "run-debug-1",
-      workflowId: "wf-1",
+      id: RUN_DEBUG_ID,
+      workflowId: WF_ID,
       orgId: "org-1",
       status: "completed",
       windmillJobId: "job-uuid-789",
@@ -782,11 +798,11 @@ describe("GET /workflow-runs/:id/debug", () => {
     });
 
     const res = await request
-      .get("/workflow-runs/run-debug-1/debug")
+      .get(`/workflow-runs/${RUN_DEBUG_ID}/debug`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.runId).toBe("run-debug-1");
+    expect(res.body.runId).toBe(RUN_DEBUG_ID);
     expect(res.body.windmillJobId).toBe("job-uuid-789");
     expect(res.body.flowStatus).toEqual(flowStatus);
     expect(res.body.flowStatus.modules).toHaveLength(3);
@@ -795,7 +811,7 @@ describe("GET /workflow-runs/:id/debug", () => {
 
   it("returns 404 for unknown run", async () => {
     const res = await request
-      .get("/workflow-runs/nonexistent/debug")
+      .get(`/workflow-runs/ffffffff-ffff-4fff-bfff-ffffffffffff/debug`)
       .set(AUTH);
 
     expect(res.status).toBe(404);
@@ -803,8 +819,8 @@ describe("GET /workflow-runs/:id/debug", () => {
 
   it("returns 400 if run has no windmill job ID", async () => {
     mockRuns.push({
-      id: "run-no-job",
-      workflowId: "wf-1",
+      id: RUN_NO_JOB_ID,
+      workflowId: WF_ID,
       orgId: "org-1",
       status: "queued",
       windmillJobId: null,
@@ -818,7 +834,7 @@ describe("GET /workflow-runs/:id/debug", () => {
     });
 
     const res = await request
-      .get("/workflow-runs/run-no-job/debug")
+      .get(`/workflow-runs/${RUN_NO_JOB_ID}/debug`)
       .set(AUTH);
 
     expect(res.status).toBe(400);
@@ -834,8 +850,8 @@ describe("GET /workflow-runs/:id/debug", () => {
     });
 
     mockRuns.push({
-      id: "run-simple",
-      workflowId: "wf-1",
+      id: RUN_SIMPLE_ID,
+      workflowId: WF_ID,
       orgId: "org-1",
       status: "completed",
       windmillJobId: "job-uuid-simple",
@@ -849,7 +865,7 @@ describe("GET /workflow-runs/:id/debug", () => {
     });
 
     const res = await request
-      .get("/workflow-runs/run-simple/debug")
+      .get(`/workflow-runs/${RUN_SIMPLE_ID}/debug`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
@@ -858,7 +874,7 @@ describe("GET /workflow-runs/:id/debug", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .get("/workflow-runs/run-1/debug")
+      .get(`/workflow-runs/${RUN_1_ID}/debug`)
       .set(IDENTITY);
     expect(res.status).toBe(401);
   });
@@ -873,8 +889,8 @@ describe("POST /workflow-runs/:id/cancel", () => {
 
   it("cancels a running workflow", async () => {
     mockRuns.push({
-      id: "run-1",
-      workflowId: "wf-1",
+      id: RUN_1_ID,
+      workflowId: WF_ID,
       orgId: "org-1",
       status: "running",
       windmillJobId: "job-uuid-456",
@@ -888,7 +904,7 @@ describe("POST /workflow-runs/:id/cancel", () => {
     });
 
     const res = await request
-      .post("/workflow-runs/run-1/cancel")
+      .post(`/workflow-runs/${RUN_1_ID}/cancel`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
@@ -908,7 +924,7 @@ describe("x-feature-slug tracking", () => {
   });
 
   const WORKFLOW_FIXTURE = {
-    id: "wf-feat",
+    id: WF_FEAT_ID,
     orgId: "org-1",
     slug: "sales-email-cold-outreach-sequoia",
     name: "Sales Email Cold Outreach Sequoia",
@@ -938,7 +954,7 @@ describe("x-feature-slug tracking", () => {
     mockWorkflows.push(WORKFLOW_FIXTURE);
 
     const res = await request
-      .post("/workflows/wf-feat/execute")
+      .post(`/workflows/${WF_FEAT_ID}/execute`)
       .set({ ...AUTH, "x-feature-slug": "sales-email-cold-outreach" })
       .send({ inputs: {} });
 
@@ -972,4 +988,33 @@ describe("x-feature-slug tracking", () => {
     );
   });
 
+});
+
+describe("UUID validation on :id routes", () => {
+  it("POST /workflows/:id/execute returns 400 for non-UUID id", async () => {
+    const res = await request
+      .post("/workflows/new/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid workflow ID format");
+  });
+
+  it("GET /workflow-runs/:id returns 400 for non-UUID id", async () => {
+    const res = await request.get("/workflow-runs/latest").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid run ID format");
+  });
+
+  it("GET /workflow-runs/:id/debug returns 400 for non-UUID id", async () => {
+    const res = await request.get("/workflow-runs/abc/debug").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid run ID format");
+  });
+
+  it("POST /workflow-runs/:id/cancel returns 400 for non-UUID id", async () => {
+    const res = await request.post("/workflow-runs/abc/cancel").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid run ID format");
+  });
 });

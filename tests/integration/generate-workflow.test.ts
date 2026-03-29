@@ -9,7 +9,7 @@ vi.mock("../../src/db/index.js", () => ({
     insert: () => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
-          id: "wf-" + Math.random().toString(36).slice(2, 10),
+          id: crypto.randomUUID(),
           ...row,
           windmillWorkspace: row.windmillWorkspace ?? "prod",
           createdAt: new Date(),
