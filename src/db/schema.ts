@@ -49,7 +49,7 @@ export const workflows = pgTable(
     index("idx_workflows_campaign").on(table.campaignId),
     index("idx_workflows_org_style").on(table.orgId, table.styleName),
     uniqueIndex("idx_workflows_slug_unique").on(table.slug),
-    uniqueIndex("idx_workflows_name_unique").on(table.name),
+    uniqueIndex("idx_workflows_name_active_unique").on(table.name).where(sql`status = 'active'`),
     index("idx_workflows_dynasty_slug").on(table.dynastySlug),
   ]
 );
