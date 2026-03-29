@@ -35,6 +35,19 @@ Workflow orchestration service powered by Windmill. Translates internal DAG form
 - When adding a node type: update `node-type-registry.ts` + create script in `scripts/nodes/`
 - Every bug fix must include a regression test
 
+## Database migrations
+
+Migrations are **auto-applied on startup** via `drizzle-orm/postgres-js/migrator` (see `src/index.ts`). The service runs `migrate(db, { migrationsFolder: "./drizzle" })` before listening.
+
+**All migrations MUST go in `drizzle/`** — never create a separate `migrations/` folder. The startup migrator only reads from `drizzle/`.
+
+When adding a migration:
+1. Create `drizzle/NNNN_description.sql` (next sequential number)
+2. Add an entry to `drizzle/meta/_journal.json` with the matching `tag` and next `idx`
+3. Use `IF NOT EXISTS` / `DO $$ BEGIN ... END $$` guards to make migrations idempotent
+4. Use `--> statement-breakpoint` between statements (drizzle convention)
+5. Commit the migration file + journal update in the same PR as the schema change
+
 ## Workflow naming and versioning
 
 Workflows follow a dynasty model: each workflow belongs to a lineage (dynasty) that tracks its evolution through upgrades. Names and slugs are derived from the feature dynasty name (from features-service) and a poetic signature name generated once per dynasty.
