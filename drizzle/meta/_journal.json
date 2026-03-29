@@ -148,6 +148,20 @@
       "when": 1772793906410,
       "tag": "0020_add_feature_slug_to_workflows",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1772880306410,
+      "tag": "0021_dynasty_naming",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1772966706410,
+      "tag": "0022_add_dynasty_slug",
+      "breakpoints": true
     }
   ]
 }
