@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { eq, and, sql } from "drizzle-orm";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
@@ -1216,6 +1218,10 @@ router.get("/workflows", requireApiKey, async (req, res) => {
 
 // GET /workflows/:id — Get one workflow
 router.get("/workflows/:id", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid workflow ID format" });
+    return;
+  }
   try {
     const [workflow] = await db
       .select()
@@ -1236,6 +1242,10 @@ router.get("/workflows/:id", requireApiKey, async (req, res) => {
 
 // GET /workflows/:id/required-providers — Compute required BYOK providers for a workflow
 router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid workflow ID format" });
+    return;
+  }
   try {
     const identity = {
       orgId: res.locals.orgId as string,
@@ -1292,6 +1302,10 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
 
 // PUT /workflows/:id — Metadata-only update (DAG changes are forbidden; use PUT /workflows/upgrade for structural changes)
 router.put("/workflows/:id", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid workflow ID format" });
+    return;
+  }
   try {
     const body = UpdateWorkflowSchema.parse(req.body);
 
@@ -1336,6 +1350,10 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
 
 // DELETE /workflows/:id — Hard delete
 router.delete("/workflows/:id", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid workflow ID format" });
+    return;
+  }
   try {
     const [existing] = await db
       .select()
@@ -1375,6 +1393,10 @@ router.delete("/workflows/:id", requireApiKey, async (req, res) => {
 
 // POST /workflows/:id/validate — Validate DAG structure + template contracts
 router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    res.status(400).json({ error: "Invalid workflow ID format" });
+    return;
+  }
   try {
     const [workflow] = await db
       .select()

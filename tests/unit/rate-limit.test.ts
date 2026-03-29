@@ -115,7 +115,7 @@ describe("Execute endpoint rate limiting", () => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
     mockWorkflows.push({
-      id: "wf-1",
+      id: "00000000-0000-4000-8000-000000000001",
       name: "Rate Test Flow",
       status: "active",
       windmillFlowPath: "f/workflows/test/flow",
@@ -129,7 +129,7 @@ describe("Execute endpoint rate limiting", () => {
     for (let i = 0; i < 61; i++) {
       promises.push(
         request
-          .post("/workflows/wf-1/execute")
+          .post(`/workflows/00000000-0000-4000-8000-000000000001/execute`)
           .set(AUTH)
           .send({ inputs: {} })
       );
@@ -148,7 +148,7 @@ describe("Execute endpoint rate limiting", () => {
     for (let i = 0; i < 60; i++) {
       exhaustPromises.push(
         request
-          .post("/workflows/wf-1/execute")
+          .post(`/workflows/00000000-0000-4000-8000-000000000001/execute`)
           .set(AUTH)
           .send({ inputs: {} })
       );
@@ -156,7 +156,7 @@ describe("Execute endpoint rate limiting", () => {
     await Promise.all(exhaustPromises);
 
     const res = await request
-      .post("/workflows/wf-1/execute")
+      .post(`/workflows/00000000-0000-4000-8000-000000000001/execute`)
       .set({ ...AUTH, "x-org-id": "org-other" })
       .send({ inputs: {} });
 

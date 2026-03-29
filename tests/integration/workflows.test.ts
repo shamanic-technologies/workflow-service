@@ -19,7 +19,7 @@ vi.mock("../../src/db/index.js", () => ({
     insert: () => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
-          id: "wf-" + Math.random().toString(36).slice(2, 10),
+          id: crypto.randomUUID(),
           ...row,
           windmillWorkspace: row.windmillWorkspace ?? "prod",
           createdAt: new Date(),
@@ -92,6 +92,15 @@ import app from "../../src/index.js";
 const request = supertest(app);
 const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
+
+// Valid UUID test IDs
+const WF_ID = "00000000-0000-4000-8000-000000000001";
+const WF_FEATURE_ID = "00000000-0000-4000-8000-000000000002";
+const WF_EXISTING_ID = "00000000-0000-4000-8000-000000000003";
+const WF_HTTP_ID = "00000000-0000-4000-8000-000000000004";
+const WF_LEGACY_ID = "00000000-0000-4000-8000-000000000005";
+const WF_META_ID = "00000000-0000-4000-8000-000000000006";
+const WF_DAG_REJECT_ID = "00000000-0000-4000-8000-000000000007";
 
 describe("POST /workflows", () => {
   beforeEach(() => {
@@ -190,7 +199,7 @@ describe("GET /workflows", () => {
 
   it("returns all workflows when no filters provided", async () => {
     mockDbRows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "flow-1",
       name: "Flow 1",
@@ -209,7 +218,7 @@ describe("GET /workflows", () => {
 
   it("returns workflows for orgId", async () => {
     mockDbRows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "flow-1",
       name: "Flow 1",
@@ -248,7 +257,7 @@ describe("GET /workflows", () => {
 
   it("filters workflows by featureSlug", async () => {
     mockDbRows.push({
-      id: "wf-feature",
+      id: WF_FEATURE_ID,
       orgId: "org-1",
       slug: "outlet-database-discovery-sequoia",
       name: "Outlet Database Discovery Sequoia",
@@ -276,7 +285,7 @@ describe("GET /workflows", () => {
 
   it("returns dimensions in response", async () => {
     mockDbRows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "sales-cold-email-outreach-sequoia",
       name: "Sales Cold Email Outreach Sequoia",
@@ -471,7 +480,7 @@ describe("PUT /workflows/upgrade", () => {
     const sig = computeDAGSignature(DAG_WITH_TRANSACTIONAL_EMAIL_SEND);
 
     mockDbRows.push({
-      id: "wf-existing",
+      id: WF_EXISTING_ID,
       orgId: "org-deploy",
       slug: "sales-cold-email-outreach-sequoia",
       name: "Sales Cold Email Outreach Sequoia",
@@ -793,7 +802,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("returns providers for a workflow with http.call nodes", async () => {
     mockDbRows.push({
-      id: "wf-http",
+      id: WF_HTTP_ID,
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
@@ -813,7 +822,7 @@ describe("GET /workflows/:id/required-providers", () => {
     });
 
     const res = await request
-      .get("/workflows/wf-http/required-providers")
+      .get(`/workflows/${WF_HTTP_ID}/required-providers`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
@@ -833,7 +842,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("enriches providers with domain info for known providers", async () => {
     mockDbRows.push({
-      id: "wf-http",
+      id: WF_HTTP_ID,
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
@@ -853,7 +862,7 @@ describe("GET /workflows/:id/required-providers", () => {
     });
 
     const res = await request
-      .get("/workflows/wf-http/required-providers")
+      .get(`/workflows/${WF_HTTP_ID}/required-providers`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
@@ -865,7 +874,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("returns empty providers for workflows with no http.call nodes", async () => {
     mockDbRows.push({
-      id: "wf-legacy",
+      id: WF_LEGACY_ID,
       orgId: "org-1",
       slug: "legacy-flow",
       name: "Legacy Flow",
@@ -877,7 +886,7 @@ describe("GET /workflows/:id/required-providers", () => {
     });
 
     const res = await request
-      .get("/workflows/wf-legacy/required-providers")
+      .get(`/workflows/${WF_LEGACY_ID}/required-providers`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
@@ -889,7 +898,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("returns 404 for non-existent workflow", async () => {
     const res = await request
-      .get("/workflows/nonexistent-id/required-providers")
+      .get("/workflows/ffffffff-ffff-4fff-bfff-ffffffffffff/required-providers")
       .set(AUTH);
 
     expect(res.status).toBe(404);
@@ -898,7 +907,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("returns 502 when key-service fails", async () => {
     mockDbRows.push({
-      id: "wf-http",
+      id: WF_HTTP_ID,
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
@@ -916,7 +925,7 @@ describe("GET /workflows/:id/required-providers", () => {
     );
 
     const res = await request
-      .get("/workflows/wf-http/required-providers")
+      .get(`/workflows/${WF_HTTP_ID}/required-providers`)
       .set(AUTH);
 
     expect(res.status).toBe(502);
@@ -925,7 +934,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("returns 502 when KEY_SERVICE env vars are missing", async () => {
     mockDbRows.push({
-      id: "wf-http",
+      id: WF_HTTP_ID,
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
@@ -943,7 +952,7 @@ describe("GET /workflows/:id/required-providers", () => {
     );
 
     const res = await request
-      .get("/workflows/wf-http/required-providers")
+      .get(`/workflows/${WF_HTTP_ID}/required-providers`)
       .set(AUTH);
 
     expect(res.status).toBe(502);
@@ -951,7 +960,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("returns 502 when key-service is unreachable (network error)", async () => {
     mockDbRows.push({
-      id: "wf-http",
+      id: WF_HTTP_ID,
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
@@ -969,7 +978,7 @@ describe("GET /workflows/:id/required-providers", () => {
     mockFetchProviderRequirements.mockRejectedValue(err);
 
     const res = await request
-      .get("/workflows/wf-http/required-providers")
+      .get(`/workflows/${WF_HTTP_ID}/required-providers`)
       .set(AUTH);
 
     expect(res.status).toBe(502);
@@ -978,7 +987,7 @@ describe("GET /workflows/:id/required-providers", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .get("/workflows/wf-1/required-providers")
+      .get(`/workflows/${WF_ID}/required-providers`)
       .set(IDENTITY);
     expect(res.status).toBe(401);
   });
@@ -992,7 +1001,7 @@ describe("PUT /workflows/:id — metadata update", () => {
 
   it("updates in-place when only metadata changes (no DAG)", async () => {
     mockDbRows.push({
-      id: "wf-meta",
+      id: WF_META_ID,
       orgId: "org-1",
       slug: "sales-email-cold-outreach-maple",
       name: "Sales Email Cold Outreach Maple",
@@ -1005,7 +1014,7 @@ describe("PUT /workflows/:id — metadata update", () => {
     });
 
     const res = await request
-      .put("/workflows/wf-meta")
+      .put(`/workflows/${WF_META_ID}`)
       .set(AUTH)
       .send({
         description: "Updated description",
@@ -1020,7 +1029,7 @@ describe("PUT /workflows/:id — metadata update", () => {
 
   it("rejects DAG changes via PUT (must use upgrade)", async () => {
     mockDbRows.push({
-      id: "wf-dag-reject",
+      id: WF_DAG_REJECT_ID,
       orgId: "org-1",
       slug: "sales-email-cold-outreach-pine",
       name: "Sales Email Cold Outreach Pine",
@@ -1032,7 +1041,7 @@ describe("PUT /workflows/:id — metadata update", () => {
     });
 
     const res = await request
-      .put("/workflows/wf-dag-reject")
+      .put(`/workflows/${WF_DAG_REJECT_ID}`)
       .set(AUTH)
       .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
 
@@ -1042,7 +1051,7 @@ describe("PUT /workflows/:id — metadata update", () => {
 
   it("returns 404 for non-existent workflow", async () => {
     const res = await request
-      .put("/workflows/nonexistent-id")
+      .put("/workflows/ffffffff-ffff-4fff-bfff-ffffffffffff")
       .set(AUTH)
       .send({ description: "test" });
 
@@ -1058,7 +1067,7 @@ describe("POST /workflows/:id/validate", () => {
 
   it("validates the DAG of an existing workflow", async () => {
     mockDbRows.push({
-      id: "wf-1",
+      id: WF_ID,
       orgId: "org-1",
       slug: "flow-1",
       name: "Flow 1",
@@ -1070,10 +1079,42 @@ describe("POST /workflows/:id/validate", () => {
     });
 
     const res = await request
-      .post("/workflows/wf-1/validate")
+      .post(`/workflows/${WF_ID}/validate`)
       .set(AUTH);
 
     expect(res.status).toBe(200);
     expect(res.body.valid).toBe(true);
+  });
+});
+
+describe("UUID validation on :id routes", () => {
+  it("GET /workflows/:id returns 400 for non-UUID id", async () => {
+    const res = await request.get("/workflows/new").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid workflow ID format");
+  });
+
+  it("GET /workflows/:id/required-providers returns 400 for non-UUID id", async () => {
+    const res = await request.get("/workflows/new/required-providers").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid workflow ID format");
+  });
+
+  it("PUT /workflows/:id returns 400 for non-UUID id", async () => {
+    const res = await request.put("/workflows/not-a-uuid").set(AUTH).send({ description: "test" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid workflow ID format");
+  });
+
+  it("DELETE /workflows/:id returns 400 for non-UUID id", async () => {
+    const res = await request.delete("/workflows/abc").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid workflow ID format");
+  });
+
+  it("POST /workflows/:id/validate returns 400 for non-UUID id", async () => {
+    const res = await request.post("/workflows/ranked/validate").set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid workflow ID format");
   });
 });
