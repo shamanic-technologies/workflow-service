@@ -73,7 +73,10 @@ export async function fetchJournalistStats(
 ): Promise<SourceStatsMap> {
   if (workflowSlugs.length === 0) return new Map();
   const { baseUrl, apiKey } = getServiceConfig("JOURNALISTS");
-  const params = new URLSearchParams({ groupBy: "workflowSlug" });
+  const params = new URLSearchParams({
+    groupBy: "workflowSlug",
+    workflowSlugs: workflowSlugs.join(","),
+  });
 
   const res = await fetch(`${baseUrl}/stats?${params}`, {
     headers: {
@@ -96,7 +99,6 @@ export async function fetchJournalistStats(
   const result: SourceStatsMap = new Map();
   if (body.groupedBy) {
     for (const [slug, stats] of Object.entries(body.groupedBy)) {
-      if (!workflowSlugs.includes(slug)) continue;
       result.set(slug, {
         journalistsFound: stats.totalJournalists,
         journalistsContacted: stats.byStatus?.contacted ?? 0,
