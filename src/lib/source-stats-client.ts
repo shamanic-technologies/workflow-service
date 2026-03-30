@@ -8,7 +8,7 @@
  * Email-gateway stats are handled separately in stats-client.ts.
  */
 
-import type { IdentityHeaders } from "./key-service-client.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 
 function getServiceConfig(envPrefix: string): { baseUrl: string; apiKey: string } {
   const baseUrl = process.env[`${envPrefix}_SERVICE_URL`];
@@ -28,7 +28,7 @@ export type SourceStatsMap = Map<string, Record<string, number>>;
 
 export async function fetchLeadStats(
   workflowSlugs: string[],
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<SourceStatsMap> {
   if (workflowSlugs.length === 0) return new Map();
   const { baseUrl, apiKey } = getServiceConfig("LEAD");
@@ -40,9 +40,7 @@ export async function fetchLeadStats(
   const res = await fetch(`${baseUrl}/stats?${params}`, {
     headers: {
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
   });
 
@@ -69,7 +67,7 @@ export async function fetchLeadStats(
 
 export async function fetchJournalistStats(
   workflowSlugs: string[],
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<SourceStatsMap> {
   if (workflowSlugs.length === 0) return new Map();
   const { baseUrl, apiKey } = getServiceConfig("JOURNALISTS");
@@ -81,9 +79,7 @@ export async function fetchJournalistStats(
   const res = await fetch(`${baseUrl}/stats?${params}`, {
     headers: {
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
   });
 
@@ -112,7 +108,7 @@ export async function fetchJournalistStats(
 
 export async function fetchOutletStats(
   workflowSlugs: string[],
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<SourceStatsMap> {
   if (workflowSlugs.length === 0) return new Map();
   const { baseUrl, apiKey } = getServiceConfig("OUTLETS");
@@ -124,9 +120,7 @@ export async function fetchOutletStats(
   const res = await fetch(`${baseUrl}/outlets/stats?${params}`, {
     headers: {
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
   });
 
@@ -161,15 +155,15 @@ export async function fetchOutletStats(
 export async function fetchSourceStats(
   source: string,
   workflowSlugs: string[],
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<SourceStatsMap> {
   switch (source) {
     case "leads":
-      return fetchLeadStats(workflowSlugs, identity);
+      return fetchLeadStats(workflowSlugs, downstreamHeaders);
     case "journalists":
-      return fetchJournalistStats(workflowSlugs, identity);
+      return fetchJournalistStats(workflowSlugs, downstreamHeaders);
     case "outlets":
-      return fetchOutletStats(workflowSlugs, identity);
+      return fetchOutletStats(workflowSlugs, downstreamHeaders);
     default:
       throw new Error(
         `[workflow-service] Unknown stats source: "${source}". Known sources: leads, journalists, outlets (email-gateway and runs are handled separately)`

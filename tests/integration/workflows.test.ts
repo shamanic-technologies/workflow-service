@@ -87,11 +87,6 @@ vi.mock("../../src/lib/features-client.js", () => ({
     // Simulate: dynasty slug resolves to itself + versioned variants
     return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
   }),
-  extractForwardHeaders: (req: { headers: Record<string, string | string[] | undefined> }) => ({
-    "x-org-id": req.headers["x-org-id"] as string,
-    "x-user-id": req.headers["x-user-id"] as string,
-    "x-run-id": req.headers["x-run-id"] as string,
-  }),
 }));
 
 // Mock Windmill client
@@ -930,7 +925,7 @@ describe("GET /workflows/:id/required-providers", () => {
         { service: "client", method: "POST", path: "/users" },
         { service: "transactional-email", method: "POST", path: "/send" },
       ],
-      { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
+      { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
   });
 

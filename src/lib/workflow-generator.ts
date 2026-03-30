@@ -10,12 +10,11 @@ import {
 } from "./api-registry-client.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
-import type { IdentityHeaders } from "./key-service-client.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 import {
   chatServiceComplete,
   type ChatServiceCompleteRequest,
   type ChatServiceCompleteResponse,
-  type ChatServiceIdentity,
 } from "./chat-service-client.js";
 
 export interface GenerateWorkflowInput {
@@ -43,7 +42,7 @@ export interface GenerateWorkflowResult {
 
 const MAX_RETRIES = 2;
 
-let overrideCompleteFn: ((req: ChatServiceCompleteRequest, id: ChatServiceIdentity) => Promise<ChatServiceCompleteResponse>) | null = null;
+let overrideCompleteFn: ((req: ChatServiceCompleteRequest, h: DownstreamHeaders) => Promise<ChatServiceCompleteResponse>) | null = null;
 
 /** Exported for testing — allows injecting a mock chat-service client */
 export function setChatServiceClient(fn: typeof overrideCompleteFn): void {
@@ -52,16 +51,16 @@ export function setChatServiceClient(fn: typeof overrideCompleteFn): void {
 
 async function callComplete(
   request: ChatServiceCompleteRequest,
-  identity: ChatServiceIdentity,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<ChatServiceCompleteResponse> {
-  if (overrideCompleteFn) return overrideCompleteFn(request, identity);
-  return chatServiceComplete(request, identity);
+  if (overrideCompleteFn) return overrideCompleteFn(request, downstreamHeaders);
+  return chatServiceComplete(request, downstreamHeaders);
 }
 
-async function fetchServiceContext(identity: IdentityHeaders): Promise<ServiceContext> {
-  const context = await fetchLlmContext(identity);
+async function fetchServiceContext(downstreamHeaders: DownstreamHeaders): Promise<ServiceContext> {
+  const context = await fetchLlmContext(downstreamHeaders);
   const serviceNames = context.services.map((s: { service: string }) => s.service);
-  const specsMap = await fetchSpecsForServices(serviceNames, identity);
+  const specsMap = await fetchSpecsForServices(serviceNames, downstreamHeaders);
 
   const specs: Record<string, unknown> = {};
   for (const [name, spec] of specsMap) specs[name] = spec;
@@ -78,7 +77,7 @@ async function fetchServiceContext(identity: IdentityHeaders): Promise<ServiceCo
 
 export async function generateWorkflow(
   input: GenerateWorkflowInput,
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<GenerateWorkflowResult> {
   if (!process.env.API_REGISTRY_SERVICE_URL || !process.env.API_REGISTRY_SERVICE_API_KEY) {
     throw new Error(
@@ -87,7 +86,7 @@ export async function generateWorkflow(
   }
 
   // Pre-fetch all service context upfront
-  const serviceContext = await fetchServiceContext(identity);
+  const serviceContext = await fetchServiceContext(downstreamHeaders);
 
   const styleDirective = input.style
     ? `This workflow MUST be created in the style of ${input.style.name}. Adopt their methodology, tone, and strategic patterns.`
@@ -118,7 +117,7 @@ export async function generateWorkflow(
         maxTokens: 16384,
         model: "claude-sonnet-4-6",
       },
-      identity,
+      downstreamHeaders,
     );
 
     if (!response.json) {
@@ -141,7 +140,7 @@ export async function generateWorkflow(
       if (httpEndpoints.length > 0) {
         try {
           const serviceNames = [...new Set(httpEndpoints.map((e) => e.service))];
-          const specs = await fetchSpecsForServices(serviceNames, identity);
+          const specs = await fetchSpecsForServices(serviceNames, downstreamHeaders);
           const endpointResult = validateWorkflowEndpoints(result.dag, specs);
 
           if (!endpointResult.valid) {

@@ -12,8 +12,8 @@ import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 import type {
   ChatServiceCompleteRequest,
   ChatServiceCompleteResponse,
-  ChatServiceIdentity,
 } from "../../src/lib/chat-service-client.js";
+import type { DownstreamHeaders } from "../../src/lib/downstream-headers.js";
 
 // Mock api-registry-client
 const mockFetchLlmContext = vi.fn();
@@ -146,7 +146,7 @@ function createMockResponse(dag: unknown, overrides?: Record<string, unknown>): 
   };
 }
 
-const TEST_IDENTITY = { orgId: "org-1", userId: "user-1", runId: "run-1" };
+const TEST_IDENTITY: DownstreamHeaders = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" };
 
 const MOCK_LLM_CONTEXT = {
   _description: "LLM-friendly context",

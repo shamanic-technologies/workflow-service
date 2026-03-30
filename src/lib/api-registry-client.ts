@@ -1,4 +1,4 @@
-import type { IdentityHeaders } from "./key-service-client.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 
 export interface LlmServiceSummary {
   service: string;
@@ -38,23 +38,17 @@ function getApiRegistryConfig(): { baseUrl: string; apiKey: string } {
   return { baseUrl: baseUrl.replace(/\/$/, ""), apiKey };
 }
 
-function buildHeaders(apiKey: string, identity?: IdentityHeaders): Record<string, string> {
-  const headers: Record<string, string> = { "x-api-key": apiKey };
-  if (identity) {
-    headers["x-org-id"] = identity.orgId;
-    headers["x-user-id"] = identity.userId;
-    headers["x-run-id"] = identity.runId;
-  }
-  return headers;
+function buildHeaders(apiKey: string, downstreamHeaders?: DownstreamHeaders): Record<string, string> {
+  return { "x-api-key": apiKey, ...downstreamHeaders };
 }
 
 /** GET /llm-context — compact summary of all services and endpoints for LLM consumption */
-export async function fetchLlmContext(identity?: IdentityHeaders): Promise<LlmContextResponse> {
+export async function fetchLlmContext(downstreamHeaders?: DownstreamHeaders): Promise<LlmContextResponse> {
   const { baseUrl, apiKey } = getApiRegistryConfig();
 
   const res = await fetch(`${baseUrl}/llm-context`, {
     method: "GET",
-    headers: buildHeaders(apiKey, identity),
+    headers: buildHeaders(apiKey, downstreamHeaders),
   });
 
   if (!res.ok) {
@@ -70,7 +64,7 @@ export async function fetchLlmContext(identity?: IdentityHeaders): Promise<LlmCo
 /** GET /llm-context/:service — endpoints for a specific service (method, path, summary) */
 export async function fetchServiceEndpoints(
   serviceName: string,
-  identity?: IdentityHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<LlmServiceEndpointsResponse> {
   const { baseUrl, apiKey } = getApiRegistryConfig();
 
@@ -78,7 +72,7 @@ export async function fetchServiceEndpoints(
     `${baseUrl}/llm-context/${encodeURIComponent(serviceName)}`,
     {
       method: "GET",
-      headers: buildHeaders(apiKey, identity),
+      headers: buildHeaders(apiKey, downstreamHeaders),
     },
   );
 
@@ -94,13 +88,13 @@ export async function fetchServiceEndpoints(
 
 /** GET /services — list all registered services (used for health check + enumeration) */
 export async function fetchServiceList(
-  identity?: IdentityHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<Array<{ service: string }>> {
   const { baseUrl, apiKey } = getApiRegistryConfig();
 
   const res = await fetch(`${baseUrl}/services`, {
     method: "GET",
-    headers: buildHeaders(apiKey, identity),
+    headers: buildHeaders(apiKey, downstreamHeaders),
   });
 
   if (!res.ok) {
@@ -116,14 +110,14 @@ export async function fetchServiceList(
 /** Fetch OpenAPI specs for multiple services (deduplicated). Returns Map<serviceName, spec> */
 export async function fetchSpecsForServices(
   serviceNames: string[],
-  identity?: IdentityHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<Map<string, Record<string, unknown>>> {
   const unique = [...new Set(serviceNames)];
   const specs = new Map<string, Record<string, unknown>>();
 
   const results = await Promise.allSettled(
     unique.map(async (name) => {
-      const spec = await fetchServiceSpec(name, identity);
+      const spec = await fetchServiceSpec(name, downstreamHeaders);
       return { name, spec };
     }),
   );
@@ -142,7 +136,7 @@ export async function fetchSpecsForServices(
 /** GET /openapi/:service — full OpenAPI spec for one service */
 export async function fetchServiceSpec(
   serviceName: string,
-  identity?: IdentityHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<Record<string, unknown>> {
   const { baseUrl, apiKey } = getApiRegistryConfig();
 
@@ -150,7 +144,7 @@ export async function fetchServiceSpec(
     `${baseUrl}/openapi/${encodeURIComponent(serviceName)}`,
     {
       method: "GET",
-      headers: buildHeaders(apiKey, identity),
+      headers: buildHeaders(apiKey, downstreamHeaders),
     },
   );
 

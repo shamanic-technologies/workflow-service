@@ -1,4 +1,4 @@
-import type { IdentityHeaders } from "./key-service-client.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 
 // --- Config helpers (same pattern as key-service-client.ts) ---
 
@@ -50,7 +50,7 @@ export interface EmailStatsResponse {
 // --- Fetch aggregated costs from runs-service (auth) ---
 
 export async function fetchRunCostsAuth(
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
   workflowSlugs?: string[],
 ): Promise<WorkflowSlugCost[]> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
@@ -61,9 +61,7 @@ export async function fetchRunCostsAuth(
     method: "GET",
     headers: {
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
   });
 
@@ -176,7 +174,7 @@ export interface EmailStatsGroup {
 
 export async function fetchEmailStatsAuth(
   workflowSlugs: string[],
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<EmailStatsGroup[]> {
   if (workflowSlugs.length === 0) return [];
 
@@ -190,9 +188,7 @@ export async function fetchEmailStatsAuth(
     method: "GET",
     headers: {
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
   });
 

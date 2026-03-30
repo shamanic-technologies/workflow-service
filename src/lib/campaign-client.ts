@@ -4,6 +4,8 @@
  * Used to check whether workflows are currently in use by active campaigns.
  */
 
+import type { DownstreamHeaders } from "./downstream-headers.js";
+
 interface Campaign {
   id: string;
   workflowSlug: string;
@@ -15,7 +17,9 @@ interface Campaign {
  * Fetch all campaigns from campaign-service.
  * Requires CAMPAIGN_SERVICE_URL and CAMPAIGN_SERVICE_API_KEY env vars.
  */
-export async function fetchAllCampaigns(): Promise<Campaign[]> {
+export async function fetchAllCampaigns(
+  downstreamHeaders?: DownstreamHeaders,
+): Promise<Campaign[]> {
   const baseUrl = process.env.CAMPAIGN_SERVICE_URL?.replace(/\/$/, "");
   const apiKey = process.env.CAMPAIGN_SERVICE_API_KEY;
 
@@ -30,6 +34,7 @@ export async function fetchAllCampaigns(): Promise<Campaign[]> {
     headers: {
       "x-api-key": apiKey,
       "x-service-name": "workflow-service",
+      ...downstreamHeaders,
     },
   });
 
@@ -50,8 +55,10 @@ export async function fetchAllCampaigns(): Promise<Campaign[]> {
  *   - status is "active", OR
  *   - toResumeAt is non-null (periodic campaign temporarily paused, will resume)
  */
-export async function fetchActiveWorkflowSlugs(): Promise<Set<string>> {
-  const campaigns = await fetchAllCampaigns();
+export async function fetchActiveWorkflowSlugs(
+  downstreamHeaders?: DownstreamHeaders,
+): Promise<Set<string>> {
+  const campaigns = await fetchAllCampaigns(downstreamHeaders);
 
   const activeSlugs = new Set<string>();
   for (const c of campaigns) {

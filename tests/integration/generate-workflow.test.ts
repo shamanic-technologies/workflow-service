@@ -118,7 +118,7 @@ describe("POST /workflows/generate", () => {
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined, style: undefined },
-      { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
+      { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
   });
 
@@ -193,7 +193,7 @@ describe("POST /workflows/generate", () => {
 
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] }, style: undefined },
-      { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
+      { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
   });
 
@@ -260,7 +260,7 @@ describe("POST /workflows/generate", () => {
       expect.objectContaining({
         style: { type: "human", humanId: "human-123", name: "Hormozi" },
       }),
-      { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
+      { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
   });
 

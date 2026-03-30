@@ -3,8 +3,8 @@ import type { DAG } from "../../src/lib/dag-validator.js";
 import type {
   ChatServiceCompleteRequest,
   ChatServiceCompleteResponse,
-  ChatServiceIdentity,
 } from "../../src/lib/chat-service-client.js";
+import type { DownstreamHeaders } from "../../src/lib/downstream-headers.js";
 
 // Mock the API registry client
 vi.mock("../../src/lib/api-registry-client.js", () => ({
@@ -193,8 +193,8 @@ describe("upgradeWorkflow", () => {
       METADATA,
     );
 
-    const identity = mockComplete.mock.calls[0][1] as ChatServiceIdentity;
-    expect(identity.orgId).toBe("platform");
-    expect(identity.userId).toBe("workflow-service");
+    const headers = mockComplete.mock.calls[0][1] as DownstreamHeaders;
+    expect(headers["x-org-id"]).toBe("platform");
+    expect(headers["x-user-id"]).toBe("workflow-service");
   });
 });

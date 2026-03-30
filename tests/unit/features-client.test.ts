@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resolveFeatureDynastySlugs, resolveFeatureDynasty, fetchFeatureOutputs, fetchStatsRegistry, extractForwardHeaders } from "../../src/lib/features-client.js";
+import { resolveFeatureDynastySlugs, resolveFeatureDynasty, fetchFeatureOutputs, fetchStatsRegistry } from "../../src/lib/features-client.js";
+import { extractDownstreamHeaders } from "../../src/lib/downstream-headers.js";
 
 describe("resolveFeatureDynastySlugs", () => {
   const originalUrl = process.env.FEATURES_SERVICE_URL;
@@ -96,18 +97,45 @@ describe("resolveFeatureDynastySlugs", () => {
   });
 });
 
-describe("extractForwardHeaders", () => {
-  it("extracts x-org-id, x-user-id, x-run-id from request headers", () => {
+describe("extractDownstreamHeaders", () => {
+  it("extracts all known contextual headers from request", () => {
     const req = {
       headers: {
         "x-org-id": "org-abc",
         "x-user-id": "user-def",
         "x-run-id": "run-ghi",
+        "x-brand-id": "brand-jkl",
+        "x-campaign-id": "camp-mno",
+        "x-workflow-slug": "my-workflow",
+        "x-feature-slug": "my-feature",
         "x-api-key": "should-not-appear",
       },
     };
 
-    const result = extractForwardHeaders(req);
+    const result = extractDownstreamHeaders(req);
+
+    expect(result).toEqual({
+      "x-org-id": "org-abc",
+      "x-user-id": "user-def",
+      "x-run-id": "run-ghi",
+      "x-brand-id": "brand-jkl",
+      "x-campaign-id": "camp-mno",
+      "x-workflow-slug": "my-workflow",
+      "x-feature-slug": "my-feature",
+    });
+    expect(result).not.toHaveProperty("x-api-key");
+  });
+
+  it("omits optional headers that are not present", () => {
+    const req = {
+      headers: {
+        "x-org-id": "org-abc",
+        "x-user-id": "user-def",
+        "x-run-id": "run-ghi",
+      },
+    };
+
+    const result = extractDownstreamHeaders(req);
 
     expect(result).toEqual({
       "x-org-id": "org-abc",
