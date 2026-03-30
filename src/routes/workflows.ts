@@ -1300,7 +1300,10 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
   }
 });
 
-// PUT /workflows/:id — Metadata-only update (DAG changes are forbidden; use PUT /workflows/upgrade for structural changes)
+// PUT /workflows/:id — Update a workflow (metadata or DAG)
+// - No DAG → metadata update in-place
+// - DAG with same signature → update in-place
+// - DAG with new signature → fork (new dynasty), optionally deprecate source dynasty
 router.put("/workflows/:id", requireApiKey, async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
     res.status(400).json({ error: "Invalid workflow ID format" });
@@ -1308,13 +1311,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
   }
   try {
     const body = UpdateWorkflowSchema.parse(req.body);
-
-    if (body.dag) {
-      res.status(400).json({
-        error: "DAG changes are not allowed via PATCH/PUT on individual workflows. Use PUT /workflows/upgrade for structural changes.",
-      });
-      return;
-    }
+    const orgId = res.locals.orgId as string;
 
     const [existing] = await db
       .select()
@@ -1326,18 +1323,226 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       return;
     }
 
-    // Metadata-only in-place update
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (body.description !== undefined) updates.description = body.description;
-    if (body.tags !== undefined) updates.tags = body.tags;
+    // --- Case 1: No DAG provided — metadata-only in-place update ---
+    if (!body.dag) {
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.tags !== undefined) updates.tags = body.tags;
 
-    const [updated] = await db
-      .update(workflows)
-      .set(updates)
-      .where(eq(workflows.id, req.params.id))
-      .returning();
+      const [updated] = await db
+        .update(workflows)
+        .set(updates)
+        .where(eq(workflows.id, req.params.id))
+        .returning();
 
-    res.json({ ...formatWorkflow(updated), _action: "updated" as const });
+      res.json({ ...formatWorkflow(updated), _action: "updated" as const });
+      return;
+    }
+
+    // --- DAG provided — validate it ---
+    const dag = body.dag as DAG;
+    const validation = validateDAG(dag);
+    if (!validation.valid) {
+      res.status(400).json({ error: "Invalid DAG", details: validation.errors });
+      return;
+    }
+
+    const newSignature = computeDAGSignature(body.dag);
+
+    // --- Case 2: Same signature — no structural change, update in-place ---
+    if (newSignature === existing.signature) {
+      const updates: Record<string, unknown> = { updatedAt: new Date(), dag: body.dag };
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.tags !== undefined) updates.tags = body.tags;
+
+      const openFlow = dagToOpenFlow(dag, existing.slug);
+      if (existing.windmillFlowPath) {
+        const client = getWindmillClient();
+        if (client) {
+          try {
+            await client.updateFlow(existing.windmillFlowPath, {
+              summary: existing.slug,
+              value: openFlow.value,
+              schema: openFlow.schema,
+            });
+          } catch (err) {
+            console.error("[workflow-service] Failed to update flow in Windmill:", err);
+          }
+        }
+      }
+
+      const [updated] = await db
+        .update(workflows)
+        .set(updates)
+        .where(eq(workflows.id, req.params.id))
+        .returning();
+
+      res.json({ ...formatWorkflow(updated), _action: "updated" as const });
+      return;
+    }
+
+    // --- Case 3: Different signature — FORK: create new workflow in new dynasty ---
+
+    // Check for existing active workflow with same signature (conflict)
+    const [conflicting] = await db
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.featureSlug, existing.featureSlug),
+          eq(workflows.signature, newSignature),
+          eq(workflows.status, "active"),
+        )
+      );
+
+    if (conflicting) {
+      res.status(409).json({
+        error: "A workflow with this DAG signature already exists",
+        existingWorkflowId: conflicting.id,
+        existingWorkflowSlug: conflicting.slug,
+      });
+      return;
+    }
+
+    // Generate new signatureName (include deprecated to avoid recycling names)
+    const existingWorkflows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows)
+      .where(sql`true`);
+    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
+    const signatureName = pickSignatureName(newSignature, usedNames);
+
+    // Resolve dynasty naming from features-service
+    const dynasty = await resolveFeatureDynasty(existing.featureSlug);
+    const baseDynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const baseDynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
+    const newSlug = baseDynastySlug; // version 1, no suffix
+    const newName = baseDynastyName; // version 1, no suffix
+
+    const openFlow = dagToOpenFlow(dag, newSlug);
+    const flowPath = generateFlowPath(orgId, newSlug);
+    const client = getWindmillClient();
+
+    if (client) {
+      try {
+        await client.createFlow({
+          path: flowPath,
+          summary: newSlug,
+          description: body.description ?? existing.description ?? undefined,
+          value: openFlow.value,
+          schema: openFlow.schema,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("already exists")) {
+          try {
+            await client.updateFlow(flowPath, {
+              summary: newSlug,
+              description: body.description ?? existing.description ?? undefined,
+              value: openFlow.value,
+              schema: openFlow.schema,
+            });
+          } catch (updateErr) {
+            console.error("[workflow-service] Failed to update existing forked flow in Windmill:", updateErr);
+          }
+        } else {
+          console.error("[workflow-service] Failed to create forked flow in Windmill:", err);
+        }
+      }
+    }
+
+    let forked;
+    try {
+      const [row] = await db
+        .insert(workflows)
+        .values({
+          orgId: existing.orgId,
+          createdForBrandId: existing.createdForBrandId,
+          featureSlug: existing.featureSlug,
+          humanId: existing.humanId,
+          campaignId: existing.campaignId,
+          subrequestId: existing.subrequestId,
+          styleName: existing.styleName,
+          slug: newSlug,
+          name: newName,
+          dynastyName: baseDynastyName,
+          dynastySlug: baseDynastySlug,
+          description: body.description ?? existing.description,
+          category: existing.category,
+          channel: existing.channel,
+          audienceType: existing.audienceType,
+          tags: body.tags ?? (existing.tags as string[]) ?? [],
+          signature: newSignature,
+          signatureName,
+          version: 1,
+          dag: body.dag,
+          status: "active",
+          forkedFrom: existing.id,
+          windmillFlowPath: flowPath,
+          createdByUserId: res.locals.userId as string,
+          createdByRunId: res.locals.runId as string,
+        })
+        .returning();
+      forked = row;
+    } catch (dbErr: unknown) {
+      if (dbErr instanceof Error && "code" in dbErr && (dbErr as { code?: string }).code === "23505") {
+        res.status(409).json({
+          error: "A workflow with this name already exists",
+          detail: (dbErr as { detail?: string }).detail,
+        });
+        return;
+      }
+      throw dbErr;
+    }
+
+    // Determine if the source dynasty should be deprecated:
+    // Deprecate ONLY if the entire dynasty has zero campaign runs.
+    let sourceDynastyDeprecated = false;
+    const dynastyWorkflows = await db
+      .select({ id: workflows.id })
+      .from(workflows)
+      .where(eq(workflows.dynastySlug, existing.dynastySlug));
+    const dynastyWorkflowIds = dynastyWorkflows.map((w) => w.id);
+
+    if (dynastyWorkflowIds.length > 0) {
+      const campaignRuns = await db
+        .select({ id: workflowRuns.id })
+        .from(workflowRuns)
+        .where(
+          and(
+            sql`${workflowRuns.workflowId} IN (${sql.join(dynastyWorkflowIds.map(id => sql`${id}`), sql`, `)})`,
+            sql`${workflowRuns.campaignId} IS NOT NULL`,
+          )
+        );
+
+      if (campaignRuns.length === 0) {
+        // Dynasty has zero campaign runs — safe to deprecate
+        await db
+          .update(workflows)
+          .set({
+            status: "deprecated",
+            upgradedTo: forked.id,
+            updatedAt: new Date(),
+          })
+          .where(eq(workflows.id, existing.id));
+        sourceDynastyDeprecated = true;
+
+        console.log(
+          `[workflow-service] fork+deprecate: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id}) [dynasty had 0 campaign runs]`,
+        );
+      } else {
+        console.log(
+          `[workflow-service] fork: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id}) [source dynasty kept active: ${campaignRuns.length} campaign run(s)]`,
+        );
+      }
+    }
+
+    res.status(201).json({
+      ...formatWorkflow(forked),
+      _action: "forked" as const,
+      _forkedFromName: existing.name,
+      _forkedFromId: existing.id,
+      _sourceDynastyDeprecated: sourceDynastyDeprecated,
+    });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
       res.status(400).json({ error: "Validation error", details: err });
