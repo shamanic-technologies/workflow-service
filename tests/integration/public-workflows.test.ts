@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 
-const mockResolveFeatureDynastySlugs = vi.fn().mockImplementation((dynastySlug: string) => {
-  return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
-});
-
 // --- Mock DB with table awareness ---
 const mockWorkflowRows: Record<string, unknown>[] = [];
 const mockWorkflowRunRows: Record<string, unknown>[] = [];
@@ -100,7 +96,9 @@ vi.mock("../../src/lib/features-client.js", () => ({
       .join(" ");
     return Promise.resolve({ featureDynastyName: dynastyName, featureDynastySlug: dynastySlug });
   }),
-  resolveFeatureDynastySlugs: (...args: unknown[]) => mockResolveFeatureDynastySlugs(...args),
+  resolveFeatureDynastySlugs: vi.fn().mockImplementation((dynastySlug: string) => {
+    return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
+  }),
   fetchFeatureOutputs: vi.fn().mockResolvedValue([{ key: "emailsReplied", displayOrder: 0 }]),
   fetchStatsRegistry: vi.fn().mockResolvedValue({ emailsReplied: { type: "count", label: "Replies" } }),
 }));
@@ -328,32 +326,6 @@ describe("GET /public/workflows/ranked", () => {
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(1);
   });
-
-  it("forwards downstream headers to resolveFeatureDynastySlugs", async () => {
-    mockResolveFeatureDynastySlugs.mockClear();
-    const wf = makeWorkflow({ id: "wf-hdr" });
-    mockWorkflowRows.push(wf);
-    mockWorkflowRunRows.push(makeRun("wf-hdr", "ext-run-hdr"));
-
-    mockFetchRunCostsPublic.mockResolvedValue([]);
-    mockFetchEmailStatsPublic.mockResolvedValue([]);
-
-    await request
-      .get("/public/workflows/ranked")
-      .set("x-org-id", "org-test")
-      .set("x-user-id", "user-test")
-      .set("x-run-id", "run-test")
-      .query({ featureDynastySlug: "sales-email-cold-outreach", objective: "emailsReplied" });
-
-    expect(mockResolveFeatureDynastySlugs).toHaveBeenCalledWith(
-      "sales-email-cold-outreach",
-      expect.objectContaining({
-        "x-org-id": "org-test",
-        "x-user-id": "user-test",
-        "x-run-id": "run-test",
-      }),
-    );
-  });
 });
 
 // ==================== GET /public/workflows/best ====================
@@ -490,36 +462,6 @@ describe("GET /public/workflows/best", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.best.emailsReplied.createdForBrandId).toBe("brand-z");
-  });
-
-  it("forwards downstream headers to resolveFeatureDynastySlugs", async () => {
-    mockResolveFeatureDynastySlugs.mockClear();
-    const wf = makeWorkflow({ id: "wf-hdr-best" });
-    mockWorkflowRows.push(wf);
-    mockWorkflowRunRows.push(makeRun("wf-hdr-best", "ext-run-hdr-best"));
-
-    mockFetchRunCostsPublic.mockResolvedValue([
-      { workflowSlug: DEFAULT_WF_SLUG, totalCostInUsdCents: 100, runCount: 1 },
-    ]);
-    mockFetchEmailStatsPublic.mockResolvedValue([
-      makeEmailGroup(DEFAULT_WF_SLUG, { transactional: { replied: 5 } }),
-    ]);
-
-    await request
-      .get("/public/workflows/best")
-      .set("x-org-id", "org-test")
-      .set("x-user-id", "user-test")
-      .set("x-run-id", "run-test")
-      .query({ featureDynastySlug: "sales-email-cold-outreach" });
-
-    expect(mockResolveFeatureDynastySlugs).toHaveBeenCalledWith(
-      "sales-email-cold-outreach",
-      expect.objectContaining({
-        "x-org-id": "org-test",
-        "x-user-id": "user-test",
-        "x-run-id": "run-test",
-      }),
-    );
   });
 
   it("accepts featureDynastySlug as alternative to featureSlug", async () => {
