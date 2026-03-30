@@ -2,7 +2,9 @@ import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { fetchRunCostsAuth, fetchRunCostsPublic, fetchEmailStatsAuth, fetchEmailStatsPublic } from "./stats-client.js";
+import { fetchSourceStats, type SourceStatsMap } from "./source-stats-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
+import type { StatsRegistryEntry } from "./features-client.js";
 
 export const EMPTY_EMAIL_STATS = {
   sent: 0, delivered: 0, opened: 0, clicked: 0,
@@ -10,10 +12,10 @@ export const EMPTY_EMAIL_STATS = {
 };
 
 /**
- * Maps stats registry keys (from features-service) to email stats field names.
- * These are the count-type metrics that can be used as ranking objectives.
+ * Maps email-gateway stats keys to internal email stats field names.
+ * Used to populate sourceMetrics from email stats data.
  */
-const STATS_KEY_TO_EMAIL_FIELD: Record<string, keyof typeof EMPTY_EMAIL_STATS> = {
+const EMAIL_KEY_TO_FIELD: Record<string, keyof typeof EMPTY_EMAIL_STATS> = {
   emailsSent: "sent",
   emailsDelivered: "delivered",
   emailsOpened: "opened",
@@ -35,20 +37,20 @@ export function resolveObjective(objective: string): string {
 }
 
 /**
- * Extracts the outcome count for a given stats key from aggregated email stats.
- * Sums transactional + broadcast counts. Throws if the key is unknown.
+ * Extracts the outcome count for a given stats key from a workflow's source metrics.
+ * Throws if the key is not found in the metrics map.
  */
 export function extractOutcomeCount(
   statsKey: string,
-  emailStats: { transactional: typeof EMPTY_EMAIL_STATS; broadcast: typeof EMPTY_EMAIL_STATS },
+  sourceMetrics: Record<string, number>,
 ): number {
-  const field = STATS_KEY_TO_EMAIL_FIELD[statsKey];
-  if (!field) {
+  const value = sourceMetrics[statsKey];
+  if (value === undefined) {
     throw new Error(
-      `Unknown objective metric: "${statsKey}". Known email stats keys: ${Object.keys(STATS_KEY_TO_EMAIL_FIELD).join(", ")}`
+      `Metric "${statsKey}" not found in source metrics. Available: [${Object.keys(sourceMetrics).join(", ")}]`
     );
   }
-  return emailStats.transactional[field] + emailStats.broadcast[field];
+  return value;
 }
 
 /**
@@ -58,13 +60,27 @@ export function extractOutcomeCount(
 export function rescoreForObjective(scores: WorkflowScore[], objective: string): WorkflowScore[] {
   const resolved = resolveObjective(objective);
   return scores.map((s) => {
-    const outcomes = extractOutcomeCount(resolved, s.emailStats);
+    const outcomes = extractOutcomeCount(resolved, s.sourceMetrics);
     return {
       ...s,
       totalOutcomes: outcomes,
       costPerOutcome: outcomes > 0 ? s.totalCost / outcomes : null,
     };
   });
+}
+
+/**
+ * Builds sourceMetrics from email stats by mapping email-gateway keys to counts.
+ */
+function emailStatsToMetrics(
+  transactional: typeof EMPTY_EMAIL_STATS,
+  broadcast: typeof EMPTY_EMAIL_STATS,
+): Record<string, number> {
+  const metrics: Record<string, number> = {};
+  for (const [statsKey, field] of Object.entries(EMAIL_KEY_TO_FIELD)) {
+    metrics[statsKey] = transactional[field] + broadcast[field];
+  }
+  return metrics;
 }
 
 export interface WorkflowScore {
@@ -74,6 +90,8 @@ export interface WorkflowScore {
   costPerOutcome: number | null;
   completedRuns: number;
   emailStats: { transactional: typeof EMPTY_EMAIL_STATS; broadcast: typeof EMPTY_EMAIL_STATS };
+  /** All metric values keyed by stats registry key (e.g. emailsReplied, leadsServed, outletsDiscovered). */
+  sourceMetrics: Record<string, number>;
 }
 
 export function getUpgradeChainIds(
@@ -124,6 +142,8 @@ export async function computeWorkflowScores(
   deprecatedWorkflows: (typeof workflows.$inferSelect)[],
   objective: string,
   mode: ScoreMode,
+  /** Stats registry entries for the objectives — used to fetch from the right source services. */
+  registry?: Record<string, StatsRegistryEntry>,
 ): Promise<ScoreResult> {
   // 1. Build dynasty chains: for each active workflow, collect all workflow names in its upgrade chain
   const chainWorkflowsById: Record<string, (typeof workflows.$inferSelect)[]> = {};
@@ -159,7 +179,33 @@ export async function computeWorkflowScores(
 
   const emailBySlug = new Map(emailGroups.map((g) => [g.workflowSlug, g]));
 
-  // 5. For each active workflow, aggregate costs + email stats across dynasty chain + build brand map
+  // 5. Fetch stats from additional source services (leads, journalists, outlets)
+  //    based on registry sources — only for auth mode (source services require identity)
+  const additionalSourceMaps: SourceStatsMap[] = [];
+  if (registry && mode.kind === "auth") {
+    const sourcesToFetch = new Set<string>();
+    for (const entry of Object.values(registry)) {
+      if (entry.source && entry.source !== "email-gateway" && entry.source !== "runs" && entry.source !== "campaign") {
+        sourcesToFetch.add(entry.source);
+      }
+    }
+    const sourcePromises = [...sourcesToFetch].map((source) =>
+      fetchSourceStats(source, allChainNames, mode.identity)
+    );
+    additionalSourceMaps.push(...await Promise.all(sourcePromises));
+  }
+
+  // Build a combined map: workflowSlug → Record<statsKey, number> from additional sources
+  const additionalMetricsBySlug = new Map<string, Record<string, number>>();
+  for (const sourceMap of additionalSourceMaps) {
+    for (const [slug, metrics] of sourceMap) {
+      const existing = additionalMetricsBySlug.get(slug) ?? {};
+      Object.assign(existing, metrics);
+      additionalMetricsBySlug.set(slug, existing);
+    }
+  }
+
+  // 6. For each active workflow, aggregate costs + all metrics across dynasty chain + build brand map
   const workflowRunsByWfId: Record<string, string[]> = {};
   const runBrandMap = new Map<string, string>();
   const scores: WorkflowScore[] = [];
@@ -187,6 +233,16 @@ export async function computeWorkflowScores(
       }
     }
 
+    // Source metrics: combine email stats + additional source stats
+    const sourceMetrics = emailStatsToMetrics(transactional, broadcast);
+    for (const name of chainNames) {
+      const additional = additionalMetricsBySlug.get(name);
+      if (!additional) continue;
+      for (const [key, value] of Object.entries(additional)) {
+        sourceMetrics[key] = (sourceMetrics[key] ?? 0) + value;
+      }
+    }
+
     // Run IDs + brand map: still from local workflow_runs table (needed for brand grouping)
     const runs = chainIds.length === 1
       ? await db.select().from(workflowRuns).where(
@@ -200,7 +256,7 @@ export async function computeWorkflowScores(
     workflowRunsByWfId[wf.id] = runIds;
 
     const resolvedObjective = resolveObjective(objective);
-    const outcomes = extractOutcomeCount(resolvedObjective, { transactional, broadcast });
+    const outcomes = extractOutcomeCount(resolvedObjective, sourceMetrics);
 
     const costPerOutcome = outcomes > 0 ? totalCost / outcomes : null;
 
@@ -211,6 +267,7 @@ export async function computeWorkflowScores(
       costPerOutcome,
       completedRuns: runIds.length,
       emailStats: { transactional, broadcast },
+      sourceMetrics,
     });
   }
 
@@ -300,7 +357,13 @@ export function handleExternalServiceError(err: unknown, res: import("express").
     err instanceof Error &&
     (err.message.includes("RUNS_SERVICE_URL") ||
       err.message.includes("EMAIL_GATEWAY_SERVICE_URL") ||
-      err.message.startsWith("email-gateway-service error:"))
+      err.message.includes("LEAD_SERVICE_URL") ||
+      err.message.includes("JOURNALISTS_SERVICE_URL") ||
+      err.message.includes("OUTLETS_SERVICE_URL") ||
+      err.message.startsWith("email-gateway-service error:") ||
+      err.message.startsWith("lead-service error:") ||
+      err.message.startsWith("journalists-service error:") ||
+      err.message.startsWith("outlets-service error:"))
   ) {
     console.error(`[workflow-service] ${label}: external service error:`, err.message);
     res.status(502).json({ error: err.message });

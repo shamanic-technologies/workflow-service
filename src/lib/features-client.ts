@@ -169,6 +169,7 @@ export async function fetchFeatureOutputs(
 export interface StatsRegistryEntry {
   type: string;
   label: string;
+  source?: string;
 }
 
 /**
