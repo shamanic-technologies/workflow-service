@@ -1,137 +1,17 @@
 import { NODE_TYPE_REGISTRY } from "./node-type-registry.js";
 
-/**
- * Claude tool_use schema for structured DAG output.
- * Forces the LLM to return valid JSON matching this shape.
- */
-export const DAG_GENERATION_TOOL = {
-  name: "create_workflow" as const,
-  description: "Create a valid DAG workflow with dimensions based on the user's description",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      category: {
-        type: "string" as const,
-        enum: ["sales", "pr"],
-        description: "Workflow category",
-      },
-      channel: {
-        type: "string" as const,
-        enum: ["email"],
-        description: "Distribution channel",
-      },
-      audienceType: {
-        type: "string" as const,
-        enum: ["cold-outreach"],
-        description: "Audience type",
-      },
-      description: {
-        type: "string" as const,
-        description: "Human-readable description of what this workflow does (1-2 sentences)",
-      },
-      dag: {
-        type: "object" as const,
-        properties: {
-          nodes: {
-            type: "array" as const,
-            items: {
-              type: "object" as const,
-              properties: {
-                id: { type: "string" as const },
-                type: { type: "string" as const },
-                config: { type: "object" as const },
-                inputMapping: { type: "object" as const },
-                retries: { type: "number" as const },
-              },
-              required: ["id", "type"],
-            },
-          },
-          edges: {
-            type: "array" as const,
-            items: {
-              type: "object" as const,
-              properties: {
-                from: { type: "string" as const },
-                to: { type: "string" as const },
-                condition: { type: "string" as const },
-              },
-              required: ["from", "to"],
-            },
-          },
-          onError: { type: "string" as const },
-        },
-        required: ["nodes", "edges"],
-      },
-    },
-    required: ["category", "channel", "audienceType", "description", "dag"],
-  },
-};
-
-/** Tool for listing all available services from the API registry */
-export const LIST_SERVICES_TOOL = {
-  name: "list_services" as const,
-  description:
-    "List all available microservices in the platform. Returns service name, description, and endpoint summaries. " +
-    "Call this FIRST to understand what services are available before designing the workflow.",
-  input_schema: {
-    type: "object" as const,
-    properties: {},
-    required: [] as string[],
-  },
-};
-
-/** Tool for listing endpoints of a specific service */
-export const LIST_SERVICE_ENDPOINTS_TOOL = {
-  name: "list_service_endpoints" as const,
-  description:
-    "List all endpoints for a specific service with method, path, and summary. " +
-    "Call this after list_services to see what endpoints a service offers before diving into full details.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      service: {
-        type: "string" as const,
-        description: "The service name (e.g. 'lead', 'campaign', 'brand')",
-      },
-    },
-    required: ["service"],
-  },
-};
-
-/** Tool for getting detailed OpenAPI spec for a specific service */
-export const GET_SERVICE_ENDPOINTS_TOOL = {
-  name: "get_service_endpoints" as const,
-  description:
-    "Get the full OpenAPI specification for a specific service, including all endpoints, " +
-    "request/response schemas, required fields, and parameter details. " +
-    "Use this when you need exact request body schemas and response shapes for specific endpoints. " +
-    "Do NOT guess — always verify.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      service: {
-        type: "string" as const,
-        description: "The service name (e.g. 'lead', 'campaign', 'brand')",
-      },
-    },
-    required: ["service"],
-  },
-};
-
-/** All tools for agentic workflow generation */
-export const AGENTIC_TOOLS = [
-  LIST_SERVICES_TOOL,
-  LIST_SERVICE_ENDPOINTS_TOOL,
-  GET_SERVICE_ENDPOINTS_TOOL,
-  DAG_GENERATION_TOOL,
-];
+export interface ServiceContext {
+  services: Array<{ name: string; description: string; endpointCount: number }>;
+  specs: Record<string, unknown>;
+}
 
 export interface BuildSystemPromptOptions {
   styleDirective?: string;
+  serviceContext?: ServiceContext;
 }
 
 export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
-  const { styleDirective } = options ?? {};
+  const { styleDirective, serviceContext } = options ?? {};
 
   const nodeTypes = Object.entries(NODE_TYPE_REGISTRY)
     .map(([type, path]) => {
@@ -140,16 +20,30 @@ export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
     })
     .join("\n");
 
-  const serviceSection = `## Service Discovery (MANDATORY)
+  let serviceSection: string;
+  if (serviceContext) {
+    const serviceList = serviceContext.services
+      .map((s) => `- **${s.name}**: ${s.description} (${s.endpointCount} endpoints)`)
+      .join("\n");
 
-You have access to a live API registry via tools. Before generating the workflow, you MUST:
-1. Call list_services to see all available microservices (names, descriptions, endpoint counts)
-2. Call list_service_endpoints for services you're interested in — this shows method, path, and summary for each endpoint
-3. Call get_service_endpoints for EACH service you plan to use in the workflow — this gives you exact request body fields, response schemas, and parameter details
-4. Only then call create_workflow with an informed DAG based on verified endpoint specs
+    serviceSection = `## Available Services
 
-Do NOT guess endpoint paths or request body fields. ALWAYS verify with get_service_endpoints first.
-If a service or endpoint you need does not exist, do NOT invent it — adjust the workflow to use only real endpoints.`;
+${serviceList}
+
+## Service OpenAPI Specs
+
+Below are the full OpenAPI specifications for each service. Use these to determine the correct endpoint paths, request body fields, and response schemas. Do NOT guess — only use endpoints and fields documented here.
+
+\`\`\`json
+${JSON.stringify(serviceContext.specs, null, 2)}
+\`\`\`
+
+Do NOT invent endpoints or fields that are not in the specs above. If a service or endpoint you need does not exist, adjust the workflow to use only real endpoints.`;
+  } else {
+    serviceSection = `## Service Discovery
+
+No service context is available. Use only well-known endpoint paths.`;
+  }
 
   return `You are a workflow architect that generates valid DAG (Directed Acyclic Graph) workflows.
 
@@ -380,17 +274,36 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 }
 \`\`\`
 
-${styleDirective ? `## Style Directive\n\n${styleDirective}\n\n` : ""}Generate a single workflow DAG that fulfills the user's description. Use the create_workflow tool to return the result.`;
+${styleDirective ? `## Style Directive\n\n${styleDirective}\n\n` : ""}## Output Format
+
+You MUST respond with a JSON object matching this exact shape:
+
+\`\`\`json
+{
+  "category": "sales" | "pr",
+  "channel": "email",
+  "audienceType": "cold-outreach",
+  "description": "Human-readable description of what this workflow does (1-2 sentences)",
+  "dag": {
+    "nodes": [{ "id": "string", "type": "string", "config": {}, "inputMapping": {}, "retries": 0 }],
+    "edges": [{ "from": "string", "to": "string", "condition": "optional" }],
+    "onError": "optional-node-id"
+  }
+}
+\`\`\`
+
+Generate a single workflow DAG that fulfills the user's description. Return ONLY the JSON object, no explanation.`;
 }
 
 export interface BuildUpgradeSystemPromptOptions {
   currentDag: Record<string, unknown>;
   invalidEndpoints: Array<{ service: string; method: string; path: string; reason: string }>;
   fieldErrors?: Array<{ nodeId: string; service: string; method: string; path: string; field: string; reason: string }>;
+  serviceContext?: ServiceContext;
 }
 
 export function buildUpgradeSystemPrompt(options: BuildUpgradeSystemPromptOptions): string {
-  const { currentDag, invalidEndpoints, fieldErrors = [] } = options;
+  const { currentDag, invalidEndpoints, fieldErrors = [], serviceContext } = options;
 
   const brokenList = invalidEndpoints
     .map((ep) => `- ${ep.method} ${ep.service}${ep.path} — ${ep.reason}`)
@@ -421,7 +334,19 @@ The following nodes send incorrect body fields to their endpoints (missing requi
 
 ${fieldErrorList}
 
-To fix field errors, update the node's \`inputMapping\` (add missing \`body.*\` entries or remove incorrect ones) and/or \`config.body\` to match the endpoint's actual request schema. Use get_service_endpoints to check the correct schema.
+To fix field errors, update the node's \`inputMapping\` (add missing \`body.*\` entries or remove incorrect ones) and/or \`config.body\` to match the endpoint's actual request schema. Refer to the service specs below.
+`;
+  }
+
+  let serviceSpecsSection = "";
+  if (serviceContext) {
+    serviceSpecsSection = `## Service OpenAPI Specs
+
+Below are the OpenAPI specifications for the relevant services. Use these to find the correct endpoint paths and request body schemas.
+
+\`\`\`json
+${JSON.stringify(serviceContext.specs, null, 2)}
+\`\`\`
 `;
   }
 
@@ -434,11 +359,10 @@ ${JSON.stringify(currentDag, null, 2)}
 \`\`\`
 
 ${issuesSection}
+${serviceSpecsSection}
 ## Your Task
 
-1. Call list_services to see all available services
-2. Call get_service_endpoints for EACH service that has a broken endpoint or field error — find the correct path and request schema
-3. Call create_workflow with a corrected DAG
+Fix the broken endpoints and field errors using the service specs above, then return the corrected DAG.
 
 ## CRITICAL RULES
 
@@ -447,12 +371,29 @@ ${issuesSection}
 - **Do NOT add, remove, or reorder nodes or edges**
 - **Do NOT change conditions, stopAfterIf, skipIf, or any non-broken config keys**
 - **Keep the same category, channel, audienceType, and description**
-- **Use the discovery tools to verify the correct endpoint and schema before fixing**
 - If you cannot find a replacement endpoint, keep the original and note it in the description
 - When fixing field errors, use \`$ref:flow_input.fieldName\` or \`$ref:node-id.output.fieldName\` for dynamic values in inputMapping
 - NEVER add cost-tracking nodes — cost tracking is handled internally by each downstream service
 
-Return the corrected DAG via the create_workflow tool.`;
+## Output Format
+
+You MUST respond with a JSON object matching this exact shape:
+
+\`\`\`json
+{
+  "category": "sales" | "pr",
+  "channel": "email",
+  "audienceType": "cold-outreach",
+  "description": "Human-readable description",
+  "dag": {
+    "nodes": [...],
+    "edges": [...],
+    "onError": "optional-node-id"
+  }
+}
+\`\`\`
+
+Return ONLY the JSON object, no explanation.`;
 }
 
 export function buildRetryUserMessage(

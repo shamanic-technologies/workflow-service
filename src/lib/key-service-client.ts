@@ -11,11 +11,6 @@ export interface ProviderRequirementsResponse {
   providers: string[];
 }
 
-export interface KeyDecryptResponse {
-  key: string;
-  keySource: "platform" | "org";
-}
-
 function getKeyServiceConfig(): { baseUrl: string; apiKey: string } {
   const baseUrl = process.env.KEY_SERVICE_URL;
   const apiKey = process.env.KEY_SERVICE_API_KEY;
@@ -58,65 +53,3 @@ export async function fetchProviderRequirements(
   return res.json() as Promise<ProviderRequirementsResponse>;
 }
 
-export async function fetchAnthropicKey(
-  opts: { orgId: string; userId: string; runId: string },
-): Promise<KeyDecryptResponse> {
-  const { baseUrl, apiKey } = getKeyServiceConfig();
-
-  const callerHeaders = {
-    "x-caller-service": "workflow",
-    "x-caller-method": "POST",
-    "x-caller-path": "/workflows/generate",
-  };
-
-  const params = new URLSearchParams({
-    orgId: opts.orgId,
-    userId: opts.userId,
-  });
-  const path = `/keys/anthropic/decrypt?${params}`;
-
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: "GET",
-    headers: {
-      "x-api-key": apiKey,
-      "x-org-id": opts.orgId,
-      "x-user-id": opts.userId,
-      "x-run-id": opts.runId,
-      ...callerHeaders,
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `key-service error: GET /keys/anthropic/decrypt -> ${res.status} ${res.statusText}: ${text}`
-    );
-  }
-
-  const body = (await res.json()) as KeyDecryptResponse;
-  return body;
-}
-
-/** GET /keys/platform/anthropic/decrypt — platform-level key (no org/user context needed) */
-export async function fetchPlatformAnthropicKey(): Promise<KeyDecryptResponse> {
-  const { baseUrl, apiKey } = getKeyServiceConfig();
-
-  const res = await fetch(`${baseUrl}/keys/platform/anthropic/decrypt`, {
-    method: "GET",
-    headers: {
-      "x-api-key": apiKey,
-      "x-caller-service": "workflow",
-      "x-caller-method": "POST",
-      "x-caller-path": "/startup-upgrade",
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `key-service error: GET /keys/platform/anthropic/decrypt -> ${res.status} ${res.statusText}: ${text}`
-    );
-  }
-
-  return res.json() as Promise<KeyDecryptResponse>;
-}

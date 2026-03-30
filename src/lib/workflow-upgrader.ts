@@ -1,57 +1,68 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { validateDAG, type DAG } from "./dag-validator.js";
 import {
   buildUpgradeSystemPrompt,
   buildRetryUserMessage,
-  AGENTIC_TOOLS,
+  type ServiceContext,
 } from "./prompt-templates.js";
 import {
   fetchLlmContext,
-  fetchServiceEndpoints,
-  fetchServiceSpec,
+  fetchSpecsForServices,
 } from "./api-registry-client.js";
 import type { IdentityHeaders } from "./key-service-client.js";
 import type { InvalidEndpoint, FieldValidationIssue } from "./validate-workflow-endpoints.js";
+import {
+  chatServiceComplete,
+  type ChatServiceCompleteRequest,
+  type ChatServiceCompleteResponse,
+  type ChatServiceIdentity,
+} from "./chat-service-client.js";
 
 const MAX_RETRIES = 2;
-const MAX_AGENT_TURNS = 10;
-const MODEL = "claude-opus-4-6";
 
-let overrideClient: Anthropic | null = null;
+let overrideCompleteFn: ((req: ChatServiceCompleteRequest, id: ChatServiceIdentity) => Promise<ChatServiceCompleteResponse>) | null = null;
 
-/** Exported for testing — allows injecting a mock client */
-export function setUpgradeAnthropicClient(client: Anthropic | null): void {
-  overrideClient = client;
+/** Exported for testing — allows injecting a mock chat-service client */
+export function setUpgradeChatServiceClient(fn: typeof overrideCompleteFn): void {
+  overrideCompleteFn = fn;
 }
 
-async function resolveToolCall(
-  toolName: string,
-  toolInput: Record<string, unknown>,
+async function callComplete(
+  request: ChatServiceCompleteRequest,
+  identity: ChatServiceIdentity,
+): Promise<ChatServiceCompleteResponse> {
+  if (overrideCompleteFn) return overrideCompleteFn(request, identity);
+  return chatServiceComplete(request, identity);
+}
+
+async function fetchServiceContext(
+  invalidEndpoints: InvalidEndpoint[],
+  fieldErrors: FieldValidationIssue[],
   identity?: IdentityHeaders,
-): Promise<{ content: string; isError?: boolean }> {
-  switch (toolName) {
-    case "list_services": {
-      const context = await fetchLlmContext(identity);
-      const summary = context.services.map((s) => ({
-        name: s.service,
-        description: s.description ?? "",
-        endpointCount: s.endpointCount,
-      }));
-      return { content: JSON.stringify(summary, null, 2) };
-    }
-    case "list_service_endpoints": {
-      const serviceName = toolInput.service as string;
-      const endpoints = await fetchServiceEndpoints(serviceName, identity);
-      return { content: JSON.stringify(endpoints, null, 2) };
-    }
-    case "get_service_endpoints": {
-      const serviceName = toolInput.service as string;
-      const spec = await fetchServiceSpec(serviceName, identity);
-      return { content: JSON.stringify(spec, null, 2) };
-    }
-    default:
-      return { content: `Unknown tool: ${toolName}`, isError: true };
+): Promise<ServiceContext> {
+  // Fetch specs for all services referenced in broken endpoints and field errors
+  const serviceNames = new Set<string>();
+  for (const ep of invalidEndpoints) serviceNames.add(ep.service);
+  for (const fe of fieldErrors) serviceNames.add(fe.service);
+
+  let services: Array<{ name: string; description: string; endpointCount: number }> = [];
+  try {
+    const context = await fetchLlmContext(identity);
+    services = context.services.map((s: { service: string; description?: string; endpointCount: number }) => ({
+      name: s.service,
+      description: s.description ?? "",
+      endpointCount: s.endpointCount,
+    }));
+    // Also add all service names from the context so the LLM can find replacements
+    for (const s of context.services) serviceNames.add(s.service);
+  } catch {
+    // Non-blocking — proceed with just the broken service specs
   }
+
+  const specsMap = await fetchSpecsForServices([...serviceNames], identity);
+  const specs: Record<string, unknown> = {};
+  for (const [name, spec] of specsMap) specs[name] = spec;
+
+  return { services, specs };
 }
 
 export interface UpgradeWorkflowResult {
@@ -66,127 +77,72 @@ export async function upgradeWorkflow(
   currentDag: DAG,
   invalidEndpoints: InvalidEndpoint[],
   fieldErrors: FieldValidationIssue[],
-  anthropicApiKey: string,
   identity: IdentityHeaders | undefined,
   metadata: { category: string; channel: string; audienceType: string; description: string },
 ): Promise<UpgradeWorkflowResult> {
-  const client = overrideClient ?? new Anthropic({ apiKey: anthropicApiKey });
+  // Pre-fetch service context
+  const serviceContext = await fetchServiceContext(invalidEndpoints, fieldErrors, identity);
 
   const systemPrompt = buildUpgradeSystemPrompt({
     currentDag: currentDag as unknown as Record<string, unknown>,
     invalidEndpoints,
     fieldErrors,
+    serviceContext,
   });
 
-  const tools = AGENTIC_TOOLS;
+  const chatIdentity: ChatServiceIdentity = identity
+    ? { orgId: identity.orgId, userId: identity.userId, runId: identity.runId }
+    : { orgId: "platform", userId: "workflow-service", runId: "startup-upgrade" };
 
-  const userMessage = `Fix this workflow. The category is "${metadata.category}", channel is "${metadata.channel}", audienceType is "${metadata.audienceType}". Description: "${metadata.description}". Fix the broken endpoints and field errors listed above.`;
+  let userMessage = `Fix this workflow. The category is "${metadata.category}", channel is "${metadata.channel}", audienceType is "${metadata.audienceType}". Description: "${metadata.description}". Fix the broken endpoints and field errors listed above.`;
 
-  const messages: Anthropic.Messages.MessageParam[] = [
-    { role: "user", content: userMessage },
-  ];
-
-  let dagRetries = 0;
-
-  for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 16384,
-      system: systemPrompt,
-      messages,
-      tools,
-      tool_choice: { type: "auto" as const },
-    });
-
-    const createWorkflowCall = response.content.find(
-      (block): block is Anthropic.Messages.ToolUseBlock =>
-        block.type === "tool_use" && block.name === "create_workflow",
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await callComplete(
+      {
+        message: userMessage,
+        systemPrompt,
+        responseFormat: "json",
+        maxTokens: 16384,
+        model: "claude-sonnet-4-6",
+      },
+      chatIdentity,
     );
 
-    if (createWorkflowCall) {
-      const result = createWorkflowCall.input as {
-        category: string;
-        channel: string;
-        audienceType: string;
-        description: string;
-        dag: DAG;
+    if (!response.json) {
+      throw new Error("LLM did not return valid JSON during upgrade");
+    }
+
+    const result = response.json as {
+      category: string;
+      channel: string;
+      audienceType: string;
+      description: string;
+      dag: DAG;
+    };
+
+    const validation = validateDAG(result.dag);
+
+    if (validation.valid) {
+      return {
+        dag: result.dag,
+        category: result.category,
+        channel: result.channel,
+        audienceType: result.audienceType,
+        description: result.description,
       };
-
-      const validation = validateDAG(result.dag);
-
-      if (validation.valid) {
-        return {
-          dag: result.dag,
-          category: result.category,
-          channel: result.channel,
-          audienceType: result.audienceType,
-          description: result.description,
-        };
-      }
-
-      dagRetries++;
-      if (dagRetries > MAX_RETRIES) {
-        throw new UpgradeValidationError(
-          "Upgraded DAG is invalid after retries",
-          validation.errors,
-        );
-      }
-
-      messages.push({ role: "assistant", content: response.content });
-      messages.push({
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: createWorkflowCall.id,
-            is_error: true,
-            content: buildRetryUserMessage(userMessage, validation.errors),
-          },
-        ],
-      });
-      continue;
     }
 
-    // Resolve discovery tool calls
-    const toolUseBlocks = response.content.filter(
-      (block): block is Anthropic.Messages.ToolUseBlock =>
-        block.type === "tool_use",
-    );
-
-    if (toolUseBlocks.length === 0) {
-      throw new Error("LLM did not return a tool use response during upgrade");
+    if (attempt >= MAX_RETRIES) {
+      throw new UpgradeValidationError(
+        "Upgraded DAG is invalid after retries",
+        validation.errors,
+      );
     }
 
-    messages.push({ role: "assistant", content: response.content });
-
-    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-    for (const toolBlock of toolUseBlocks) {
-      try {
-        const resolved = await resolveToolCall(
-          toolBlock.name,
-          toolBlock.input as Record<string, unknown>,
-          identity,
-        );
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolBlock.id,
-          content: resolved.content,
-          ...(resolved.isError ? { is_error: true } : {}),
-        });
-      } catch (err) {
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolBlock.id,
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
-          is_error: true,
-        });
-      }
-    }
-
-    messages.push({ role: "user", content: toolResults });
+    userMessage = buildRetryUserMessage(userMessage, validation.errors);
   }
 
-  throw new Error("Upgrade exceeded maximum turns without producing a corrected workflow");
+  throw new Error("Upgrade exceeded maximum retries without producing a corrected workflow");
 }
 
 export class UpgradeValidationError extends Error {

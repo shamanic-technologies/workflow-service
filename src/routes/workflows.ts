@@ -27,7 +27,7 @@ import { pickSignatureName } from "../lib/signature-words.js";
 import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
 import { validateWorkflowEndpoints } from "../lib/validate-workflow-endpoints.js";
 import { fetchSpecsForServices } from "../lib/api-registry-client.js";
-import { fetchProviderRequirements, fetchAnthropicKey } from "../lib/key-service-client.js";
+import { fetchProviderRequirements } from "../lib/key-service-client.js";
 import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIssue, type TemplateRef } from "../lib/validate-template-contracts.js";
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
@@ -116,11 +116,8 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     const runId = res.locals.runId as string;
     const identity = { orgId, userId, runId };
 
-    const { key: anthropicApiKey } = await fetchAnthropicKey({ orgId, userId, runId });
-
     const generated = await generateWorkflow(
       { description: body.description, hints: body.hints, style: body.style },
-      anthropicApiKey,
       identity,
     );
 
@@ -326,15 +323,6 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         error: err.message,
         details: err.validationErrors,
       });
-      return;
-    }
-    if (err instanceof Error && err.message.startsWith("key-service error:")) {
-      console.error("[workflow-service] generate: key-service error:", err.message);
-      res.status(502).json({ error: err.message });
-      return;
-    }
-    if (err instanceof Error && err.message.includes("KEY_SERVICE_URL")) {
-      res.status(502).json({ error: err.message });
       return;
     }
     console.error("[workflow-service] GENERATE error:", err);
