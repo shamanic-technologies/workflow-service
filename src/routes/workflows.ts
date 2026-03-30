@@ -45,14 +45,11 @@ import { resolveFeatureDynasty, fetchFeatureOutputs, fetchStatsRegistry } from "
 
 const router = Router();
 
-/** Default metrics when feature outputs can't be resolved or no featureSlug is provided. */
-const DEFAULT_OBJECTIVES = ["emailsReplied"];
-
 /**
  * Resolves which stats keys to use as ranking objectives.
  * - If explicit objective is provided, use it alone.
  * - If featureSlug is provided, fetch its outputs and filter to count-type metrics.
- * - Otherwise, fall back to DEFAULT_OBJECTIVES.
+ * - Otherwise, crash — callers must provide either objective or featureSlug.
  */
 async function resolveObjectives(
   objective: string | undefined,
@@ -60,21 +57,28 @@ async function resolveObjectives(
 ): Promise<string[]> {
   if (objective) return [objective];
 
-  if (featureSlug) {
-    const [outputs, registry] = await Promise.all([
-      fetchFeatureOutputs(featureSlug),
-      fetchStatsRegistry(),
-    ]);
-    const countMetrics = outputs
-      .map((o) => o.key)
-      .filter((key) => {
-        const entry = registry[key];
-        return entry && entry.type === "count";
-      });
-    if (countMetrics.length > 0) return countMetrics;
+  if (!featureSlug) {
+    throw new Error(
+      "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics"
+    );
   }
 
-  return DEFAULT_OBJECTIVES;
+  const [outputs, registry] = await Promise.all([
+    fetchFeatureOutputs(featureSlug),
+    fetchStatsRegistry(),
+  ]);
+  const countMetrics = outputs
+    .map((o) => o.key)
+    .filter((key) => {
+      const entry = registry[key];
+      return entry && entry.type === "count";
+    });
+  if (countMetrics.length === 0) {
+    throw new Error(
+      `Feature "${featureSlug}" has no count-type output metrics. Outputs: [${outputs.map((o) => o.key).join(", ")}]`
+    );
+  }
+  return countMetrics;
 }
 
 function formatWorkflow(w: typeof workflows.$inferSelect) {
@@ -840,6 +844,12 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       return;
     }
     const { orgId, brandId, featureSlug, objective, limit, groupBy } = query.data;
+
+    if (!objective && !featureSlug) {
+      res.status(400).json({ error: "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics" });
+      return;
+    }
+
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
@@ -980,6 +990,12 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       return;
     }
     const { orgId, brandId, featureSlug, by } = query.data;
+
+    if (!featureSlug) {
+      res.status(400).json({ error: "'featureSlug' is required — metrics are derived from the feature's declared outputs" });
+      return;
+    }
+
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
@@ -1161,7 +1177,11 @@ router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
     }
 
     const objectiveParam = req.query.objective;
-    const objective = (typeof objectiveParam === "string" && objectiveParam) ? objectiveParam : "replies";
+    if (!objectiveParam || typeof objectiveParam !== "string") {
+      res.status(400).json({ error: "Missing required query parameter: objective (stats key, e.g. 'emailsReplied')" });
+      return;
+    }
+    const objective = objectiveParam;
 
     const identity = {
       orgId: res.locals.orgId as string,

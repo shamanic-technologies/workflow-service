@@ -19,27 +19,34 @@ import { fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.
 
 const router = Router();
 
-const DEFAULT_OBJECTIVES = ["emailsReplied"];
-
 async function resolveObjectives(
   objective: string | undefined,
   featureSlug: string | undefined,
 ): Promise<string[]> {
   if (objective) return [objective];
-  if (featureSlug) {
-    const [outputs, registry] = await Promise.all([
-      fetchFeatureOutputs(featureSlug),
-      fetchStatsRegistry(),
-    ]);
-    const countMetrics = outputs
-      .map((o) => o.key)
-      .filter((key) => {
-        const entry = registry[key];
-        return entry && entry.type === "count";
-      });
-    if (countMetrics.length > 0) return countMetrics;
+
+  if (!featureSlug) {
+    throw new Error(
+      "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics"
+    );
   }
-  return DEFAULT_OBJECTIVES;
+
+  const [outputs, registry] = await Promise.all([
+    fetchFeatureOutputs(featureSlug),
+    fetchStatsRegistry(),
+  ]);
+  const countMetrics = outputs
+    .map((o) => o.key)
+    .filter((key) => {
+      const entry = registry[key];
+      return entry && entry.type === "count";
+    });
+  if (countMetrics.length === 0) {
+    throw new Error(
+      `Feature "${featureSlug}" has no count-type output metrics. Outputs: [${outputs.map((o) => o.key).join(", ")}]`
+    );
+  }
+  return countMetrics;
 }
 
 // GET /public/workflows/ranked — Public ranked workflows (no auth, no DAG)
@@ -51,6 +58,11 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
     const { orgId, brandId, featureSlug, objective, limit, groupBy } = query.data;
+
+    if (!objective && !featureSlug) {
+      res.status(400).json({ error: "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics" });
+      return;
+    }
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
@@ -176,6 +188,11 @@ router.get("/public/workflows/best", async (req, res) => {
       return;
     }
     const { orgId, brandId, featureSlug, by } = query.data;
+
+    if (!featureSlug) {
+      res.status(400).json({ error: "'featureSlug' is required — metrics are derived from the feature's declared outputs" });
+      return;
+    }
 
     const objectives = await resolveObjectives(undefined, featureSlug);
 
