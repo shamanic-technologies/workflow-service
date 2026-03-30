@@ -83,6 +83,10 @@ vi.mock("../../src/lib/features-client.js", () => ({
       .join(" ");
     return Promise.resolve({ featureDynastyName: dynastyName, featureDynastySlug: dynastySlug });
   }),
+  resolveFeatureDynastySlugs: vi.fn().mockImplementation((dynastySlug: string) => {
+    // Simulate: dynasty slug resolves to itself + versioned variants
+    return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
+  }),
 }));
 
 // Mock Windmill client
@@ -293,6 +297,79 @@ describe("GET /workflows", () => {
     expect(res.status).toBe(200);
     expect(res.body.workflows).toBeDefined();
     expect(res.body.workflows[0].featureSlug).toBe("outlet-database-discovery");
+  });
+
+  it("filters workflows by featureDynastySlug via features-service resolution", async () => {
+    mockDbRows.push({
+      id: WF_FEATURE_ID,
+      orgId: "org-1",
+      slug: "outlet-database-discovery-sequoia",
+      name: "Outlet Database Discovery Sequoia",
+      dynastyName: "Outlet Database Discovery Sequoia",
+      version: 1,
+      featureSlug: "outlet-database-discovery",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ featureDynastySlug: "outlet-database-discovery" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toBeDefined();
+  });
+
+  it("filters workflows by workflowDynastySlug", async () => {
+    mockDbRows.push({
+      id: WF_FEATURE_ID,
+      orgId: "org-1",
+      slug: "sales-cold-email-outreach-sequoia-v2",
+      name: "Sales Cold Email Outreach Sequoia v2",
+      dynastyName: "Sales Cold Email Outreach Sequoia",
+      dynastySlug: "sales-cold-email-outreach-sequoia",
+      version: 2,
+      featureSlug: "sales-cold-email-outreach",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ workflowDynastySlug: "sales-cold-email-outreach-sequoia" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toBeDefined();
+  });
+
+  it("filters workflows by workflowSlug", async () => {
+    mockDbRows.push({
+      id: WF_FEATURE_ID,
+      orgId: "org-1",
+      slug: "sales-cold-email-outreach-sequoia",
+      name: "Sales Cold Email Outreach Sequoia",
+      dynastyName: "Sales Cold Email Outreach Sequoia",
+      version: 1,
+      featureSlug: "sales-cold-email-outreach",
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ workflowSlug: "sales-cold-email-outreach-sequoia" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toBeDefined();
   });
 
   it("returns dimensions in response", async () => {

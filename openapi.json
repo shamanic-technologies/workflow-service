@@ -1829,11 +1829,41 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter workflows by feature slug."
+              "description": "Exact match on the versioned feature slug stored in the workflow."
             },
             "required": false,
-            "description": "Filter workflows by feature slug.",
+            "description": "Exact match on the versioned feature slug stored in the workflow.",
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service."
+            },
+            "required": false,
+            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service.",
+            "name": "featureDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Exact match on the versioned workflow slug."
+            },
+            "required": false,
+            "description": "Exact match on the versioned workflow slug.",
+            "name": "workflowSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions)."
+            },
+            "required": false,
+            "description": "Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions).",
+            "name": "workflowDynastySlug",
             "in": "query"
           },
           {
@@ -2996,11 +3026,41 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter runs by feature slug."
+              "description": "Exact match on the versioned feature slug stored in the run."
             },
             "required": false,
-            "description": "Filter runs by feature slug.",
+            "description": "Exact match on the versioned feature slug stored in the run.",
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service."
+            },
+            "required": false,
+            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service.",
+            "name": "featureDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Exact match on the versioned workflow slug stored in the run."
+            },
+            "required": false,
+            "description": "Exact match on the versioned workflow slug stored in the run.",
+            "name": "workflowSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID."
+            },
+            "required": false,
+            "description": "Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID.",
+            "name": "workflowDynastySlug",
             "in": "query"
           },
           {
@@ -3377,11 +3437,21 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter workflows by feature slug."
+              "description": "Exact match on the versioned feature slug."
             },
             "required": false,
-            "description": "Filter workflows by feature slug.",
+            "description": "Exact match on the versioned feature slug.",
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
+            },
+            "required": false,
+            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
+            "name": "featureDynastySlug",
             "in": "query"
           },
           {
@@ -3556,11 +3626,21 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter by feature slug and use its declared output metrics for best-record computation."
+              "description": "Exact match on the versioned feature slug."
             },
             "required": false,
-            "description": "Filter by feature slug and use its declared output metrics for best-record computation.",
+            "description": "Exact match on the versioned feature slug.",
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
+            },
+            "required": false,
+            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
+            "name": "featureDynastySlug",
             "in": "query"
           },
           {
@@ -4078,11 +4158,21 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter workflows by feature slug."
+              "description": "Exact match on the versioned feature slug."
             },
             "required": false,
-            "description": "Filter workflows by feature slug.",
+            "description": "Exact match on the versioned feature slug.",
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
+            },
+            "required": false,
+            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
+            "name": "featureDynastySlug",
             "in": "query"
           },
           {
@@ -4182,11 +4272,21 @@
           {
             "schema": {
               "type": "string",
-              "description": "Filter by feature slug and use its declared output metrics for best-record computation."
+              "description": "Exact match on the versioned feature slug."
             },
             "required": false,
-            "description": "Filter by feature slug and use its declared output metrics for best-record computation.",
+            "description": "Exact match on the versioned feature slug.",
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
+            },
+            "required": false,
+            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
+            "name": "featureDynastySlug",
             "in": "query"
           },
           {

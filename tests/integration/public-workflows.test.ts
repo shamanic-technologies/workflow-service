@@ -87,6 +87,23 @@ vi.mock("../../src/lib/key-service-client.js", () => ({
   fetchAnthropicKey: vi.fn(),
 }));
 
+// --- Mock features-client ---
+vi.mock("../../src/lib/features-client.js", () => ({
+  resolveFeatureDynasty: vi.fn().mockImplementation((featureSlug: string) => {
+    const dynastySlug = featureSlug.replace(/-v\d+$/, "");
+    const dynastyName = dynastySlug
+      .split("-")
+      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+    return Promise.resolve({ featureDynastyName: dynastyName, featureDynastySlug: dynastySlug });
+  }),
+  resolveFeatureDynastySlugs: vi.fn().mockImplementation((dynastySlug: string) => {
+    return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
+  }),
+  fetchFeatureOutputs: vi.fn().mockRejectedValue(new Error("not configured")),
+  fetchStatsRegistry: vi.fn().mockRejectedValue(new Error("not configured")),
+}));
+
 import supertest from "supertest";
 import app from "../../src/index.js";
 

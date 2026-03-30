@@ -618,7 +618,8 @@ export const RankedWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
-    featureSlug: z.string().optional().describe("Filter workflows by feature slug."),
+    featureSlug: z.string().optional().describe("Exact match on the versioned feature slug."),
+    featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."),
     objective: RankedWorkflowObjectiveSchema.optional().describe(
       "Stats key to optimize for. When omitted with featureSlug, auto-resolves from the feature's declared output metrics. " +
       "When omitted without featureSlug, defaults to 'replies' (emailsReplied) for backward compatibility."
@@ -710,7 +711,8 @@ export const BestWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
-    featureSlug: z.string().optional().describe("Filter by feature slug and use its declared output metrics for best-record computation."),
+    featureSlug: z.string().optional().describe("Exact match on the versioned feature slug."),
+    featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."),
     by: BestWorkflowBySchema.default("workflow").describe("Granularity: best workflow or best brand. Defaults to 'workflow'."),
   })
   .openapi("BestWorkflowQuery");
@@ -922,7 +924,10 @@ registry.registerPath({
       brandId: z.string().optional(),
       humanId: z.string().optional(),
       campaignId: z.string().optional(),
-      featureSlug: z.string().optional().describe("Filter workflows by feature slug."),
+      featureSlug: z.string().optional().describe("Exact match on the versioned feature slug stored in the workflow."),
+      featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service."),
+      workflowSlug: z.string().optional().describe("Exact match on the versioned workflow slug."),
+      workflowDynastySlug: z.string().optional().describe("Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions)."),
       category: WorkflowCategorySchema.optional(),
       channel: WorkflowChannelSchema.optional(),
       audienceType: WorkflowAudienceTypeSchema.optional(),
@@ -1183,7 +1188,10 @@ registry.registerPath({
       workflowId: z.string().uuid().optional(),
       orgId: z.string().optional(),
       campaignId: z.string().optional(),
-      featureSlug: z.string().optional().describe("Filter runs by feature slug."),
+      featureSlug: z.string().optional().describe("Exact match on the versioned feature slug stored in the run."),
+      featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service."),
+      workflowSlug: z.string().optional().describe("Exact match on the versioned workflow slug stored in the run."),
+      workflowDynastySlug: z.string().optional().describe("Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID."),
       status: z.string().optional(),
     }),
   },
