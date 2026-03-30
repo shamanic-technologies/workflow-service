@@ -101,6 +101,11 @@ vi.mock("../../src/lib/features-client.js", () => ({
   }),
   fetchFeatureOutputs: vi.fn().mockRejectedValue(new Error("not configured")),
   fetchStatsRegistry: vi.fn().mockRejectedValue(new Error("not configured")),
+  extractForwardHeaders: (req: { headers: Record<string, string | string[] | undefined> }) => ({
+    "x-org-id": req.headers["x-org-id"] as string,
+    "x-user-id": req.headers["x-user-id"] as string,
+    "x-run-id": req.headers["x-run-id"] as string,
+  }),
 }));
 
 import supertest from "supertest";

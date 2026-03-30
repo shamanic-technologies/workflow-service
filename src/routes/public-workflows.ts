@@ -15,13 +15,14 @@ import {
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
-import { fetchFeatureOutputs, fetchStatsRegistry, resolveFeatureDynastySlugs } from "../lib/features-client.js";
+import { fetchFeatureOutputs, fetchStatsRegistry, resolveFeatureDynastySlugs, type ForwardHeaders } from "../lib/features-client.js";
 
 const router = Router();
 
 async function resolveObjectives(
   objective: string | undefined,
   featureSlug: string | undefined,
+  forwardHeaders?: ForwardHeaders,
 ): Promise<{ objectives: string[]; registry?: Record<string, import("../lib/features-client.js").StatsRegistryEntry> }> {
   if (objective) return { objectives: [objective] };
 
@@ -32,8 +33,8 @@ async function resolveObjectives(
   }
 
   const [outputs, registry] = await Promise.all([
-    fetchFeatureOutputs(featureSlug),
-    fetchStatsRegistry(),
+    fetchFeatureOutputs(featureSlug, forwardHeaders),
+    fetchStatsRegistry(forwardHeaders),
   ]);
   const countMetrics = outputs
     .map((o) => o.key)
