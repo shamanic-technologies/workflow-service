@@ -96,6 +96,13 @@ vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
 }));
 
+// Mock features-client (for dynasty slug resolution)
+vi.mock("../../src/lib/features-client.js", () => ({
+  resolveFeatureDynastySlugs: vi.fn().mockImplementation((dynastySlug: string) => {
+    return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
+  }),
+}));
+
 import supertest from "supertest";
 import app from "../../src/index.js";
 

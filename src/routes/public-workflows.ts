@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
 import {
@@ -15,7 +15,7 @@ import {
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
-import { fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.js";
+import { fetchFeatureOutputs, fetchStatsRegistry, resolveFeatureDynastySlugs } from "../lib/features-client.js";
 
 const router = Router();
 
@@ -57,7 +57,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, featureSlug, objective, limit, groupBy } = query.data;
+    const { orgId, brandId, featureSlug, featureDynastySlug, objective, limit, groupBy } = query.data;
 
     if (!objective && !featureSlug) {
       res.status(400).json({ error: "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics" });
@@ -67,6 +67,10 @@ router.get("/public/workflows/ranked", async (req, res) => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
+    if (featureDynastySlug) {
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+    }
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -187,7 +191,7 @@ router.get("/public/workflows/best", async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, featureSlug, by } = query.data;
+    const { orgId, brandId, featureSlug, featureDynastySlug, by } = query.data;
 
     if (!featureSlug) {
       res.status(400).json({ error: "'featureSlug' is required — metrics are derived from the feature's declared outputs" });
@@ -199,6 +203,10 @@ router.get("/public/workflows/best", async (req, res) => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
+    if (featureDynastySlug) {
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+    }
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))

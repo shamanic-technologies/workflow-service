@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
@@ -41,7 +41,7 @@ import {
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
-import { resolveFeatureDynasty, fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.js";
+import { resolveFeatureDynasty, resolveFeatureDynastySlugs, fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.js";
 
 const router = Router();
 
@@ -843,7 +843,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, featureSlug, objective, limit, groupBy } = query.data;
+    const { orgId, brandId, featureSlug, featureDynastySlug, objective, limit, groupBy } = query.data;
 
     if (!objective && !featureSlug) {
       res.status(400).json({ error: "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics" });
@@ -859,6 +859,10 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
+    if (featureDynastySlug) {
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+    }
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -989,7 +993,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, featureSlug, by } = query.data;
+    const { orgId, brandId, featureSlug, featureDynastySlug, by } = query.data;
 
     if (!featureSlug) {
       res.status(400).json({ error: "'featureSlug' is required — metrics are derived from the feature's declared outputs" });
@@ -1008,6 +1012,10 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
+    if (featureDynastySlug) {
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+    }
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -1241,7 +1249,7 @@ router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
 // GET /workflows — List workflows (defaults to active only; ?status=all for all)
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, brandId, humanId, campaignId, featureSlug, tag, status } = req.query;
+    const { orgId, brandId, humanId, campaignId, featureSlug, featureDynastySlug, workflowSlug, workflowDynastySlug, tag, status } = req.query;
 
     const conditions: ReturnType<typeof eq>[] = [];
 
@@ -1264,6 +1272,16 @@ router.get("/workflows", requireApiKey, async (req, res) => {
     }
     if (featureSlug && typeof featureSlug === "string") {
       conditions.push(eq(workflows.featureSlug, featureSlug));
+    }
+    if (featureDynastySlug && typeof featureDynastySlug === "string") {
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+    }
+    if (workflowSlug && typeof workflowSlug === "string") {
+      conditions.push(eq(workflows.slug, workflowSlug));
+    }
+    if (workflowDynastySlug && typeof workflowDynastySlug === "string") {
+      conditions.push(eq(workflows.dynastySlug, workflowDynastySlug));
     }
     if (tag && typeof tag === "string") {
       conditions.push(sql`${workflows.tags} @> ${JSON.stringify([tag])}::jsonb`);

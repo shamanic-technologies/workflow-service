@@ -85,6 +85,43 @@ function deriveFromSlug(featureSlug: string): FeatureDynasty {
   return { featureDynastyName: dynastyName, featureDynastySlug: dynastySlug };
 }
 
+/**
+ * Resolve all versioned feature slugs belonging to a dynasty.
+ *
+ * Calls features-service GET /features/dynasty/slugs?dynastySlug=... which returns
+ * { slugs: ['feature-slug', 'feature-slug-v2', ...] }.
+ *
+ * Throws if features-service is not configured or returns an error.
+ */
+export async function resolveFeatureDynastySlugs(
+  dynastySlug: string,
+): Promise<string[]> {
+  const config = getFeaturesServiceConfig();
+  if (!config) {
+    throw new Error(
+      "FEATURES_SERVICE_URL and FEATURES_SERVICE_API_KEY must be set to resolve dynasty slugs"
+    );
+  }
+
+  const res = await fetch(
+    `${config.baseUrl}/features/dynasty/slugs?dynastySlug=${encodeURIComponent(dynastySlug)}`,
+    {
+      method: "GET",
+      headers: { "x-api-key": config.apiKey },
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `features-service error: GET /features/dynasty/slugs?dynastySlug=${dynastySlug} -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  const data = (await res.json()) as { slugs: string[] };
+  return data.slugs;
+}
+
 // --- Feature outputs (for dynamic ranking metrics) ---
 
 export interface FeatureOutput {
