@@ -3923,12 +3923,12 @@
                   "$ref": "#/components/schemas/RankedWorkflowObjective"
                 },
                 {
-                  "description": "Stats key to optimize for. Defaults to 'replies' (emailsReplied) when omitted."
+                  "description": "Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required."
                 }
               ]
             },
-            "required": false,
-            "description": "Stats key to optimize for. Defaults to 'replies' (emailsReplied) when omitted.",
+            "required": true,
+            "description": "Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required.",
             "name": "objective",
             "in": "query"
           },

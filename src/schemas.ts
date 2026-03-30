@@ -1391,7 +1391,7 @@ registry.registerPath({
     headers: IdentityHeaders,
     query: z.object({
       dynastySlug: z.string().describe("The dynasty slug to get stats for."),
-      objective: RankedWorkflowObjectiveSchema.optional().describe("Stats key to optimize for. Defaults to 'replies' (emailsReplied) when omitted."),
+      objective: RankedWorkflowObjectiveSchema.describe("Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required."),
     }),
   },
   responses: {
