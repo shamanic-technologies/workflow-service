@@ -22,8 +22,8 @@ const router = Router();
 async function resolveObjectives(
   objective: string | undefined,
   featureSlug: string | undefined,
-): Promise<string[]> {
-  if (objective) return [objective];
+): Promise<{ objectives: string[]; registry?: Record<string, import("../lib/features-client.js").StatsRegistryEntry> }> {
+  if (objective) return { objectives: [objective] };
 
   if (!featureSlug) {
     throw new Error(
@@ -46,7 +46,7 @@ async function resolveObjectives(
       `Feature "${featureSlug}" has no count-type output metrics. Outputs: [${outputs.map((o) => o.key).join(", ")}]`
     );
   }
-  return countMetrics;
+  return { objectives: countMetrics, registry };
 }
 
 // GET /public/workflows/ranked — Public ranked workflows (no auth, no DAG)
@@ -83,7 +83,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
 
-    const objectives = await resolveObjectives(objective, featureSlug);
+    const { objectives } = await resolveObjectives(objective, featureSlug);
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "public" as const, brandId, orgId });
 
     function rankForObjectives(inputScores: WorkflowScore[]) {
@@ -198,7 +198,7 @@ router.get("/public/workflows/best", async (req, res) => {
       return;
     }
 
-    const objectives = await resolveObjectives(undefined, featureSlug);
+    const { objectives } = await resolveObjectives(undefined, featureSlug);
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));

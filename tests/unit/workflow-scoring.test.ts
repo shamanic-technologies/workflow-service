@@ -12,12 +12,40 @@ const makeEmailStats = (overrides: Partial<typeof EMPTY_EMAIL_STATS> = {}) => ({
   ...overrides,
 });
 
+/**
+ * Builds sourceMetrics from email stats, mirroring the production emailStatsToMetrics helper.
+ */
+function buildSourceMetrics(
+  transactional: typeof EMPTY_EMAIL_STATS,
+  broadcast: typeof EMPTY_EMAIL_STATS,
+  extra?: Record<string, number>,
+): Record<string, number> {
+  const EMAIL_KEY_TO_FIELD: Record<string, keyof typeof EMPTY_EMAIL_STATS> = {
+    emailsSent: "sent",
+    emailsDelivered: "delivered",
+    emailsOpened: "opened",
+    emailsClicked: "clicked",
+    emailsReplied: "replied",
+    emailsBounced: "bounced",
+    recipients: "recipients",
+  };
+  const metrics: Record<string, number> = {};
+  for (const [statsKey, field] of Object.entries(EMAIL_KEY_TO_FIELD)) {
+    metrics[statsKey] = transactional[field] + broadcast[field];
+  }
+  if (extra) Object.assign(metrics, extra);
+  return metrics;
+}
+
 function makeScore(opts: {
   totalCost: number;
   completedRuns: number;
   transactional?: Partial<typeof EMPTY_EMAIL_STATS>;
   broadcast?: Partial<typeof EMPTY_EMAIL_STATS>;
+  extraMetrics?: Record<string, number>;
 }): WorkflowScore {
+  const transactional = makeEmailStats(opts.transactional);
+  const broadcast = makeEmailStats(opts.broadcast);
   return {
     workflow: {
       id: "wf-1",
@@ -35,10 +63,8 @@ function makeScore(opts: {
     totalOutcomes: 0,
     costPerOutcome: null,
     completedRuns: opts.completedRuns,
-    emailStats: {
-      transactional: makeEmailStats(opts.transactional),
-      broadcast: makeEmailStats(opts.broadcast),
-    },
+    emailStats: { transactional, broadcast },
+    sourceMetrics: buildSourceMetrics(transactional, broadcast, opts.extraMetrics),
   };
 }
 
@@ -59,53 +85,56 @@ describe("resolveObjective", () => {
 });
 
 describe("extractOutcomeCount", () => {
-  it("extracts emailsReplied from transactional + broadcast", () => {
-    const stats = {
-      transactional: makeEmailStats({ replied: 5 }),
-      broadcast: makeEmailStats({ replied: 3 }),
-    };
-    expect(extractOutcomeCount("emailsReplied", stats)).toBe(8);
+  it("extracts emailsReplied from sourceMetrics", () => {
+    const metrics = buildSourceMetrics(
+      makeEmailStats({ replied: 5 }),
+      makeEmailStats({ replied: 3 }),
+    );
+    expect(extractOutcomeCount("emailsReplied", metrics)).toBe(8);
   });
 
-  it("extracts emailsClicked from transactional + broadcast", () => {
-    const stats = {
-      transactional: makeEmailStats({ clicked: 10 }),
-      broadcast: makeEmailStats({ clicked: 7 }),
-    };
-    expect(extractOutcomeCount("emailsClicked", stats)).toBe(17);
+  it("extracts emailsClicked from sourceMetrics", () => {
+    const metrics = buildSourceMetrics(
+      makeEmailStats({ clicked: 10 }),
+      makeEmailStats({ clicked: 7 }),
+    );
+    expect(extractOutcomeCount("emailsClicked", metrics)).toBe(17);
   });
 
   it("extracts emailsOpened", () => {
-    const stats = {
-      transactional: makeEmailStats({ opened: 20 }),
-      broadcast: makeEmailStats({ opened: 15 }),
-    };
-    expect(extractOutcomeCount("emailsOpened", stats)).toBe(35);
+    const metrics = buildSourceMetrics(
+      makeEmailStats({ opened: 20 }),
+      makeEmailStats({ opened: 15 }),
+    );
+    expect(extractOutcomeCount("emailsOpened", metrics)).toBe(35);
   });
 
   it("extracts emailsSent", () => {
-    const stats = {
-      transactional: makeEmailStats({ sent: 100 }),
-      broadcast: makeEmailStats({ sent: 50 }),
-    };
-    expect(extractOutcomeCount("emailsSent", stats)).toBe(150);
+    const metrics = buildSourceMetrics(
+      makeEmailStats({ sent: 100 }),
+      makeEmailStats({ sent: 50 }),
+    );
+    expect(extractOutcomeCount("emailsSent", metrics)).toBe(150);
   });
 
   it("extracts emailsDelivered", () => {
-    const stats = {
-      transactional: makeEmailStats({ delivered: 90 }),
-      broadcast: makeEmailStats({ delivered: 45 }),
-    };
-    expect(extractOutcomeCount("emailsDelivered", stats)).toBe(135);
+    const metrics = buildSourceMetrics(
+      makeEmailStats({ delivered: 90 }),
+      makeEmailStats({ delivered: 45 }),
+    );
+    expect(extractOutcomeCount("emailsDelivered", metrics)).toBe(135);
+  });
+
+  it("extracts non-email metrics (leadsServed, outletsDiscovered)", () => {
+    const metrics = { leadsServed: 42, outletsDiscovered: 7 };
+    expect(extractOutcomeCount("leadsServed", metrics)).toBe(42);
+    expect(extractOutcomeCount("outletsDiscovered", metrics)).toBe(7);
   });
 
   it("throws for unknown stats key", () => {
-    const stats = {
-      transactional: makeEmailStats(),
-      broadcast: makeEmailStats(),
-    };
-    expect(() => extractOutcomeCount("unknownMetric", stats)).toThrow(
-      'Unknown objective metric: "unknownMetric"'
+    const metrics = buildSourceMetrics(makeEmailStats(), makeEmailStats());
+    expect(() => extractOutcomeCount("unknownMetric", metrics)).toThrow(
+      'Metric "unknownMetric" not found in source metrics'
     );
   });
 });
@@ -193,5 +222,17 @@ describe("rescoreForObjective", () => {
     const byClicks = rescoreForObjective([scoreA, scoreB], "emailsClicked");
     expect(byClicks[0].costPerOutcome).toBe(100); // A
     expect(byClicks[1].costPerOutcome).toBe(10); // B
+  });
+
+  it("works with non-email source metrics (leadsServed)", () => {
+    const score = makeScore({
+      totalCost: 2000,
+      completedRuns: 10,
+      extraMetrics: { leadsServed: 40, leadsContacted: 20 },
+    });
+
+    const rescored = rescoreForObjective([score], "leadsServed");
+    expect(rescored[0].totalOutcomes).toBe(40);
+    expect(rescored[0].costPerOutcome).toBe(50); // 2000 / 40
   });
 });
