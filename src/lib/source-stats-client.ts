@@ -116,7 +116,10 @@ export async function fetchOutletStats(
 ): Promise<SourceStatsMap> {
   if (workflowSlugs.length === 0) return new Map();
   const { baseUrl, apiKey } = getServiceConfig("OUTLETS");
-  const params = new URLSearchParams({ groupBy: "workflowSlug" });
+  const params = new URLSearchParams({
+    groupBy: "workflowSlug",
+    workflowSlugs: workflowSlugs.join(","),
+  });
 
   const res = await fetch(`${baseUrl}/outlets/stats?${params}`, {
     headers: {
@@ -138,7 +141,6 @@ export async function fetchOutletStats(
 
   const result: SourceStatsMap = new Map();
   for (const g of body.groups) {
-    if (!workflowSlugs.includes(g.key)) continue;
     result.set(g.key, {
       outletsDiscovered: g.outletsDiscovered,
       searchQueriesUsed: g.searchQueriesUsed,
