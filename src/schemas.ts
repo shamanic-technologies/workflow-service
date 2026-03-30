@@ -165,12 +165,26 @@ export const UpdateWorkflowSchema = z
   .object({
     description: z.string().optional().describe("Updated description."),
     tags: z.array(z.string()).optional().describe("Updated tags for filtering/grouping."),
-    dag: DAGSchema.optional().describe("DAG changes are NOT allowed via PUT on individual workflows. Use PUT /workflows/upgrade for structural changes. This field will be rejected if provided."),
+    dag: DAGSchema.optional().describe(
+      "Optional new DAG. When omitted, only metadata (description, tags) is updated in-place. " +
+      "When provided with the same structural signature, the DAG is updated in-place. " +
+      "When provided with a different structural signature, a new workflow is created (fork) " +
+      "and the original is kept active (unless its dynasty has zero campaign runs, in which case it is deprecated)."
+    ),
   })
   .openapi("UpdateWorkflowRequest", {
     example: {
       description: "Updated workflow description",
       tags: ["email", "outreach"],
+      dag: {
+        nodes: [
+          { id: "fetch-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/buffer/next" }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
+          { id: "send-email", type: "http.call", config: { service: "email-gateway", method: "POST", path: "/send" }, inputMapping: { "body.to": "$ref:fetch-lead.output.lead.email" }, retries: 0 },
+        ],
+        edges: [
+          { from: "fetch-lead", to: "send-email" },
+        ],
+      },
     },
   });
 
@@ -210,8 +224,19 @@ export const WorkflowResponseSchema = z
   .openapi("WorkflowResponse");
 
 export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
-  _action: z.enum(["updated"]).describe(
-    "What happened: 'updated' means the existing workflow was modified in-place (metadata only)."
+  _action: z.enum(["updated", "forked"]).describe(
+    "What happened: 'updated' means the existing workflow was modified in-place (metadata or same-signature DAG). " +
+    "'forked' means a new workflow was created with a new dynasty because the DAG signature changed."
+  ),
+  _forkedFromName: z.string().optional().describe(
+    "Present only when _action='forked'. The display name of the original workflow that was forked."
+  ),
+  _forkedFromId: z.string().uuid().optional().describe(
+    "Present only when _action='forked'. The ID of the original workflow that was forked."
+  ),
+  _sourceDynastyDeprecated: z.boolean().optional().describe(
+    "Present only when _action='forked'. True if the source dynasty was deprecated (had zero campaign runs). " +
+    "False if the source dynasty was kept active."
   ),
 }).openapi("WorkflowMutationResponse", {
   example: {
@@ -962,11 +987,18 @@ registry.registerPath({
 registry.registerPath({
   method: "put",
   path: "/workflows/{id}",
-  summary: "Update workflow metadata",
+  summary: "Update a workflow (metadata or DAG)",
   description:
-    "Updates metadata (description, tags) on an existing workflow. " +
-    "DAG changes are NOT allowed — use PUT /workflows/upgrade for structural changes. " +
-    "Slug and name are immutable and cannot be changed.",
+    "The single endpoint for modifying a workflow. Behavior depends on what you send:\n\n" +
+    "**Metadata only** (no `dag` in body): updates description/tags in-place. Returns `_action: 'updated'`.\n\n" +
+    "**DAG with same signature**: the DAG structure hasn't changed (e.g. only config tweaks that don't affect the hash). " +
+    "Updates in-place. Returns `_action: 'updated'`.\n\n" +
+    "**DAG with new signature**: creates a new workflow in a new dynasty (fork). The original workflow is kept active " +
+    "unless its entire dynasty has zero campaign runs, in which case it is deprecated. " +
+    "Returns `_action: 'forked'` with the new workflow data, plus `_forkedFromName`, `_forkedFromId`, " +
+    "and `_sourceDynastyDeprecated` to indicate what happened.\n\n" +
+    "The new workflow's ID is in the response — use it going forward. " +
+    "Returns 201 for forks, 200 for in-place updates.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
@@ -979,16 +1011,24 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Workflow updated in-place (metadata only). _action='updated'.",
+      description: "Workflow updated in-place (metadata or same-signature DAG). _action='updated'.",
+      content: { "application/json": { schema: WorkflowMutationResponseSchema } },
+    },
+    201: {
+      description: "New workflow created via fork (DAG signature changed). _action='forked'.",
       content: { "application/json": { schema: WorkflowMutationResponseSchema } },
     },
     400: {
-      description: "DAG changes not allowed via this endpoint",
+      description: "Invalid DAG structure",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
-      description: "Not found",
+      description: "Workflow not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "A workflow with this DAG signature already exists",
+      content: { "application/json": { schema: WorkflowConflictResponseSchema } },
     },
   },
 });
@@ -1169,39 +1209,9 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
-  method: "put",
-  path: "/workflows/upgrade",
-  summary: "Upgrade (upsert) workflows by DAG signature",
-  description:
-    "Idempotent: creates new workflows or updates existing ones matched by featureSlug. " +
-    "If the DAG signature is unchanged, updates metadata in-place. " +
-    "If the DAG signature changed, deprecates the old workflow and creates a new version. " +
-    "The workflow slug is auto-generated as {featureDynastySlug}-{signatureName}[-v{N}]. " +
-    "signatureName is a poetic word auto-assigned once per dynasty. " +
-    "After deploying, execute workflows via POST /workflows/by-slug/{slug}/execute.",
-  tags: ["Workflows"],
-  security: [{ apiKey: [] }],
-  request: {
-    headers: IdentityHeaders,
-    body: {
-      required: true,
-      content: { "application/json": { schema: DeployWorkflowsSchema } },
-    },
-  },
-  responses: {
-    200: {
-      description: "Workflows deployed",
-      content: {
-        "application/json": { schema: DeployWorkflowsResponseSchema },
-      },
-    },
-    400: {
-      description: "Validation error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
+// NOTE: PUT /workflows/upgrade is an internal-only endpoint (used by apps at startup).
+// It is NOT registered in OpenAPI to avoid exposing it to external clients.
+// External clients should use PUT /workflows/{id} for all workflow modifications.
 
 registry.registerPath({
   method: "post",

@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Workflow Service",
-    "description": "Workflow orchestration service. Register DAG workflows once, execute them by name with runtime inputs.\n\n## Quick Start\n\n**Step 1 — Deploy your workflows (once, at app startup):**\n```\nPUT /workflows/upgrade\n{ \"appId\": \"my-app\", \"workflows\": [{ \"name\": \"my-flow\", \"dag\": { ... } }] }\n```\nThis is idempotent — safe to call on every cold start.\n\n**Step 2 — Execute by name (each time an event occurs):**\n```\nPOST /workflows/by-name/my-flow/execute\n{ \"appId\": \"my-app\", \"inputs\": { \"email\": \"user@example.com\" } }\n```\nReturns a run ID. Poll `GET /workflow-runs/{id}` for status and result.\n\n## DAG Format\n\nA DAG has `nodes` (steps) and `edges` (execution order).\n\n**Recommended node type: `http.call`** — calls any microservice by name:\n```json\n{\n  \"id\": \"create-user\",\n  \"type\": \"http.call\",\n  \"config\": { \"service\": \"client\", \"method\": \"POST\", \"path\": \"/users\" },\n  \"inputMapping\": { \"body\": \"$ref:flow_input.userData\" }\n}\n```\nThe service name maps to env vars `{NAME}_SERVICE_URL` and `{NAME}_SERVICE_API_KEY`.\nTo discover available services and their endpoints, use the API Registry.\n\n## Input Mapping ($ref syntax)\n\nUse `inputMapping` to pass data between nodes:\n- `$ref:flow_input.field` — from the workflow execution inputs\n- `$ref:node-id.output.field` — from a previous node's output\n\n## Features\n\n- Automatic retries (3 attempts, 5s apart) on each node\n- Async execution with status polling\n- Topological ordering — nodes run in dependency order\n- Native constructs: `wait` (delay), `condition` (branching), `for-each` (loops)\n\n## Per-App Secrets (BYOK)\n\nSome services (e.g. Stripe) require per-app API keys. **Never pass secrets as workflow inputs.**\nInstead, use the **key-service** app-keys system:\n\n**1. Register the key once (at app startup via `instrumentation.ts`):**\n```\nPOST key-service /internal/app-keys\n{ \"appId\": \"my-app\", \"provider\": \"stripe\", \"apiKey\": \"sk_live_xxx\" }\n```\n\n**2. Pass `appId` (not the secret) in your workflow inputs:**\n```\nPOST /workflows/by-name/create-course/execute\n{ \"appId\": \"my-app\", \"inputs\": { \"courseName\": \"My Course\", \"price\": 99 } }\n```\n\n**3. The downstream service resolves the key itself:**\nThe service (e.g. stripe-service) receives `appId`, calls key-service\n`GET /internal/app-keys/stripe/decrypt?appId=my-app` to get the decrypted key.\nNo secret ever transits through the workflow.\n\n## Setup Pattern (Next.js `instrumentation.ts`)\n\nPut all one-time setup in your app's `instrumentation.ts`. Both operations are idempotent (upsert):\n```typescript\nexport async function register() {\n  // Register per-app secrets\n  await fetch(`${KEY_SERVICE_URL}/internal/app-keys`, {\n    method: \"POST\",\n    headers: { \"Content-Type\": \"application/json\", \"x-api-key\": KEY_SERVICE_API_KEY },\n    body: JSON.stringify({ appId: \"my-app\", provider: \"stripe\", apiKey: STRIPE_SECRET_KEY }),\n  });\n  // Deploy workflows\n  await fetch(`${WORKFLOW_SERVICE_URL}/workflows/upgrade`, {\n    method: \"PUT\",\n    headers: { \"Content-Type\": \"application/json\", \"x-api-key\": WORKFLOW_SERVICE_API_KEY },\n    body: JSON.stringify({ appId: \"my-app\", workflows: [{ name: \"my-flow\", dag: { ... } }] }),\n  });\n}\n```",
+    "description": "Workflow orchestration service. Create DAG workflows, modify them, and execute them by slug with runtime inputs.\n\n## Quick Start\n\n**Step 1 — Create a workflow:**\n```\nPOST /workflows\n{ \"featureSlug\": \"my-feature\", \"dag\": { \"nodes\": [...], \"edges\": [...] } }\n```\n\n**Step 2 — Execute by slug (each time an event occurs):**\n```\nPOST /workflows/by-slug/my-feature-obsidian/execute\n{ \"inputs\": { \"email\": \"user@example.com\" } }\n```\nReturns a run ID. Poll `GET /workflow-runs/{id}` for status and result.\n\n**Step 3 — Modify the workflow (metadata or DAG):**\n```\nPUT /workflows/{id}\n{ \"dag\": { \"nodes\": [...], \"edges\": [...] } }\n```\nIf the DAG structure changed, a new workflow is created (fork). The response tells you what happened via `_action`.\n\n## DAG Format\n\nA DAG has `nodes` (steps) and `edges` (execution order).\n\n**Recommended node type: `http.call`** — calls any microservice by name:\n```json\n{\n  \"id\": \"create-user\",\n  \"type\": \"http.call\",\n  \"config\": { \"service\": \"client\", \"method\": \"POST\", \"path\": \"/users\" },\n  \"inputMapping\": { \"body\": \"$ref:flow_input.userData\" }\n}\n```\nThe service name maps to env vars `{NAME}_SERVICE_URL` and `{NAME}_SERVICE_API_KEY`.\nTo discover available services and their endpoints, use the API Registry.\n\n## Input Mapping ($ref syntax)\n\nUse `inputMapping` to pass data between nodes:\n- `$ref:flow_input.field` — from the workflow execution inputs\n- `$ref:node-id.output.field` — from a previous node's output\n\n## Features\n\n- Automatic retries (3 attempts, 5s apart) on each node\n- Async execution with status polling\n- Topological ordering — nodes run in dependency order\n- Native constructs: `wait` (delay), `condition` (branching), `for-each` (loops)\n\n## Per-App Secrets (BYOK)\n\nSome services (e.g. Stripe) require per-app API keys. **Never pass secrets as workflow inputs.**\nInstead, use the **key-service** app-keys system:\n\n**1. Register the key once (at app startup via `instrumentation.ts`):**\n```\nPOST key-service /internal/app-keys\n{ \"appId\": \"my-app\", \"provider\": \"stripe\", \"apiKey\": \"sk_live_xxx\" }\n```\n\n**2. Pass `appId` (not the secret) in your workflow inputs:**\n```\nPOST /workflows/by-name/create-course/execute\n{ \"appId\": \"my-app\", \"inputs\": { \"courseName\": \"My Course\", \"price\": 99 } }\n```\n\n**3. The downstream service resolves the key itself:**\nThe service (e.g. stripe-service) receives `appId`, calls key-service\n`GET /internal/app-keys/stripe/decrypt?appId=my-app` to get the decrypted key.\nNo secret ever transits through the workflow.\n\n## Setup Pattern (Next.js `instrumentation.ts`)\n\nPut all one-time setup in your app's `instrumentation.ts`:\n```typescript\nexport async function register() {\n  // Register per-app secrets\n  await fetch(`${KEY_SERVICE_URL}/internal/app-keys`, {\n    method: \"POST\",\n    headers: { \"Content-Type\": \"application/json\", \"x-api-key\": KEY_SERVICE_API_KEY },\n    body: JSON.stringify({ appId: \"my-app\", provider: \"stripe\", apiKey: STRIPE_SECRET_KEY }),\n  });\n  // Create or update workflows via POST /workflows or PUT /workflows/{id}\n}\n```",
     "version": "1.0.0"
   },
   "servers": [
@@ -562,9 +562,23 @@
               "_action": {
                 "type": "string",
                 "enum": [
-                  "updated"
+                  "updated",
+                  "forked"
                 ],
-                "description": "What happened: 'updated' means the existing workflow was modified in-place (metadata only)."
+                "description": "What happened: 'updated' means the existing workflow was modified in-place (metadata or same-signature DAG). 'forked' means a new workflow was created with a new dynasty because the DAG signature changed."
+              },
+              "_forkedFromName": {
+                "type": "string",
+                "description": "Present only when _action='forked'. The display name of the original workflow that was forked."
+              },
+              "_forkedFromId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Present only when _action='forked'. The ID of the original workflow that was forked."
+              },
+              "_sourceDynastyDeprecated": {
+                "type": "boolean",
+                "description": "Present only when _action='forked'. True if the source dynasty was deprecated (had zero campaign runs). False if the source dynasty was kept active."
               }
             },
             "required": [
@@ -651,6 +665,28 @@
           "_action": "updated"
         }
       },
+      "WorkflowConflictResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "existingWorkflowId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "ID of the existing workflow that already has this DAG signature."
+          },
+          "existingWorkflowSlug": {
+            "type": "string",
+            "description": "Slug of the existing workflow that already has this DAG signature."
+          }
+        },
+        "required": [
+          "error",
+          "existingWorkflowId",
+          "existingWorkflowSlug"
+        ]
+      },
       "UpdateWorkflowRequest": {
         "type": "object",
         "properties": {
@@ -671,7 +707,7 @@
                 "$ref": "#/components/schemas/DAG"
               },
               {
-                "description": "DAG changes are NOT allowed via PUT on individual workflows. Use PUT /workflows/upgrade for structural changes. This field will be rejected if provided."
+                "description": "Optional new DAG. When omitted, only metadata (description, tags) is updated in-place. When provided with the same structural signature, the DAG is updated in-place. When provided with a different structural signature, a new workflow is created (fork) and the original is kept active (unless its dynasty has zero campaign runs, in which case it is deprecated)."
               }
             ]
           }
@@ -681,7 +717,42 @@
           "tags": [
             "email",
             "outreach"
-          ]
+          ],
+          "dag": {
+            "nodes": [
+              {
+                "id": "fetch-lead",
+                "type": "http.call",
+                "config": {
+                  "service": "lead",
+                  "method": "POST",
+                  "path": "/buffer/next"
+                },
+                "inputMapping": {
+                  "body.campaignId": "$ref:flow_input.campaignId"
+                }
+              },
+              {
+                "id": "send-email",
+                "type": "http.call",
+                "config": {
+                  "service": "email-gateway",
+                  "method": "POST",
+                  "path": "/send"
+                },
+                "inputMapping": {
+                  "body.to": "$ref:fetch-lead.output.lead.email"
+                },
+                "retries": 0
+              }
+            ],
+            "edges": [
+              {
+                "from": "fetch-lead",
+                "to": "send-email"
+              }
+            ]
+          }
         }
       },
       "TemplateRef": {
@@ -1042,176 +1113,14 @@
           "signatureName",
           "version",
           "action"
-        ]
-      },
-      "DeployWorkflowsResponse": {
-        "type": "object",
-        "properties": {
-          "workflows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DeployWorkflowResult"
-            }
-          }
-        },
-        "required": [
-          "workflows"
-        ]
-      },
-      "DeployWorkflowItem": {
-        "type": "object",
-        "properties": {
-          "createdForBrandId": {
-            "type": "string",
-            "description": "Optional brand ID — records which brand context created this workflow."
-          },
-          "featureSlug": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Feature slug from features-service. Required — used to build the workflow name."
-          },
-          "description": {
-            "type": "string",
-            "description": "Human-readable description."
-          },
-          "category": {
-            "$ref": "#/components/schemas/WorkflowCategory"
-          },
-          "channel": {
-            "$ref": "#/components/schemas/WorkflowChannel"
-          },
-          "audienceType": {
-            "$ref": "#/components/schemas/WorkflowAudienceType"
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."
-          },
-          "dag": {
-            "$ref": "#/components/schemas/DAG"
-          }
-        },
-        "required": [
-          "featureSlug",
-          "dag"
-        ]
-      },
-      "DeployWorkflowsRequest": {
-        "type": "object",
-        "properties": {
-          "workflows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DeployWorkflowItem"
-            },
-            "minItems": 1,
-            "description": "The workflows to deploy."
-          }
-        },
-        "required": [
-          "workflows"
         ],
-        "example": {
-          "workflows": [
-            {
-              "featureSlug": "pr-cold-email-outreach",
-              "description": "Cold outreach sequence for PR campaigns",
-              "category": "pr",
-              "channel": "email",
-              "audienceType": "cold-outreach",
-              "tags": [
-                "email"
-              ],
-              "dag": {
-                "nodes": [
-                  {
-                    "id": "fetch-lead",
-                    "type": "http.call",
-                    "config": {
-                      "service": "lead",
-                      "method": "POST",
-                      "path": "/buffer/next",
-                      "body": {
-                        "sourceType": "journalist"
-                      }
-                    },
-                    "inputMapping": {
-                      "body.campaignId": "$ref:flow_input.campaignId"
-                    }
-                  },
-                  {
-                    "id": "check-lead",
-                    "type": "condition"
-                  },
-                  {
-                    "id": "send-email",
-                    "type": "http.call",
-                    "config": {
-                      "service": "email-gateway",
-                      "method": "POST",
-                      "path": "/send"
-                    },
-                    "inputMapping": {
-                      "body.to": "$ref:fetch-lead.output.lead.email"
-                    },
-                    "retries": 0
-                  },
-                  {
-                    "id": "end-run",
-                    "type": "http.call",
-                    "config": {
-                      "service": "campaign",
-                      "method": "POST",
-                      "path": "/end-run",
-                      "body": {
-                        "success": true
-                      }
-                    },
-                    "inputMapping": {
-                      "body.campaignId": "$ref:flow_input.campaignId"
-                    }
-                  }
-                ],
-                "edges": [
-                  {
-                    "from": "fetch-lead",
-                    "to": "check-lead"
-                  },
-                  {
-                    "from": "check-lead",
-                    "to": "send-email",
-                    "condition": "results['fetch-lead'].found == true"
-                  },
-                  {
-                    "from": "check-lead",
-                    "to": "end-run",
-                    "condition": "results['fetch-lead'].found == false"
-                  },
-                  {
-                    "from": "send-email",
-                    "to": "end-run"
-                  }
-                ]
-              }
-            }
-          ]
-        }
+        "description": "The deployed workflow metadata."
       },
       "GenerateWorkflowResponse": {
         "type": "object",
         "properties": {
           "workflow": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/DeployWorkflowResult"
-              },
-              {
-                "description": "The deployed workflow metadata."
-              }
-            ]
+            "$ref": "#/components/schemas/DeployWorkflowResult"
           },
           "dag": {
             "allOf": [
@@ -2220,8 +2129,8 @@
         }
       },
       "put": {
-        "summary": "Update workflow metadata",
-        "description": "Updates metadata (description, tags) on an existing workflow. DAG changes are NOT allowed — use PUT /workflows/upgrade for structural changes. Slug and name are immutable and cannot be changed.",
+        "summary": "Update a workflow (metadata or DAG)",
+        "description": "The single endpoint for modifying a workflow. Behavior depends on what you send:\n\n**Metadata only** (no `dag` in body): updates description/tags in-place. Returns `_action: 'updated'`.\n\n**DAG with same signature**: the DAG structure hasn't changed (e.g. only config tweaks that don't affect the hash). Updates in-place. Returns `_action: 'updated'`.\n\n**DAG with new signature**: creates a new workflow in a new dynasty (fork). The original workflow is kept active unless its entire dynasty has zero campaign runs, in which case it is deprecated. Returns `_action: 'forked'` with the new workflow data, plus `_forkedFromName`, `_forkedFromId`, and `_sourceDynastyDeprecated` to indicate what happened.\n\nThe new workflow's ID is in the response — use it going forward. Returns 201 for forks, 200 for in-place updates.",
         "tags": [
           "Workflows"
         ],
@@ -2323,7 +2232,17 @@
         },
         "responses": {
           "200": {
-            "description": "Workflow updated in-place (metadata only). _action='updated'.",
+            "description": "Workflow updated in-place (metadata or same-signature DAG). _action='updated'.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowMutationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "New workflow created via fork (DAG signature changed). _action='forked'.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2333,7 +2252,7 @@
             }
           },
           "400": {
-            "description": "DAG changes not allowed via this endpoint",
+            "description": "Invalid DAG structure",
             "content": {
               "application/json": {
                 "schema": {
@@ -2343,11 +2262,21 @@
             }
           },
           "404": {
-            "description": "Not found",
+            "description": "Workflow not found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A workflow with this DAG signature already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowConflictResponse"
                 }
               }
             }
@@ -3290,124 +3219,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkflowRunResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/workflows/upgrade": {
-      "put": {
-        "summary": "Upgrade (upsert) workflows by DAG signature",
-        "description": "Idempotent: creates new workflows or updates existing ones matched by featureSlug. If the DAG signature is unchanged, updates metadata in-place. If the DAG signature changed, deprecates the old workflow and creates a new version. The workflow slug is auto-generated as {featureDynastySlug}-{signatureName}[-v{N}]. signatureName is a poetic word auto-assigned once per dynasty. After deploying, execute workflows via POST /workflows/by-slug/{slug}/execute.",
-        "tags": [
-          "Workflows"
-        ],
-        "security": [
-          {
-            "apiKey": []
-          }
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "description": "Internal org UUID (from client-service). Required."
-            },
-            "required": true,
-            "description": "Internal org UUID (from client-service). Required.",
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Internal user UUID (from client-service). Required."
-            },
-            "required": true,
-            "description": "Internal user UUID (from client-service). Required.",
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Run ID for tracing across services. Required."
-            },
-            "required": true,
-            "description": "Run ID for tracing across services. Required.",
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug from features-service. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
-            "name": "x-feature-slug",
-            "in": "header"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeployWorkflowsRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Workflows deployed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeployWorkflowsResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

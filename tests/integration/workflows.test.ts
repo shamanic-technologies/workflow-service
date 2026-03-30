@@ -73,6 +73,18 @@ vi.mock("../../src/lib/content-generation-client.js", () => ({
     mockFetchPromptTemplates(...args),
 }));
 
+// Mock features-client (for fork dynasty name resolution)
+vi.mock("../../src/lib/features-client.js", () => ({
+  resolveFeatureDynasty: vi.fn().mockImplementation((featureSlug: string) => {
+    const dynastySlug = featureSlug.replace(/-v\d+$/, "");
+    const dynastyName = dynastySlug
+      .split("-")
+      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+    return Promise.resolve({ featureDynastyName: dynastyName, featureDynastySlug: dynastySlug });
+  }),
+}));
+
 // Mock Windmill client
 vi.mock("../../src/lib/windmill-client.js", () => ({
   getWindmillClient: () => ({
@@ -993,7 +1005,7 @@ describe("GET /workflows/:id/required-providers", () => {
   });
 });
 
-describe("PUT /workflows/:id — metadata update", () => {
+describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
     mockSelectResponses.length = 0;
@@ -1006,9 +1018,15 @@ describe("PUT /workflows/:id — metadata update", () => {
       slug: "sales-email-cold-outreach-maple",
       name: "Sales Email Cold Outreach Maple",
       dynastyName: "Sales Email Cold Outreach Maple",
+      dynastySlug: "sales-email-cold-outreach-maple",
+      featureSlug: "sales-email-cold-outreach",
+      signatureName: "maple",
+      signature: "abc123",
       version: 1,
       description: "Old desc",
       dag: VALID_LINEAR_DAG,
+      tags: [],
+      status: "active",
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -1027,26 +1045,85 @@ describe("PUT /workflows/:id — metadata update", () => {
     expect(res.body.tags).toEqual(["updated"]);
   });
 
-  it("rejects DAG changes via PUT (must use upgrade)", async () => {
-    mockDbRows.push({
+  it("updates in-place when DAG has same signature", async () => {
+    // Compute the real signature so it matches
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const realSig = computeDAGSignature(VALID_LINEAR_DAG);
+
+    const existingWf = {
+      id: WF_META_ID,
+      orgId: "org-1",
+      slug: "sales-email-cold-outreach-maple",
+      name: "Sales Email Cold Outreach Maple",
+      dynastyName: "Sales Email Cold Outreach Maple",
+      dynastySlug: "sales-email-cold-outreach-maple",
+      featureSlug: "sales-email-cold-outreach",
+      signatureName: "maple",
+      signature: realSig,
+      version: 1,
+      description: "Old desc",
+      dag: VALID_LINEAR_DAG,
+      tags: [],
+      status: "active",
+      windmillFlowPath: "f/workflows/org-1/sales_email_cold_outreach_maple",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Queue: 1) existing lookup
+    mockSelectResponses.push([existingWf]);
+
+    // Send the same DAG — signature will match
+    const res = await request
+      .put(`/workflows/${WF_META_ID}`)
+      .set(AUTH)
+      .send({ dag: VALID_LINEAR_DAG, description: "Same DAG, new desc" });
+
+    expect(res.status).toBe(200);
+    expect(res.body._action).toBe("updated");
+    expect(res.body.description).toBe("Same DAG, new desc");
+  });
+
+  it("forks when DAG has a new signature", async () => {
+    const existingWf = {
       id: WF_DAG_REJECT_ID,
       orgId: "org-1",
       slug: "sales-email-cold-outreach-pine",
       name: "Sales Email Cold Outreach Pine",
       dynastyName: "Sales Email Cold Outreach Pine",
+      dynastySlug: "sales-email-cold-outreach-pine",
+      featureSlug: "sales-email-cold-outreach",
+      signatureName: "pine",
+      signature: "old-sig-123",
       version: 1,
+      description: "Original",
       dag: VALID_LINEAR_DAG,
+      tags: [],
+      status: "active",
+      windmillWorkspace: "prod",
       createdAt: new Date(),
       updatedAt: new Date(),
-    });
+    };
+
+    // Queue responses: 1) existing lookup, 2) conflict check (empty), 3) used signatureNames, 4) dynasty workflows, 5) campaign runs
+    mockSelectResponses.push([existingWf]); // existing workflow lookup
+    mockSelectResponses.push([]); // no conflicting workflow with same signature
+    mockSelectResponses.push([{ signatureName: "pine" }]); // existing signatureNames
+    mockSelectResponses.push([{ id: WF_DAG_REJECT_ID }]); // dynasty workflows
+    mockSelectResponses.push([]); // zero campaign runs → safe to deprecate
 
     const res = await request
       .put(`/workflows/${WF_DAG_REJECT_ID}`)
       .set(AUTH)
       .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("DAG changes are not allowed");
+    expect(res.status).toBe(201);
+    expect(res.body._action).toBe("forked");
+    expect(res.body._forkedFromName).toBe("Sales Email Cold Outreach Pine");
+    expect(res.body._forkedFromId).toBe(WF_DAG_REJECT_ID);
+    expect(res.body._sourceDynastyDeprecated).toBe(true);
+    expect(res.body.forkedFrom).toBe(WF_DAG_REJECT_ID);
+    expect(res.body.version).toBe(1);
   });
 
   it("returns 404 for non-existent workflow", async () => {
