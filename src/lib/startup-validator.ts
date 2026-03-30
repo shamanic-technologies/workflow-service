@@ -15,6 +15,7 @@ import { pickSignatureName } from "./signature-words.js";
 import type { WindmillClient } from "./windmill-client.js";
 import { fetchPlatformAnthropicKey } from "./key-service-client.js";
 import { createPlatformRun, closePlatformRun } from "./runs-client.js";
+import { deprecateStaleWorkflows } from "./stale-workflow-deprecator.js";
 
 type Database = typeof DbInstance;
 
@@ -40,6 +41,24 @@ export async function validateAndUpgradeWorkflows(
   deps: StartupValidatorDeps,
 ): Promise<void> {
   const { db: database, windmillClient } = deps;
+
+  // 0. Deprecate stale workflows BEFORE validation — avoids paying for LLM upgrades on unused workflows
+  try {
+    const result = await deprecateStaleWorkflows(database);
+    if (result.deprecatedCount > 0) {
+      console.log(
+        `[workflow-service] Stale deprecation: ${result.deprecatedCount} deprecated, ${result.keptByRecency} kept by recency, ${result.keptByCampaign} kept by active campaign`,
+      );
+    }
+    if (result.skippedNoCampaignService) {
+      console.warn("[workflow-service] Stale deprecation skipped — campaign-service unreachable");
+    }
+  } catch (err) {
+    console.warn(
+      "[workflow-service] Stale workflow deprecation failed (non-blocking):",
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   // 1. Fetch all active workflows
   const activeWorkflows = await database
