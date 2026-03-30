@@ -16,7 +16,7 @@ import {
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
 import { fetchFeatureOutputs, fetchStatsRegistry, resolveFeatureDynastySlugs } from "../lib/features-client.js";
-import { extractDownstreamHeaders, type DownstreamHeaders } from "../lib/downstream-headers.js";
+import type { DownstreamHeaders } from "../lib/downstream-headers.js";
 
 const router = Router();
 
@@ -60,13 +60,12 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
     const { orgId, brandId, featureSlug, featureDynastySlug, objective, limit, groupBy } = query.data;
-    const downstreamHeaders = extractDownstreamHeaders(req);
 
     // Resolve effective featureSlug: direct or via dynasty
     let effectiveFeatureSlug = featureSlug;
     let dynastyVersionedSlugs: string[] | undefined;
     if (!effectiveFeatureSlug && featureDynastySlug) {
-      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, downstreamHeaders);
+      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
       effectiveFeatureSlug = dynastyVersionedSlugs[0];
     }
 
@@ -79,7 +78,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug, downstreamHeaders);
+      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug);
       conditions.push(inArray(workflows.featureSlug, dynastyVersionedSlugs));
     }
 
@@ -94,7 +93,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
 
-    const { objectives } = await resolveObjectives(objective, effectiveFeatureSlug, downstreamHeaders);
+    const { objectives } = await resolveObjectives(objective, effectiveFeatureSlug);
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "public" as const, brandId, orgId });
 
     function rankForObjectives(inputScores: WorkflowScore[]) {
@@ -203,13 +202,12 @@ router.get("/public/workflows/best", async (req, res) => {
       return;
     }
     const { orgId, brandId, featureSlug, featureDynastySlug, by } = query.data;
-    const downstreamHeaders = extractDownstreamHeaders(req);
 
     // Resolve effective featureSlug: direct or via dynasty
     let effectiveFeatureSlug = featureSlug;
     let dynastyVersionedSlugs: string[] | undefined;
     if (!effectiveFeatureSlug && featureDynastySlug) {
-      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, downstreamHeaders);
+      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
       effectiveFeatureSlug = dynastyVersionedSlugs[0];
     }
     if (!effectiveFeatureSlug) {
@@ -217,13 +215,13 @@ router.get("/public/workflows/best", async (req, res) => {
       return;
     }
 
-    const { objectives } = await resolveObjectives(undefined, effectiveFeatureSlug, downstreamHeaders);
+    const { objectives } = await resolveObjectives(undefined, effectiveFeatureSlug);
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug, downstreamHeaders);
+      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug);
       conditions.push(inArray(workflows.featureSlug, dynastyVersionedSlugs));
     }
 
