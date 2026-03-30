@@ -34,6 +34,7 @@ Workflow orchestration service powered by Windmill. Translates internal DAG form
 - Commit `openapi.json` alongside schema changes in `src/schemas.ts`
 - When adding a node type: update `node-type-registry.ts` + create script in `scripts/nodes/`
 - Every bug fix must include a regression test
+- **Always forward ALL downstream headers.** Every service-to-service call MUST spread `DownstreamHeaders` (from `src/lib/downstream-headers.ts`) into the fetch headers. Never cherry-pick individual headers — use `extractDownstreamHeaders(req)` in routes and pass the full object through. Missing headers don't always crash, but they silently break tracing and logging in downstream services.
 
 ## Database migrations
 

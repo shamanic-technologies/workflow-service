@@ -1,3 +1,5 @@
+import type { DownstreamHeaders } from "./downstream-headers.js";
+
 export interface PromptTemplate {
   id: string;
   type: string;
@@ -26,6 +28,7 @@ function getConfig(): { baseUrl: string; apiKey: string } {
  */
 export async function fetchPromptTemplate(
   type: string,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<PromptTemplate | null> {
   const { baseUrl, apiKey } = getConfig();
 
@@ -33,7 +36,7 @@ export async function fetchPromptTemplate(
     `${baseUrl}/platform-prompts?type=${encodeURIComponent(type)}`,
     {
       method: "GET",
-      headers: { "x-api-key": apiKey },
+      headers: { "x-api-key": apiKey, ...downstreamHeaders },
     },
   );
 
@@ -54,13 +57,14 @@ export async function fetchPromptTemplate(
  */
 export async function fetchPromptTemplates(
   types: string[],
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<Map<string, PromptTemplate>> {
   const unique = [...new Set(types)];
   const templates = new Map<string, PromptTemplate>();
 
   const results = await Promise.allSettled(
     unique.map(async (type) => {
-      const template = await fetchPromptTemplate(type);
+      const template = await fetchPromptTemplate(type, downstreamHeaders);
       return { type, template };
     }),
   );

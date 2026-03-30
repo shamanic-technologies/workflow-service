@@ -15,11 +15,7 @@ export interface ChatServiceCompleteResponse {
   model: string;
 }
 
-export interface ChatServiceIdentity {
-  orgId: string;
-  userId: string;
-  runId: string;
-}
+import type { DownstreamHeaders } from "./downstream-headers.js";
 
 function getChatServiceConfig(): { baseUrl: string; apiKey: string } {
   const baseUrl = process.env.CHAT_SERVICE_URL;
@@ -36,7 +32,7 @@ function getChatServiceConfig(): { baseUrl: string; apiKey: string } {
 
 export async function chatServiceComplete(
   request: ChatServiceCompleteRequest,
-  identity: ChatServiceIdentity,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<ChatServiceCompleteResponse> {
   const { baseUrl, apiKey } = getChatServiceConfig();
 
@@ -45,9 +41,7 @@ export async function chatServiceComplete(
     headers: {
       "Content-Type": "application/json",
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
     body: JSON.stringify(request),
   });

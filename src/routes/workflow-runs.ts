@@ -11,7 +11,8 @@ import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 import { parseWindmillError } from "../lib/error-parser.js";
-import { resolveFeatureDynastySlugs, extractForwardHeaders } from "../lib/features-client.js";
+import { resolveFeatureDynastySlugs } from "../lib/features-client.js";
+import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 
 const router = Router();
 
@@ -418,7 +419,7 @@ router.get("/workflow-runs", requireApiKey, async (req, res) => {
       conditions.push(eq(workflowRuns.featureSlug, featureSlug));
     }
     if (featureDynastySlug && typeof featureDynastySlug === "string") {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractDownstreamHeaders(req));
       conditions.push(inArray(workflowRuns.featureSlug, versionedSlugs));
     }
     if (workflowSlug && typeof workflowSlug === "string") {

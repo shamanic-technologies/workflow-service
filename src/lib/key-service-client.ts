@@ -1,4 +1,5 @@
 import type { HttpEndpoint } from "./extract-http-endpoints.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 
 export interface IdentityHeaders {
   orgId: string;
@@ -26,7 +27,7 @@ function getKeyServiceConfig(): { baseUrl: string; apiKey: string } {
 
 export async function fetchProviderRequirements(
   endpoints: HttpEndpoint[],
-  identity: IdentityHeaders,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<ProviderRequirementsResponse> {
   const { baseUrl, apiKey } = getKeyServiceConfig();
 
@@ -36,9 +37,7 @@ export async function fetchProviderRequirements(
     headers: {
       "Content-Type": "application/json",
       "x-api-key": apiKey,
-      "x-org-id": identity.orgId,
-      "x-user-id": identity.userId,
-      "x-run-id": identity.runId,
+      ...downstreamHeaders,
     },
     body: JSON.stringify({ endpoints }),
   });

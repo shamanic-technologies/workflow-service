@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { fetchRunCostsAuth, fetchRunCostsPublic, fetchEmailStatsAuth, fetchEmailStatsPublic } from "./stats-client.js";
 import { fetchSourceStats, type SourceStatsMap } from "./source-stats-client.js";
-import type { IdentityHeaders } from "./key-service-client.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 import type { StatsRegistryEntry } from "./features-client.js";
 
 export const EMPTY_EMAIL_STATS = {
@@ -126,7 +126,7 @@ export function getUpgradeChainIds(
 }
 
 type ScoreMode =
-  | { kind: "auth"; identity: IdentityHeaders }
+  | { kind: "auth"; downstreamHeaders: DownstreamHeaders }
   | { kind: "public"; brandId?: string; orgId?: string };
 
 export interface ScoreResult {
@@ -166,7 +166,7 @@ export async function computeWorkflowScores(
   // 3. Fetch costs aggregated by workflowSlug, filtered to dynasty slugs only
   const costGroups =
     mode.kind === "auth"
-      ? await fetchRunCostsAuth(mode.identity, allChainNames)
+      ? await fetchRunCostsAuth(mode.downstreamHeaders, allChainNames)
       : await fetchRunCostsPublic({ brandId: mode.brandId, orgId: mode.orgId, workflowSlugs: allChainNames });
 
   const costBySlug = new Map(costGroups.map((g) => [g.workflowSlug, g.totalCostInUsdCents]));
@@ -174,7 +174,7 @@ export async function computeWorkflowScores(
   // 4. Fetch email stats grouped by workflowSlug (1 call for all dynasty slugs)
   const emailGroups =
     mode.kind === "auth"
-      ? await fetchEmailStatsAuth(allChainNames, mode.identity)
+      ? await fetchEmailStatsAuth(allChainNames, mode.downstreamHeaders)
       : await fetchEmailStatsPublic(allChainNames);
 
   const emailBySlug = new Map(emailGroups.map((g) => [g.workflowSlug, g]));
@@ -190,7 +190,7 @@ export async function computeWorkflowScores(
       }
     }
     const sourcePromises = [...sourcesToFetch].map((source) =>
-      fetchSourceStats(source, allChainNames, mode.identity)
+      fetchSourceStats(source, allChainNames, mode.downstreamHeaders)
     );
     additionalSourceMaps.push(...await Promise.all(sourcePromises));
   }

@@ -8,18 +8,17 @@ import {
   fetchLlmContext,
   fetchSpecsForServices,
 } from "./api-registry-client.js";
-import type { IdentityHeaders } from "./key-service-client.js";
+import type { DownstreamHeaders } from "./downstream-headers.js";
 import type { InvalidEndpoint, FieldValidationIssue } from "./validate-workflow-endpoints.js";
 import {
   chatServiceComplete,
   type ChatServiceCompleteRequest,
   type ChatServiceCompleteResponse,
-  type ChatServiceIdentity,
 } from "./chat-service-client.js";
 
 const MAX_RETRIES = 2;
 
-let overrideCompleteFn: ((req: ChatServiceCompleteRequest, id: ChatServiceIdentity) => Promise<ChatServiceCompleteResponse>) | null = null;
+let overrideCompleteFn: ((req: ChatServiceCompleteRequest, h: DownstreamHeaders) => Promise<ChatServiceCompleteResponse>) | null = null;
 
 /** Exported for testing — allows injecting a mock chat-service client */
 export function setUpgradeChatServiceClient(fn: typeof overrideCompleteFn): void {
@@ -28,16 +27,16 @@ export function setUpgradeChatServiceClient(fn: typeof overrideCompleteFn): void
 
 async function callComplete(
   request: ChatServiceCompleteRequest,
-  identity: ChatServiceIdentity,
+  downstreamHeaders: DownstreamHeaders,
 ): Promise<ChatServiceCompleteResponse> {
-  if (overrideCompleteFn) return overrideCompleteFn(request, identity);
-  return chatServiceComplete(request, identity);
+  if (overrideCompleteFn) return overrideCompleteFn(request, downstreamHeaders);
+  return chatServiceComplete(request, downstreamHeaders);
 }
 
 async function fetchServiceContext(
   invalidEndpoints: InvalidEndpoint[],
   fieldErrors: FieldValidationIssue[],
-  identity?: IdentityHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<ServiceContext> {
   // Fetch specs for all services referenced in broken endpoints and field errors
   const serviceNames = new Set<string>();
@@ -46,7 +45,7 @@ async function fetchServiceContext(
 
   let services: Array<{ name: string; description: string; endpointCount: number }> = [];
   try {
-    const context = await fetchLlmContext(identity);
+    const context = await fetchLlmContext(downstreamHeaders);
     services = context.services.map((s: { service: string; description?: string; endpointCount: number }) => ({
       name: s.service,
       description: s.description ?? "",
@@ -58,7 +57,7 @@ async function fetchServiceContext(
     // Non-blocking — proceed with just the broken service specs
   }
 
-  const specsMap = await fetchSpecsForServices([...serviceNames], identity);
+  const specsMap = await fetchSpecsForServices([...serviceNames], downstreamHeaders);
   const specs: Record<string, unknown> = {};
   for (const [name, spec] of specsMap) specs[name] = spec;
 
@@ -77,11 +76,11 @@ export async function upgradeWorkflow(
   currentDag: DAG,
   invalidEndpoints: InvalidEndpoint[],
   fieldErrors: FieldValidationIssue[],
-  identity: IdentityHeaders | undefined,
+  downstreamHeaders: DownstreamHeaders | undefined,
   metadata: { category: string; channel: string; audienceType: string; description: string },
 ): Promise<UpgradeWorkflowResult> {
   // Pre-fetch service context
-  const serviceContext = await fetchServiceContext(invalidEndpoints, fieldErrors, identity);
+  const serviceContext = await fetchServiceContext(invalidEndpoints, fieldErrors, downstreamHeaders);
 
   const systemPrompt = buildUpgradeSystemPrompt({
     currentDag: currentDag as unknown as Record<string, unknown>,
@@ -90,9 +89,8 @@ export async function upgradeWorkflow(
     serviceContext,
   });
 
-  const chatIdentity: ChatServiceIdentity = identity
-    ? { orgId: identity.orgId, userId: identity.userId, runId: identity.runId }
-    : { orgId: "platform", userId: "workflow-service", runId: "startup-upgrade" };
+  const chatHeaders: DownstreamHeaders = downstreamHeaders
+    ?? { "x-org-id": "platform", "x-user-id": "workflow-service", "x-run-id": "startup-upgrade" };
 
   let userMessage = `Fix this workflow. The category is "${metadata.category}", channel is "${metadata.channel}", audienceType is "${metadata.audienceType}". Description: "${metadata.description}". Fix the broken endpoints and field errors listed above.`;
 
@@ -105,7 +103,7 @@ export async function upgradeWorkflow(
         maxTokens: 16384,
         model: "claude-sonnet-4-6",
       },
-      chatIdentity,
+      chatHeaders,
     );
 
     if (!response.json) {

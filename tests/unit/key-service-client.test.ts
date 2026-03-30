@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchProviderRequirements, type IdentityHeaders } from "../../src/lib/key-service-client.js";
+import { fetchProviderRequirements } from "../../src/lib/key-service-client.js";
+import type { DownstreamHeaders } from "../../src/lib/downstream-headers.js";
 
-const TEST_IDENTITY: IdentityHeaders = { orgId: "org-1", userId: "user-1", runId: "run-1" };
+const TEST_HEADERS: DownstreamHeaders = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1" };
 
 describe("fetchProviderRequirements", () => {
   const originalUrl = process.env.KEY_SERVICE_URL;
@@ -20,14 +21,14 @@ describe("fetchProviderRequirements", () => {
 
   it("throws if KEY_SERVICE_URL is not set", async () => {
     delete process.env.KEY_SERVICE_URL;
-    await expect(fetchProviderRequirements([], TEST_IDENTITY)).rejects.toThrow(
+    await expect(fetchProviderRequirements([], TEST_HEADERS)).rejects.toThrow(
       "KEY_SERVICE_URL and KEY_SERVICE_API_KEY must be set"
     );
   });
 
   it("throws if KEY_SERVICE_API_KEY is not set", async () => {
     delete process.env.KEY_SERVICE_API_KEY;
-    await expect(fetchProviderRequirements([], TEST_IDENTITY)).rejects.toThrow(
+    await expect(fetchProviderRequirements([], TEST_HEADERS)).rejects.toThrow(
       "KEY_SERVICE_URL and KEY_SERVICE_API_KEY must be set"
     );
   });
@@ -48,7 +49,7 @@ describe("fetchProviderRequirements", () => {
 
     const result = await fetchProviderRequirements([
       { service: "apollo", method: "POST", path: "/search" },
-    ], TEST_IDENTITY);
+    ], TEST_HEADERS);
 
     expect(result).toEqual(mockResponse);
     expect(fetch).toHaveBeenCalledWith(
@@ -77,7 +78,7 @@ describe("fetchProviderRequirements", () => {
       })
     );
 
-    await fetchProviderRequirements([], TEST_IDENTITY);
+    await fetchProviderRequirements([], TEST_HEADERS);
 
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:4000/provider-requirements",
@@ -96,7 +97,7 @@ describe("fetchProviderRequirements", () => {
 
     await fetchProviderRequirements([
       { service: "apollo", method: "POST", path: "/search" },
-    ], TEST_IDENTITY);
+    ], TEST_HEADERS);
 
     const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(calledUrl).not.toContain("/internal/");
@@ -117,7 +118,7 @@ describe("fetchProviderRequirements", () => {
     await expect(
       fetchProviderRequirements([
         { service: "apollo", method: "POST", path: "/search" },
-      ], TEST_IDENTITY)
+      ], TEST_HEADERS)
     ).rejects.toThrow("key-service error:");
   });
 });

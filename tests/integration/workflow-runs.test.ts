@@ -101,11 +101,6 @@ vi.mock("../../src/lib/features-client.js", () => ({
   resolveFeatureDynastySlugs: vi.fn().mockImplementation((dynastySlug: string) => {
     return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
   }),
-  extractForwardHeaders: (req: { headers: Record<string, string | string[] | undefined> }) => ({
-    "x-org-id": req.headers["x-org-id"] as string,
-    "x-user-id": req.headers["x-user-id"] as string,
-    "x-run-id": req.headers["x-run-id"] as string,
-  }),
 }));
 
 import supertest from "supertest";

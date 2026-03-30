@@ -41,7 +41,8 @@ import {
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
-import { resolveFeatureDynasty, resolveFeatureDynastySlugs, fetchFeatureOutputs, fetchStatsRegistry, extractForwardHeaders, type ForwardHeaders } from "../lib/features-client.js";
+import { resolveFeatureDynasty, resolveFeatureDynastySlugs, fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.js";
+import { extractDownstreamHeaders, type DownstreamHeaders } from "../lib/downstream-headers.js";
 
 const router = Router();
 
@@ -54,7 +55,7 @@ const router = Router();
 async function resolveObjectives(
   objective: string | undefined,
   featureSlug: string | undefined,
-  forwardHeaders?: ForwardHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<{ objectives: string[]; registry?: Record<string, import("../lib/features-client.js").StatsRegistryEntry> }> {
   if (objective) return { objectives: [objective] };
 
@@ -65,8 +66,8 @@ async function resolveObjectives(
   }
 
   const [outputs, registry] = await Promise.all([
-    fetchFeatureOutputs(featureSlug, forwardHeaders),
-    fetchStatsRegistry(forwardHeaders),
+    fetchFeatureOutputs(featureSlug, downstreamHeaders),
+    fetchStatsRegistry(downstreamHeaders),
   ]);
   const countMetrics = outputs
     .map((o) => o.key)
@@ -115,11 +116,11 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     const orgId = res.locals.orgId as string;
     const userId = res.locals.userId as string;
     const runId = res.locals.runId as string;
-    const identity = { orgId, userId, runId };
+    const dsHeaders = extractDownstreamHeaders(req);
 
     const generated = await generateWorkflow(
       { description: body.description, hints: body.hints, style: body.style },
-      identity,
+      dsHeaders,
     );
 
     const dag = generated.dag as DAG;
@@ -230,7 +231,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         signatureName = pickSignatureName(signature, usedNames);
       }
 
-      const dynasty = await resolveFeatureDynasty(body.featureSlug, extractForwardHeaders(req));
+      const dynasty = await resolveFeatureDynasty(body.featureSlug, extractDownstreamHeaders(req));
       const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
       const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
       const newVersion = existing ? existing.version + 1 : 1;
@@ -356,7 +357,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(signature, usedNames);
 
-    const dynasty = await resolveFeatureDynasty(body.featureSlug, extractForwardHeaders(req));
+    const dynasty = await resolveFeatureDynasty(body.featureSlug, extractDownstreamHeaders(req));
     const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
     const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
     const slug = dynastySlug;
@@ -453,7 +454,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
       if (allServiceNames.size > 0) {
         try {
-          const specs = await fetchSpecsForServices([...allServiceNames]);
+          const specs = await fetchSpecsForServices([...allServiceNames], extractDownstreamHeaders(req));
           const validationErrors: Array<{ index: number; issues: unknown[] }> = [];
 
           for (let i = 0; i < body.workflows.length; i++) {
@@ -505,7 +506,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
       if (allTemplateRefs.length > 0) {
         const types = [...new Set(allTemplateRefs.map((r) => r.templateType))];
-        const templates = await fetchPromptTemplates(types);
+        const templates = await fetchPromptTemplates(types, extractDownstreamHeaders(req));
 
         const templateErrors: Array<{ index: number; issues: TemplateContractIssue[] }> = [];
         for (let i = 0; i < body.workflows.length; i++) {
@@ -739,7 +740,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        const dynasty = await resolveFeatureDynasty(wf.featureSlug, extractForwardHeaders(req));
+        const dynasty = await resolveFeatureDynasty(wf.featureSlug, extractDownstreamHeaders(req));
         const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
         const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
         const slug = dynastySlug;
@@ -839,17 +840,13 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       return;
     }
 
-    const identity = {
-      orgId: res.locals.orgId as string,
-      userId: res.locals.userId as string,
-      runId: res.locals.runId as string,
-    };
+    const dsHeaders = extractDownstreamHeaders(req);
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
       conditions.push(inArray(workflows.featureSlug, versionedSlugs));
     }
 
@@ -865,10 +862,10 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     }
 
     // Resolve which metrics to rank by (from feature outputs or explicit objective)
-    const { objectives, registry } = await resolveObjectives(objective, featureSlug, extractForwardHeaders(req));
+    const { objectives, registry } = await resolveObjectives(objective, featureSlug, dsHeaders);
 
     // Fetch base scores once — objective only affects outcome computation, which we re-score per metric
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", identity }, registry);
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", downstreamHeaders: dsHeaders }, registry);
 
     // Helper: produce rankings for a given set of scores across all objectives
     function rankForObjectives(inputScores: WorkflowScore[]) {
@@ -989,20 +986,16 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       return;
     }
 
-    const identity = {
-      orgId: res.locals.orgId as string,
-      userId: res.locals.userId as string,
-      runId: res.locals.runId as string,
-    };
+    const dsHeaders = extractDownstreamHeaders(req);
 
     // Resolve which metrics to compute best records for
-    const { objectives, registry } = await resolveObjectives(undefined, featureSlug, extractForwardHeaders(req));
+    const { objectives, registry } = await resolveObjectives(undefined, featureSlug, dsHeaders);
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
       conditions.push(inArray(workflows.featureSlug, versionedSlugs));
     }
 
@@ -1020,7 +1013,7 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     }
 
     // Slug-level stats only — no dynasty chain aggregation
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", identity }, registry);
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", downstreamHeaders: dsHeaders }, registry);
 
     if (by === "brand") {
       // Aggregate by brandId from runs
@@ -1180,11 +1173,7 @@ router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
     }
     const objective = objectiveParam;
 
-    const identity = {
-      orgId: res.locals.orgId as string,
-      userId: res.locals.userId as string,
-      runId: res.locals.runId as string,
-    };
+    const dsHeaders = extractDownstreamHeaders(req);
 
     const allDynastyWorkflows = await db
       .select()
@@ -1218,7 +1207,7 @@ router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
     }
 
     // Dynasty-level: pass all deprecated workflows so chain aggregation happens
-    const { scores } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", identity });
+    const { scores } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", downstreamHeaders: dsHeaders });
 
     const stats = aggregateSectionStats(scores);
 
@@ -1263,7 +1252,7 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       conditions.push(eq(workflows.featureSlug, featureSlug));
     }
     if (featureDynastySlug && typeof featureDynastySlug === "string") {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractDownstreamHeaders(req));
       conditions.push(inArray(workflows.featureSlug, versionedSlugs));
     }
     if (workflowSlug && typeof workflowSlug === "string") {
@@ -1318,11 +1307,7 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
     return;
   }
   try {
-    const identity = {
-      orgId: res.locals.orgId as string,
-      userId: res.locals.userId as string,
-      runId: res.locals.runId as string,
-    };
+    const dsHeaders = extractDownstreamHeaders(req);
 
     const [workflow] = await db
       .select()
@@ -1342,7 +1327,7 @@ router.get("/workflows/:id/required-providers", requireApiKey, async (req, res) 
       return;
     }
 
-    const result = await fetchProviderRequirements(endpoints, identity);
+    const result = await fetchProviderRequirements(endpoints, dsHeaders);
 
     res.json({
       endpoints,
@@ -1484,7 +1469,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const signatureName = pickSignatureName(newSignature, usedNames);
 
     // Resolve dynasty naming from features-service
-    const dynasty = await resolveFeatureDynasty(existing.featureSlug, extractForwardHeaders(req));
+    const dynasty = await resolveFeatureDynasty(existing.featureSlug, extractDownstreamHeaders(req));
     const baseDynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
     const baseDynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
     const newSlug = baseDynastySlug; // version 1, no suffix
@@ -1693,7 +1678,7 @@ router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
       const templateRefs = extractTemplateRefs(dag);
       if (templateRefs.length > 0) {
         const types = templateRefs.map((r) => r.templateType);
-        const templates = await fetchPromptTemplates(types);
+        const templates = await fetchPromptTemplates(types, extractDownstreamHeaders(req));
         templateContract = validateTemplateContracts(dag, templates);
       }
     } catch (err) {
