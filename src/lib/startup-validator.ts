@@ -13,7 +13,6 @@ import { dagToOpenFlow } from "./dag-to-openflow.js";
 import { computeDAGSignature } from "./dag-signature.js";
 import { pickSignatureName } from "./signature-words.js";
 import type { WindmillClient } from "./windmill-client.js";
-import { fetchPlatformAnthropicKey } from "./key-service-client.js";
 import { createPlatformRun, closePlatformRun } from "./runs-client.js";
 import { deprecateStaleWorkflows } from "./stale-workflow-deprecator.js";
 
@@ -152,10 +151,10 @@ export async function validateAndUpgradeWorkflows(
           `[workflow-service] Workflow "${wf.slug}" upgraded successfully -> new ID: ${upgraded}`,
         );
       } else {
-        // Upgrade skipped (no Anthropic key available) — keep workflow active
+        // Upgrade skipped — keep workflow active
         failedCount++;
         console.warn(
-          `[workflow-service] Workflow "${wf.slug}" has broken endpoints but upgrade skipped (platform key not available) — keeping active`,
+          `[workflow-service] Workflow "${wf.slug}" has broken endpoints but upgrade skipped — keeping active`,
         );
       }
     } catch (err) {
@@ -182,7 +181,7 @@ export async function validateAndUpgradeWorkflows(
 
   if (failedCount > 0) {
     throw new Error(
-      `[workflow-service] ${failedCount} workflow(s) have broken endpoints that could not be auto-upgraded. Fix the workflows or provide the platform Anthropic key, then restart.`,
+      `[workflow-service] ${failedCount} workflow(s) have broken endpoints that could not be auto-upgraded. Fix the workflows or ensure chat-service is available, then restart.`,
     );
   }
 
@@ -219,19 +218,6 @@ async function attemptUpgrade(
   database: Database,
   windmillClient: WindmillClient | null,
 ): Promise<string | null> {
-  // Resolve Anthropic API key via key-service platform endpoint
-  let anthropicApiKey: string;
-  try {
-    const keyResult = await fetchPlatformAnthropicKey();
-    anthropicApiKey = keyResult.key;
-  } catch (err) {
-    console.warn(
-      "[workflow-service] Platform Anthropic key not available — upgrade skipped:",
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  }
-
   // Track this upgrade as a platform-level run
   let platformRunId: string | undefined;
   try {
@@ -253,7 +239,6 @@ async function attemptUpgrade(
       dag,
       invalidEndpoints,
       fieldErrors,
-      anthropicApiKey,
       undefined,
       {
         category: wf.category ?? "",

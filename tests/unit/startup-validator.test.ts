@@ -18,11 +18,8 @@ vi.mock("../../src/lib/workflow-upgrader.js", () => ({
   upgradeWorkflow: (...args: unknown[]) => mockUpgradeWorkflow(...args),
 }));
 
-// Mock key-service client
-const mockFetchPlatformAnthropicKey = vi.fn();
-vi.mock("../../src/lib/key-service-client.js", () => ({
-  fetchPlatformAnthropicKey: (...args: unknown[]) => mockFetchPlatformAnthropicKey(...args),
-}));
+// Mock key-service client (no longer needed for Anthropic key, but module must exist)
+vi.mock("../../src/lib/key-service-client.js", () => ({}));
 
 // Mock runs-client
 const mockCreatePlatformRun = vi.fn();
@@ -227,7 +224,7 @@ describe("validateAndUpgradeWorkflows", () => {
   beforeEach(() => {
     mockFetchSpecsForServices.mockReset();
     mockUpgradeWorkflow.mockReset();
-    mockFetchPlatformAnthropicKey.mockReset();
+
     mockCreatePlatformRun.mockReset();
     mockClosePlatformRun.mockReset();
     dbSelectResult = [];
@@ -298,7 +295,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockRejectedValue(new Error("key not found"));
+    mockUpgradeWorkflow.mockRejectedValue(new Error("chat-service unavailable"));
 
     // Should throw to crash the service at startup
     await expect(
@@ -318,7 +315,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-platform-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "platform-run-123" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -346,9 +343,6 @@ describe("validateAndUpgradeWorkflows", () => {
       windmillClient: null,
     });
 
-    // Should have resolved the key via platform endpoint
-    expect(mockFetchPlatformAnthropicKey).toHaveBeenCalledTimes(1);
-
     // Should have created a platform run
     expect(mockCreatePlatformRun).toHaveBeenCalledWith({
       serviceName: "workflow",
@@ -356,12 +350,11 @@ describe("validateAndUpgradeWorkflows", () => {
       workflowSlug: "sales-email-cold-outreach-Broken",  // uses wf.slug
     });
 
-    // Should have called upgradeWorkflow with the platform key and no identity
+    // Should have called upgradeWorkflow with no identity (platform-level)
     expect(mockUpgradeWorkflow).toHaveBeenCalledWith(
       BROKEN_WORKFLOW.dag,
       expect.any(Array), // invalidEndpoints
       expect.any(Array), // fieldErrors
-      "test-platform-key",
       undefined,
       expect.objectContaining({ category: "sales" }),
     );
@@ -453,7 +446,7 @@ describe("validateAndUpgradeWorkflows", () => {
       new Map([["campaign", SPEC_WITH_REQUIRED]]),
     );
 
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "field-run-1" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -486,7 +479,6 @@ describe("validateAndUpgradeWorkflows", () => {
     });
 
     // Should attempt upgrade with field errors passed through
-    expect(mockFetchPlatformAnthropicKey).toHaveBeenCalledTimes(1);
     expect(mockUpgradeWorkflow).toHaveBeenCalledTimes(1);
 
     // upgradeWorkflow should receive empty invalidEndpoints but non-empty fieldErrors
@@ -558,7 +550,7 @@ describe("validateAndUpgradeWorkflows", () => {
       new Map([["campaign", SPEC_WITH_KNOWN_FIELDS]]),
     );
 
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "warning-run-1" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -609,7 +601,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "platform-run-456" });
     mockClosePlatformRun.mockResolvedValue(undefined);
     mockUpgradeWorkflow.mockRejectedValue(new Error("LLM error"));
@@ -635,7 +627,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "run-1" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -683,7 +675,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "run-2" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -732,7 +724,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "run-3" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -805,7 +797,7 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "test-key", keySource: "platform" });
+
     mockCreatePlatformRun.mockResolvedValue({ runId: "dedup-run-1" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 
@@ -893,7 +885,6 @@ describe("validateAndUpgradeWorkflows", () => {
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
-    mockFetchPlatformAnthropicKey.mockResolvedValue({ key: "sk-test" });
     mockCreatePlatformRun.mockResolvedValue({ runId: "run-1" });
     mockClosePlatformRun.mockResolvedValue(undefined);
 

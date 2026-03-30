@@ -1,5 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { DAG } from "../../src/lib/dag-validator.js";
+import type {
+  ChatServiceCompleteRequest,
+  ChatServiceCompleteResponse,
+  ChatServiceIdentity,
+} from "../../src/lib/chat-service-client.js";
 
 // Mock the API registry client
 vi.mock("../../src/lib/api-registry-client.js", () => ({
@@ -12,27 +17,20 @@ vi.mock("../../src/lib/api-registry-client.js", () => ({
       },
     ],
   }),
-  fetchServiceEndpoints: vi.fn().mockResolvedValue({
-    service: "campaign",
-    description: "Campaign service",
-    endpoints: [
-      { method: "POST", path: "/gate-check", summary: "Gate check" },
-      { method: "POST", path: "/start-run", summary: "Start run" },
-      { method: "POST", path: "/end-run", summary: "End run" },
-    ],
-  }),
-  fetchServiceSpec: vi.fn().mockResolvedValue({
-    paths: {
-      "/gate-check": { post: {} },
-      "/start-run": { post: {} },
-      "/end-run": { post: {} },
-    },
-  }),
+  fetchSpecsForServices: vi.fn().mockResolvedValue(new Map([
+    ["campaign", {
+      paths: {
+        "/gate-check": { post: {} },
+        "/start-run": { post: {} },
+        "/end-run": { post: {} },
+      },
+    }],
+  ])),
 }));
 
 import {
   upgradeWorkflow,
-  setUpgradeAnthropicClient,
+  setUpgradeChatServiceClient,
   UpgradeValidationError,
 } from "../../src/lib/workflow-upgrader.js";
 
@@ -82,101 +80,83 @@ describe("upgradeWorkflow", () => {
   };
 
   afterEach(() => {
-    setUpgradeAnthropicClient(null);
+    setUpgradeChatServiceClient(null);
   });
 
-  it("calls the LLM with upgrade prompt and returns corrected DAG", async () => {
-    // Mock Anthropic client that immediately returns a fixed DAG via create_workflow
-    const mockClient = {
-      messages: {
-        create: vi.fn().mockResolvedValue({
-          content: [
-            {
-              type: "tool_use",
-              id: "tool-1",
-              name: "create_workflow",
-              input: {
-                category: "sales",
-                channel: "email",
-                audienceType: "cold-outreach",
-                description: "Test workflow (fixed)",
-                dag: FIXED_DAG,
-              },
-            },
-          ],
-        }),
-      },
+  function createMockResponse(dag: DAG, overrides?: Partial<{ category: string; channel: string; audienceType: string; description: string }>): ChatServiceCompleteResponse {
+    const result = {
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Test workflow (fixed)",
+      dag,
+      ...overrides,
     };
+    return {
+      content: JSON.stringify(result),
+      json: result as unknown as Record<string, unknown>,
+      tokensInput: 100,
+      tokensOutput: 200,
+      model: "claude-sonnet-4-6",
+    };
+  }
 
-    setUpgradeAnthropicClient(mockClient as any);
+  it("calls chat-service /complete and returns corrected DAG", async () => {
+    const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
+    setUpgradeChatServiceClient(mockComplete);
 
     const result = await upgradeWorkflow(
       BROKEN_DAG,
       [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
       [],
-      "fake-key",
       IDENTITY,
       METADATA,
     );
 
     expect(result.dag.nodes[0].config?.path).toBe("/gate-check");
     expect(result.category).toBe("sales");
-    expect(mockClient.messages.create).toHaveBeenCalledTimes(1);
+    expect(mockComplete).toHaveBeenCalledTimes(1);
 
     // Verify the system prompt mentions the broken endpoint
-    const systemArg = mockClient.messages.create.mock.calls[0][0].system;
-    expect(systemArg).toContain("/internal/gate-check");
-    expect(systemArg).toContain("FIX a broken workflow");
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).toContain("/internal/gate-check");
+    expect(call.systemPrompt).toContain("FIX a broken workflow");
   });
 
-  it("handles discovery tool calls before generating the fixed DAG", async () => {
-    let callCount = 0;
-    const mockClient = {
-      messages: {
-        create: vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount === 1) {
-            // First call: model wants to call list_services
-            return Promise.resolve({
-              content: [
-                { type: "tool_use", id: "t1", name: "list_services", input: {} },
-              ],
-            });
-          }
-          // Second call: model returns the fixed DAG
-          return Promise.resolve({
-            content: [
-              {
-                type: "tool_use",
-                id: "t2",
-                name: "create_workflow",
-                input: {
-                  category: "sales",
-                  channel: "email",
-                  audienceType: "cold-outreach",
-                  description: "Fixed",
-                  dag: FIXED_DAG,
-                },
-              },
-            ],
-          });
-        }),
-      },
-    };
+  it("uses claude-sonnet-4-6 and responseFormat json", async () => {
+    const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
+    setUpgradeChatServiceClient(mockComplete);
 
-    setUpgradeAnthropicClient(mockClient as any);
-
-    const result = await upgradeWorkflow(
+    await upgradeWorkflow(
       BROKEN_DAG,
       [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
       [],
-      "fake-key",
       IDENTITY,
       METADATA,
     );
 
-    expect(result.dag.nodes[0].config?.path).toBe("/gate-check");
-    expect(mockClient.messages.create).toHaveBeenCalledTimes(2);
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.model).toBe("claude-sonnet-4-6");
+    expect(call.responseFormat).toBe("json");
+  });
+
+  it("pre-fetches service context and embeds in system prompt", async () => {
+    const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
+    setUpgradeChatServiceClient(mockComplete);
+
+    await upgradeWorkflow(
+      BROKEN_DAG,
+      [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
+      [],
+      IDENTITY,
+      METADATA,
+    );
+
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).toContain("Service OpenAPI Specs");
+    expect(call.systemPrompt).toContain("gate-check");
+    // No agentic loop — single call
+    expect(mockComplete).toHaveBeenCalledTimes(1);
   });
 
   it("throws when LLM produces invalid DAG after retries", async () => {
@@ -187,38 +167,34 @@ describe("upgradeWorkflow", () => {
       edges: [{ from: "a", to: "b" }], // 'b' doesn't exist
     };
 
-    const mockClient = {
-      messages: {
-        create: vi.fn().mockResolvedValue({
-          content: [
-            {
-              type: "tool_use",
-              id: "t1",
-              name: "create_workflow",
-              input: {
-                category: "sales",
-                channel: "email",
-                audienceType: "cold-outreach",
-                description: "Bad",
-                dag: invalidDag,
-              },
-            },
-          ],
-        }),
-      },
-    };
-
-    setUpgradeAnthropicClient(mockClient as any);
+    const mockComplete = vi.fn().mockResolvedValue(createMockResponse(invalidDag));
+    setUpgradeChatServiceClient(mockComplete);
 
     await expect(
       upgradeWorkflow(
         BROKEN_DAG,
         [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
         [],
-        "fake-key",
         IDENTITY,
         METADATA,
       ),
     ).rejects.toThrow(UpgradeValidationError);
+  });
+
+  it("uses platform identity when no identity is provided", async () => {
+    const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
+    setUpgradeChatServiceClient(mockComplete);
+
+    await upgradeWorkflow(
+      BROKEN_DAG,
+      [{ service: "campaign", method: "POST", path: "/internal/gate-check", reason: "not found" }],
+      [],
+      undefined,
+      METADATA,
+    );
+
+    const identity = mockComplete.mock.calls[0][1] as ChatServiceIdentity;
+    expect(identity.orgId).toBe("platform");
+    expect(identity.userId).toBe("workflow-service");
   });
 });

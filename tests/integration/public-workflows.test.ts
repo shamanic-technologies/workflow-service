@@ -84,7 +84,6 @@ vi.mock("../../src/lib/windmill-client.js", () => ({
 // --- Mock key-service ---
 vi.mock("../../src/lib/key-service-client.js", () => ({
   fetchProviderRequirements: vi.fn(),
-  fetchAnthropicKey: vi.fn(),
 }));
 
 import supertest from "supertest";

@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type Anthropic from "@anthropic-ai/sdk";
 import {
   generateWorkflow,
-  setAnthropicClient,
+  setChatServiceClient,
   GenerationValidationError,
 } from "../../src/lib/workflow-generator.js";
 import {
@@ -10,16 +9,19 @@ import {
   buildRetryUserMessage,
 } from "../../src/lib/prompt-templates.js";
 import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
+import type {
+  ChatServiceCompleteRequest,
+  ChatServiceCompleteResponse,
+  ChatServiceIdentity,
+} from "../../src/lib/chat-service-client.js";
 
 // Mock api-registry-client
 const mockFetchLlmContext = vi.fn();
-const mockFetchServiceEndpoints = vi.fn();
-const mockFetchServiceSpec = vi.fn();
+const mockFetchSpecsForServices = vi.fn();
 
 vi.mock("../../src/lib/api-registry-client.js", () => ({
   fetchLlmContext: (...args: unknown[]) => mockFetchLlmContext(...args),
-  fetchServiceEndpoints: (...args: unknown[]) => mockFetchServiceEndpoints(...args),
-  fetchServiceSpec: (...args: unknown[]) => mockFetchServiceSpec(...args),
+  fetchSpecsForServices: (...args: unknown[]) => mockFetchSpecsForServices(...args),
 }));
 
 // --- Prompt building tests ---
@@ -41,13 +43,17 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain('"cold-outreach"');
   });
 
-  it("includes service discovery instructions", () => {
-    const prompt = buildSystemPrompt();
-    expect(prompt).toContain("Service Discovery (MANDATORY)");
-    expect(prompt).toContain("list_services");
-    expect(prompt).toContain("list_service_endpoints");
-    expect(prompt).toContain("get_service_endpoints");
-    expect(prompt).not.toContain("Available Services");
+  it("includes service context when provided", () => {
+    const prompt = buildSystemPrompt({
+      serviceContext: {
+        services: [{ name: "lead", description: "Lead management", endpointCount: 3 }],
+        specs: { lead: { openapi: "3.0.0" } },
+      },
+    });
+    expect(prompt).toContain("Available Services");
+    expect(prompt).toContain("lead");
+    expect(prompt).toContain("Lead management");
+    expect(prompt).toContain("Service OpenAPI Specs");
   });
 
   it("includes example DAGs", () => {
@@ -94,6 +100,12 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt();
     expect(prompt).not.toContain("Style Directive");
   });
+
+  it("includes JSON output format instructions", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain("Output Format");
+    expect(prompt).toContain("Return ONLY the JSON object");
+  });
 });
 
 describe("buildRetryUserMessage", () => {
@@ -110,50 +122,30 @@ describe("buildRetryUserMessage", () => {
 
 // --- Generator tests ---
 
-function createMockToolResponse(dag: unknown, overrides?: Record<string, unknown>) {
+function createMockResponse(dag: unknown, overrides?: Record<string, unknown>): ChatServiceCompleteResponse {
   return {
-    id: "msg_test",
-    type: "message" as const,
-    role: "assistant" as const,
-    model: "claude-opus-4-6",
-    stop_reason: "tool_use" as const,
-    content: [
-      {
-        type: "tool_use" as const,
-        id: "tool_test_" + Math.random().toString(36).slice(2, 6),
-        name: "create_workflow",
-        input: {
-          category: "sales",
-          channel: "email",
-          audienceType: "cold-outreach",
-          description: "Generated workflow description",
-          dag,
-          ...overrides,
-        },
-      },
-    ],
-    usage: { input_tokens: 100, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    content: JSON.stringify({
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Generated workflow description",
+      dag,
+      ...overrides,
+    }),
+    json: {
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Generated workflow description",
+      dag,
+      ...overrides,
+    },
+    tokensInput: 100,
+    tokensOutput: 200,
+    model: "claude-sonnet-4-6",
   };
 }
 
-function createMockAgenticResponse(toolCalls: Array<{ name: string; input: unknown }>) {
-  return {
-    id: "msg_test",
-    type: "message" as const,
-    role: "assistant" as const,
-    model: "claude-opus-4-6",
-    stop_reason: "tool_use" as const,
-    content: toolCalls.map((tc) => ({
-      type: "tool_use" as const,
-      id: "tool_" + Math.random().toString(36).slice(2, 6),
-      name: tc.name,
-      input: tc.input,
-    })),
-    usage: { input_tokens: 100, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-  };
-}
-
-const TEST_API_KEY = "test-anthropic-key";
 const TEST_IDENTITY = { orgId: "org-1", userId: "user-1", runId: "run-1" };
 
 const MOCK_LLM_CONTEXT = {
@@ -173,52 +165,64 @@ const MOCK_LLM_CONTEXT = {
   ],
 };
 
-const MOCK_SERVICE_ENDPOINTS = {
-  service: "lead",
-  description: "Lead buffer management",
-  endpoints: [
-    { method: "POST", path: "/buffer/next", summary: "Get next lead" },
-    { method: "POST", path: "/buffer/push", summary: "Push lead" },
-  ],
-};
-
-const MOCK_SERVICE_SPEC = {
-  openapi: "3.0.0",
-  info: { title: "Lead Service", version: "1.0.0" },
-  paths: {
-    "/buffer/next": {
-      post: {
-        summary: "Get next lead",
-        requestBody: {
-          content: { "application/json": { schema: { type: "object", properties: { campaignId: { type: "string" } } } } },
+const MOCK_SPECS_MAP = new Map([
+  ["lead", {
+    openapi: "3.0.0",
+    info: { title: "Lead Service", version: "1.0.0" },
+    paths: {
+      "/buffer/next": {
+        post: {
+          summary: "Get next lead",
+          requestBody: {
+            content: { "application/json": { schema: { type: "object", properties: { campaignId: { type: "string" } } } } },
+          },
         },
       },
     },
-  },
-};
+  }],
+  ["campaign", {
+    openapi: "3.0.0",
+    info: { title: "Campaign Service", version: "1.0.0" },
+    paths: {},
+  }],
+  ["content-generation", {
+    openapi: "3.0.0",
+    info: { title: "Content Generation Service", version: "1.0.0" },
+    paths: {
+      "/generate": {
+        post: {
+          summary: "Generate content",
+          requestBody: {
+            content: { "application/json": { schema: { type: "object", properties: { type: { type: "string" } } } } },
+          },
+        },
+      },
+    },
+  }],
+]);
 
 describe("generateWorkflow", () => {
-  let mockCreate: ReturnType<typeof vi.fn>;
+  let mockComplete: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    mockCreate = vi.fn();
-    setAnthropicClient({
-      messages: { create: mockCreate },
-    } as unknown as Anthropic);
+    mockComplete = vi.fn();
+    setChatServiceClient(mockComplete);
     process.env.API_REGISTRY_SERVICE_URL = "http://fake-registry";
     process.env.API_REGISTRY_SERVICE_API_KEY = "test-key";
+    process.env.CHAT_SERVICE_URL = "http://fake-chat";
+    process.env.CHAT_SERVICE_API_KEY = "test-chat-key";
     mockFetchLlmContext.mockReset();
-    mockFetchServiceEndpoints.mockReset();
-    mockFetchServiceSpec.mockReset();
+    mockFetchSpecsForServices.mockReset();
     mockFetchLlmContext.mockResolvedValue(MOCK_LLM_CONTEXT);
-    mockFetchServiceEndpoints.mockResolvedValue(MOCK_SERVICE_ENDPOINTS);
-    mockFetchServiceSpec.mockResolvedValue(MOCK_SERVICE_SPEC);
+    mockFetchSpecsForServices.mockResolvedValue(MOCK_SPECS_MAP);
   });
 
   afterEach(() => {
-    setAnthropicClient(null);
+    setChatServiceClient(null);
     delete process.env.API_REGISTRY_SERVICE_URL;
     delete process.env.API_REGISTRY_SERVICE_API_KEY;
+    delete process.env.CHAT_SERVICE_URL;
+    delete process.env.CHAT_SERVICE_API_KEY;
   });
 
   it("throws if API_REGISTRY env vars are missing", async () => {
@@ -226,18 +230,15 @@ describe("generateWorkflow", () => {
     delete process.env.API_REGISTRY_SERVICE_API_KEY;
 
     await expect(
-      generateWorkflow({ description: "test" }, TEST_API_KEY, TEST_IDENTITY),
+      generateWorkflow({ description: "test" }, TEST_IDENTITY),
     ).rejects.toThrow("API_REGISTRY_SERVICE_URL and API_REGISTRY_SERVICE_API_KEY must be set");
   });
 
   it("returns valid DAG on first attempt", async () => {
-    mockCreate.mockResolvedValueOnce(
-      createMockToolResponse(VALID_LINEAR_DAG),
-    );
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     const result = await generateWorkflow(
       { description: "Search leads and send cold emails" },
-      TEST_API_KEY,
       TEST_IDENTITY,
     );
 
@@ -245,7 +246,7 @@ describe("generateWorkflow", () => {
     expect(result.category).toBe("sales");
     expect(result.channel).toBe("email");
     expect(result.audienceType).toBe("cold-outreach");
-    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockComplete).toHaveBeenCalledTimes(1);
   });
 
   it("retries with error feedback when DAG is invalid", async () => {
@@ -254,22 +255,20 @@ describe("generateWorkflow", () => {
       edges: [],
     };
 
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(invalidDag));
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+    mockComplete.mockResolvedValueOnce(createMockResponse(invalidDag));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     const result = await generateWorkflow(
       { description: "Search leads and send cold emails" },
-      TEST_API_KEY,
       TEST_IDENTITY,
     );
 
     expect(result.dag).toEqual(VALID_LINEAR_DAG);
-    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockComplete).toHaveBeenCalledTimes(2);
 
     // Verify retry message includes error context
-    const retryCall = mockCreate.mock.calls[1][0];
-    const lastMessage = retryCall.messages[retryCall.messages.length - 1];
-    expect(lastMessage.content[0].is_error).toBe(true);
+    const retryCall = mockComplete.mock.calls[1][0] as ChatServiceCompleteRequest;
+    expect(retryCall.message).toContain("invalid");
   });
 
   it("throws GenerationValidationError after max retries", async () => {
@@ -278,18 +277,18 @@ describe("generateWorkflow", () => {
       edges: [],
     };
 
-    mockCreate.mockResolvedValue(createMockToolResponse(invalidDag));
+    mockComplete.mockResolvedValue(createMockResponse(invalidDag));
 
     await expect(
-      generateWorkflow({ description: "Bad workflow" }, TEST_API_KEY, TEST_IDENTITY),
+      generateWorkflow({ description: "Bad workflow" }, TEST_IDENTITY),
     ).rejects.toThrow(GenerationValidationError);
 
     // 1 initial + 2 retries = 3 calls
-    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(mockComplete).toHaveBeenCalledTimes(3);
   });
 
   it("passes hints to the user message", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow(
       {
@@ -299,246 +298,121 @@ describe("generateWorkflow", () => {
           expectedInputs: ["campaignId"],
         },
       },
-      TEST_API_KEY,
       TEST_IDENTITY,
     );
 
-    const call = mockCreate.mock.calls[0][0];
-    const userMsg = call.messages[0].content;
-    expect(userMsg).toContain("lead, email-gateway");
-    expect(userMsg).toContain("campaignId");
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.message).toContain("lead, email-gateway");
+    expect(call.message).toContain("campaignId");
   });
 
-  it("throws if LLM returns no tool use block", async () => {
-    mockCreate.mockResolvedValueOnce({
-      id: "msg_test",
-      type: "message",
-      role: "assistant",
-      model: "claude-opus-4-6",
-      content: [{ type: "text", text: "I cannot generate a workflow" }],
-      usage: { input_tokens: 100, output_tokens: 50 },
+  it("throws if LLM returns no JSON", async () => {
+    mockComplete.mockResolvedValueOnce({
+      content: "I cannot generate a workflow",
+      tokensInput: 100,
+      tokensOutput: 50,
+      model: "claude-sonnet-4-6",
     });
 
     await expect(
-      generateWorkflow({ description: "test workflow" }, TEST_API_KEY, TEST_IDENTITY),
-    ).rejects.toThrow("LLM did not return a tool use response");
+      generateWorkflow({ description: "test workflow" }, TEST_IDENTITY),
+    ).rejects.toThrow("LLM did not return valid JSON");
   });
 
-  it("includes system prompt with DAG schema and service discovery", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+  it("includes system prompt with DAG schema and service context", async () => {
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
-    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY, TEST_IDENTITY);
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
 
-    const call = mockCreate.mock.calls[0][0];
-    expect(call.system).toContain("DAG Format");
-    expect(call.system).toContain("http.call");
-    expect(call.system).toContain("Service Discovery (MANDATORY)");
-    expect(call.system).not.toContain("Available Services");
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).toContain("DAG Format");
+    expect(call.systemPrompt).toContain("http.call");
+    expect(call.systemPrompt).toContain("Available Services");
+    expect(call.systemPrompt).toContain("lead");
   });
 
-  it("uses auto tool_choice", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+  it("uses responseFormat json", async () => {
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
-    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY, TEST_IDENTITY);
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
 
-    const call = mockCreate.mock.calls[0][0];
-    expect(call.tool_choice).toEqual({ type: "auto" });
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.responseFormat).toBe("json");
   });
 
-  it("provides all four tools", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+  it("uses claude-sonnet-4-6 model", async () => {
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
-    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY, TEST_IDENTITY);
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
 
-    const call = mockCreate.mock.calls[0][0];
-    expect(call.tools).toHaveLength(4);
-    const toolNames = call.tools.map((t: { name: string }) => t.name);
-    expect(toolNames).toContain("list_services");
-    expect(toolNames).toContain("list_service_endpoints");
-    expect(toolNames).toContain("get_service_endpoints");
-    expect(toolNames).toContain("create_workflow");
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.model).toBe("claude-sonnet-4-6");
   });
 
-  it("resolves list_services then create_workflow across turns", async () => {
-    // Turn 1: LLM calls list_services
-    mockCreate.mockResolvedValueOnce(
-      createMockAgenticResponse([{ name: "list_services", input: {} }]),
-    );
-    // Turn 2: LLM calls create_workflow with valid DAG
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+  it("uses 16384 maxTokens", async () => {
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
-    const result = await generateWorkflow(
-      { description: "Search leads and send cold emails" },
-      TEST_API_KEY,
-      TEST_IDENTITY,
-    );
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
 
-    expect(result.dag).toEqual(VALID_LINEAR_DAG);
-    expect(mockCreate).toHaveBeenCalledTimes(2);
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.maxTokens).toBe(16384);
+  });
+
+  it("pre-fetches all service context before calling LLM", async () => {
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
+
     expect(mockFetchLlmContext).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves list_services then get_service_endpoints then create_workflow", async () => {
-    // Turn 1: list_services
-    mockCreate.mockResolvedValueOnce(
-      createMockAgenticResponse([{ name: "list_services", input: {} }]),
-    );
-    // Turn 2: get_service_endpoints for "lead"
-    mockCreate.mockResolvedValueOnce(
-      createMockAgenticResponse([{ name: "get_service_endpoints", input: { service: "lead" } }]),
-    );
-    // Turn 3: create_workflow
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
-
-    const result = await generateWorkflow(
-      { description: "Cold email outreach" },
-      TEST_API_KEY,
+    expect(mockFetchSpecsForServices).toHaveBeenCalledWith(
+      ["lead", "campaign"],
       TEST_IDENTITY,
     );
-
-    expect(result.dag).toEqual(VALID_LINEAR_DAG);
-    expect(mockCreate).toHaveBeenCalledTimes(3);
-    expect(mockFetchLlmContext).toHaveBeenCalledTimes(1);
-    expect(mockFetchServiceSpec).toHaveBeenCalledWith("lead", TEST_IDENTITY);
-  });
-
-  it("handles multiple tool calls in a single turn", async () => {
-    // Turn 1: LLM calls both list_services and get_service_endpoints in one response
-    mockCreate.mockResolvedValueOnce(
-      createMockAgenticResponse([
-        { name: "list_services", input: {} },
-        { name: "get_service_endpoints", input: { service: "lead" } },
-      ]),
-    );
-    // Turn 2: create_workflow
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
-
-    const result = await generateWorkflow(
-      { description: "Cold email outreach" },
-      TEST_API_KEY,
-      TEST_IDENTITY,
-    );
-
-    expect(result.dag).toEqual(VALID_LINEAR_DAG);
-    expect(mockCreate).toHaveBeenCalledTimes(2);
-    expect(mockFetchLlmContext).toHaveBeenCalledTimes(1);
-    expect(mockFetchServiceSpec).toHaveBeenCalledWith("lead", TEST_IDENTITY);
-  });
-
-  it("passes api-registry error to LLM as tool_result error", async () => {
-    mockFetchLlmContext.mockRejectedValueOnce(new Error("api-registry error: connection refused"));
-
-    // Turn 1: list_services (will fail)
-    mockCreate.mockResolvedValueOnce(
-      createMockAgenticResponse([{ name: "list_services", input: {} }]),
-    );
-    // Turn 2: LLM recovers and calls create_workflow
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
-
-    const result = await generateWorkflow(
-      { description: "Cold email outreach" },
-      TEST_API_KEY,
-      TEST_IDENTITY,
-    );
-
-    expect(result.dag).toEqual(VALID_LINEAR_DAG);
-    // Verify the error was passed back to the LLM
-    const turn2Call = mockCreate.mock.calls[1][0];
-    const toolResultMsg = turn2Call.messages[2]; // user message with tool_result
-    expect(toolResultMsg.content[0].is_error).toBe(true);
-    expect(toolResultMsg.content[0].content).toContain("api-registry error");
-  });
-
-  it("throws when max agent turns exceeded without create_workflow", async () => {
-    // LLM keeps calling list_services forever
-    mockCreate.mockResolvedValue(
-      createMockAgenticResponse([{ name: "list_services", input: {} }]),
-    );
-
-    await expect(
-      generateWorkflow({ description: "Stuck workflow" }, TEST_API_KEY, TEST_IDENTITY),
-    ).rejects.toThrow("Generation exceeded maximum turns without producing a workflow");
-  });
-
-  it("retries invalid DAG within agentic loop", async () => {
-    const invalidDag = {
-      nodes: [{ id: "a", type: "unknown-type-xyz" }],
-      edges: [],
-    };
-
-    // Turn 1: list_services
-    mockCreate.mockResolvedValueOnce(
-      createMockAgenticResponse([{ name: "list_services", input: {} }]),
-    );
-    // Turn 2: create_workflow with invalid DAG
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(invalidDag));
-    // Turn 3: create_workflow with valid DAG (after retry)
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
-
-    const result = await generateWorkflow(
-      { description: "Cold email outreach" },
-      TEST_API_KEY,
-      TEST_IDENTITY,
-    );
-
-    expect(result.dag).toEqual(VALID_LINEAR_DAG);
-    expect(mockCreate).toHaveBeenCalledTimes(3);
-  });
-
-  it("uses 16384 max_tokens", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
-
-    await generateWorkflow({ description: "test workflow" }, TEST_API_KEY, TEST_IDENTITY);
-
-    const call = mockCreate.mock.calls[0][0];
-    expect(call.max_tokens).toBe(16384);
+    // LLM called only once — no agentic loop
+    expect(mockComplete).toHaveBeenCalledTimes(1);
   });
 
   it("includes style directive in system prompt when style is provided", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow(
       {
         description: "Cold email outreach",
         style: { type: "human", name: "Hormozi", humanId: "human-123" },
       },
-      TEST_API_KEY,
       TEST_IDENTITY,
     );
 
-    const call = mockCreate.mock.calls[0][0];
-    expect(call.system).toContain("Style Directive");
-    expect(call.system).toContain("Hormozi");
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).toContain("Style Directive");
+    expect(call.systemPrompt).toContain("Hormozi");
   });
 
   it("appends style to user message when style is provided", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow(
       {
         description: "Cold email outreach",
         style: { type: "brand", name: "My Brand", brandId: "brand-456" },
       },
-      TEST_API_KEY,
       TEST_IDENTITY,
     );
 
-    const call = mockCreate.mock.calls[0][0];
-    const userMsg = call.messages[0].content;
-    expect(userMsg).toContain('Style: Generate this workflow in the style of "My Brand"');
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.message).toContain('Style: Generate this workflow in the style of "My Brand"');
   });
 
   it("does not include style in prompt when style is not provided", async () => {
-    mockCreate.mockResolvedValueOnce(createMockToolResponse(VALID_LINEAR_DAG));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow(
       { description: "Cold email outreach" },
-      TEST_API_KEY,
       TEST_IDENTITY,
     );
 
-    const call = mockCreate.mock.calls[0][0];
-    expect(call.system).not.toContain("Style Directive");
-    expect(call.messages[0].content).not.toContain("Style:");
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).not.toContain("Style Directive");
+    expect(call.message).not.toContain("Style:");
   });
 });

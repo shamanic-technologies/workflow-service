@@ -1,19 +1,22 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { validateDAG, type DAG } from "./dag-validator.js";
 import {
   buildSystemPrompt,
   buildRetryUserMessage,
-  AGENTIC_TOOLS,
+  type ServiceContext,
 } from "./prompt-templates.js";
 import {
   fetchLlmContext,
-  fetchServiceEndpoints,
-  fetchServiceSpec,
   fetchSpecsForServices,
 } from "./api-registry-client.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
 import type { IdentityHeaders } from "./key-service-client.js";
+import {
+  chatServiceComplete,
+  type ChatServiceCompleteRequest,
+  type ChatServiceCompleteResponse,
+  type ChatServiceIdentity,
+} from "./chat-service-client.js";
 
 export interface GenerateWorkflowInput {
   description: string;
@@ -39,49 +42,42 @@ export interface GenerateWorkflowResult {
 }
 
 const MAX_RETRIES = 2;
-const MAX_AGENT_TURNS = 10;
-const MODEL = "claude-opus-4-6";
 
-let overrideClient: Anthropic | null = null;
+let overrideCompleteFn: ((req: ChatServiceCompleteRequest, id: ChatServiceIdentity) => Promise<ChatServiceCompleteResponse>) | null = null;
 
-/** Exported for testing — allows injecting a mock client */
-export function setAnthropicClient(client: Anthropic | null): void {
-  overrideClient = client;
+/** Exported for testing — allows injecting a mock chat-service client */
+export function setChatServiceClient(fn: typeof overrideCompleteFn): void {
+  overrideCompleteFn = fn;
 }
 
-async function resolveToolCall(
-  toolName: string,
-  toolInput: Record<string, unknown>,
-  identity: IdentityHeaders,
-): Promise<{ content: string; isError?: boolean }> {
-  switch (toolName) {
-    case "list_services": {
-      const context = await fetchLlmContext(identity);
-      const summary = context.services.map((s) => ({
-        name: s.service,
-        description: s.description ?? "",
-        endpointCount: s.endpointCount,
-      }));
-      return { content: JSON.stringify(summary, null, 2) };
-    }
-    case "list_service_endpoints": {
-      const serviceName = toolInput.service as string;
-      const endpoints = await fetchServiceEndpoints(serviceName, identity);
-      return { content: JSON.stringify(endpoints, null, 2) };
-    }
-    case "get_service_endpoints": {
-      const serviceName = toolInput.service as string;
-      const spec = await fetchServiceSpec(serviceName, identity);
-      return { content: JSON.stringify(spec, null, 2) };
-    }
-    default:
-      return { content: `Unknown tool: ${toolName}`, isError: true };
-  }
+async function callComplete(
+  request: ChatServiceCompleteRequest,
+  identity: ChatServiceIdentity,
+): Promise<ChatServiceCompleteResponse> {
+  if (overrideCompleteFn) return overrideCompleteFn(request, identity);
+  return chatServiceComplete(request, identity);
+}
+
+async function fetchServiceContext(identity: IdentityHeaders): Promise<ServiceContext> {
+  const context = await fetchLlmContext(identity);
+  const serviceNames = context.services.map((s: { service: string }) => s.service);
+  const specsMap = await fetchSpecsForServices(serviceNames, identity);
+
+  const specs: Record<string, unknown> = {};
+  for (const [name, spec] of specsMap) specs[name] = spec;
+
+  return {
+    services: context.services.map((s: { service: string; description?: string; endpointCount: number }) => ({
+      name: s.service,
+      description: s.description ?? "",
+      endpointCount: s.endpointCount,
+    })),
+    specs,
+  };
 }
 
 export async function generateWorkflow(
   input: GenerateWorkflowInput,
-  anthropicApiKey: string,
   identity: IdentityHeaders,
 ): Promise<GenerateWorkflowResult> {
   if (!process.env.API_REGISTRY_SERVICE_URL || !process.env.API_REGISTRY_SERVICE_API_KEY) {
@@ -90,15 +86,14 @@ export async function generateWorkflow(
     );
   }
 
-  const client = overrideClient ?? new Anthropic({ apiKey: anthropicApiKey });
+  // Pre-fetch all service context upfront
+  const serviceContext = await fetchServiceContext(identity);
 
   const styleDirective = input.style
     ? `This workflow MUST be created in the style of ${input.style.name}. Adopt their methodology, tone, and strategic patterns.`
     : undefined;
 
-  const systemPrompt = buildSystemPrompt({ styleDirective });
-
-  const tools = AGENTIC_TOOLS;
+  const systemPrompt = buildSystemPrompt({ styleDirective, serviceContext });
 
   let userMessage = input.description;
   if (input.hints?.services?.length) {
@@ -114,162 +109,91 @@ export async function generateWorkflow(
     userMessage += `\n\nStyle: Generate this workflow in the style of "${input.style.name}".`;
   }
 
-  const messages: Anthropic.Messages.MessageParam[] = [
-    { role: "user", content: userMessage },
-  ];
-
-  let dagRetries = 0;
-
-  for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 16384,
-      system: systemPrompt,
-      messages,
-      tools,
-      tool_choice: { type: "auto" as const },
-    });
-
-    // Check if the response contains a create_workflow call
-    const createWorkflowCall = response.content.find(
-      (block): block is Anthropic.Messages.ToolUseBlock =>
-        block.type === "tool_use" && block.name === "create_workflow",
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await callComplete(
+      {
+        message: userMessage,
+        systemPrompt,
+        responseFormat: "json",
+        maxTokens: 16384,
+        model: "claude-sonnet-4-6",
+      },
+      identity,
     );
 
-    if (createWorkflowCall) {
-      const result = createWorkflowCall.input as {
-        category: string;
-        channel: string;
-        audienceType: string;
-        description: string;
-        dag: DAG;
-      };
+    if (!response.json) {
+      throw new Error("LLM did not return valid JSON");
+    }
 
-      const validation = validateDAG(result.dag);
+    const result = response.json as {
+      category: string;
+      channel: string;
+      audienceType: string;
+      description: string;
+      dag: DAG;
+    };
 
-      if (validation.valid) {
-        // Also validate endpoint fields against API registry
-        const httpEndpoints = extractHttpEndpoints(result.dag);
-        if (httpEndpoints.length > 0) {
-          try {
-            const serviceNames = [...new Set(httpEndpoints.map((e) => e.service))];
-            const specs = await fetchSpecsForServices(serviceNames, identity);
-            const endpointResult = validateWorkflowEndpoints(result.dag, specs);
+    const validation = validateDAG(result.dag);
 
-            if (!endpointResult.valid) {
-              const fieldErrors = [
-                ...endpointResult.invalidEndpoints.map((e) => ({
-                  field: `${e.method} ${e.service}${e.path}`,
-                  message: e.reason,
+    if (validation.valid) {
+      // Also validate endpoint fields against API registry
+      const httpEndpoints = extractHttpEndpoints(result.dag);
+      if (httpEndpoints.length > 0) {
+        try {
+          const serviceNames = [...new Set(httpEndpoints.map((e) => e.service))];
+          const specs = await fetchSpecsForServices(serviceNames, identity);
+          const endpointResult = validateWorkflowEndpoints(result.dag, specs);
+
+          if (!endpointResult.valid) {
+            const fieldErrors = [
+              ...endpointResult.invalidEndpoints.map((e) => ({
+                field: `${e.method} ${e.service}${e.path}`,
+                message: e.reason,
+              })),
+              ...endpointResult.fieldIssues
+                .filter((f) => f.severity === "error")
+                .map((f) => ({
+                  field: `nodes[${f.nodeId}].${f.field}`,
+                  message: f.reason,
                 })),
-                ...endpointResult.fieldIssues
-                  .filter((f) => f.severity === "error")
-                  .map((f) => ({
-                    field: `nodes[${f.nodeId}].${f.field}`,
-                    message: f.reason,
-                  })),
-              ];
+            ];
 
-              dagRetries++;
-              if (dagRetries > MAX_RETRIES) {
-                throw new GenerationValidationError(
-                  "Generated DAG has invalid endpoint fields after retries",
-                  fieldErrors,
-                );
-              }
-
-              messages.push({ role: "assistant", content: response.content });
-              messages.push({
-                role: "user",
-                content: [
-                  {
-                    type: "tool_result",
-                    tool_use_id: createWorkflowCall.id,
-                    is_error: true,
-                    content: buildRetryUserMessage(input.description, fieldErrors),
-                  },
-                ],
-              });
-              continue;
+            if (attempt >= MAX_RETRIES) {
+              throw new GenerationValidationError(
+                "Generated DAG has invalid endpoint fields after retries",
+                fieldErrors,
+              );
             }
-          } catch (err) {
-            if (err instanceof GenerationValidationError) throw err;
-            console.warn("[workflow-service] generate: field validation skipped:", err);
+
+            userMessage = buildRetryUserMessage(input.description, fieldErrors);
+            continue;
           }
+        } catch (err) {
+          if (err instanceof GenerationValidationError) throw err;
+          console.warn("[workflow-service] generate: field validation skipped:", err);
         }
-
-        return {
-          dag: result.dag,
-          category: result.category,
-          channel: result.channel,
-          audienceType: result.audienceType,
-          description: result.description,
-        };
       }
 
-      dagRetries++;
-      if (dagRetries > MAX_RETRIES) {
-        throw new GenerationValidationError(
-          "Generated DAG is invalid after retries",
-          validation.errors,
-        );
-      }
-
-      messages.push({ role: "assistant", content: response.content });
-      messages.push({
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: createWorkflowCall.id,
-            is_error: true,
-            content: buildRetryUserMessage(input.description, validation.errors),
-          },
-        ],
-      });
-      continue;
+      return {
+        dag: result.dag,
+        category: result.category,
+        channel: result.channel,
+        audienceType: result.audienceType,
+        description: result.description,
+      };
     }
 
-    // No create_workflow — resolve discovery tool calls (list_services, get_service_endpoints)
-    const toolUseBlocks = response.content.filter(
-      (block): block is Anthropic.Messages.ToolUseBlock =>
-        block.type === "tool_use",
-    );
-
-    if (toolUseBlocks.length === 0) {
-      throw new Error("LLM did not return a tool use response");
+    if (attempt >= MAX_RETRIES) {
+      throw new GenerationValidationError(
+        "Generated DAG is invalid after retries",
+        validation.errors,
+      );
     }
 
-    messages.push({ role: "assistant", content: response.content });
-
-    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-    for (const toolBlock of toolUseBlocks) {
-      try {
-        const resolved = await resolveToolCall(
-          toolBlock.name,
-          toolBlock.input as Record<string, unknown>,
-          identity,
-        );
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolBlock.id,
-          content: resolved.content,
-          ...(resolved.isError ? { is_error: true } : {}),
-        });
-      } catch (err) {
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolBlock.id,
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
-          is_error: true,
-        });
-      }
-    }
-
-    messages.push({ role: "user", content: toolResults });
+    userMessage = buildRetryUserMessage(input.description, validation.errors);
   }
 
-  throw new Error("Generation exceeded maximum turns without producing a workflow");
+  throw new Error("Generation exceeded maximum retries without producing a workflow");
 }
 
 export class GenerationValidationError extends Error {

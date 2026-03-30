@@ -75,11 +75,8 @@ vi.mock("../../src/lib/workflow-generator.js", () => {
   };
 });
 
-// Mock fetchAnthropicKey from key-service-client
-const mockFetchAnthropicKey = vi.fn().mockResolvedValue({ key: "resolved-anthropic-key", keySource: "platform" });
 vi.mock("../../src/lib/key-service-client.js", () => ({
   fetchProviderRequirements: vi.fn().mockResolvedValue({ requirements: [], providers: [] }),
-  fetchAnthropicKey: (...args: unknown[]) => mockFetchAnthropicKey(...args),
 }));
 
 import supertest from "supertest";
@@ -93,8 +90,6 @@ describe("POST /workflows/generate", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
     mockGenerateWorkflow.mockReset();
-    mockFetchAnthropicKey.mockReset();
-    mockFetchAnthropicKey.mockResolvedValue({ key: "resolved-anthropic-key", keySource: "platform" });
   });
 
   it("generates and deploys a workflow from description", async () => {
@@ -121,10 +116,8 @@ describe("POST /workflows/generate", () => {
     expect(res.body.workflow.slug).toContain("cold-email-outreach-");
     expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
-    expect(mockFetchAnthropicKey).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", runId: "run-caller-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined, style: undefined },
-      "resolved-anthropic-key",
       { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
     );
   });
@@ -198,10 +191,8 @@ describe("POST /workflows/generate", () => {
         hints: { services: ["lead", "email-gateway"] },
       });
 
-    expect(mockFetchAnthropicKey).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", runId: "run-caller-1" });
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] }, style: undefined },
-      "resolved-anthropic-key",
       { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
     );
   });
@@ -223,21 +214,21 @@ describe("POST /workflows/generate", () => {
     expect(res.body.error).toContain("Unexpected LLM error");
   });
 
-  it("returns 502 when key-service returns an error", async () => {
-    mockFetchAnthropicKey.mockRejectedValueOnce(
-      new Error("key-service error: GET /keys/anthropic/decrypt -> 404 Not Found: key not configured"),
+  it("returns 500 when generator throws unexpected error", async () => {
+    mockGenerateWorkflow.mockRejectedValueOnce(
+      new Error("chat-service error: POST /complete -> 502 Bad Gateway: upstream unavailable"),
     );
 
     const res = await request
       .post("/workflows/generate")
       .set(AUTH)
       .send({
-        featureSlug: "test-key-error",
-        description: "Some workflow description for testing key-service errors",
+        featureSlug: "test-chat-error",
+        description: "Some workflow description for testing chat-service errors",
       });
 
-    expect(res.status).toBe(502);
-    expect(res.body.error).toContain("key-service error:");
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("chat-service error:");
   });
 
   // --- Style tests ---
@@ -269,7 +260,6 @@ describe("POST /workflows/generate", () => {
       expect.objectContaining({
         style: { type: "human", humanId: "human-123", name: "Hormozi" },
       }),
-      "resolved-anthropic-key",
       { orgId: "org-1", userId: "user-1", runId: "run-caller-1" },
     );
   });
@@ -347,9 +337,9 @@ describe("POST /workflows/generate", () => {
     expect(res.body.workflow.signatureName).toMatch(/^[a-z]+$/);
   });
 
-  it("returns 502 when KEY_SERVICE_URL is not configured", async () => {
-    mockFetchAnthropicKey.mockRejectedValueOnce(
-      new Error("KEY_SERVICE_URL and KEY_SERVICE_API_KEY must be set to fetch provider requirements"),
+  it("returns 500 when CHAT_SERVICE_URL is not configured", async () => {
+    mockGenerateWorkflow.mockRejectedValueOnce(
+      new Error("CHAT_SERVICE_URL and CHAT_SERVICE_API_KEY must be set for LLM calls"),
     );
 
     const res = await request
@@ -360,7 +350,7 @@ describe("POST /workflows/generate", () => {
         description: "Some workflow description for testing missing config",
       });
 
-    expect(res.status).toBe(502);
-    expect(res.body.error).toContain("KEY_SERVICE_URL");
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("CHAT_SERVICE_URL");
   });
 });
