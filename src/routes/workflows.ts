@@ -35,14 +35,47 @@ import {
   getUpgradeChainIds,
   computeWorkflowScores,
   rankScores,
+  rescoreForObjective,
   formatScoreItem,
   aggregateSectionStats,
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
-import { resolveFeatureDynasty } from "../lib/features-client.js";
+import { resolveFeatureDynasty, fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.js";
 
 const router = Router();
+
+/** Default metrics when feature outputs can't be resolved or no featureSlug is provided. */
+const DEFAULT_OBJECTIVES = ["emailsReplied"];
+
+/**
+ * Resolves which stats keys to use as ranking objectives.
+ * - If explicit objective is provided, use it alone.
+ * - If featureSlug is provided, fetch its outputs and filter to count-type metrics.
+ * - Otherwise, fall back to DEFAULT_OBJECTIVES.
+ */
+async function resolveObjectives(
+  objective: string | undefined,
+  featureSlug: string | undefined,
+): Promise<string[]> {
+  if (objective) return [objective];
+
+  if (featureSlug) {
+    const [outputs, registry] = await Promise.all([
+      fetchFeatureOutputs(featureSlug),
+      fetchStatsRegistry(),
+    ]);
+    const countMetrics = outputs
+      .map((o) => o.key)
+      .filter((key) => {
+        const entry = registry[key];
+        return entry && entry.type === "count";
+      });
+    if (countMetrics.length > 0) return countMetrics;
+  }
+
+  return DEFAULT_OBJECTIVES;
+}
 
 function formatWorkflow(w: typeof workflows.$inferSelect) {
   return {
@@ -828,8 +861,27 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
       return;
     }
 
-    // Slug-level stats only — no dynasty chain aggregation
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objective, { kind: "auth", identity });
+    // Resolve which metrics to rank by (from feature outputs or explicit objective)
+    const objectives = await resolveObjectives(objective, featureSlug);
+
+    // Fetch base scores once — objective only affects outcome computation, which we re-score per metric
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", identity });
+
+    // Helper: produce rankings for a given set of scores across all objectives
+    function rankForObjectives(inputScores: WorkflowScore[]) {
+      if (objectives.length === 1) {
+        // Single objective — re-score if needed, return flat ranked list
+        const rescored = rescoreForObjective(inputScores, objectives[0]);
+        return rankScores(rescored).slice(0, limit).map(formatScoreItem);
+      }
+      // Multiple objectives — return per-metric rankings
+      const rankings: Record<string, ReturnType<typeof formatScoreItem>[]> = {};
+      for (const obj of objectives) {
+        const rescored = rescoreForObjective(inputScores, obj);
+        rankings[obj] = rankScores(rescored).slice(0, limit).map(formatScoreItem);
+      }
+      return rankings;
+    }
 
     if (groupBy === "feature") {
       // Group by featureSlug
@@ -841,14 +893,11 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
         featureMap.set(key, arr);
       }
 
-      const features = [...featureMap.entries()].map(([featureSlug, featureScores]) => {
-        const ranked = rankScores(featureScores).slice(0, limit);
-        return {
-          featureSlug,
-          stats: aggregateSectionStats(featureScores),
-          workflows: ranked.map(formatScoreItem),
-        };
-      });
+      const features = [...featureMap.entries()].map(([featureSlug, featureScores]) => ({
+        featureSlug,
+        stats: aggregateSectionStats(featureScores),
+        workflows: rankForObjectives(featureScores),
+      }));
 
       res.json({ features });
     } else if (groupBy === "brand") {
@@ -873,13 +922,13 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
         ? [...brandRunIds.entries()].filter(([bId]) => bId === brandId)
         : [...brandRunIds.entries()];
 
-      const brands = brandEntries.map(([bId, runIdSet]) => {
+      const brands = brandEntries.map(([bId]) => {
         const wfIds = brandWorkflowIds.get(bId)!;
         const brandScores = scores.filter((s) => wfIds.has(s.workflow.id));
         return {
           brandId: bId,
           stats: aggregateSectionStats(brandScores),
-          workflows: rankScores(brandScores).slice(0, limit).map(formatScoreItem),
+          workflows: rankForObjectives(brandScores),
         };
       });
 
@@ -900,8 +949,19 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
         }
         filteredScores = scores.filter((s) => wfIdsForBrand.has(s.workflow.id));
       }
-      const ranked = rankScores(filteredScores).slice(0, limit);
-      res.json({ results: ranked.map(formatScoreItem) });
+
+      if (objectives.length === 1) {
+        const rescored = rescoreForObjective(filteredScores, objectives[0]);
+        const ranked = rankScores(rescored).slice(0, limit);
+        res.json({ results: ranked.map(formatScoreItem) });
+      } else {
+        const rankings: Record<string, ReturnType<typeof formatScoreItem>[]> = {};
+        for (const obj of objectives) {
+          const rescored = rescoreForObjective(filteredScores, obj);
+          rankings[obj] = rankScores(rescored).slice(0, limit).map(formatScoreItem);
+        }
+        res.json({ rankings });
+      }
     }
   } catch (err: unknown) {
     if (!handleExternalServiceError(err, res, "ranked")) {
@@ -911,7 +971,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
   }
 });
 
-// GET /workflows/best — Hero records: best cost-per-open and best cost-per-reply
+// GET /workflows/best — Hero records: best cost-per-metric for each feature output metric
 router.get("/workflows/best", requireApiKey, async (req, res) => {
   try {
     const query = BestWorkflowQuerySchema.safeParse(req.query);
@@ -919,15 +979,19 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
       res.status(400).json({ error: "Validation error", details: query.error });
       return;
     }
-    const { orgId, brandId, by } = query.data;
+    const { orgId, brandId, featureSlug, by } = query.data;
     const identity = {
       orgId: res.locals.orgId as string,
       userId: res.locals.userId as string,
       runId: res.locals.runId as string,
     };
 
+    // Resolve which metrics to compute best records for
+    const objectives = await resolveObjectives(undefined, featureSlug);
+
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
+    if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
 
     const allMatchingWorkflows = conditions.length > 0
       ? await db.select().from(workflows).where(and(...conditions))
@@ -936,15 +1000,17 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     const activeWorkflows = allMatchingWorkflows.filter((w) => w.status === "active");
 
     if (activeWorkflows.length === 0) {
-      res.json({ bestCostPerOpen: null, bestCostPerReply: null });
+      const best: Record<string, null> = {};
+      for (const obj of objectives) best[obj] = null;
+      res.json({ best });
       return;
     }
 
     // Slug-level stats only — no dynasty chain aggregation
-    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], "replies", { kind: "auth", identity });
+    const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", identity });
 
     if (by === "brand") {
-      // Aggregate by brandId from runs, find the best brand for cost-per-open and cost-per-reply
+      // Aggregate by brandId from runs
       const brandScoresMap = new Map<string, WorkflowScore[]>();
       for (const s of scores) {
         const runIds = workflowRunIds[s.workflow.id] ?? [];
@@ -952,7 +1018,6 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
           const bId = runBrandMap.get(runId);
           if (!bId) continue;
           if (!brandScoresMap.has(bId)) brandScoresMap.set(bId, []);
-          // Add workflow to brand group (deduplicate)
           const arr = brandScoresMap.get(bId)!;
           if (!arr.some((existing) => existing.workflow.id === s.workflow.id)) {
             arr.push(s);
@@ -960,83 +1025,63 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
         }
       }
 
-      // If brandId filter is set, only consider that brand
       const brandEntries = brandId
         ? [...brandScoresMap.entries()].filter(([bId]) => bId === brandId)
         : [...brandScoresMap.entries()];
 
-      let bestCostPerOpen: { brandId: string; workflowCount: number; value: number } | null = null;
-      let bestCostPerReply: { brandId: string; workflowCount: number; value: number } | null = null;
+      const best: Record<string, { brandId: string; workflowCount: number; value: number } | null> = {};
+      for (const obj of objectives) {
+        let bestForMetric: { brandId: string; workflowCount: number; value: number } | null = null;
 
-      for (const [bId, brandScores] of brandEntries) {
-        const totalCost = brandScores.reduce((s, e) => s + e.totalCost, 0);
-        const hasRuns = brandScores.some((s) => s.completedRuns > 0);
-        if (!hasRuns) continue;
+        for (const [bId, brandScores] of brandEntries) {
+          const totalCost = brandScores.reduce((s, e) => s + e.totalCost, 0);
+          const hasRuns = brandScores.some((s) => s.completedRuns > 0);
+          if (!hasRuns) continue;
 
-        const totalOpened = brandScores.reduce(
-          (s, e) => s + e.emailStats.transactional.opened + e.emailStats.broadcast.opened,
-          0,
-        );
-        if (totalOpened > 0) {
-          const costPerOpen = totalCost / totalOpened;
-          if (!bestCostPerOpen || costPerOpen < bestCostPerOpen.value) {
-            bestCostPerOpen = { brandId: bId, workflowCount: brandScores.length, value: Math.round(costPerOpen * 100) / 100 };
+          const rescored = rescoreForObjective(brandScores, obj);
+          const totalOutcomes = rescored.reduce((s, e) => s + e.totalOutcomes, 0);
+          if (totalOutcomes > 0) {
+            const costPer = totalCost / totalOutcomes;
+            if (!bestForMetric || costPer < bestForMetric.value) {
+              bestForMetric = { brandId: bId, workflowCount: brandScores.length, value: Math.round(costPer * 100) / 100 };
+            }
           }
         }
 
-        const totalReplied = brandScores.reduce(
-          (s, e) => s + e.emailStats.transactional.replied + e.emailStats.broadcast.replied,
-          0,
-        );
-        if (totalReplied > 0) {
-          const costPerReply = totalCost / totalReplied;
-          if (!bestCostPerReply || costPerReply < bestCostPerReply.value) {
-            bestCostPerReply = { brandId: bId, workflowCount: brandScores.length, value: Math.round(costPerReply * 100) / 100 };
-          }
-        }
+        best[obj] = bestForMetric;
       }
 
-      res.json({ bestCostPerOpen, bestCostPerReply });
+      res.json({ best });
     } else {
-      // by=workflow (default) — existing behavior
-      let bestCostPerOpen: { score: WorkflowScore; value: number } | null = null;
-      let bestCostPerReply: { score: WorkflowScore; value: number } | null = null;
+      // by=workflow (default)
+      const best: Record<string, { workflowId: string; workflowSlug: string; workflowName: string; createdForBrandId: string | null; value: number } | null> = {};
 
-      for (const s of scores) {
-        if (s.completedRuns === 0) continue;
+      for (const obj of objectives) {
+        let bestForMetric: { score: WorkflowScore; value: number } | null = null;
+        const rescored = rescoreForObjective(scores, obj);
 
-        const totalOpened = s.emailStats.transactional.opened + s.emailStats.broadcast.opened;
-        if (totalOpened > 0) {
-          const costPerOpen = s.totalCost / totalOpened;
-          if (!bestCostPerOpen || costPerOpen < bestCostPerOpen.value) {
-            bestCostPerOpen = { score: s, value: costPerOpen };
+        for (const s of rescored) {
+          if (s.completedRuns === 0) continue;
+          if (s.totalOutcomes > 0) {
+            const costPer = s.totalCost / s.totalOutcomes;
+            if (!bestForMetric || costPer < bestForMetric.value) {
+              bestForMetric = { score: s, value: costPer };
+            }
           }
         }
 
-        const totalReplied = s.emailStats.transactional.replied + s.emailStats.broadcast.replied;
-        if (totalReplied > 0) {
-          const costPerReply = s.totalCost / totalReplied;
-          if (!bestCostPerReply || costPerReply < bestCostPerReply.value) {
-            bestCostPerReply = { score: s, value: costPerReply };
-          }
-        }
+        best[obj] = bestForMetric
+          ? {
+              workflowId: bestForMetric.score.workflow.id,
+              workflowSlug: bestForMetric.score.workflow.slug,
+              workflowName: bestForMetric.score.workflow.name,
+              createdForBrandId: bestForMetric.score.workflow.createdForBrandId,
+              value: Math.round(bestForMetric.value * 100) / 100,
+            }
+          : null;
       }
 
-      function formatRecord(entry: { score: WorkflowScore; value: number } | null) {
-        if (!entry) return null;
-        return {
-          workflowId: entry.score.workflow.id,
-          workflowSlug: entry.score.workflow.slug,
-          workflowName: entry.score.workflow.name,
-          createdForBrandId: entry.score.workflow.createdForBrandId,
-          value: Math.round(entry.value * 100) / 100,
-        };
-      }
-
-      res.json({
-        bestCostPerOpen: formatRecord(bestCostPerOpen),
-        bestCostPerReply: formatRecord(bestCostPerReply),
-      });
+      res.json({ best });
     }
   } catch (err: unknown) {
     if (!handleExternalServiceError(err, res, "best")) {
@@ -1116,8 +1161,7 @@ router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
     }
 
     const objectiveParam = req.query.objective;
-    const objectiveResult = RankedWorkflowObjectiveSchema.safeParse(objectiveParam ?? "replies");
-    const objective = objectiveResult.success ? objectiveResult.data : "replies" as const;
+    const objective = (typeof objectiveParam === "string" && objectiveParam) ? objectiveParam : "replies";
 
     const identity = {
       orgId: res.locals.orgId as string,
