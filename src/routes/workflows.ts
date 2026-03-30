@@ -41,7 +41,7 @@ import {
   handleExternalServiceError,
   type WorkflowScore,
 } from "../lib/workflow-scoring.js";
-import { resolveFeatureDynasty, resolveFeatureDynastySlugs, fetchFeatureOutputs, fetchStatsRegistry } from "../lib/features-client.js";
+import { resolveFeatureDynasty, resolveFeatureDynastySlugs, fetchFeatureOutputs, fetchStatsRegistry, extractForwardHeaders, type ForwardHeaders } from "../lib/features-client.js";
 
 const router = Router();
 
@@ -54,6 +54,7 @@ const router = Router();
 async function resolveObjectives(
   objective: string | undefined,
   featureSlug: string | undefined,
+  forwardHeaders?: ForwardHeaders,
 ): Promise<{ objectives: string[]; registry?: Record<string, import("../lib/features-client.js").StatsRegistryEntry> }> {
   if (objective) return { objectives: [objective] };
 
@@ -64,8 +65,8 @@ async function resolveObjectives(
   }
 
   const [outputs, registry] = await Promise.all([
-    fetchFeatureOutputs(featureSlug),
-    fetchStatsRegistry(),
+    fetchFeatureOutputs(featureSlug, forwardHeaders),
+    fetchStatsRegistry(forwardHeaders),
   ]);
   const countMetrics = outputs
     .map((o) => o.key)
@@ -229,7 +230,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         signatureName = pickSignatureName(signature, usedNames);
       }
 
-      const dynasty = await resolveFeatureDynasty(body.featureSlug);
+      const dynasty = await resolveFeatureDynasty(body.featureSlug, extractForwardHeaders(req));
       const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
       const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
       const newVersion = existing ? existing.version + 1 : 1;
@@ -355,7 +356,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(signature, usedNames);
 
-    const dynasty = await resolveFeatureDynasty(body.featureSlug);
+    const dynasty = await resolveFeatureDynasty(body.featureSlug, extractForwardHeaders(req));
     const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
     const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
     const slug = dynastySlug;
@@ -738,7 +739,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        const dynasty = await resolveFeatureDynasty(wf.featureSlug);
+        const dynasty = await resolveFeatureDynasty(wf.featureSlug, extractForwardHeaders(req));
         const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
         const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
         const slug = dynastySlug;
@@ -848,7 +849,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
       conditions.push(inArray(workflows.featureSlug, versionedSlugs));
     }
 
@@ -864,7 +865,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     }
 
     // Resolve which metrics to rank by (from feature outputs or explicit objective)
-    const { objectives, registry } = await resolveObjectives(objective, featureSlug);
+    const { objectives, registry } = await resolveObjectives(objective, featureSlug, extractForwardHeaders(req));
 
     // Fetch base scores once — objective only affects outcome computation, which we re-score per metric
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", identity }, registry);
@@ -995,13 +996,13 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     };
 
     // Resolve which metrics to compute best records for
-    const { objectives, registry } = await resolveObjectives(undefined, featureSlug);
+    const { objectives, registry } = await resolveObjectives(undefined, featureSlug, extractForwardHeaders(req));
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
       conditions.push(inArray(workflows.featureSlug, versionedSlugs));
     }
 
@@ -1262,7 +1263,7 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       conditions.push(eq(workflows.featureSlug, featureSlug));
     }
     if (featureDynastySlug && typeof featureDynastySlug === "string") {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractForwardHeaders(req));
       conditions.push(inArray(workflows.featureSlug, versionedSlugs));
     }
     if (workflowSlug && typeof workflowSlug === "string") {
@@ -1483,7 +1484,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const signatureName = pickSignatureName(newSignature, usedNames);
 
     // Resolve dynasty naming from features-service
-    const dynasty = await resolveFeatureDynasty(existing.featureSlug);
+    const dynasty = await resolveFeatureDynasty(existing.featureSlug, extractForwardHeaders(req));
     const baseDynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
     const baseDynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
     const newSlug = baseDynastySlug; // version 1, no suffix

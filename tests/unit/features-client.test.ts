@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resolveFeatureDynastySlugs } from "../../src/lib/features-client.js";
+import { resolveFeatureDynastySlugs, resolveFeatureDynasty, fetchFeatureOutputs, fetchStatsRegistry, extractForwardHeaders } from "../../src/lib/features-client.js";
 
 describe("resolveFeatureDynastySlugs", () => {
   const originalUrl = process.env.FEATURES_SERVICE_URL;
@@ -35,7 +35,7 @@ describe("resolveFeatureDynastySlugs", () => {
       "http://localhost:4000/features/dynasty/slugs?dynastySlug=sales-cold-email",
       expect.objectContaining({
         method: "GET",
-        headers: { "x-api-key": "test-features-key" },
+        headers: expect.objectContaining({ "x-api-key": "test-features-key" }),
       }),
     );
   });
@@ -62,6 +62,201 @@ describe("resolveFeatureDynastySlugs", () => {
 
     await expect(resolveFeatureDynastySlugs("nonexistent")).rejects.toThrow(
       "features-service error",
+    );
+  });
+
+  it("forwards x-org-id, x-user-id, x-run-id headers when provided", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ slugs: ["slug-a"] }),
+      }),
+    );
+
+    const fwdHeaders = {
+      "x-org-id": "org-123",
+      "x-user-id": "user-456",
+      "x-run-id": "run-789",
+    };
+
+    await resolveFeatureDynastySlugs("slug-a", fwdHeaders);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: {
+          "x-api-key": "test-features-key",
+          "x-org-id": "org-123",
+          "x-user-id": "user-456",
+          "x-run-id": "run-789",
+        },
+      }),
+    );
+  });
+});
+
+describe("extractForwardHeaders", () => {
+  it("extracts x-org-id, x-user-id, x-run-id from request headers", () => {
+    const req = {
+      headers: {
+        "x-org-id": "org-abc",
+        "x-user-id": "user-def",
+        "x-run-id": "run-ghi",
+        "x-api-key": "should-not-appear",
+      },
+    };
+
+    const result = extractForwardHeaders(req);
+
+    expect(result).toEqual({
+      "x-org-id": "org-abc",
+      "x-user-id": "user-def",
+      "x-run-id": "run-ghi",
+    });
+  });
+});
+
+describe("resolveFeatureDynasty forwards headers", () => {
+  const originalUrl = process.env.FEATURES_SERVICE_URL;
+  const originalKey = process.env.FEATURES_SERVICE_API_KEY;
+
+  beforeEach(() => {
+    process.env.FEATURES_SERVICE_URL = "http://localhost:4000";
+    process.env.FEATURES_SERVICE_API_KEY = "test-features-key";
+  });
+
+  afterEach(() => {
+    process.env.FEATURES_SERVICE_URL = originalUrl;
+    process.env.FEATURES_SERVICE_API_KEY = originalKey;
+    vi.restoreAllMocks();
+  });
+
+  it("forwards identity headers to features-service", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            feature_dynasty_name: "Sales Cold Email",
+            feature_dynasty_slug: "sales-cold-email",
+          }),
+      }),
+    );
+
+    const fwdHeaders = {
+      "x-org-id": "org-123",
+      "x-user-id": "user-456",
+      "x-run-id": "run-789",
+    };
+
+    await resolveFeatureDynasty("sales-cold-email-v2", fwdHeaders);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: {
+          "x-api-key": "test-features-key",
+          "x-org-id": "org-123",
+          "x-user-id": "user-456",
+          "x-run-id": "run-789",
+        },
+      }),
+    );
+  });
+});
+
+describe("fetchFeatureOutputs forwards headers", () => {
+  const originalUrl = process.env.FEATURES_SERVICE_URL;
+  const originalKey = process.env.FEATURES_SERVICE_API_KEY;
+
+  beforeEach(() => {
+    process.env.FEATURES_SERVICE_URL = "http://localhost:4000";
+    process.env.FEATURES_SERVICE_API_KEY = "test-features-key";
+  });
+
+  afterEach(() => {
+    process.env.FEATURES_SERVICE_URL = originalUrl;
+    process.env.FEATURES_SERVICE_API_KEY = originalKey;
+    vi.restoreAllMocks();
+  });
+
+  it("forwards identity headers to features-service", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({ feature: { outputs: [{ key: "emails_sent", displayOrder: 1 }] } }),
+      }),
+    );
+
+    const fwdHeaders = {
+      "x-org-id": "org-123",
+      "x-user-id": "user-456",
+      "x-run-id": "run-789",
+    };
+
+    await fetchFeatureOutputs("sales-cold-email", fwdHeaders);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: {
+          "x-api-key": "test-features-key",
+          "x-org-id": "org-123",
+          "x-user-id": "user-456",
+          "x-run-id": "run-789",
+        },
+      }),
+    );
+  });
+});
+
+describe("fetchStatsRegistry forwards headers", () => {
+  const originalUrl = process.env.FEATURES_SERVICE_URL;
+  const originalKey = process.env.FEATURES_SERVICE_API_KEY;
+
+  beforeEach(() => {
+    process.env.FEATURES_SERVICE_URL = "http://localhost:4000";
+    process.env.FEATURES_SERVICE_API_KEY = "test-features-key";
+  });
+
+  afterEach(() => {
+    process.env.FEATURES_SERVICE_URL = originalUrl;
+    process.env.FEATURES_SERVICE_API_KEY = originalKey;
+    vi.restoreAllMocks();
+  });
+
+  it("forwards identity headers to features-service", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({ registry: { emails_sent: { type: "count", label: "Emails Sent" } } }),
+      }),
+    );
+
+    const fwdHeaders = {
+      "x-org-id": "org-123",
+      "x-user-id": "user-456",
+      "x-run-id": "run-789",
+    };
+
+    await fetchStatsRegistry(fwdHeaders);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: {
+          "x-api-key": "test-features-key",
+          "x-org-id": "org-123",
+          "x-user-id": "user-456",
+          "x-run-id": "run-789",
+        },
+      }),
     );
   });
 });

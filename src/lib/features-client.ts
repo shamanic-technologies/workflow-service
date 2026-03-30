@@ -11,6 +11,22 @@ export interface FeatureDynasty {
   featureDynastySlug: string;
 }
 
+/** Headers to forward to features-service for auth. */
+export interface ForwardHeaders {
+  "x-org-id": string;
+  "x-user-id": string;
+  "x-run-id": string;
+}
+
+/** Extract forward headers from an Express request. */
+export function extractForwardHeaders(req: { headers: Record<string, string | string[] | undefined> }): ForwardHeaders {
+  return {
+    "x-org-id": req.headers["x-org-id"] as string,
+    "x-user-id": req.headers["x-user-id"] as string,
+    "x-run-id": req.headers["x-run-id"] as string,
+  };
+}
+
 function getFeaturesServiceConfig(): { baseUrl: string; apiKey: string } | null {
   const baseUrl = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
@@ -29,6 +45,7 @@ function getFeaturesServiceConfig(): { baseUrl: string; apiKey: string } | null 
  */
 export async function resolveFeatureDynasty(
   featureSlug: string,
+  forwardHeaders?: ForwardHeaders,
 ): Promise<FeatureDynasty> {
   const config = getFeaturesServiceConfig();
 
@@ -38,7 +55,7 @@ export async function resolveFeatureDynasty(
         `${config.baseUrl}/features/dynasty?slug=${encodeURIComponent(featureSlug)}`,
         {
           method: "GET",
-          headers: { "x-api-key": config.apiKey },
+          headers: { "x-api-key": config.apiKey, ...forwardHeaders },
         },
       );
 
@@ -95,6 +112,7 @@ function deriveFromSlug(featureSlug: string): FeatureDynasty {
  */
 export async function resolveFeatureDynastySlugs(
   dynastySlug: string,
+  forwardHeaders?: ForwardHeaders,
 ): Promise<string[]> {
   const config = getFeaturesServiceConfig();
   if (!config) {
@@ -107,7 +125,7 @@ export async function resolveFeatureDynastySlugs(
     `${config.baseUrl}/features/dynasty/slugs?dynastySlug=${encodeURIComponent(dynastySlug)}`,
     {
       method: "GET",
-      headers: { "x-api-key": config.apiKey },
+      headers: { "x-api-key": config.apiKey, ...forwardHeaders },
     },
   );
 
@@ -137,6 +155,7 @@ export interface FeatureOutput {
  */
 export async function fetchFeatureOutputs(
   featureSlug: string,
+  forwardHeaders?: ForwardHeaders,
 ): Promise<FeatureOutput[]> {
   const config = getFeaturesServiceConfig();
   if (!config) {
@@ -149,7 +168,7 @@ export async function fetchFeatureOutputs(
     `${config.baseUrl}/features/${encodeURIComponent(featureSlug)}`,
     {
       method: "GET",
-      headers: { "x-api-key": config.apiKey },
+      headers: { "x-api-key": config.apiKey, ...forwardHeaders },
     },
   );
 
@@ -177,7 +196,9 @@ export interface StatsRegistryEntry {
  * Returns a map of stats key → { type, label }.
  * Throws if features-service is not configured or returns an error.
  */
-export async function fetchStatsRegistry(): Promise<Record<string, StatsRegistryEntry>> {
+export async function fetchStatsRegistry(
+  forwardHeaders?: ForwardHeaders,
+): Promise<Record<string, StatsRegistryEntry>> {
   const config = getFeaturesServiceConfig();
   if (!config) {
     throw new Error(
@@ -187,7 +208,7 @@ export async function fetchStatsRegistry(): Promise<Record<string, StatsRegistry
 
   const res = await fetch(`${config.baseUrl}/stats/registry`, {
     method: "GET",
-    headers: { "x-api-key": config.apiKey },
+    headers: { "x-api-key": config.apiKey, ...forwardHeaders },
   });
 
   if (!res.ok) {
