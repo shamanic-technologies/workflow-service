@@ -8,6 +8,7 @@ import { JobPoller } from "./lib/job-poller.js";
 import { requireIdentity } from "./middleware/auth.js";
 import { checkApiRegistryHealth, validateAndUpgradeWorkflows } from "./lib/startup-validator.js";
 import { deployNodes } from "./lib/deploy-nodes.js";
+import { SpecWatcher } from "./lib/spec-watcher.js";
 import healthRoutes from "./routes/health.js";
 import workflowsRoutes from "./routes/workflows.js";
 import workflowRunsRoutes from "./routes/workflow-runs.js";
@@ -88,6 +89,13 @@ if (process.env.NODE_ENV !== "test") {
           console.error("[workflow-service] Workflow validation/upgrade failed:", err);
           // Don't crash — workflows with issues are kept active and logged above
         }
+
+        // Start SpecWatcher — checks every 5 min if OpenAPI specs changed,
+        // triggers workflow upgrades only when a spec change breaks a workflow.
+        // The check itself is free (HTTP + hash comparison), LLM only on upgrade.
+        const specWatcher = new SpecWatcher({ db, windmillClient });
+        await specWatcher.check(); // Store baseline hash (no-op on first call)
+        specWatcher.start();
       }
     } catch (err) {
       console.error("Startup failed:", err);
