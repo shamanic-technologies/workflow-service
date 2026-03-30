@@ -9,6 +9,64 @@ export const EMPTY_EMAIL_STATS = {
   replied: 0, bounced: 0, unsubscribed: 0, recipients: 0,
 };
 
+/**
+ * Maps stats registry keys (from features-service) to email stats field names.
+ * These are the count-type metrics that can be used as ranking objectives.
+ */
+const STATS_KEY_TO_EMAIL_FIELD: Record<string, keyof typeof EMPTY_EMAIL_STATS> = {
+  emailsSent: "sent",
+  emailsDelivered: "delivered",
+  emailsOpened: "opened",
+  emailsClicked: "clicked",
+  emailsReplied: "replied",
+  emailsBounced: "bounced",
+  recipients: "recipients",
+};
+
+/** Backward-compat aliases for the legacy "replies" | "clicks" objective values. */
+const OBJECTIVE_ALIASES: Record<string, string> = {
+  replies: "emailsReplied",
+  clicks: "emailsClicked",
+};
+
+/** Resolves a legacy alias to its stats key, or returns the key unchanged. */
+export function resolveObjective(objective: string): string {
+  return OBJECTIVE_ALIASES[objective] ?? objective;
+}
+
+/**
+ * Extracts the outcome count for a given stats key from aggregated email stats.
+ * Sums transactional + broadcast counts. Throws if the key is unknown.
+ */
+export function extractOutcomeCount(
+  statsKey: string,
+  emailStats: { transactional: typeof EMPTY_EMAIL_STATS; broadcast: typeof EMPTY_EMAIL_STATS },
+): number {
+  const field = STATS_KEY_TO_EMAIL_FIELD[statsKey];
+  if (!field) {
+    throw new Error(
+      `Unknown objective metric: "${statsKey}". Known email stats keys: ${Object.keys(STATS_KEY_TO_EMAIL_FIELD).join(", ")}`
+    );
+  }
+  return emailStats.transactional[field] + emailStats.broadcast[field];
+}
+
+/**
+ * Re-computes outcomes and costPerOutcome for a different objective without re-fetching data.
+ * Use this to produce per-metric rankings from a single computeWorkflowScores call.
+ */
+export function rescoreForObjective(scores: WorkflowScore[], objective: string): WorkflowScore[] {
+  const resolved = resolveObjective(objective);
+  return scores.map((s) => {
+    const outcomes = extractOutcomeCount(resolved, s.emailStats);
+    return {
+      ...s,
+      totalOutcomes: outcomes,
+      costPerOutcome: outcomes > 0 ? s.totalCost / outcomes : null,
+    };
+  });
+}
+
 export interface WorkflowScore {
   workflow: typeof workflows.$inferSelect;
   totalCost: number;
@@ -64,7 +122,7 @@ export interface ScoreResult {
 export async function computeWorkflowScores(
   activeWorkflows: (typeof workflows.$inferSelect)[],
   deprecatedWorkflows: (typeof workflows.$inferSelect)[],
-  objective: "replies" | "clicks",
+  objective: string,
   mode: ScoreMode,
 ): Promise<ScoreResult> {
   // 1. Build dynasty chains: for each active workflow, collect all workflow names in its upgrade chain
@@ -141,10 +199,8 @@ export async function computeWorkflowScores(
     }
     workflowRunsByWfId[wf.id] = runIds;
 
-    const outcomes =
-      objective === "replies"
-        ? transactional.replied + broadcast.replied
-        : transactional.clicked + broadcast.clicked;
+    const resolvedObjective = resolveObjective(objective);
+    const outcomes = extractOutcomeCount(resolvedObjective, { transactional, broadcast });
 
     const costPerOutcome = outcomes > 0 ? totalCost / outcomes : null;
 

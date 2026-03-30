@@ -1429,12 +1429,7 @@
       },
       "RankedWorkflowObjective": {
         "type": "string",
-        "enum": [
-          "replies",
-          "clicks"
-        ],
-        "default": "replies",
-        "description": "Which metric to optimize for. Defaults to 'replies'."
+        "description": "Stats key to optimize for. When omitted with featureSlug, auto-resolves from the feature's declared output metrics. When omitted without featureSlug, defaults to 'replies' (emailsReplied) for backward compatibility."
       },
       "RankedWorkflowGroupBy": {
         "type": "string",
@@ -1477,29 +1472,21 @@
           "workflowName",
           "createdForBrandId",
           "value"
-        ],
-        "description": "Workflow with the lowest cost per email open. Null if no data."
+        ]
       },
       "BestWorkflowResponse": {
         "type": "object",
         "properties": {
-          "bestCostPerOpen": {
-            "$ref": "#/components/schemas/BestWorkflowRecord"
-          },
-          "bestCostPerReply": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BestWorkflowRecord"
-              },
-              {
-                "description": "Workflow with the lowest cost per reply. Null if no data."
-              }
-            ]
+          "best": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BestWorkflowRecord"
+            },
+            "description": "Best records keyed by stats metric (e.g. 'emailsReplied', 'emailsOpened'). Each value is the workflow with the lowest cost per that metric, or null if no data."
           }
         },
         "required": [
-          "bestCostPerOpen",
-          "bestCostPerReply"
+          "best"
         ]
       },
       "BestWorkflowBy": {
@@ -3402,7 +3389,7 @@
               "$ref": "#/components/schemas/RankedWorkflowObjective"
             },
             "required": false,
-            "description": "Which metric to optimize for. Defaults to 'replies'.",
+            "description": "Stats key to optimize for. When omitted with featureSlug, auto-resolves from the feature's declared output metrics. When omitted without featureSlug, defaults to 'replies' (emailsReplied) for backward compatibility.",
             "name": "objective",
             "in": "query"
           },
@@ -3564,6 +3551,16 @@
             "required": false,
             "description": "Filter workflows by brand ID.",
             "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature slug and use its declared output metrics for best-record computation."
+            },
+            "required": false,
+            "description": "Filter by feature slug and use its declared output metrics for best-record computation.",
+            "name": "featureSlug",
             "in": "query"
           },
           {
@@ -3921,10 +3918,17 @@
           },
           {
             "schema": {
-              "$ref": "#/components/schemas/RankedWorkflowObjective"
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/RankedWorkflowObjective"
+                },
+                {
+                  "description": "Stats key to optimize for. Defaults to 'replies' (emailsReplied) when omitted."
+                }
+              ]
             },
             "required": false,
-            "description": "Which metric to optimize for. Defaults to 'replies'.",
+            "description": "Stats key to optimize for. Defaults to 'replies' (emailsReplied) when omitted.",
             "name": "objective",
             "in": "query"
           },
@@ -4086,7 +4090,7 @@
               "$ref": "#/components/schemas/RankedWorkflowObjective"
             },
             "required": false,
-            "description": "Which metric to optimize for. Defaults to 'replies'.",
+            "description": "Stats key to optimize for. When omitted with featureSlug, auto-resolves from the feature's declared output metrics. When omitted without featureSlug, defaults to 'replies' (emailsReplied) for backward compatibility.",
             "name": "objective",
             "in": "query"
           },
@@ -4173,6 +4177,16 @@
             "required": false,
             "description": "Filter workflows by brand ID.",
             "name": "brandId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by feature slug and use its declared output metrics for best-record computation."
+            },
+            "required": false,
+            "description": "Filter by feature slug and use its declared output metrics for best-record computation.",
+            "name": "featureSlug",
             "in": "query"
           },
           {

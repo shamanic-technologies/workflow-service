@@ -597,9 +597,11 @@ export const WorkflowMetadataSchema = z
 // --- Ranked Workflow schemas ---
 
 export const RankedWorkflowObjectiveSchema = z
-  .enum(["replies", "clicks"])
+  .string()
   .describe(
-    'Optimization objective. "replies" sorts by lowest cost per reply; "clicks" sorts by lowest cost per click.'
+    'Stats key to optimize for (e.g. "emailsReplied", "emailsClicked", "emailsOpened"). ' +
+    'Legacy values "replies" and "clicks" are still supported as aliases. ' +
+    'When featureSlug is provided and objective is omitted, the feature\'s declared output metrics are used automatically.'
   )
   .openapi("RankedWorkflowObjective");
 
@@ -617,7 +619,10 @@ export const RankedWorkflowQuerySchema = z
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
     featureSlug: z.string().optional().describe("Filter workflows by feature slug."),
-    objective: RankedWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
+    objective: RankedWorkflowObjectiveSchema.optional().describe(
+      "Stats key to optimize for. When omitted with featureSlug, auto-resolves from the feature's declared output metrics. " +
+      "When omitted without featureSlug, defaults to 'replies' (emailsReplied) for backward compatibility."
+    ),
     limit: z.coerce.number().int().min(1).max(100).default(10).describe("Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."),
     groupBy: RankedWorkflowGroupBySchema.optional().describe("Group results by section or brand. When omitted, returns a flat ranked list."),
   })
@@ -705,6 +710,7 @@ export const BestWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
+    featureSlug: z.string().optional().describe("Filter by feature slug and use its declared output metrics for best-record computation."),
     by: BestWorkflowBySchema.default("workflow").describe("Granularity: best workflow or best brand. Defaults to 'workflow'."),
   })
   .openapi("BestWorkflowQuery");
@@ -729,15 +735,21 @@ export const BestBrandRecordSchema = z
 
 export const BestWorkflowResponseSchema = z
   .object({
-    bestCostPerOpen: BestWorkflowRecordSchema.nullable().describe("Workflow with the lowest cost per email open. Null if no data."),
-    bestCostPerReply: BestWorkflowRecordSchema.nullable().describe("Workflow with the lowest cost per reply. Null if no data."),
+    best: z.record(z.string(), BestWorkflowRecordSchema.nullable())
+      .describe(
+        "Best records keyed by stats metric (e.g. 'emailsReplied', 'emailsOpened'). " +
+        "Each value is the workflow with the lowest cost per that metric, or null if no data."
+      ),
   })
   .openapi("BestWorkflowResponse");
 
 export const BestBrandResponseSchema = z
   .object({
-    bestCostPerOpen: BestBrandRecordSchema.nullable().describe("Brand with the lowest cost per email open. Null if no data."),
-    bestCostPerReply: BestBrandRecordSchema.nullable().describe("Brand with the lowest cost per reply. Null if no data."),
+    best: z.record(z.string(), BestBrandRecordSchema.nullable())
+      .describe(
+        "Best records keyed by stats metric (e.g. 'emailsReplied', 'emailsOpened'). " +
+        "Each value is the brand with the lowest cost per that metric, or null if no data."
+      ),
   })
   .openapi("BestBrandResponse");
 
@@ -1379,7 +1391,7 @@ registry.registerPath({
     headers: IdentityHeaders,
     query: z.object({
       dynastySlug: z.string().describe("The dynasty slug to get stats for."),
-      objective: RankedWorkflowObjectiveSchema.default("replies").describe("Which metric to optimize for. Defaults to 'replies'."),
+      objective: RankedWorkflowObjectiveSchema.optional().describe("Stats key to optimize for. Defaults to 'replies' (emailsReplied) when omitted."),
     }),
   },
   responses: {
