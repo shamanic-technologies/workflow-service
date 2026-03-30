@@ -121,6 +121,25 @@ vi.mock("../../src/lib/key-service-client.js", () => ({
   fetchProviderRequirements: vi.fn(),
 }));
 
+// --- Mock features-client ---
+const mockResolveFeatureDynastySlugs = vi.fn();
+const mockFetchFeatureOutputs = vi.fn();
+const mockFetchStatsRegistry = vi.fn();
+
+vi.mock("../../src/lib/features-client.js", () => ({
+  resolveFeatureDynasty: vi.fn().mockImplementation((featureSlug: string) => {
+    const dynastySlug = featureSlug.replace(/-v\d+$/, "");
+    const dynastyName = dynastySlug
+      .split("-")
+      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+    return Promise.resolve({ featureDynastyName: dynastyName, featureDynastySlug: dynastySlug });
+  }),
+  resolveFeatureDynastySlugs: (...args: unknown[]) => mockResolveFeatureDynastySlugs(...args),
+  fetchFeatureOutputs: (...args: unknown[]) => mockFetchFeatureOutputs(...args),
+  fetchStatsRegistry: (...args: unknown[]) => mockFetchStatsRegistry(...args),
+}));
+
 import supertest from "supertest";
 import app from "../../src/index.js";
 
@@ -227,6 +246,9 @@ describe("GET /workflows/ranked", () => {
     mockWorkflowRunRows.length = 0;
     mockFetchRunCostsAuth.mockReset();
     mockFetchEmailStatsAuth.mockReset();
+    mockResolveFeatureDynastySlugs.mockReset();
+    mockFetchFeatureOutputs.mockReset();
+    mockFetchStatsRegistry.mockReset();
   });
 
   it("returns ranked workflows with stats", async () => {
@@ -252,12 +274,12 @@ describe("GET /workflows/ranked", () => {
     expect(best.stats.email.broadcast).toEqual(EMPTY_STATS);
     // Verify workflowNames filter is passed to both endpoints
     expect(mockFetchRunCostsAuth).toHaveBeenCalledWith(
-      expect.objectContaining({ orgId: "org-1" }),
+      expect.objectContaining({ "x-org-id": "org-1" }),
       [DEFAULT_WF_SLUG],
     );
     expect(mockFetchEmailStatsAuth).toHaveBeenCalledWith(
       [DEFAULT_WF_SLUG],
-      expect.objectContaining({ orgId: "org-1" }),
+      expect.objectContaining({ "x-org-id": "org-1" }),
     );
   });
 
@@ -507,6 +529,36 @@ describe("GET /workflows/ranked", () => {
     expect(feature.stats.email).toBeDefined();
     expect(feature.workflows).toHaveLength(2);
   });
+
+  it("accepts featureDynastySlug as alternative to featureSlug for objective resolution", async () => {
+    const wf = makeWorkflow({ id: "wf-dynasty-ranked" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-dynasty-ranked", "ext-run-dr1"));
+
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 200, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 8 } } });
+
+    // Mock dynasty resolution → returns the matching featureSlug
+    mockResolveFeatureDynastySlugs.mockResolvedValue(["sales-cold-email-outreach", "sales-cold-email-outreach-v2"]);
+    // Mock feature outputs → emailsReplied is a count metric
+    mockFetchFeatureOutputs.mockResolvedValue([{ key: "emailsReplied", displayOrder: 0 }]);
+    mockFetchStatsRegistry.mockResolvedValue({ emailsReplied: { type: "count", label: "Replies" } });
+
+    const res = await request.get("/workflows/ranked").query({
+      orgId: "org1",
+      featureDynastySlug: "sales-cold-email-outreach",
+    }).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(1);
+    expect(res.body.results[0].stats.totalOutcomes).toBe(8);
+  });
+
+  it("returns 400 when neither objective, featureSlug, nor featureDynastySlug is provided", async () => {
+    const res = await request.get("/workflows/ranked").query({ orgId: "org1" }).set(AUTH);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/objective.*featureSlug.*featureDynastySlug/);
+  });
 });
 
 // ==================== GET /workflows/best (hero records) ====================
@@ -517,54 +569,79 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRunRows.length = 0;
     mockFetchRunCostsAuth.mockReset();
     mockFetchEmailStatsAuth.mockReset();
+    mockResolveFeatureDynastySlugs.mockReset();
+    mockFetchFeatureOutputs.mockReset();
+    mockFetchStatsRegistry.mockReset();
   });
 
-  it("returns bestCostPerOpen and bestCostPerReply", async () => {
+  // Helper: set up features mocks for best endpoint (which requires featureSlug or featureDynastySlug)
+  function setupFeaturesMock(outputs: Array<{ key: string; displayOrder: number }> = [{ key: "emailsReplied", displayOrder: 0 }]) {
+    mockFetchFeatureOutputs.mockResolvedValue(outputs);
+    mockFetchStatsRegistry.mockResolvedValue(
+      Object.fromEntries(outputs.map((o) => [o.key, { type: "count", label: o.key }]))
+    );
+  }
+
+  const BEST_QUERY = { featureSlug: "sales-cold-email-outreach" };
+
+  it("returns best record keyed by metric", async () => {
     const wf = makeWorkflow({ id: "wf-hero", createdForBrandId: "brand-abc" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-hero", "ext-run-hero"));
 
     setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
+      .query(BEST_QUERY)
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen).toBeDefined();
-    expect(res.body.bestCostPerOpen.workflowId).toBe("wf-hero");
-    expect(res.body.bestCostPerOpen.createdForBrandId).toBe("brand-abc");
-    expect(res.body.bestCostPerOpen.value).toBe(10); // 100 / 10 opens
-    expect(res.body.bestCostPerReply).toBeDefined();
-    expect(res.body.bestCostPerReply.workflowId).toBe("wf-hero");
-    expect(res.body.bestCostPerReply.value).toBe(20); // 100 / 5 replies
+    expect(res.body.best.emailsReplied).toBeDefined();
+    expect(res.body.best.emailsReplied.workflowId).toBe("wf-hero");
+    expect(res.body.best.emailsReplied.createdForBrandId).toBe("brand-abc");
+    expect(res.body.best.emailsReplied.value).toBe(20); // 100 / 5 replies
   });
 
-  it("returns null when no opens or replies exist", async () => {
+  it("returns null when no outcomes exist", async () => {
     const wf = makeWorkflow({ id: "wf-no-outcomes" });
     mockWorkflowRows.push(wf);
     mockWorkflowRunRows.push(makeRun("wf-no-outcomes", "ext-run-no"));
 
     setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
     setupEmailMock({ [DEFAULT_WF_SLUG]: {} });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
+      .query(BEST_QUERY)
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen).toBeNull();
-    expect(res.body.bestCostPerReply).toBeNull();
+    expect(res.body.best.emailsReplied).toBeNull();
   });
 
   it("returns 200 with null records when no active workflows exist", async () => {
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
+
+    const res = await request
+      .get("/workflows/best")
+      .query(BEST_QUERY)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.best.emailsReplied).toBeNull();
+  });
+
+  it("returns 400 when neither featureSlug nor featureDynastySlug is provided", async () => {
     const res = await request
       .get("/workflows/best")
       .set(AUTH);
 
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ bestCostPerOpen: null, bestCostPerReply: null });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/featureSlug.*featureDynastySlug/);
   });
 
   it("requires authentication", async () => {
@@ -581,15 +658,16 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRunRows.push(makeRun("wf-dn-hero", "ext-run-dn"));
 
     setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
+      .query(BEST_QUERY)
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen.workflowName).toBe("Sales Email Cold Outreach Jasmine");
-    expect(res.body.bestCostPerReply.workflowName).toBe("Sales Email Cold Outreach Jasmine");
+    expect(res.body.best.emailsReplied.workflowName).toBe("Sales Email Cold Outreach Jasmine");
   });
 
   it("filters by brandId", async () => {
@@ -600,17 +678,18 @@ describe("GET /workflows/best (hero records)", () => {
 
     setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 }, "sales-email-cold-outreach-other": { cost: 200, runCount: 1 } });
     setupEmailMock({
-      [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } },
-      "sales-email-cold-outreach-other": { transactional: { opened: 10, replied: 5 } },
+      [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } },
+      "sales-email-cold-outreach-other": { transactional: { replied: 5 } },
     });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
-      .query({ brandId: "brand-target" })
+      .query({ ...BEST_QUERY, brandId: "brand-target" })
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen.createdForBrandId).toBe("brand-target");
+    expect(res.body.best.emailsReplied.createdForBrandId).toBe("brand-target");
   });
 
   it("returns best brand with by=brand", async () => {
@@ -619,19 +698,18 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRunRows.push(makeRun("wf-1", "ext-run-a", "brand-A"), makeRun("wf-1", "ext-run-b", "brand-A"));
 
     setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 600, runCount: 2 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 20, replied: 10 } } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 10 } } });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
-      .query({ by: "brand" })
+      .query({ ...BEST_QUERY, by: "brand" })
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen).toBeDefined();
-    expect(res.body.bestCostPerOpen.workflowCount).toBe(1);
-    expect(res.body.bestCostPerOpen.value).toBe(30); // 600 / 20
-    expect(res.body.bestCostPerReply).toBeDefined();
-    expect(res.body.bestCostPerReply.value).toBe(60); // 600 / 10
+    expect(res.body.best.emailsReplied).toBeDefined();
+    expect(res.body.best.emailsReplied.workflowCount).toBe(1);
+    expect(res.body.best.emailsReplied.value).toBe(60); // 600 / 10
   });
 
   it("returns null for by=brand when no branded workflows have outcomes", async () => {
@@ -640,16 +718,16 @@ describe("GET /workflows/best (hero records)", () => {
     mockWorkflowRunRows.push(makeRun("wf-no-brand", "ext-run-nb"));
 
     setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 100, runCount: 1 } });
-    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { opened: 10, replied: 5 } } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 5 } } });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
-      .query({ by: "brand" })
+      .query({ ...BEST_QUERY, by: "brand" })
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.bestCostPerOpen).toBeNull();
-    expect(res.body.bestCostPerReply).toBeNull();
+    expect(res.body.best.emailsReplied).toBeNull();
   });
 
   it("picks the best from multiple workflows", async () => {
@@ -662,18 +740,40 @@ describe("GET /workflows/best (hero records)", () => {
 
     setupCostsMock({ [nameExp]: { cost: 500, runCount: 1 }, [nameCheap]: { cost: 500, runCount: 1 } });
     setupEmailMock({
-      [nameExp]: { transactional: { opened: 2, replied: 1 } },
-      [nameCheap]: { transactional: { opened: 100, replied: 50 } },
+      [nameExp]: { transactional: { replied: 1 } },
+      [nameCheap]: { transactional: { replied: 50 } },
     });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
 
     const res = await request
       .get("/workflows/best")
+      .query(BEST_QUERY)
       .set(AUTH);
 
     expect(res.status).toBe(200);
-    // wf-cheap has lower cost-per-open (500/100=5 vs 500/2=250) and cost-per-reply
-    expect(res.body.bestCostPerOpen.workflowId).toBe("wf-cheap");
-    expect(res.body.bestCostPerReply.workflowId).toBe("wf-cheap");
+    // wf-cheap has lower cost-per-reply (500/50=10 vs 500/1=500)
+    expect(res.body.best.emailsReplied.workflowId).toBe("wf-cheap");
+  });
+
+  it("accepts featureDynastySlug as alternative to featureSlug", async () => {
+    const wf = makeWorkflow({ id: "wf-dynasty-best" });
+    mockWorkflowRows.push(wf);
+    mockWorkflowRunRows.push(makeRun("wf-dynasty-best", "ext-run-db1"));
+
+    setupCostsMock({ [DEFAULT_WF_SLUG]: { cost: 200, runCount: 1 } });
+    setupEmailMock({ [DEFAULT_WF_SLUG]: { transactional: { replied: 10 } } });
+    setupFeaturesMock([{ key: "emailsReplied", displayOrder: 0 }]);
+    mockResolveFeatureDynastySlugs.mockResolvedValue(["sales-cold-email-outreach", "sales-cold-email-outreach-v2"]);
+
+    const res = await request
+      .get("/workflows/best")
+      .query({ featureDynastySlug: "sales-cold-email-outreach" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.best.emailsReplied).toBeDefined();
+    expect(res.body.best.emailsReplied.workflowId).toBe("wf-dynasty-best");
+    expect(res.body.best.emailsReplied.value).toBe(20); // 200 / 10
   });
 });
 
@@ -767,7 +867,7 @@ describe("GET /workflows/dynasty/stats", () => {
     setupCostsMock({ "cold-email-sequoia-v2": { cost: 100, runCount: 1 }, "cold-email-sequoia": { cost: 200, runCount: 1 } });
     setupEmailMock({ "cold-email-sequoia-v2": { transactional: { replied: 5 } }, "cold-email-sequoia": { transactional: { replied: 10 } } });
 
-    const res = await request.get("/workflows/dynasty/stats").query({ dynastySlug: "cold-email-sequoia" }).set(AUTH);
+    const res = await request.get("/workflows/dynasty/stats").query({ dynastySlug: "cold-email-sequoia", objective: "emailsReplied" }).set(AUTH);
 
     expect(res.status).toBe(200);
     expect(res.body.dynastySlug).toBe("cold-email-sequoia");
@@ -785,7 +885,7 @@ describe("GET /workflows/dynasty/stats", () => {
   });
 
   it("returns 404 when no workflows match", async () => {
-    const res = await request.get("/workflows/dynasty/stats").query({ dynastySlug: "nonexistent" }).set(AUTH);
+    const res = await request.get("/workflows/dynasty/stats").query({ dynastySlug: "nonexistent", objective: "emailsReplied" }).set(AUTH);
     expect(res.status).toBe(404);
   });
 });

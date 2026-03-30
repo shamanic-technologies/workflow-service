@@ -3680,20 +3680,20 @@
           {
             "schema": {
               "type": "string",
-              "description": "Exact match on the versioned feature slug."
+              "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required."
             },
             "required": false,
-            "description": "Exact match on the versioned feature slug.",
+            "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required.",
             "name": "featureSlug",
             "in": "query"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
+              "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug."
             },
             "required": false,
-            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
+            "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug.",
             "name": "featureDynastySlug",
             "in": "query"
           },
@@ -4326,20 +4326,20 @@
           {
             "schema": {
               "type": "string",
-              "description": "Exact match on the versioned feature slug."
+              "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required."
             },
             "required": false,
-            "description": "Exact match on the versioned feature slug.",
+            "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required.",
             "name": "featureSlug",
             "in": "query"
           },
           {
             "schema": {
               "type": "string",
-              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
+              "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug."
             },
             "required": false,
-            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
+            "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug.",
             "name": "featureDynastySlug",
             "in": "query"
           },

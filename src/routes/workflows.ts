@@ -835,19 +835,27 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     }
     const { orgId, brandId, featureSlug, featureDynastySlug, objective, limit, groupBy } = query.data;
 
-    if (!objective && !featureSlug) {
-      res.status(400).json({ error: "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics" });
-      return;
+    const dsHeaders = extractDownstreamHeaders(req);
+
+    // Resolve effective featureSlug: direct or via dynasty
+    let effectiveFeatureSlug = featureSlug;
+    let dynastyVersionedSlugs: string[] | undefined;
+    if (!effectiveFeatureSlug && featureDynastySlug) {
+      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
+      effectiveFeatureSlug = dynastyVersionedSlugs[0];
     }
 
-    const dsHeaders = extractDownstreamHeaders(req);
+    if (!objective && !effectiveFeatureSlug) {
+      res.status(400).json({ error: "Either 'objective', 'featureSlug', or 'featureDynastySlug' must be provided to determine ranking metrics" });
+      return;
+    }
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
-      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
+      conditions.push(inArray(workflows.featureSlug, dynastyVersionedSlugs));
     }
 
     const allMatchingWorkflows = conditions.length > 0
@@ -862,7 +870,7 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
     }
 
     // Resolve which metrics to rank by (from feature outputs or explicit objective)
-    const { objectives, registry } = await resolveObjectives(objective, featureSlug, dsHeaders);
+    const { objectives, registry } = await resolveObjectives(objective, effectiveFeatureSlug, dsHeaders);
 
     // Fetch base scores once — objective only affects outcome computation, which we re-score per metric
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", downstreamHeaders: dsHeaders }, registry);
@@ -981,22 +989,29 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     }
     const { orgId, brandId, featureSlug, featureDynastySlug, by } = query.data;
 
-    if (!featureSlug) {
-      res.status(400).json({ error: "'featureSlug' is required — metrics are derived from the feature's declared outputs" });
+    const dsHeaders = extractDownstreamHeaders(req);
+
+    // Resolve effective featureSlug: direct or via dynasty
+    let effectiveFeatureSlug = featureSlug;
+    let dynastyVersionedSlugs: string[] | undefined;
+    if (!effectiveFeatureSlug && featureDynastySlug) {
+      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
+      effectiveFeatureSlug = dynastyVersionedSlugs[0];
+    }
+    if (!effectiveFeatureSlug) {
+      res.status(400).json({ error: "'featureSlug' or 'featureDynastySlug' is required — metrics are derived from the feature's declared outputs" });
       return;
     }
 
-    const dsHeaders = extractDownstreamHeaders(req);
-
     // Resolve which metrics to compute best records for
-    const { objectives, registry } = await resolveObjectives(undefined, featureSlug, dsHeaders);
+    const { objectives, registry } = await resolveObjectives(undefined, effectiveFeatureSlug, dsHeaders);
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
-      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug, dsHeaders);
+      conditions.push(inArray(workflows.featureSlug, dynastyVersionedSlugs));
     }
 
     const allMatchingWorkflows = conditions.length > 0

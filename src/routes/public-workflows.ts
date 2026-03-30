@@ -61,8 +61,16 @@ router.get("/public/workflows/ranked", async (req, res) => {
     }
     const { orgId, brandId, featureSlug, featureDynastySlug, objective, limit, groupBy } = query.data;
 
-    if (!objective && !featureSlug) {
-      res.status(400).json({ error: "Either 'objective' or 'featureSlug' must be provided to determine ranking metrics" });
+    // Resolve effective featureSlug: direct or via dynasty
+    let effectiveFeatureSlug = featureSlug;
+    let dynastyVersionedSlugs: string[] | undefined;
+    if (!effectiveFeatureSlug && featureDynastySlug) {
+      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      effectiveFeatureSlug = dynastyVersionedSlugs[0];
+    }
+
+    if (!objective && !effectiveFeatureSlug) {
+      res.status(400).json({ error: "Either 'objective', 'featureSlug', or 'featureDynastySlug' must be provided to determine ranking metrics" });
       return;
     }
 
@@ -70,8 +78,8 @@ router.get("/public/workflows/ranked", async (req, res) => {
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
-      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, dynastyVersionedSlugs));
     }
 
     const allMatchingWorkflows = conditions.length > 0
@@ -85,7 +93,7 @@ router.get("/public/workflows/ranked", async (req, res) => {
       return;
     }
 
-    const { objectives } = await resolveObjectives(objective, featureSlug);
+    const { objectives } = await resolveObjectives(objective, effectiveFeatureSlug);
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "public" as const, brandId, orgId });
 
     function rankForObjectives(inputScores: WorkflowScore[]) {
@@ -195,19 +203,26 @@ router.get("/public/workflows/best", async (req, res) => {
     }
     const { orgId, brandId, featureSlug, featureDynastySlug, by } = query.data;
 
-    if (!featureSlug) {
-      res.status(400).json({ error: "'featureSlug' is required — metrics are derived from the feature's declared outputs" });
+    // Resolve effective featureSlug: direct or via dynasty
+    let effectiveFeatureSlug = featureSlug;
+    let dynastyVersionedSlugs: string[] | undefined;
+    if (!effectiveFeatureSlug && featureDynastySlug) {
+      dynastyVersionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      effectiveFeatureSlug = dynastyVersionedSlugs[0];
+    }
+    if (!effectiveFeatureSlug) {
+      res.status(400).json({ error: "'featureSlug' or 'featureDynastySlug' is required — metrics are derived from the feature's declared outputs" });
       return;
     }
 
-    const { objectives } = await resolveObjectives(undefined, featureSlug);
+    const { objectives } = await resolveObjectives(undefined, effectiveFeatureSlug);
 
     const conditions: ReturnType<typeof eq>[] = [];
     if (orgId) conditions.push(eq(workflows.orgId, orgId));
     if (featureSlug) conditions.push(eq(workflows.featureSlug, featureSlug));
     if (featureDynastySlug) {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
-      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
+      dynastyVersionedSlugs ??= await resolveFeatureDynastySlugs(featureDynastySlug);
+      conditions.push(inArray(workflows.featureSlug, dynastyVersionedSlugs));
     }
 
     const allMatchingWorkflows = conditions.length > 0
