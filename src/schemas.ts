@@ -723,8 +723,8 @@ export const BestWorkflowQuerySchema = z
   .object({
     orgId: z.string().optional().describe("Organization ID. When omitted, searches across all orgs."),
     brandId: z.string().optional().describe("Filter workflows by brand ID."),
-    featureSlug: z.string().optional().describe("Exact match on the versioned feature slug."),
-    featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."),
+    featureSlug: z.string().optional().describe("Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required."),
+    featureDynastySlug: z.string().optional().describe("Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug."),
     by: BestWorkflowBySchema.default("workflow").describe("Granularity: best workflow or best brand. Defaults to 'workflow'."),
   })
   .openapi("BestWorkflowQuery");
