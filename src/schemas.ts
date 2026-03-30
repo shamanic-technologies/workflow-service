@@ -568,16 +568,27 @@ export const EmailStatsSchema = z
 
 export const WorkflowStatsSchema = z
   .object({
-    totalCostInUsdCents: z.number().describe("Total cost across all completed runs of this workflow."),
-    totalOutcomes: z.number().describe("Total replies or clicks (depending on objective) across all runs."),
-    costPerOutcome: z.number().nullable().describe("Cost per reply or cost per click in USD cents. Null if no outcomes yet."),
+    totalCostInUsdCents: z.number().describe("Total cost in USD cents across all completed runs of this workflow."),
+    totalOutcomes: z.number().describe("Total outcome count for the requested objective metric (e.g. emailsReplied, leadsServed, outletsDiscovered)."),
+    costPerOutcome: z.number().nullable().describe("Cost per outcome in USD cents (totalCostInUsdCents / totalOutcomes). Null if no outcomes yet."),
     completedRuns: z.number().describe("Number of completed runs used in the calculation."),
     email: z.object({
       transactional: EmailStatsSchema.describe("Aggregated transactional email stats across all runs."),
       broadcast: EmailStatsSchema.describe("Aggregated broadcast email stats across all runs."),
     }).describe("Detailed email engagement stats aggregated across the upgrade chain."),
   })
-  .openapi("WorkflowStats");
+  .openapi("WorkflowStats", {
+    example: {
+      totalCostInUsdCents: 4250,
+      totalOutcomes: 17,
+      costPerOutcome: 250,
+      completedRuns: 12,
+      email: {
+        transactional: { sent: 120, delivered: 115, opened: 48, clicked: 12, replied: 7, bounced: 3, unsubscribed: 0, recipients: 120 },
+        broadcast: { sent: 80, delivered: 76, opened: 30, clicked: 8, replied: 3, bounced: 2, unsubscribed: 1, recipients: 80 },
+      },
+    },
+  });
 
 export const WorkflowMetadataSchema = z
   .object({
@@ -599,11 +610,12 @@ export const WorkflowMetadataSchema = z
 export const RankedWorkflowObjectiveSchema = z
   .string()
   .describe(
-    'Stats key to optimize for (e.g. "emailsReplied", "emailsClicked", "emailsOpened"). ' +
+    'Stats key to optimize for. Any key from the stats registry is valid ' +
+    '(e.g. "emailsReplied", "emailsClicked", "leadsServed", "outletsDiscovered", "journalistsFound"). ' +
     'Legacy values "replies" and "clicks" are still supported as aliases. ' +
     'When featureSlug is provided and objective is omitted, the feature\'s declared output metrics are used automatically.'
   )
-  .openapi("RankedWorkflowObjective");
+  .openapi("RankedWorkflowObjective", { example: "emailsReplied" });
 
 export const RankedWorkflowGroupBySchema = z
   .enum(["feature", "brand"])
@@ -621,8 +633,8 @@ export const RankedWorkflowQuerySchema = z
     featureSlug: z.string().optional().describe("Exact match on the versioned feature slug."),
     featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."),
     objective: RankedWorkflowObjectiveSchema.optional().describe(
-      "Stats key to optimize for. When omitted with featureSlug, auto-resolves from the feature's declared output metrics. " +
-      "When omitted without featureSlug, defaults to 'replies' (emailsReplied) for backward compatibility."
+      "Stats key to optimize for (e.g. 'emailsReplied', 'leadsServed', 'outletsDiscovered'). " +
+      "When omitted, featureSlug is required — metrics are auto-resolved from the feature's declared outputs."
     ),
     limit: z.coerce.number().int().min(1).max(100).default(10).describe("Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."),
     groupBy: RankedWorkflowGroupBySchema.optional().describe("Group results by section or brand. When omitted, returns a flat ranked list."),
@@ -723,9 +735,17 @@ export const BestWorkflowRecordSchema = z
     workflowSlug: z.string().describe("Unique technical identifier of the workflow."),
     workflowName: z.string().describe("Human-readable display name of the workflow."),
     createdForBrandId: z.string().nullable().describe("Brand ID that created this workflow (creation context, not execution brand)."),
-    value: z.number().describe("The record value in USD cents."),
+    value: z.number().describe("The best (lowest) cost-per-outcome value in USD cents for this metric."),
   })
-  .openapi("BestWorkflowRecord");
+  .openapi("BestWorkflowRecord", {
+    example: {
+      workflowId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      workflowSlug: "sales-cold-outreach-obsidian-v3",
+      workflowName: "Sales Cold Outreach Obsidian v3",
+      createdForBrandId: null,
+      value: 142.5,
+    },
+  });
 
 export const BestBrandRecordSchema = z
   .object({
@@ -739,11 +759,31 @@ export const BestWorkflowResponseSchema = z
   .object({
     best: z.record(z.string(), BestWorkflowRecordSchema.nullable())
       .describe(
-        "Best records keyed by stats metric (e.g. 'emailsReplied', 'emailsOpened'). " +
+        "Best records keyed by stats metric (e.g. 'emailsReplied', 'leadsServed', 'outletsDiscovered'). " +
+        "Metrics are derived from the feature's declared outputs. " +
         "Each value is the workflow with the lowest cost per that metric, or null if no data."
       ),
   })
-  .openapi("BestWorkflowResponse");
+  .openapi("BestWorkflowResponse", {
+    example: {
+      best: {
+        emailsReplied: {
+          workflowId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          workflowSlug: "sales-cold-outreach-obsidian-v3",
+          workflowName: "Sales Cold Outreach Obsidian v3",
+          createdForBrandId: null,
+          value: 142.5,
+        },
+        emailsClicked: {
+          workflowId: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          workflowSlug: "sales-cold-outreach-jade",
+          workflowName: "Sales Cold Outreach Jade",
+          createdForBrandId: null,
+          value: 85.33,
+        },
+      },
+    },
+  });
 
 export const BestBrandResponseSchema = z
   .object({
@@ -1271,11 +1311,16 @@ registry.registerPath({
   path: "/workflows/ranked",
   summary: "Get workflows ranked by cost-per-outcome",
   description:
-    "Returns workflows ranked by lowest cost-per-reply or cost-per-click for the given dimensions. " +
+    "Returns workflows ranked by lowest cost-per-outcome for the specified objective metric. " +
+    "Either `objective` or `featureSlug` must be provided. " +
+    "When `featureSlug` is provided without `objective`, metrics are auto-resolved from the feature's declared outputs (count-type only). " +
+    "Stats are fetched from the appropriate source services (email-gateway, lead-service, journalists-service, outlets-service) based on the stats registry.\n\n" +
     "Stats are aggregated across the full upgrade chain (deprecated predecessors included). " +
-    "Use `groupBy=section` to group by category-channel-audienceType, or `groupBy=brand` to group by brandId. " +
+    "Use `groupBy=feature` to group by featureSlug, or `groupBy=brand` to group by brandId. " +
     "When groupBy=brand, workflows without a brandId are excluded. " +
-    "Workflows with no completed runs are included with zeroed stats.",
+    "Workflows with no completed runs are included with zeroed stats.\n\n" +
+    "When multiple objectives are resolved (via featureSlug), each metric gets its own independent ranking. " +
+    "Example: `?featureSlug=sales-cold-outreach` might rank by both `emailsReplied` and `emailsClicked`.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
@@ -1294,7 +1339,7 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     502: {
-      description: "External service (runs-service or email-gateway-service) unavailable",
+      description: "External service unavailable (runs-service, email-gateway, lead-service, journalists-service, or outlets-service)",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -1303,12 +1348,15 @@ registry.registerPath({
 registry.registerPath({
   method: "get",
   path: "/workflows/best",
-  summary: "Get hero records — best cost-per-open and best cost-per-reply",
+  summary: "Get hero records — best cost-per-outcome for each feature metric",
   description:
-    "Returns the single best workflow (or brand) for cost-per-open and cost-per-reply across all active workflows. " +
+    "Returns the single best workflow (or brand) for each of the feature's declared output metrics. " +
+    "Requires `featureSlug` — metrics are derived from the feature's outputs in features-service, filtered to count-type metrics. " +
     "Stats are aggregated across the full upgrade chain. " +
     "Use `by=brand` to find the best brand instead of the best individual workflow. " +
-    "Use this for leaderboard hero/headline stats.",
+    "Use this for leaderboard hero/headline stats.\n\n" +
+    "Example: for a feature with outputs `emailsReplied` and `emailsClicked`, returns " +
+    "`{ best: { emailsReplied: { workflowId, value: 142.5 }, emailsClicked: { workflowId, value: 85.3 } } }`.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
@@ -1433,8 +1481,10 @@ registry.registerPath({
   description:
     "Public version of GET /workflows/ranked. No authentication required. " +
     "Returns workflows ranked by performance with stats, but without DAG details. " +
+    "Either `objective` or `featureSlug` must be provided. " +
+    "When `featureSlug` is provided without `objective`, metrics are auto-resolved from the feature's declared outputs. " +
     "Stats are aggregated across the full upgrade chain. " +
-    "Use `groupBy=section` to group by category-channel-audienceType, or `groupBy=brand` to group by brandId. " +
+    "Use `groupBy=feature` to group by featureSlug, or `groupBy=brand` to group by brandId. " +
     "Use `brandId` to filter by a specific brand.",
   tags: ["Public"],
   request: {
@@ -1461,10 +1511,11 @@ registry.registerPath({
 registry.registerPath({
   method: "get",
   path: "/public/workflows/best",
-  summary: "Public: Get hero records — best cost-per-open and best cost-per-reply",
+  summary: "Public: Get hero records — best cost-per-outcome for each feature metric",
   description:
     "Public version of GET /workflows/best. No authentication required. " +
-    "Returns the single best workflow for cost-per-open and cost-per-reply across all active workflows. " +
+    "Returns the single best workflow for each of the feature's declared output metrics. " +
+    "Requires `featureSlug` — metrics are derived from the feature's outputs, filtered to count-type metrics. " +
     "Stats are aggregated across the full upgrade chain. " +
     "Use `by=brand` to find the best brand instead of the best workflow. " +
     "Use `brandId` to filter by a specific brand.",
