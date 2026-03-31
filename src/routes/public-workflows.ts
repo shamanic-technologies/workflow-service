@@ -132,12 +132,14 @@ router.get("/public/workflows/ranked", async (req, res) => {
       for (const score of scores) {
         const runIds = workflowRunIds[score.workflow.id] ?? [];
         for (const runId of runIds) {
-          const bId = runBrandMap.get(runId);
-          if (!bId) continue;
-          if (!brandRunIds.has(bId)) brandRunIds.set(bId, new Set());
-          if (!brandWorkflowIds.has(bId)) brandWorkflowIds.set(bId, new Set());
-          brandRunIds.get(bId)!.add(runId);
-          brandWorkflowIds.get(bId)!.add(score.workflow.id);
+          const bIds = runBrandMap.get(runId);
+          if (!bIds) continue;
+          for (const bId of bIds) {
+            if (!brandRunIds.has(bId)) brandRunIds.set(bId, new Set());
+            if (!brandWorkflowIds.has(bId)) brandWorkflowIds.set(bId, new Set());
+            brandRunIds.get(bId)!.add(runId);
+            brandWorkflowIds.get(bId)!.add(score.workflow.id);
+          }
         }
       }
 
@@ -163,7 +165,8 @@ router.get("/public/workflows/ranked", async (req, res) => {
         for (const score of scores) {
           const runIds = workflowRunIds[score.workflow.id] ?? [];
           for (const runId of runIds) {
-            if (runBrandMap.get(runId) === brandId) {
+            const bIds = runBrandMap.get(runId);
+            if (bIds?.includes(brandId)) {
               wfIdsForBrand.add(score.workflow.id);
               break;
             }
@@ -245,12 +248,14 @@ router.get("/public/workflows/best", async (req, res) => {
       for (const s of scores) {
         const runIds = workflowRunIds[s.workflow.id] ?? [];
         for (const runId of runIds) {
-          const bId = runBrandMap.get(runId);
-          if (!bId) continue;
-          if (!brandScoresMap.has(bId)) brandScoresMap.set(bId, []);
-          const arr = brandScoresMap.get(bId)!;
-          if (!arr.some((existing) => existing.workflow.id === s.workflow.id)) {
-            arr.push(s);
+          const bIds = runBrandMap.get(runId);
+          if (!bIds) continue;
+          for (const bId of bIds) {
+            if (!brandScoresMap.has(bId)) brandScoresMap.set(bId, []);
+            const arr = brandScoresMap.get(bId)!;
+            if (!arr.some((existing) => existing.workflow.id === s.workflow.id)) {
+              arr.push(s);
+            }
           }
         }
       }

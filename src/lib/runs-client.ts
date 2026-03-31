@@ -33,17 +33,16 @@ export async function createRun(opts: {
   taskName: string;
   workflowSlug?: string;
   campaignId?: string;
-  brandId?: string;
+  /** CSV-formatted brand IDs (e.g. "uuid1,uuid2") forwarded via x-brand-id header */
+  brandIdHeader?: string;
 }): Promise<CreateRunResult> {
   const { baseUrl, apiKey } = getRunsServiceConfig();
 
+  // Body only contains non-deprecated fields
   const body: Record<string, string> = {
     serviceName: "workflow",
     taskName: opts.taskName,
   };
-  if (opts.workflowSlug) body.workflowSlug = opts.workflowSlug;
-  if (opts.campaignId) body.campaignId = opts.campaignId;
-  if (opts.brandId) body.brandId = opts.brandId;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -53,7 +52,7 @@ export async function createRun(opts: {
     "x-run-id": opts.parentRunId,
   };
   if (opts.campaignId) headers["x-campaign-id"] = opts.campaignId;
-  if (opts.brandId) headers["x-brand-id"] = opts.brandId;
+  if (opts.brandIdHeader) headers["x-brand-id"] = opts.brandIdHeader;
   if (opts.workflowSlug) headers["x-workflow-slug"] = opts.workflowSlug;
 
   const res = await fetch(`${baseUrl}/v1/runs`, {

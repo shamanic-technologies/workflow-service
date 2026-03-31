@@ -34,8 +34,11 @@ export function requireIdentity(
   res.locals.runId = runId;
 
   // Optional headers — read if present, never required
-  const brandId = req.headers["x-brand-id"] as string | undefined;
-  if (brandId) res.locals.brandId = brandId;
+  // x-brand-id is CSV (e.g. "uuid1,uuid2,uuid3") — parse into string[]
+  const rawBrandId = req.headers["x-brand-id"] as string | undefined;
+  if (rawBrandId) {
+    res.locals.brandIds = rawBrandId.split(",").map((s) => s.trim()).filter(Boolean);
+  }
 
   const campaignId = req.headers["x-campaign-id"] as string | undefined;
   const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
@@ -52,8 +55,9 @@ export function requireBrandId(
   res: Response,
   next: NextFunction
 ): void {
-  const brandId = req.headers["x-brand-id"] as string | undefined;
-  if (!brandId && !req.body?.inputs?.brandId) {
+  const rawBrandId = req.headers["x-brand-id"] as string | undefined;
+  const brandIds = rawBrandId ? rawBrandId.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  if (brandIds.length === 0 && !req.body?.inputs?.brandId) {
     res.status(400).json({
       error: "x-brand-id header or inputs.brandId is required for execution endpoints",
     });

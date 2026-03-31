@@ -194,7 +194,7 @@ describe("POST /workflows/:id/execute", () => {
       taskName: "execute-workflow",
       workflowSlug: "test-flow",
       campaignId: "camp-1",
-      brandId: "brand-1",
+      brandIdHeader: "brand-1",
     });
   });
 
@@ -251,7 +251,7 @@ describe("POST /workflows/:id/execute", () => {
       taskName: "execute-workflow",
       workflowSlug: "test-flow",
       campaignId: "camp-1",
-      brandId: "brand-1",
+      brandIdHeader: "brand-1",
     });
   });
 
@@ -408,7 +408,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
       taskName: "execute-workflow",
       workflowSlug: "create-user-flow",
       campaignId: "camp-1",
-      brandId: "brand-1",
+      brandIdHeader: "brand-1",
     });
   });
 

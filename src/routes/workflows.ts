@@ -909,19 +909,21 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
 
       res.json({ features });
     } else if (groupBy === "brand") {
-      // Group by brandId from runs — a workflow can appear under multiple brands
+      // Group by brandIds from runs — a run can belong to multiple brands
       const brandRunIds = new Map<string, Set<string>>();
       const brandWorkflowIds = new Map<string, Set<string>>();
 
       for (const score of scores) {
         const runIds = workflowRunIds[score.workflow.id] ?? [];
         for (const runId of runIds) {
-          const bId = runBrandMap.get(runId);
-          if (!bId) continue;
-          if (!brandRunIds.has(bId)) brandRunIds.set(bId, new Set());
-          if (!brandWorkflowIds.has(bId)) brandWorkflowIds.set(bId, new Set());
-          brandRunIds.get(bId)!.add(runId);
-          brandWorkflowIds.get(bId)!.add(score.workflow.id);
+          const bIds = runBrandMap.get(runId);
+          if (!bIds) continue;
+          for (const bId of bIds) {
+            if (!brandRunIds.has(bId)) brandRunIds.set(bId, new Set());
+            if (!brandWorkflowIds.has(bId)) brandWorkflowIds.set(bId, new Set());
+            brandRunIds.get(bId)!.add(runId);
+            brandWorkflowIds.get(bId)!.add(score.workflow.id);
+          }
         }
       }
 
@@ -949,7 +951,8 @@ router.get("/workflows/ranked", requireApiKey, async (req, res) => {
         for (const score of scores) {
           const runIds = workflowRunIds[score.workflow.id] ?? [];
           for (const runId of runIds) {
-            if (runBrandMap.get(runId) === brandId) {
+            const bIds = runBrandMap.get(runId);
+            if (bIds?.includes(brandId)) {
               wfIdsForBrand.add(score.workflow.id);
               break;
             }
@@ -1031,17 +1034,19 @@ router.get("/workflows/best", requireApiKey, async (req, res) => {
     const { scores, runBrandMap, workflowRunIds } = await computeWorkflowScores(activeWorkflows, [], objectives[0], { kind: "auth", downstreamHeaders: dsHeaders }, registry);
 
     if (by === "brand") {
-      // Aggregate by brandId from runs
+      // Aggregate by brandIds from runs — a run can belong to multiple brands
       const brandScoresMap = new Map<string, WorkflowScore[]>();
       for (const s of scores) {
         const runIds = workflowRunIds[s.workflow.id] ?? [];
         for (const runId of runIds) {
-          const bId = runBrandMap.get(runId);
-          if (!bId) continue;
-          if (!brandScoresMap.has(bId)) brandScoresMap.set(bId, []);
-          const arr = brandScoresMap.get(bId)!;
-          if (!arr.some((existing) => existing.workflow.id === s.workflow.id)) {
-            arr.push(s);
+          const bIds = runBrandMap.get(runId);
+          if (!bIds) continue;
+          for (const bId of bIds) {
+            if (!brandScoresMap.has(bId)) brandScoresMap.set(bId, []);
+            const arr = brandScoresMap.get(bId)!;
+            if (!arr.some((existing) => existing.workflow.id === s.workflow.id)) {
+              arr.push(s);
+            }
           }
         }
       }

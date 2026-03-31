@@ -893,9 +893,13 @@
             "type": "string",
             "nullable": true
           },
-          "brandId": {
-            "type": "string",
-            "nullable": true
+          "brandIds": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            },
+            "description": "Brand IDs associated with this run. Multi-brand campaigns produce multiple IDs."
           },
           "featureSlug": {
             "type": "string",
@@ -987,7 +991,7 @@
           "workflowId",
           "orgId",
           "campaignId",
-          "brandId",
+          "brandIds",
           "featureSlug",
           "workflowSlug",
           "subrequestId",
@@ -1776,10 +1780,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2031,10 +2035,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2148,10 +2152,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2263,10 +2267,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2417,10 +2421,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2532,10 +2536,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2658,10 +2662,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2764,10 +2768,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Required on execute endpoints — propagated to all downstream http.call nodes."
             },
             "required": true,
-            "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2881,10 +2885,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2988,10 +2992,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3168,10 +3172,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3285,10 +3289,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3383,10 +3387,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3582,10 +3586,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3749,10 +3753,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3857,10 +3861,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -3965,10 +3969,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -4109,10 +4113,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID for tracking. Optional on non-execute endpoints."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
             },
             "required": false,
-            "description": "Brand ID for tracking. Optional on non-execute endpoints.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -4441,10 +4445,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Required on execute endpoints — propagated to all downstream http.call nodes."
             },
             "required": true,
-            "description": "Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes.",
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Required on execute endpoints — propagated to all downstream http.call nodes.",
             "name": "x-brand-id",
             "in": "header"
           },

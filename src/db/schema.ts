@@ -62,7 +62,7 @@ export const workflowRuns = pgTable(
     orgId: text("org_id").notNull(),
     userId: text("user_id"),
     campaignId: text("campaign_id"),
-    brandId: text("brand_id"),
+    brandIds: text("brand_ids").array(),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
     subrequestId: text("subrequest_id"),

@@ -127,7 +127,8 @@ router.post(
 
       const userId = res.locals.userId as string;
       const callerRunId = res.locals.runId as string;
-      const brandId = res.locals.brandId as string;
+      const brandIds = (res.locals.brandIds as string[] | undefined) ?? [];
+      const brandIdHeader = req.headers["x-brand-id"] as string | undefined;
       const campaignId = res.locals.campaignId as string;
       const featureSlug = res.locals.featureSlug as string;
 
@@ -141,7 +142,7 @@ router.post(
           taskName: "execute-workflow",
           workflowSlug: workflow.slug,
           campaignId,
-          brandId,
+          brandIdHeader,
         });
         ownRunId = newRunId;
       } catch (err) {
@@ -151,11 +152,12 @@ router.post(
       }
 
       // Run in Windmill — inject identity + tracking headers so every node receives them
+      // Pass brandId as CSV string so downstream nodes receive it in the same format as the header
       let windmillJobId: string | null = null;
       const client = getWindmillClient();
       if (client) {
         try {
-          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowSlug: workflow.slug, campaignId, brandId, featureSlug, serviceEnvs: collectServiceEnvs() };
+          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowSlug: workflow.slug, campaignId, brandId: brandIdHeader, featureSlug, serviceEnvs: collectServiceEnvs() };
           windmillJobId = await client.runFlow(
             workflow.windmillFlowPath,
             flowInputs
@@ -180,7 +182,7 @@ router.post(
           orgId,
           userId,
           campaignId,
-          brandId,
+          brandIds: brandIds.length > 0 ? brandIds : null,
           featureSlug,
           workflowSlug: workflow.slug,
           subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
@@ -256,7 +258,8 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
 
     const executeUserId = res.locals.userId as string;
     const callerRunId = res.locals.runId as string;
-    const execBrandId = res.locals.brandId as string;
+    const execBrandIds = (res.locals.brandIds as string[] | undefined) ?? [];
+    const execBrandIdHeader = req.headers["x-brand-id"] as string | undefined;
     const execCampaignId = res.locals.campaignId as string;
     const execFeatureSlug = res.locals.featureSlug as string;
 
@@ -270,7 +273,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         taskName: "execute-workflow",
         workflowSlug: workflow.slug,
         campaignId: execCampaignId,
-        brandId: execBrandId,
+        brandIdHeader: execBrandIdHeader,
       });
       ownRunId = newRunId;
     } catch (err) {
@@ -284,7 +287,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
     const client = getWindmillClient();
     if (client) {
       try {
-        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowSlug: workflow.slug, campaignId: execCampaignId, brandId: execBrandId, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
+        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowSlug: workflow.slug, campaignId: execCampaignId, brandId: execBrandIdHeader, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
         windmillJobId = await client.runFlow(
           workflow.windmillFlowPath,
           flowInputs
@@ -306,7 +309,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         orgId,
         userId: executeUserId,
         campaignId: execCampaignId,
-        brandId: execBrandId,
+        brandIds: execBrandIds.length > 0 ? execBrandIds : null,
         featureSlug: execFeatureSlug,
         workflowSlug: workflow.slug,
         subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
