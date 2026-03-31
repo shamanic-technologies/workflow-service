@@ -709,6 +709,36 @@ export const PublicRankedBrandGroupSchema = z
   })
   .openapi("PublicRankedBrandGroup");
 
+// --- Public workflow metadata (service-to-service, x-api-key only) ---
+
+export const PublicWorkflowsQuerySchema = z
+  .object({
+    featureSlugs: z.string().min(1).describe("Comma-separated list of versioned feature slugs."),
+    status: z.enum(["active", "deprecated", "all"]).optional().describe("Filter by workflow status. Defaults to 'active'."),
+  })
+  .openapi("PublicWorkflowsQuery");
+
+export const PublicWorkflowItemSchema = z
+  .object({
+    id: z.string().uuid().describe("Workflow ID."),
+    slug: z.string().describe("Unique technical identifier."),
+    name: z.string().describe("Human-readable display name."),
+    dynastyName: z.string().describe("Stable dynasty name across versions."),
+    dynastySlug: z.string().describe("Stable dynasty slug across versions."),
+    version: z.number().int().describe("Version number within the dynasty."),
+    status: z.string().describe("Workflow status: active or deprecated."),
+    featureSlug: z.string().describe("Versioned feature slug."),
+    createdForBrandId: z.string().nullable().describe("Brand ID this workflow was created for, or null."),
+    upgradedTo: z.string().uuid().nullable().describe("ID of the workflow this was upgraded to, or null if still active."),
+  })
+  .openapi("PublicWorkflowItem");
+
+export const PublicWorkflowsResponseSchema = z
+  .object({
+    workflows: z.array(PublicWorkflowItemSchema).describe("Workflow metadata matching the query."),
+  })
+  .openapi("PublicWorkflowsResponse");
+
 // --- Best Workflow schemas (hero records) ---
 
 export const BestWorkflowBySchema = z
@@ -1472,7 +1502,33 @@ registry.registerPath({
   },
 });
 
-// --- Public endpoints (no auth, no identity headers) ---
+// --- Public endpoints ---
+
+registry.registerPath({
+  method: "get",
+  path: "/public/workflows",
+  summary: "Public: Get workflow metadata by feature slugs",
+  description:
+    "Service-to-service endpoint. Returns workflow metadata (no DAG) filtered by feature slugs. " +
+    "Requires x-api-key. No identity headers needed.",
+  tags: ["Public"],
+  security: [{ apiKey: [] }],
+  request: {
+    query: PublicWorkflowsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Workflow metadata",
+      content: {
+        "application/json": { schema: PublicWorkflowsResponseSchema },
+      },
+    },
+    400: {
+      description: "Missing or invalid query parameters",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
 registry.registerPath({
   method: "get",
