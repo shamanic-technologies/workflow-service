@@ -1649,6 +1649,82 @@
           "stats"
         ]
       },
+      "PublicWorkflowItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Workflow ID."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Unique technical identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable display name."
+          },
+          "dynastyName": {
+            "type": "string",
+            "description": "Stable dynasty name across versions."
+          },
+          "dynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug across versions."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Version number within the dynasty."
+          },
+          "status": {
+            "type": "string",
+            "description": "Workflow status: active or deprecated."
+          },
+          "featureSlug": {
+            "type": "string",
+            "description": "Versioned feature slug."
+          },
+          "createdForBrandId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Brand ID this workflow was created for, or null."
+          },
+          "upgradedTo": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "ID of the workflow this was upgraded to, or null if still active."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "dynastyName",
+          "dynastySlug",
+          "version",
+          "status",
+          "featureSlug",
+          "createdForBrandId",
+          "upgradedTo"
+        ]
+      },
+      "PublicWorkflowsResponse": {
+        "type": "object",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWorkflowItem"
+            },
+            "description": "Workflow metadata matching the query."
+          }
+        },
+        "required": [
+          "workflows"
+        ]
+      },
       "PublicRankedWorkflowItem": {
         "type": "object",
         "properties": {
@@ -4174,6 +4250,70 @@
           },
           "502": {
             "description": "External service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/workflows": {
+      "get": {
+        "summary": "Public: Get workflow metadata by feature slugs",
+        "description": "Service-to-service endpoint. Returns workflow metadata (no DAG) filtered by feature slugs. Requires x-api-key. No identity headers needed.",
+        "tags": [
+          "Public"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Comma-separated list of versioned feature slugs."
+            },
+            "required": true,
+            "description": "Comma-separated list of versioned feature slugs.",
+            "name": "featureSlugs",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "deprecated",
+                "all"
+              ],
+              "description": "Filter by workflow status. Defaults to 'active'."
+            },
+            "required": false,
+            "description": "Filter by workflow status. Defaults to 'active'.",
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicWorkflowsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
             "content": {
               "application/json": {
                 "schema": {

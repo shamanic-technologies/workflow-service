@@ -485,3 +485,121 @@ describe("GET /public/workflows/best", () => {
     expect(res.body.best.emailsReplied.workflowId).toBe("wf-dynasty-pub");
   });
 });
+
+// ==================== GET /public/workflows ====================
+
+describe("GET /public/workflows", () => {
+  const API_KEY = { "x-api-key": "test-api-key" };
+
+  beforeEach(() => {
+    mockWorkflowRows.length = 0;
+  });
+
+  it("returns 401 without x-api-key", async () => {
+    const res = await request.get("/public/workflows").query({ featureSlugs: "sales-v1" });
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 400 when featureSlugs is missing", async () => {
+    const res = await request.get("/public/workflows").set(API_KEY);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns workflows for given feature slugs (mock returns all rows)", async () => {
+    const wf1 = makeWorkflow({ id: "wf-a1", featureSlug: "sales-v1", status: "active", dynastySlug: "sales-cold-outreach-alpha" });
+    const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", slug: "sales-cold-outreach-alpha-v2", name: "Sales Alpha v2", dynastySlug: "sales-cold-outreach-alpha" });
+    mockWorkflowRows.push(wf1, wf2);
+
+    const res = await request
+      .get("/public/workflows")
+      .set(API_KEY)
+      .query({ featureSlugs: "sales-v1,sales-v2" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows.length).toBeGreaterThanOrEqual(2);
+    const ids = res.body.workflows.map((w: { id: string }) => w.id);
+    expect(ids).toContain("wf-a1");
+    expect(ids).toContain("wf-a2");
+  });
+
+  it("passes status filter to DB query and returns upgradedTo", async () => {
+    const wfDepr = makeWorkflow({ id: "wf-dep", featureSlug: "feat-x", status: "deprecated", slug: "feat-dep", name: "Depr", upgradedTo: "wf-act-uuid", dynastySlug: "feat-dep" });
+    mockWorkflowRows.push(wfDepr);
+
+    const res = await request
+      .get("/public/workflows")
+      .set(API_KEY)
+      .query({ featureSlugs: "feat-x", status: "deprecated" });
+
+    expect(res.status).toBe(200);
+    const dep = res.body.workflows.find((w: { id: string }) => w.id === "wf-dep");
+    expect(dep).toBeDefined();
+    expect(dep.upgradedTo).toBe("wf-act-uuid");
+  });
+
+  it("returns workflows with status=all", async () => {
+    const wf1 = makeWorkflow({ id: "wf-all-1", featureSlug: "feat-y", status: "active" });
+    const wf2 = makeWorkflow({ id: "wf-all-2", featureSlug: "feat-y", status: "deprecated", slug: "feat-y-old", name: "Old", dynastySlug: "feat-y-old" });
+    mockWorkflowRows.push(wf1, wf2);
+
+    const res = await request
+      .get("/public/workflows")
+      .set(API_KEY)
+      .query({ featureSlugs: "feat-y", status: "all" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns correct shape with all expected fields", async () => {
+    const wf = makeWorkflow({
+      id: "wf-shape",
+      slug: "sales-cold-outreach-obsidian-v3",
+      name: "Sales Cold Outreach Obsidian v3",
+      dynastyName: "Sales Cold Outreach Obsidian",
+      dynastySlug: "sales-cold-outreach-obsidian",
+      version: 3,
+      featureSlug: "sales-cold-outreach-v2",
+      createdForBrandId: "brand-123",
+      status: "active",
+      upgradedTo: null,
+    });
+    mockWorkflowRows.push(wf);
+
+    const res = await request
+      .get("/public/workflows")
+      .set(API_KEY)
+      .query({ featureSlugs: "sales-cold-outreach-v2" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toHaveLength(1);
+    const w = res.body.workflows[0];
+    expect(w).toEqual({
+      id: "wf-shape",
+      slug: "sales-cold-outreach-obsidian-v3",
+      name: "Sales Cold Outreach Obsidian v3",
+      dynastyName: "Sales Cold Outreach Obsidian",
+      dynastySlug: "sales-cold-outreach-obsidian",
+      version: 3,
+      status: "active",
+      featureSlug: "sales-cold-outreach-v2",
+      createdForBrandId: "brand-123",
+      upgradedTo: null,
+    });
+    // Must NOT include DAG or internal fields
+    expect(w).not.toHaveProperty("dag");
+    expect(w).not.toHaveProperty("orgId");
+    expect(w).not.toHaveProperty("signature");
+    expect(w).not.toHaveProperty("windmillFlowPath");
+  });
+
+  it("returns empty array when no workflows match", async () => {
+    const res = await request
+      .get("/public/workflows")
+      .set(API_KEY)
+      .query({ featureSlugs: "nonexistent-feature" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toEqual([]);
+  });
+});
