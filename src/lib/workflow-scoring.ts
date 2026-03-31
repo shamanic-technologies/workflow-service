@@ -54,22 +54,6 @@ export function extractOutcomeCount(
 }
 
 /**
- * Re-computes outcomes and costPerOutcome for a different objective without re-fetching data.
- * Use this to produce per-metric rankings from a single computeWorkflowScores call.
- */
-export function rescoreForObjective(scores: WorkflowScore[], objective: string): WorkflowScore[] {
-  const resolved = resolveObjective(objective);
-  return scores.map((s) => {
-    const outcomes = extractOutcomeCount(resolved, s.sourceMetrics);
-    return {
-      ...s,
-      totalOutcomes: outcomes,
-      costPerOutcome: outcomes > 0 ? s.totalCost / outcomes : null,
-    };
-  });
-}
-
-/**
  * Builds sourceMetrics from email stats by mapping email-gateway keys to counts.
  */
 function emailStatsToMetrics(
@@ -274,64 +258,6 @@ export async function computeWorkflowScores(
   }
 
   return { scores, runBrandMap, workflowRunIds: workflowRunsByWfId };
-}
-
-export function rankScores(scores: WorkflowScore[]): WorkflowScore[] {
-  return [...scores].sort((a, b) => {
-    if (a.costPerOutcome !== null && b.costPerOutcome !== null) {
-      return a.costPerOutcome - b.costPerOutcome;
-    }
-    if (a.costPerOutcome !== null) return -1;
-    if (b.costPerOutcome !== null) return 1;
-    return b.completedRuns - a.completedRuns;
-  });
-}
-
-export function formatScoreItem(entry: WorkflowScore) {
-  return {
-    workflow: {
-      id: entry.workflow.id,
-      slug: entry.workflow.slug,
-      name: entry.workflow.name,
-      dynastyName: entry.workflow.dynastyName,
-      dynastySlug: entry.workflow.dynastySlug,
-      version: entry.workflow.version,
-      createdForBrandId: entry.workflow.createdForBrandId,
-      featureSlug: entry.workflow.featureSlug,
-      signature: entry.workflow.signature,
-      signatureName: entry.workflow.signatureName,
-    },
-    dag: entry.workflow.dag,
-    stats: formatStats(entry),
-  };
-}
-
-export function formatPublicScoreItem(entry: WorkflowScore) {
-  return {
-    workflow: {
-      id: entry.workflow.id,
-      slug: entry.workflow.slug,
-      name: entry.workflow.name,
-      dynastyName: entry.workflow.dynastyName,
-      dynastySlug: entry.workflow.dynastySlug,
-      version: entry.workflow.version,
-      createdForBrandId: entry.workflow.createdForBrandId,
-      featureSlug: entry.workflow.featureSlug,
-      signature: entry.workflow.signature,
-      signatureName: entry.workflow.signatureName,
-    },
-    stats: formatStats(entry),
-  };
-}
-
-function formatStats(entry: WorkflowScore) {
-  return {
-    totalCostInUsdCents: entry.totalCost,
-    totalOutcomes: entry.totalOutcomes,
-    costPerOutcome: entry.costPerOutcome,
-    completedRuns: entry.completedRuns,
-    email: entry.emailStats,
-  };
 }
 
 export function aggregateSectionStats(scores: WorkflowScore[]) {
