@@ -200,7 +200,7 @@ function makeRun(workflowId: string, runId: string, brandId?: string | null) {
     workflowId,
     runId,
     orgId: "org1",
-    brandId: brandId ?? null,
+    brandIds: brandId ? [brandId] : null,
     campaignId: null,
     subrequestId: null,
     windmillJobId: "wm-job-1",

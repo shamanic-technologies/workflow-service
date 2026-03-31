@@ -52,7 +52,7 @@ describe("createRun", () => {
     );
   });
 
-  it("includes workflowSlug in body when provided", async () => {
+  it("forwards workflowSlug as x-workflow-slug header (not in body)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -69,19 +69,22 @@ describe("createRun", () => {
       workflowSlug: "sales-email-cold-outreach",
     });
 
+    const calledHeaders = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].headers;
+    expect(calledHeaders["x-workflow-slug"]).toBe("sales-email-cold-outreach");
+
+    // Body only has serviceName + taskName (deprecated fields removed)
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:5000/v1/runs",
       expect.objectContaining({
         body: JSON.stringify({
           serviceName: "workflow",
           taskName: "execute-workflow",
-          workflowSlug: "sales-email-cold-outreach",
         }),
       })
     );
   });
 
-  it("includes campaignId and brandId in body and forwards tracking headers when provided", async () => {
+  it("forwards campaignId and brandIdHeader as headers only (not in body)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -97,7 +100,7 @@ describe("createRun", () => {
       taskName: "execute-workflow",
       workflowSlug: "sales-email-cold-outreach",
       campaignId: "camp-123",
-      brandId: "brand-456",
+      brandIdHeader: "brand-456,brand-789",
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -105,15 +108,12 @@ describe("createRun", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           "x-campaign-id": "camp-123",
-          "x-brand-id": "brand-456",
+          "x-brand-id": "brand-456,brand-789",
           "x-workflow-slug": "sales-email-cold-outreach",
         }),
         body: JSON.stringify({
           serviceName: "workflow",
           taskName: "execute-workflow",
-          workflowSlug: "sales-email-cold-outreach",
-          campaignId: "camp-123",
-          brandId: "brand-456",
         }),
       })
     );

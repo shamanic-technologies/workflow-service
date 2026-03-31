@@ -27,7 +27,7 @@ describe("requireIdentity – tracking headers", () => {
     requireIdentity(req, res, next);
 
     expect(called).toBe(true);
-    expect(locals.brandId).toBe("brand-xyz");
+    expect(locals.brandIds).toEqual(["brand-xyz"]);
     expect(locals.campaignId).toBe("camp-abc");
     expect(locals.workflowSlug).toBe("sales-email-cold-outreach");
     expect(locals.featureSlug).toBe("sales-email-cold-outreach");
@@ -46,13 +46,13 @@ describe("requireIdentity – tracking headers", () => {
     requireIdentity(req, res, next);
 
     expect(called).toBe(true);
-    expect(locals).not.toHaveProperty("brandId");
+    expect(locals).not.toHaveProperty("brandIds");
     expect(locals).not.toHaveProperty("campaignId");
     expect(locals).not.toHaveProperty("workflowSlug");
     expect(locals).not.toHaveProperty("featureSlug");
   });
 
-  it("sets brandId in locals when x-brand-id header is present", () => {
+  it("parses CSV x-brand-id into brandIds array in res.locals", () => {
     const { req, res, locals } = mockReqRes({
       "x-org-id": "org-1",
       "x-user-id": "user-1",
@@ -66,7 +66,24 @@ describe("requireIdentity – tracking headers", () => {
     requireIdentity(req, res, next);
 
     expect(called).toBe(true);
-    expect(locals.brandId).toBe("brand-1");
+    expect(locals.brandIds).toEqual(["brand-1"]);
+  });
+
+  it("parses multi-brand CSV x-brand-id into brandIds array", () => {
+    const { req, res, locals } = mockReqRes({
+      "x-org-id": "org-1",
+      "x-user-id": "user-1",
+      "x-run-id": "run-1",
+      "x-brand-id": "brand-1,brand-2,brand-3",
+    });
+
+    let called = false;
+    const next: NextFunction = () => { called = true; };
+
+    requireIdentity(req, res, next);
+
+    expect(called).toBe(true);
+    expect(locals.brandIds).toEqual(["brand-1", "brand-2", "brand-3"]);
   });
 
   it("rejects requests missing all required identity headers", () => {

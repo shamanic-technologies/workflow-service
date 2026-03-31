@@ -345,7 +345,7 @@ export const WorkflowRunResponseSchema = z
     workflowId: z.string().uuid().nullable(),
     orgId: z.string(),
     campaignId: z.string().nullable(),
-    brandId: z.string().nullable(),
+    brandIds: z.array(z.string()).nullable().describe("Brand IDs associated with this run. Multi-brand campaigns produce multiple IDs."),
     featureSlug: z.string().nullable().describe("Feature slug from features-service. Used for per-feature analytics."),
     workflowSlug: z.string().nullable().describe("Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{slug}/execute."),
     subrequestId: z.string().nullable(),
@@ -895,7 +895,7 @@ const IdentityHeaders = z.object({
   "x-user-id": z.string().describe("Internal user UUID (from client-service). Required."),
   "x-run-id": z.string().describe("Run ID for tracing across services. Required."),
   "x-campaign-id": z.string().optional().describe("Campaign ID for tracking. Optional on non-execute endpoints."),
-  "x-brand-id": z.string().optional().describe("Brand ID for tracking. Optional on non-execute endpoints."),
+  "x-brand-id": z.string().optional().describe("Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."),
   "x-workflow-slug": z.string().optional().describe("Workflow slug for tracking. Optional on non-execute endpoints."),
   "x-feature-slug": z.string().optional().describe("Feature slug from features-service. Optional on non-execute endpoints."),
 });
@@ -906,7 +906,7 @@ const ExecutionHeaders = z.object({
   "x-user-id": z.string().describe("Internal user UUID (from client-service). Required."),
   "x-run-id": z.string().describe("Run ID for tracing across services. Required."),
   "x-campaign-id": z.string().describe("Campaign ID. Required on execute endpoints — propagated to all downstream http.call nodes."),
-  "x-brand-id": z.string().describe("Brand ID. Required on execute endpoints — propagated to all downstream http.call nodes."),
+  "x-brand-id": z.string().describe("Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Required on execute endpoints — propagated to all downstream http.call nodes."),
   "x-workflow-slug": z.string().describe("Workflow slug. Required on execute endpoints — propagated to all downstream http.call nodes."),
   "x-feature-slug": z.string().describe("Feature slug. Required on execute endpoints — propagated to all downstream http.call nodes."),
 });

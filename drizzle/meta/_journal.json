@@ -169,6 +169,13 @@
       "when": 1774747900000,
       "tag": "0023_fix_dynasty_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1774834300000,
+      "tag": "0024_multi_brand_runs",
+      "breakpoints": true
     }
   ]
 }

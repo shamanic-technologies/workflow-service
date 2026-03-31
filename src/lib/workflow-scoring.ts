@@ -131,8 +131,8 @@ type ScoreMode =
 
 export interface ScoreResult {
   scores: WorkflowScore[];
-  /** Maps runId → brandId (from workflow_runs table) for brand-level aggregation */
-  runBrandMap: Map<string, string>;
+  /** Maps runId → brandIds (from workflow_runs table) for brand-level aggregation */
+  runBrandMap: Map<string, string[]>;
   /** Maps workflowId → runIds for cross-referencing */
   workflowRunIds: Record<string, string[]>;
 }
@@ -207,7 +207,7 @@ export async function computeWorkflowScores(
 
   // 6. For each active workflow, aggregate costs + all metrics across dynasty chain + build brand map
   const workflowRunsByWfId: Record<string, string[]> = {};
-  const runBrandMap = new Map<string, string>();
+  const runBrandMap = new Map<string, string[]>();
   const scores: WorkflowScore[] = [];
 
   for (const wf of activeWorkflows) {
@@ -251,7 +251,9 @@ export async function computeWorkflowScores(
           and(inArray(workflowRuns.workflowId, chainIds), eq(workflowRuns.status, "completed")));
     const runIds = runs.filter((r) => r.runId).map((r) => r.runId!);
     for (const r of runs) {
-      if (r.runId && r.brandId) runBrandMap.set(r.runId, r.brandId);
+      if (r.runId && r.brandIds && r.brandIds.length > 0) {
+        runBrandMap.set(r.runId, r.brandIds);
+      }
     }
     workflowRunsByWfId[wf.id] = runIds;
 
