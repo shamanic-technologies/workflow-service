@@ -1233,61 +1233,70 @@
           "featureSlug"
         ]
       },
-      "WorkflowMetadata": {
+      "DynastyEntry": {
         "type": "object",
         "properties": {
-          "id": {
+          "dynastySlug": {
             "type": "string",
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string",
-            "description": "Unique technical identifier."
-          },
-          "name": {
-            "type": "string",
-            "description": "Human-readable display name."
+            "description": "Stable dynasty slug."
           },
           "dynastyName": {
             "type": "string",
-            "description": "Stable lineage name (constant across versions)."
+            "description": "Human-readable dynasty name."
           },
-          "dynastySlug": {
-            "type": "string",
-            "description": "Stable dynasty slug (constant across versions)."
-          },
-          "version": {
-            "type": "integer",
-            "description": "Version number within the dynasty."
-          },
-          "createdForBrandId": {
-            "type": "string",
-            "nullable": true
-          },
-          "featureSlug": {
-            "type": "string",
-            "description": "Feature slug for grouping and naming."
-          },
-          "signature": {
-            "type": "string"
-          },
-          "signatureName": {
-            "type": "string"
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All versioned workflow slugs in this dynasty."
           }
         },
         "required": [
-          "id",
-          "slug",
-          "name",
-          "dynastyName",
           "dynastySlug",
-          "version",
-          "createdForBrandId",
-          "featureSlug",
-          "signature",
-          "signatureName"
-        ],
-        "description": "Workflow metadata."
+          "dynastyName",
+          "slugs"
+        ]
+      },
+      "DynastiesResponse": {
+        "type": "object",
+        "properties": {
+          "dynasties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DynastyEntry"
+            },
+            "description": "All dynasties with their versioned slugs."
+          }
+        },
+        "required": [
+          "dynasties"
+        ]
+      },
+      "DynastySlugsResponse": {
+        "type": "object",
+        "properties": {
+          "dynastySlug": {
+            "type": "string",
+            "description": "The dynasty slug used for lookup."
+          },
+          "dynastyName": {
+            "type": "string",
+            "description": "Human-readable dynasty name."
+          },
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All workflow slugs in this dynasty (all versions, all statuses)."
+          }
+        },
+        "required": [
+          "dynastySlug",
+          "dynastyName",
+          "slugs"
+        ]
       },
       "EmailStats": {
         "type": "object",
@@ -1388,7 +1397,7 @@
           "completedRuns",
           "email"
         ],
-        "description": "Aggregated performance stats for this workflow.",
+        "description": "Aggregated stats across all versions of this dynasty.",
         "example": {
           "totalCostInUsdCents": 4250,
           "totalOutcomes": 17,
@@ -1418,209 +1427,6 @@
           }
         }
       },
-      "RankedWorkflowItem": {
-        "type": "object",
-        "properties": {
-          "workflow": {
-            "$ref": "#/components/schemas/WorkflowMetadata"
-          },
-          "dag": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/DAG"
-              },
-              {
-                "description": "The DAG definition of the workflow."
-              }
-            ]
-          },
-          "stats": {
-            "$ref": "#/components/schemas/WorkflowStats"
-          }
-        },
-        "required": [
-          "workflow",
-          "dag",
-          "stats"
-        ]
-      },
-      "RankedWorkflowResponse": {
-        "type": "object",
-        "properties": {
-          "results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RankedWorkflowItem"
-            },
-            "description": "Workflows ranked by performance, best first."
-          }
-        },
-        "required": [
-          "results"
-        ]
-      },
-      "RankedWorkflowObjective": {
-        "type": "string",
-        "description": "Stats key to optimize for (e.g. 'emailsReplied', 'leadsServed', 'outletsDiscovered'). When omitted, featureSlug is required — metrics are auto-resolved from the feature's declared outputs.",
-        "example": "emailsReplied"
-      },
-      "RankedWorkflowGroupBy": {
-        "type": "string",
-        "enum": [
-          "feature",
-          "brand"
-        ],
-        "description": "Group results by section or brand. When omitted, returns a flat ranked list."
-      },
-      "BestWorkflowRecord": {
-        "type": "object",
-        "nullable": true,
-        "properties": {
-          "workflowId": {
-            "type": "string",
-            "format": "uuid",
-            "description": "ID of the workflow holding the record."
-          },
-          "workflowSlug": {
-            "type": "string",
-            "description": "Unique technical identifier of the workflow."
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Human-readable display name of the workflow."
-          },
-          "createdForBrandId": {
-            "type": "string",
-            "nullable": true,
-            "description": "Brand ID that created this workflow (creation context, not execution brand)."
-          },
-          "value": {
-            "type": "number",
-            "description": "The best (lowest) cost-per-outcome value in USD cents for this metric."
-          }
-        },
-        "required": [
-          "workflowId",
-          "workflowSlug",
-          "workflowName",
-          "createdForBrandId",
-          "value"
-        ],
-        "example": {
-          "workflowId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-          "workflowSlug": "sales-cold-outreach-obsidian-v3",
-          "workflowName": "Sales Cold Outreach Obsidian v3",
-          "createdForBrandId": null,
-          "value": 142.5
-        }
-      },
-      "BestWorkflowResponse": {
-        "type": "object",
-        "properties": {
-          "best": {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/components/schemas/BestWorkflowRecord"
-            },
-            "description": "Best records keyed by stats metric (e.g. 'emailsReplied', 'leadsServed', 'outletsDiscovered'). Metrics are derived from the feature's declared outputs. Each value is the workflow with the lowest cost per that metric, or null if no data."
-          }
-        },
-        "required": [
-          "best"
-        ],
-        "example": {
-          "best": {
-            "emailsReplied": {
-              "workflowId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-              "workflowSlug": "sales-cold-outreach-obsidian-v3",
-              "workflowName": "Sales Cold Outreach Obsidian v3",
-              "createdForBrandId": null,
-              "value": 142.5
-            },
-            "emailsClicked": {
-              "workflowId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-              "workflowSlug": "sales-cold-outreach-jade",
-              "workflowName": "Sales Cold Outreach Jade",
-              "createdForBrandId": null,
-              "value": 85.33
-            }
-          }
-        }
-      },
-      "BestWorkflowBy": {
-        "type": "string",
-        "enum": [
-          "workflow",
-          "brand"
-        ],
-        "default": "workflow",
-        "description": "Granularity: best workflow or best brand. Defaults to 'workflow'."
-      },
-      "DynastyEntry": {
-        "type": "object",
-        "properties": {
-          "dynastySlug": {
-            "type": "string",
-            "description": "Stable dynasty slug."
-          },
-          "dynastyName": {
-            "type": "string",
-            "description": "Human-readable dynasty name."
-          },
-          "slugs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "All versioned workflow slugs in this dynasty."
-          }
-        },
-        "required": [
-          "dynastySlug",
-          "dynastyName",
-          "slugs"
-        ]
-      },
-      "DynastiesResponse": {
-        "type": "object",
-        "properties": {
-          "dynasties": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DynastyEntry"
-            },
-            "description": "All dynasties with their versioned slugs."
-          }
-        },
-        "required": [
-          "dynasties"
-        ]
-      },
-      "DynastySlugsResponse": {
-        "type": "object",
-        "properties": {
-          "dynastySlug": {
-            "type": "string",
-            "description": "The dynasty slug used for lookup."
-          },
-          "dynastyName": {
-            "type": "string",
-            "description": "Human-readable dynasty name."
-          },
-          "slugs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "All workflow slugs in this dynasty (all versions, all statuses)."
-          }
-        },
-        "required": [
-          "dynastySlug",
-          "dynastyName",
-          "slugs"
-        ]
-      },
       "DynastyStatsResponse": {
         "type": "object",
         "properties": {
@@ -1633,14 +1439,7 @@
             "description": "Human-readable dynasty name."
           },
           "stats": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowStats"
-              },
-              {
-                "description": "Aggregated stats across all versions of this dynasty."
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowStats"
           }
         },
         "required": [
@@ -1648,6 +1447,11 @@
           "dynastyName",
           "stats"
         ]
+      },
+      "RankedWorkflowObjective": {
+        "type": "string",
+        "description": "Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required.",
+        "example": "emailsReplied"
       },
       "PublicWorkflowItem": {
         "type": "object",
@@ -1723,36 +1527,6 @@
         },
         "required": [
           "workflows"
-        ]
-      },
-      "PublicRankedWorkflowItem": {
-        "type": "object",
-        "properties": {
-          "workflow": {
-            "$ref": "#/components/schemas/WorkflowMetadata"
-          },
-          "stats": {
-            "$ref": "#/components/schemas/WorkflowStats"
-          }
-        },
-        "required": [
-          "workflow",
-          "stats"
-        ]
-      },
-      "PublicRankedWorkflowResponse": {
-        "type": "object",
-        "properties": {
-          "results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PublicRankedWorkflowItem"
-            },
-            "description": "Workflows ranked by performance, best first."
-          }
-        },
-        "required": [
-          "results"
         ]
       },
       "ExecuteBySlugRequest": {
@@ -3535,352 +3309,6 @@
         }
       }
     },
-    "/workflows/ranked": {
-      "get": {
-        "summary": "Get workflows ranked by cost-per-outcome",
-        "description": "Returns workflows ranked by lowest cost-per-outcome for the specified objective metric. Either `objective` or `featureSlug` must be provided. When `featureSlug` is provided without `objective`, metrics are auto-resolved from the feature's declared outputs (count-type only). Stats are fetched from the appropriate source services (email-gateway, lead-service, journalists-service, outlets-service) based on the stats registry.\n\nStats are aggregated across the full upgrade chain (deprecated predecessors included). Use `groupBy=feature` to group by featureSlug, or `groupBy=brand` to group by brandId. When groupBy=brand, workflows without a brandId are excluded. Workflows with no completed runs are included with zeroed stats.\n\nWhen multiple objectives are resolved (via featureSlug), each metric gets its own independent ranking. Example: `?featureSlug=sales-cold-outreach` might rank by both `emailsReplied` and `emailsClicked`.",
-        "tags": [
-          "Workflows"
-        ],
-        "security": [
-          {
-            "apiKey": []
-          }
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "description": "Organization ID. When omitted, searches across all orgs."
-            },
-            "required": false,
-            "description": "Organization ID. When omitted, searches across all orgs.",
-            "name": "orgId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter workflows by brand ID."
-            },
-            "required": false,
-            "description": "Filter workflows by brand ID.",
-            "name": "brandId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Exact match on the versioned feature slug."
-            },
-            "required": false,
-            "description": "Exact match on the versioned feature slug.",
-            "name": "featureSlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
-            },
-            "required": false,
-            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
-            "name": "featureDynastySlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/RankedWorkflowObjective"
-            },
-            "required": false,
-            "description": "Stats key to optimize for (e.g. 'emailsReplied', 'leadsServed', 'outletsDiscovered'). When omitted, featureSlug is required — metrics are auto-resolved from the feature's declared outputs.",
-            "name": "objective",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 10,
-              "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."
-            },
-            "required": false,
-            "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10.",
-            "name": "limit",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/RankedWorkflowGroupBy"
-            },
-            "required": false,
-            "description": "Group results by section or brand. When omitted, returns a flat ranked list.",
-            "name": "groupBy",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Internal org UUID (from client-service). Required."
-            },
-            "required": true,
-            "description": "Internal org UUID (from client-service). Required.",
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Internal user UUID (from client-service). Required."
-            },
-            "required": true,
-            "description": "Internal user UUID (from client-service). Required.",
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Run ID for tracing across services. Required."
-            },
-            "required": true,
-            "description": "Run ID for tracing across services. Required.",
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug from features-service. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
-            "name": "x-feature-slug",
-            "in": "header"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Ranked workflows (flat list or grouped by section/brand)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RankedWorkflowResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Missing or invalid query parameters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "External service unavailable (runs-service, email-gateway, lead-service, journalists-service, or outlets-service)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/workflows/best": {
-      "get": {
-        "summary": "Get hero records — best cost-per-outcome for each feature metric",
-        "description": "Returns the single best workflow (or brand) for each of the feature's declared output metrics. Requires `featureSlug` — metrics are derived from the feature's outputs in features-service, filtered to count-type metrics. Stats are aggregated across the full upgrade chain. Use `by=brand` to find the best brand instead of the best individual workflow. Use this for leaderboard hero/headline stats.\n\nExample: for a feature with outputs `emailsReplied` and `emailsClicked`, returns `{ best: { emailsReplied: { workflowId, value: 142.5 }, emailsClicked: { workflowId, value: 85.3 } } }`.",
-        "tags": [
-          "Workflows"
-        ],
-        "security": [
-          {
-            "apiKey": []
-          }
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "description": "Organization ID. When omitted, searches across all orgs."
-            },
-            "required": false,
-            "description": "Organization ID. When omitted, searches across all orgs.",
-            "name": "orgId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter workflows by brand ID."
-            },
-            "required": false,
-            "description": "Filter workflows by brand ID.",
-            "name": "brandId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required."
-            },
-            "required": false,
-            "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required.",
-            "name": "featureSlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug."
-            },
-            "required": false,
-            "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug.",
-            "name": "featureDynastySlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/BestWorkflowBy"
-            },
-            "required": false,
-            "description": "Granularity: best workflow or best brand. Defaults to 'workflow'.",
-            "name": "by",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Internal org UUID (from client-service). Required."
-            },
-            "required": true,
-            "description": "Internal org UUID (from client-service). Required.",
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Internal user UUID (from client-service). Required."
-            },
-            "required": true,
-            "description": "Internal user UUID (from client-service). Required.",
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Run ID for tracing across services. Required."
-            },
-            "required": true,
-            "description": "Run ID for tracing across services. Required.",
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug from features-service. Optional on non-execute endpoints."
-            },
-            "required": false,
-            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
-            "name": "x-feature-slug",
-            "in": "header"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Hero records found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BestWorkflowResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "External service unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/workflows/dynasties": {
       "get": {
         "summary": "List all dynasties with their versioned slugs",
@@ -4132,14 +3560,7 @@
           },
           {
             "schema": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/RankedWorkflowObjective"
-                },
-                {
-                  "description": "Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required."
-                }
-              ]
+              "$ref": "#/components/schemas/RankedWorkflowObjective"
             },
             "required": true,
             "description": "Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required.",
@@ -4314,202 +3735,6 @@
           },
           "400": {
             "description": "Missing or invalid query parameters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/public/workflows/ranked": {
-      "get": {
-        "summary": "Public: Get workflows ranked by cost-per-outcome",
-        "description": "Public version of GET /workflows/ranked. No authentication required. Returns workflows ranked by performance with stats, but without DAG details. Either `objective` or `featureSlug` must be provided. When `featureSlug` is provided without `objective`, metrics are auto-resolved from the feature's declared outputs. Stats are aggregated across the full upgrade chain. Use `groupBy=feature` to group by featureSlug, or `groupBy=brand` to group by brandId. Use `brandId` to filter by a specific brand.",
-        "tags": [
-          "Public"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "description": "Organization ID. When omitted, searches across all orgs."
-            },
-            "required": false,
-            "description": "Organization ID. When omitted, searches across all orgs.",
-            "name": "orgId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter workflows by brand ID."
-            },
-            "required": false,
-            "description": "Filter workflows by brand ID.",
-            "name": "brandId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Exact match on the versioned feature slug."
-            },
-            "required": false,
-            "description": "Exact match on the versioned feature slug.",
-            "name": "featureSlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage."
-            },
-            "required": false,
-            "description": "Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage.",
-            "name": "featureDynastySlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/RankedWorkflowObjective"
-            },
-            "required": false,
-            "description": "Stats key to optimize for (e.g. 'emailsReplied', 'leadsServed', 'outletsDiscovered'). When omitted, featureSlug is required — metrics are auto-resolved from the feature's declared outputs.",
-            "name": "objective",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 10,
-              "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10."
-            },
-            "required": false,
-            "description": "Max workflows per group (when groupBy is set) or total (when flat). Defaults to 10.",
-            "name": "limit",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/RankedWorkflowGroupBy"
-            },
-            "required": false,
-            "description": "Group results by section or brand. When omitted, returns a flat ranked list.",
-            "name": "groupBy",
-            "in": "query"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Ranked workflows (flat list or grouped by section)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublicRankedWorkflowResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Missing or invalid query parameters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "External service unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/public/workflows/best": {
-      "get": {
-        "summary": "Public: Get hero records — best cost-per-outcome for each feature metric",
-        "description": "Public version of GET /workflows/best. No authentication required. Returns the single best workflow for each of the feature's declared output metrics. Requires `featureSlug` — metrics are derived from the feature's outputs, filtered to count-type metrics. Stats are aggregated across the full upgrade chain. Use `by=brand` to find the best brand instead of the best workflow. Use `brandId` to filter by a specific brand.",
-        "tags": [
-          "Public"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "description": "Organization ID. When omitted, searches across all orgs."
-            },
-            "required": false,
-            "description": "Organization ID. When omitted, searches across all orgs.",
-            "name": "orgId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter workflows by brand ID."
-            },
-            "required": false,
-            "description": "Filter workflows by brand ID.",
-            "name": "brandId",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required."
-            },
-            "required": false,
-            "description": "Exact match on the versioned feature slug. Either featureSlug or featureDynastySlug is required.",
-            "name": "featureSlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug."
-            },
-            "required": false,
-            "description": "Feature dynasty slug — resolves to all versioned feature slugs in the lineage. Can be used instead of featureSlug.",
-            "name": "featureDynastySlug",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/BestWorkflowBy"
-            },
-            "required": false,
-            "description": "Granularity: best workflow or best brand. Defaults to 'workflow'.",
-            "name": "by",
-            "in": "query"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Hero records found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BestWorkflowResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "External service unavailable",
             "content": {
               "application/json": {
                 "schema": {
