@@ -123,7 +123,7 @@ describe("upgradeWorkflow", () => {
     expect(call.systemPrompt).toContain("FIX a broken workflow");
   });
 
-  it("uses claude-sonnet-4-6 and responseFormat json", async () => {
+  it("uses google pro model and responseFormat json", async () => {
     const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
     setUpgradeChatServiceClient(mockComplete);
 
@@ -136,7 +136,8 @@ describe("upgradeWorkflow", () => {
     );
 
     const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
-    expect(call.model).toBe("claude-sonnet-4-6");
+    expect(call.provider).toBe("google");
+    expect(call.model).toBe("pro");
     expect(call.responseFormat).toBe("json");
   });
 

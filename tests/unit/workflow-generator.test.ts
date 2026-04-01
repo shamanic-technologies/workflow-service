@@ -340,13 +340,14 @@ describe("generateWorkflow", () => {
     expect(call.responseFormat).toBe("json");
   });
 
-  it("uses claude-sonnet-4-6 model", async () => {
+  it("uses google pro model", async () => {
     mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
 
     await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
 
     const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
-    expect(call.model).toBe("claude-sonnet-4-6");
+    expect(call.provider).toBe("google");
+    expect(call.model).toBe("pro");
   });
 
   it("uses 16384 maxTokens", async () => {

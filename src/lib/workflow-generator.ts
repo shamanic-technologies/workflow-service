@@ -115,7 +115,8 @@ export async function generateWorkflow(
         systemPrompt,
         responseFormat: "json",
         maxTokens: 16384,
-        model: "claude-sonnet-4-6",
+        provider: "google",
+        model: "pro",
       },
       downstreamHeaders,
     );

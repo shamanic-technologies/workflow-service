@@ -1,10 +1,14 @@
+export type ChatProvider = "anthropic" | "google";
+export type ChatModel = "haiku" | "sonnet" | "opus" | "flash-lite" | "flash" | "pro";
+
 export interface ChatServiceCompleteRequest {
   message: string;
   systemPrompt: string;
   responseFormat?: "json";
   temperature?: number;
   maxTokens?: number;
-  model?: "claude-sonnet-4-6" | "claude-haiku-4-5";
+  provider: ChatProvider;
+  model: ChatModel;
 }
 
 export interface ChatServiceCompleteResponse {
