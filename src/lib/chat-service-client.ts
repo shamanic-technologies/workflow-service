@@ -59,3 +59,31 @@ export async function chatServiceComplete(
 
   return res.json() as Promise<ChatServiceCompleteResponse>;
 }
+
+/**
+ * Platform-level LLM call — no org/user/run context, no billing.
+ * Uses POST /internal/platform-complete (x-api-key auth only).
+ */
+export async function chatServicePlatformComplete(
+  request: ChatServiceCompleteRequest,
+): Promise<ChatServiceCompleteResponse> {
+  const { baseUrl, apiKey } = getChatServiceConfig();
+
+  const res = await fetch(`${baseUrl}/internal/platform-complete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `chat-service error: POST /internal/platform-complete -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+
+  return res.json() as Promise<ChatServiceCompleteResponse>;
+}

@@ -182,7 +182,7 @@ describe("upgradeWorkflow", () => {
     ).rejects.toThrow(UpgradeValidationError);
   });
 
-  it("uses platform identity when no identity is provided", async () => {
+  it("passes undefined headers for platform-level calls (no identity)", async () => {
     const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
     setUpgradeChatServiceClient(mockComplete);
 
@@ -194,8 +194,9 @@ describe("upgradeWorkflow", () => {
       METADATA,
     );
 
-    const headers = mockComplete.mock.calls[0][1] as DownstreamHeaders;
-    expect(headers["x-org-id"]).toBe("platform");
-    expect(headers["x-user-id"]).toBe("workflow-service");
+    // When no downstreamHeaders, callComplete receives undefined
+    // which routes to chatServicePlatformComplete (no org/user/run headers)
+    const headers = mockComplete.mock.calls[0][1];
+    expect(headers).toBeUndefined();
   });
 });

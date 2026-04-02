@@ -12,13 +12,14 @@ import type { DownstreamHeaders } from "./downstream-headers.js";
 import type { InvalidEndpoint, FieldValidationIssue } from "./validate-workflow-endpoints.js";
 import {
   chatServiceComplete,
+  chatServicePlatformComplete,
   type ChatServiceCompleteRequest,
   type ChatServiceCompleteResponse,
 } from "./chat-service-client.js";
 
 const MAX_RETRIES = 2;
 
-let overrideCompleteFn: ((req: ChatServiceCompleteRequest, h: DownstreamHeaders) => Promise<ChatServiceCompleteResponse>) | null = null;
+let overrideCompleteFn: ((req: ChatServiceCompleteRequest, h?: DownstreamHeaders) => Promise<ChatServiceCompleteResponse>) | null = null;
 
 /** Exported for testing — allows injecting a mock chat-service client */
 export function setUpgradeChatServiceClient(fn: typeof overrideCompleteFn): void {
@@ -27,10 +28,11 @@ export function setUpgradeChatServiceClient(fn: typeof overrideCompleteFn): void
 
 async function callComplete(
   request: ChatServiceCompleteRequest,
-  downstreamHeaders: DownstreamHeaders,
+  downstreamHeaders?: DownstreamHeaders,
 ): Promise<ChatServiceCompleteResponse> {
   if (overrideCompleteFn) return overrideCompleteFn(request, downstreamHeaders);
-  return chatServiceComplete(request, downstreamHeaders);
+  if (downstreamHeaders) return chatServiceComplete(request, downstreamHeaders);
+  return chatServicePlatformComplete(request);
 }
 
 async function fetchServiceContext(
@@ -89,9 +91,6 @@ export async function upgradeWorkflow(
     serviceContext,
   });
 
-  const chatHeaders: DownstreamHeaders = downstreamHeaders
-    ?? { "x-org-id": "platform", "x-user-id": "workflow-service", "x-run-id": "startup-upgrade" };
-
   let userMessage = `Fix this workflow. The category is "${metadata.category}", channel is "${metadata.channel}", audienceType is "${metadata.audienceType}". Description: "${metadata.description}". Fix the broken endpoints and field errors listed above.`;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -104,7 +103,7 @@ export async function upgradeWorkflow(
         provider: "google",
         model: "pro",
       },
-      chatHeaders,
+      downstreamHeaders,
     );
 
     if (!response.json) {
