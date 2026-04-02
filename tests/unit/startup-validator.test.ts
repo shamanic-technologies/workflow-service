@@ -493,7 +493,7 @@ describe("validateAndUpgradeWorkflows", () => {
     expect(dbInserts[0].status).toBe("active");
   });
 
-  it("upgrades workflow with warning-only field issues (unknown body fields)", async () => {
+  it("does not attempt upgrade for warning-only field issues", async () => {
     // Workflow sends "bodyHtml" but schema expects "htmlBody" — this is a warning, not an error
     const WARNING_ONLY_WORKFLOW = {
       ...VALID_WORKFLOW,
@@ -550,50 +550,102 @@ describe("validateAndUpgradeWorkflows", () => {
       new Map([["campaign", SPEC_WITH_KNOWN_FIELDS]]),
     );
 
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "warning-run-1" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    const fixedDag = {
-      nodes: [
-        {
-          id: "end-run",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/end-run" },
-          inputMapping: {
-            "body.campaignId": "$ref:flow_input.campaignId",
-            "body.orgId": "$ref:flow_input.orgId",
-          },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
+    const warnSpy = vi.spyOn(console, "warn");
+    const logSpy = vi.spyOn(console, "log");
 
     await validateAndUpgradeWorkflows({
       db: createMockDb() as any,
       windmillClient: null,
     });
 
-    // Should attempt upgrade even though only warnings (no errors)
-    expect(mockUpgradeWorkflow).toHaveBeenCalledTimes(1);
+    // Should NOT attempt upgrade — warnings don't trigger upgrades
+    expect(mockUpgradeWorkflow).not.toHaveBeenCalled();
 
-    // upgradeWorkflow should receive the warning-level field issues
-    const callArgs = mockUpgradeWorkflow.mock.calls[0];
-    expect(callArgs[1]).toEqual([]); // no invalid endpoints
-    expect(callArgs[2]).toEqual([   // fieldIssues includes warnings
-      expect.objectContaining({ nodeId: "end-run", field: "bodyHtml", severity: "warning" }),
-    ]);
+    // Should still log the warnings for visibility
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('has 1 field issue(s)'),
+      expect.stringContaining('bodyHtml'),
+    );
 
-    // Should have inserted a new upgraded workflow
-    expect(dbInserts.length).toBe(1);
+    // Should count as valid (not failed)
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("1 valid"),
+    );
+
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("does not crash startup when warnings exist and chat-service is down", async () => {
+    // Regression: warning-only field issues + chat-service 502 should NOT crash the service
+    const WARNING_WORKFLOW = {
+      ...VALID_WORKFLOW,
+      id: "wf-warning-crash",
+      slug: "press-kit-page-generation-cascade",
+      name: "Press Kit Page Generation Cascade",
+      dynastyName: "Press Kit Page Generation Cascade",
+      signatureName: "Cascade",
+      dag: {
+        nodes: [
+          {
+            id: "end-run",
+            type: "http.call",
+            config: { service: "campaign", method: "POST", path: "/end-run" },
+            inputMapping: {
+              "body.success": "$ref:flow_input.success",
+              "body.orgId": "$ref:flow_input.orgId",
+              "body.campaignId": "$ref:flow_input.campaignId",
+            },
+          },
+        ],
+        edges: [],
+      },
+    };
+
+    // Spec says /end-run accepts success + leadFound; orgId/campaignId are unknown → warnings only
+    const CAMPAIGN_SPEC_STRICT = {
+      paths: {
+        "/end-run": {
+          post: {
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["success"],
+                    properties: {
+                      success: { type: "boolean" },
+                      leadFound: { type: "boolean" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    dbSelectResult = [WARNING_WORKFLOW];
+    mockFetchSpecsForServices.mockResolvedValue(
+      new Map([["campaign", CAMPAIGN_SPEC_STRICT]]),
+    );
+
+    // chat-service would fail if called — but it should NOT be called
+    mockUpgradeWorkflow.mockRejectedValue(
+      new Error("chat-service error: POST /complete -> 502 Bad Gateway: Billing service unavailable"),
+    );
+
+    // Should NOT throw — warnings alone don't trigger upgrades or crash
+    await expect(
+      validateAndUpgradeWorkflows({
+        db: createMockDb() as any,
+        windmillClient: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    // Should NOT have attempted upgrade
+    expect(mockUpgradeWorkflow).not.toHaveBeenCalled();
   });
 
   it("throws when upgrade fails (LLM error) and closes platform run as failed", async () => {
