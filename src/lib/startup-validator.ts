@@ -112,19 +112,21 @@ export async function validateAndUpgradeWorkflows(
     const dag = wf.dag as DAG;
     const result = validateWorkflowEndpoints(dag, specs);
 
-    // Check for any issues: broken endpoints, field errors, or field warnings
-    const hasIssues = !result.valid || result.fieldIssues.length > 0;
-
-    if (!hasIssues) {
-      validCount++;
-      continue;
-    }
-
+    // Log all field issues (warnings + errors) for visibility
     if (result.fieldIssues.length > 0) {
       console.warn(
         `[workflow-service] Workflow "${wf.slug}" (${wf.id}) has ${result.fieldIssues.length} field issue(s):`,
         result.fieldIssues.map((f) => f.reason).join("; "),
       );
+    }
+
+    // Only attempt upgrade for actual errors — warnings alone don't block startup
+    const hasFieldErrors = result.fieldIssues.some((i) => i.severity === "error");
+    const needsUpgrade = !result.valid || hasFieldErrors;
+
+    if (!needsUpgrade) {
+      validCount++;
+      continue;
     }
 
     if (result.invalidEndpoints.length > 0) {
