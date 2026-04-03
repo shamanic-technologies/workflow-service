@@ -145,7 +145,11 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 - Campaign service triggers the workflow (DAG) repeatedly, roughly every minute, until the budget is exhausted
 - Each workflow run processes ONE unit of work (e.g. one lead, one email send)
 - The gate-check step validates that budget remains before each run — if budget is exhausted, it returns allowed=false and the flow stops gracefully via stopAfterIf
-- The end-run step reports success/failure so campaign service knows whether to continue re-triggering
+- The end-run step reports success/failure AND whether to stop the campaign:
+  - stopCampaign: false → campaign-service automatically re-triggers the workflow
+  - stopCampaign: true → campaign-service auto-stops the campaign (use when no more leads are available)
+- Both "success" and "stopCampaign" are required fields in the /end-run body
+- campaign-service reads orgId and campaignId from headers (x-org-id, x-campaign-id) — do NOT pass them in the body
 - This is why campaign workflows MUST use the chassis pattern: gate-check → start-run → [business logic] → end-run, with onError → end-run-error
 
 ## Rules
@@ -157,7 +161,11 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 5. Use onError for workflows that need cleanup on failure (e.g. mark run as failed via end-run)
 6. Use "condition" nodes for branching, not skipIf (skipIf only skips one step)
 7. The http.call node auto-injects orgId, userId, and serviceEnvs from flow_input — no need to map them
-8. Campaign workflows should use the chassis pattern: gate-check → start-run → ... → end-run, with onError → end-run-error
+8. Campaign workflows MUST have THREE end-run nodes:
+   - end-run (after successful business logic): { "success": true, "stopCampaign": false }
+   - end-run-no-lead (when fetch-lead finds nothing): { "success": true, "stopCampaign": true }
+   - end-run-error (onError handler): { "success": false, "stopCampaign": false }
+   Do NOT pass orgId or campaignId in end-run body — campaign-service reads them from headers
 9. NEVER include cost-tracking nodes in workflows. Cost tracking (run costs, usage metering) is handled internally by each downstream service — do NOT add steps that POST to runs-service /costs or any similar cost endpoint
 
 ## Example: Cold Email Outreach with Branching
@@ -235,14 +243,17 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     {
       "id": "end-run",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true } },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.leadFound": "$ref:fetch-lead.output.found" }
+      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true, "stopCampaign": false } }
+    },
+    {
+      "id": "end-run-no-lead",
+      "type": "http.call",
+      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true, "stopCampaign": true } }
     },
     {
       "id": "end-run-error",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": false } },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId" }
+      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": false, "stopCampaign": false } }
     }
   ],
   "edges": [
@@ -252,7 +263,8 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     { "from": "check-lead", "to": "brand-profile", "condition": "results.fetch_lead.found == true" },
     { "from": "brand-profile", "to": "email-generate" },
     { "from": "email-generate", "to": "email-send" },
-    { "from": "check-lead", "to": "end-run" }
+    { "from": "email-send", "to": "end-run" },
+    { "from": "check-lead", "to": "end-run-no-lead" }
   ],
   "onError": "end-run-error"
 }
