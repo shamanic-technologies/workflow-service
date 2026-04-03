@@ -62,6 +62,29 @@ describe("Drizzle migration journal", () => {
     expect(sql).not.toContain("status");
   });
 
+  it("migration 0025 drops all 10 unused/redundant indexes", () => {
+    const sql = readFileSync(resolve(DRIZZLE_DIR, "0025_drop_unused_indexes.sql"), "utf-8");
+
+    // 7 workflows indexes
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_name_active;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_signature_active;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_signature_name_active;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_name_active_unique;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_org_style;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_campaign;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflows_org;");
+
+    // 3 workflow_runs indexes
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflow_runs_brand_ids;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflow_runs_windmill_job;");
+    expect(sql).toContain("DROP INDEX IF EXISTS idx_workflow_runs_org;");
+
+    // Uses IF EXISTS for idempotency
+    const dropStatements = sql.match(/DROP INDEX/g);
+    const ifExistsStatements = sql.match(/DROP INDEX IF EXISTS/g);
+    expect(dropStatements?.length).toBe(ifExistsStatements?.length);
+  });
+
   it("includes style columns migration (0010)", () => {
     const entry = journal.entries.find((e) => e.tag === "0010_add_style_columns");
     expect(entry).toBeDefined();
