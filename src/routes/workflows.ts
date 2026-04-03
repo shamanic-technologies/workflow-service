@@ -1125,7 +1125,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
 
     // Check for existing active workflow with same signature (conflict)
     const [conflicting] = await db
-      .select()
+      .select({ id: workflows.id, slug: workflows.slug })
       .from(workflows)
       .where(
         and(
