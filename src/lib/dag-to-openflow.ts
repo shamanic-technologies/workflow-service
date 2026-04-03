@@ -2,6 +2,9 @@ import type { DAG, DAGNode, DAGEdge } from "./dag-validator.js";
 import { getScriptPath, isNativeNode } from "./node-type-registry.js";
 import { buildInputTransforms } from "./input-mapping.js";
 
+/** Global timeout applied to every script module (in seconds). 1 hour. */
+const NODE_TIMEOUT_SECONDS = 3600;
+
 export interface FlowModule {
   id: string;
   summary?: string;
@@ -11,6 +14,7 @@ export interface FlowModule {
     | BranchOneModule
     | ForloopFlowModule;
   sleep?: { type: "javascript"; expr: string } | { type: "static"; value: number };
+  timeout?: { type: "static"; value: number };
   retry?: { constant?: { attempts: number; seconds: number } };
   stop_after_if?: { expr: string; skip_if_stopped?: boolean };
   skip_if?: { expr: string };
@@ -421,6 +425,7 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
       path: scriptPath,
       input_transforms: inputTransforms,
     },
+    timeout: { type: "static", value: NODE_TIMEOUT_SECONDS },
     retry: retries > 0
       ? { constant: { attempts: retries, seconds: 5 } }
       : { constant: { attempts: 0, seconds: 0 } },
