@@ -1203,6 +1203,48 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
     expect(res.body.version).toBe(1);
   });
 
+  it("returns 409 with existingWorkflowId and existingWorkflowSlug when DAG signature conflicts", async () => {
+    const conflictingId = "00000000-0000-4000-8000-000000000099";
+    const existingWf = {
+      id: WF_DAG_REJECT_ID,
+      orgId: "org-1",
+      slug: "sales-email-cold-outreach-pine",
+      name: "Sales Email Cold Outreach Pine",
+      dynastyName: "Sales Email Cold Outreach Pine",
+      dynastySlug: "sales-email-cold-outreach-pine",
+      featureSlug: "sales-email-cold-outreach",
+      signatureName: "pine",
+      signature: "old-sig-123",
+      version: 1,
+      description: "Original",
+      dag: VALID_LINEAR_DAG,
+      tags: [],
+      status: "active",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const conflictingWf = {
+      id: conflictingId,
+      slug: "sales-email-cold-outreach-maple",
+    };
+
+    // Queue responses: 1) existing lookup, 2) conflict check (found!)
+    mockSelectResponses.push([existingWf]); // existing workflow lookup
+    mockSelectResponses.push([conflictingWf]); // conflicting workflow with same new signature
+
+    const res = await request
+      .put(`/workflows/${WF_DAG_REJECT_ID}`)
+      .set(AUTH)
+      .send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("A workflow with this DAG signature already exists");
+    expect(res.body.existingWorkflowId).toBe(conflictingId);
+    expect(res.body.existingWorkflowSlug).toBe("sales-email-cold-outreach-maple");
+  });
+
   it("returns 404 for non-existent workflow", async () => {
     const res = await request
       .put("/workflows/ffffffff-ffff-4fff-bfff-ffffffffffff")
