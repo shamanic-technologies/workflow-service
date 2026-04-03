@@ -95,11 +95,10 @@ const CAMPAIGN_SPEC_WITH_SCHEMAS: Record<string, unknown> = {
               schema: {
                 type: "object",
                 properties: {
-                  campaignId: { type: "string" },
-                  orgId: { type: "string" },
                   success: { type: "boolean" },
+                  stopCampaign: { type: "boolean" },
                 },
-                required: ["campaignId", "orgId", "success"],
+                required: ["success", "stopCampaign"],
               },
             },
           },
@@ -351,10 +350,7 @@ describe("field validation — input fields", () => {
             method: "POST",
             path: "/end-run",
             body: { success: true },
-          },
-          inputMapping: {
-            "body.campaignId": "$ref:flow_input.campaignId",
-            // orgId missing!
+            // stopCampaign missing!
           },
         },
       ],
@@ -366,7 +362,7 @@ describe("field validation — input fields", () => {
 
     expect(result.valid).toBe(false);
     const errors = result.fieldIssues.filter((i) => i.severity === "error");
-    expect(errors.some((e) => e.field === "orgId")).toBe(true);
+    expect(errors.some((e) => e.field === "stopCampaign")).toBe(true);
   });
 
   it("extracts body fields from both config.body and inputMapping", () => {

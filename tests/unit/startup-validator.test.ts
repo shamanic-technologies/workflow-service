@@ -494,7 +494,7 @@ describe("validateAndUpgradeWorkflows", () => {
   });
 
   it("does not attempt upgrade for warning-only field issues", async () => {
-    // Workflow sends "bodyHtml" but schema expects "htmlBody" — this is a warning, not an error
+    // Workflow sends "bodyHtml" which is not in the spec — this is a warning, not an error
     const WARNING_ONLY_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-warning",
@@ -507,10 +507,8 @@ describe("validateAndUpgradeWorkflows", () => {
           {
             id: "end-run",
             type: "http.call",
-            config: { service: "campaign", method: "POST", path: "/end-run" },
+            config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, stopCampaign: false } },
             inputMapping: {
-              "body.campaignId": "$ref:flow_input.campaignId",
-              "body.orgId": "$ref:flow_input.orgId",
               "body.bodyHtml": "$ref:email-generate.output.bodyHtml",
             },
           },
@@ -519,7 +517,7 @@ describe("validateAndUpgradeWorkflows", () => {
       },
     };
 
-    // Spec has campaignId and orgId as valid fields but NOT bodyHtml
+    // Spec has success and stopCampaign as valid fields but NOT bodyHtml
     const SPEC_WITH_KNOWN_FIELDS = {
       paths: {
         "/end-run": {
@@ -529,12 +527,10 @@ describe("validateAndUpgradeWorkflows", () => {
                 "application/json": {
                   schema: {
                     type: "object",
-                    required: ["campaignId", "orgId"],
+                    required: ["success", "stopCampaign"],
                     properties: {
-                      campaignId: { type: "string" },
-                      orgId: { type: "string" },
                       success: { type: "boolean" },
-                      leadFound: { type: "boolean" },
+                      stopCampaign: { type: "boolean" },
                     },
                   },
                 },
@@ -590,11 +586,9 @@ describe("validateAndUpgradeWorkflows", () => {
           {
             id: "end-run",
             type: "http.call",
-            config: { service: "campaign", method: "POST", path: "/end-run" },
+            config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, stopCampaign: false } },
             inputMapping: {
-              "body.success": "$ref:flow_input.success",
-              "body.orgId": "$ref:flow_input.orgId",
-              "body.campaignId": "$ref:flow_input.campaignId",
+              "body.extraField": "$ref:flow_input.extraField",
             },
           },
         ],
@@ -602,7 +596,7 @@ describe("validateAndUpgradeWorkflows", () => {
       },
     };
 
-    // Spec says /end-run accepts success + leadFound; orgId/campaignId are unknown → warnings only
+    // Spec says /end-run accepts success + stopCampaign; extraField is unknown → warnings only
     const CAMPAIGN_SPEC_STRICT = {
       paths: {
         "/end-run": {
@@ -612,10 +606,10 @@ describe("validateAndUpgradeWorkflows", () => {
                 "application/json": {
                   schema: {
                     type: "object",
-                    required: ["success"],
+                    required: ["success", "stopCampaign"],
                     properties: {
                       success: { type: "boolean" },
-                      leadFound: { type: "boolean" },
+                      stopCampaign: { type: "boolean" },
                     },
                   },
                 },
