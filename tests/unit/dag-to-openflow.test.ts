@@ -622,4 +622,26 @@ describe("dagToOpenFlow", () => {
       expect(transforms.body).toBeUndefined();
     }
   });
+
+  it("sets a 1-hour timeout on every script module", () => {
+    const result = dagToOpenFlow(VALID_LINEAR_DAG, "Timeout Flow");
+
+    for (const mod of result.value.modules) {
+      if (mod.value.type === "script") {
+        expect(mod.timeout).toEqual({ type: "static", value: 3600 });
+      }
+    }
+  });
+
+  it("sets timeout on http.call modules", () => {
+    const result = dagToOpenFlow(DAG_WITH_HTTP_CALL, "HTTP Timeout");
+    const mod = result.value.modules[0];
+    expect(mod.timeout).toEqual({ type: "static", value: 3600 });
+  });
+
+  it("does not set timeout on wait modules", () => {
+    const result = dagToOpenFlow(DAG_WITH_WAIT, "Wait Timeout");
+    const waitMod = result.value.modules.find((m) => m.id === "pause");
+    expect(waitMod!.timeout).toBeUndefined();
+  });
 });
