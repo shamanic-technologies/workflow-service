@@ -184,7 +184,7 @@ export async function fetchEmailStatsAuth(
     workflowSlugs: workflowSlugs.join(","),
   });
 
-  const res = await fetch(`${baseUrl}/stats?${params}`, {
+  const res = await fetch(`${baseUrl}/orgs/stats?${params}`, {
     method: "GET",
     headers: {
       "x-api-key": apiKey,
@@ -195,7 +195,7 @@ export async function fetchEmailStatsAuth(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `email-gateway-service error: GET /stats -> ${res.status} ${res.statusText}: ${text}`
+      `email-gateway-service error: GET /orgs/stats -> ${res.status} ${res.statusText}: ${text}`
     );
   }
 
@@ -213,7 +213,7 @@ export async function fetchEmailStatsPublic(
     workflowSlugs: workflowSlugs.join(","),
   });
 
-  const res = await fetch(`${baseUrl}/stats/public?${params}`, {
+  const res = await fetch(`${baseUrl}/public/stats?${params}`, {
     method: "GET",
     headers: { "x-api-key": apiKey },
   });
@@ -221,7 +221,7 @@ export async function fetchEmailStatsPublic(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `email-gateway-service error: GET /stats/public -> ${res.status} ${res.statusText}: ${text}`
+      `email-gateway-service error: GET /public/stats -> ${res.status} ${res.statusText}: ${text}`
     );
   }
 
