@@ -37,7 +37,7 @@ export async function fetchLeadStats(
     workflowSlugs: workflowSlugs.join(","),
   });
 
-  const res = await fetch(`${baseUrl}/stats?${params}`, {
+  const res = await fetch(`${baseUrl}/orgs/stats?${params}`, {
     headers: {
       "x-api-key": apiKey,
       ...downstreamHeaders,
@@ -46,7 +46,7 @@ export async function fetchLeadStats(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`lead-service error: GET /stats -> ${res.status} ${res.statusText}: ${text}`);
+    throw new Error(`lead-service error: GET /orgs/stats -> ${res.status} ${res.statusText}: ${text}`);
   }
 
   const body = (await res.json()) as {
