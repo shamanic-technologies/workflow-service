@@ -117,7 +117,7 @@ export async function fetchOutletStats(
     workflowSlugs: workflowSlugs.join(","),
   });
 
-  const res = await fetch(`${baseUrl}/outlets/stats?${params}`, {
+  const res = await fetch(`${baseUrl}/org/outlets/stats?${params}`, {
     headers: {
       "x-api-key": apiKey,
       ...downstreamHeaders,
@@ -126,7 +126,7 @@ export async function fetchOutletStats(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`outlets-service error: GET /outlets/stats -> ${res.status} ${res.statusText}: ${text}`);
+    throw new Error(`outlets-service error: GET /org/outlets/stats -> ${res.status} ${res.statusText}: ${text}`);
   }
 
   const body = (await res.json()) as {
