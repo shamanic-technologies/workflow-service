@@ -27,7 +27,7 @@ describe("fetchOutletStats", () => {
     "x-workflow-slug": "wf",
   } as any;
 
-  it("calls /org/outlets/stats (not /outlets/stats)", async () => {
+  it("calls /orgs/outlets/stats (not /outlets/stats)", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -42,7 +42,7 @@ describe("fetchOutletStats", () => {
     await fetchOutletStats(["wf-slug"], dummyHeaders);
 
     const calledUrl = spy.mock.calls[0][0] as string;
-    expect(calledUrl).toBe("https://outlets.test/org/outlets/stats?groupBy=workflowSlug&workflowSlugs=wf-slug");
+    expect(calledUrl).toBe("https://outlets.test/orgs/outlets/stats?groupBy=workflowSlug&workflowSlugs=wf-slug");
   });
 
   it("returns mapped stats by workflow slug", async () => {
@@ -70,7 +70,7 @@ describe("fetchOutletStats", () => {
     );
 
     await expect(fetchOutletStats(["x"], dummyHeaders)).rejects.toThrow(
-      "GET /org/outlets/stats",
+      "GET /orgs/outlets/stats",
     );
   });
 });
