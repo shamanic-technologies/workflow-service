@@ -92,7 +92,7 @@ Dot-notation keys create nested objects:
 
 Static body fields go in config.body, dynamic overrides go in inputMapping with dot-notation.
 
-For path parameters (e.g. \`/brands/{brandId}/sales-profile\`), use \`params.*\` in inputMapping:
+For path parameters (e.g. \`/internal/brands/{brandId}\`), use \`params.*\` in inputMapping:
 - "params.brandId": "$ref:start-run.output.brandId" → replaces {brandId} in the path
 
 ## Special Config Keys (stripped before passing to script)
@@ -196,7 +196,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     {
       "id": "brand-profile",
       "type": "http.call",
-      "config": { "service": "brand", "method": "GET", "path": "/brands/{brandId}/sales-profile" },
+      "config": { "service": "brand", "method": "GET", "path": "/internal/brands/{brandId}" },
       "inputMapping": { "params.brandId": "$ref:start-run.output.brandId" }
     },
     {
