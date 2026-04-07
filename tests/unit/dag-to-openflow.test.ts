@@ -613,7 +613,7 @@ describe("dagToOpenFlow", () => {
         { type: string; value?: unknown; expr?: string }
       >;
       // path should remain the static string, NOT be replaced by an object
-      expect(transforms.path).toEqual({ type: "static", value: "/brands/:brandId/sales-profile" });
+      expect(transforms.path).toEqual({ type: "static", value: "/internal/brands/:brandId" });
       // params should contain the dynamic path parameter
       expect(transforms.params).toBeDefined();
       expect(transforms.params.type).toBe("javascript");

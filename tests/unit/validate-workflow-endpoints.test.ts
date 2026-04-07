@@ -650,7 +650,7 @@ describe("field validation — nested object detection in additionalProperties",
 
   const BRAND_SPEC: Record<string, unknown> = {
     paths: {
-      "/brands/{brandId}/sales-profile": {
+      "/internal/brands/{brandId}": {
         get: {
           summary: "Get brand sales profile",
           responses: {
@@ -692,7 +692,7 @@ describe("field validation — nested object detection in additionalProperties",
         {
           id: "brand-profile",
           type: "http.call",
-          config: { service: "brand", method: "GET", path: "/brands/{brandId}/sales-profile" },
+          config: { service: "brand", method: "GET", path: "/internal/brands/{brandId}" },
           inputMapping: {
             "params.brandId": "$ref:flow_input.brandId",
           },
@@ -922,7 +922,7 @@ describe("field validation — nested object detection in additionalProperties",
   it("accepts array-indexed output paths like results.0.value (regression: regulus false positive)", () => {
     const BRAND_EXTRACT_SPEC: Record<string, unknown> = {
       paths: {
-        "/brands/{brandId}/extract-fields": {
+        "/orgs/brands/extract-fields": {
           post: {
             summary: "Extract fields from brand",
             requestBody: {
@@ -973,7 +973,7 @@ describe("field validation — nested object detection in additionalProperties",
         {
           id: "brand-extract",
           type: "http.call",
-          config: { service: "brand", method: "POST", path: "/brands/{brandId}/extract-fields" },
+          config: { service: "brand", method: "POST", path: "/orgs/brands/extract-fields" },
           inputMapping: {
             "body.fields": "$ref:flow_input.fields",
           },

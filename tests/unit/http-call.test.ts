@@ -176,7 +176,7 @@ describe("http-call script", () => {
       };
 
       await main(
-        "brand", "POST", "/brands/{brandId}/sales-profile",
+        "brand", "POST", "/internal/brands/{brandId}",
         { workflowSlug: "test" },
         undefined,
         brandServiceEnvs,
@@ -189,7 +189,7 @@ describe("http-call script", () => {
       );
 
       const [url] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://brand.example.com/brands/brand-uuid-123/sales-profile");
+      expect(url).toBe("https://brand.example.com/internal/brands/brand-uuid-123");
     });
 
     it("replaces multiple path params", async () => {

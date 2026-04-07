@@ -273,7 +273,7 @@ export const DAG_WITH_BANNED_API_SERVICE: DAG = {
     {
       id: "brand-profile",
       type: "http.call",
-      config: { service: "api", method: "GET", path: "/brands/123/profile" },
+      config: { service: "api", method: "GET", path: "/internal/brands/123/profile" },
     },
   ],
   edges: [],
@@ -545,7 +545,7 @@ export const DAG_WITH_PATH_PARAMS: DAG = {
       id: "fetch-brand",
       type: "http.call",
       config: {
-        path: "/brands/:brandId/sales-profile",
+        path: "/internal/brands/:brandId",
         method: "GET",
         service: "brand",
       },

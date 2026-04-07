@@ -24,7 +24,7 @@ export async function main(
   if (runId) reqHeaders["x-run-id"] = runId;
 
   const response = await fetch(
-    `${baseUrl}/brands/${context.brandId}`,
+    `${baseUrl}/internal/brands/${context.brandId}`,
     { headers: reqHeaders }
   );
 
