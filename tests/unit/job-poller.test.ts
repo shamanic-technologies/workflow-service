@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // We need to mock drizzle operators since they're used internally
 vi.mock("drizzle-orm", () => ({
@@ -9,6 +9,11 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("../../src/db/index.js", () => ({
   db: "mock-db",
   sql: { end: () => Promise.resolve() },
+}));
+
+const mockCloseRun = vi.fn();
+vi.mock("../../src/lib/runs-client.js", () => ({
+  closeRun: (...args: unknown[]) => mockCloseRun(...args),
 }));
 
 import { JobPoller } from "../../src/lib/job-poller.js";
@@ -48,6 +53,8 @@ describe("JobPoller error serialization", () => {
 
   beforeEach(() => {
     dbSetCalls = [];
+    mockCloseRun.mockReset();
+    mockCloseRun.mockResolvedValue(undefined);
   });
 
   it("serializes object errors as JSON instead of [object Object]", async () => {
@@ -97,5 +104,60 @@ describe("JobPoller error serialization", () => {
 
     expect(dbSetCalls.length).toBe(1);
     expect(dbSetCalls[0].error).toBe('"Unknown error"');
+  });
+
+  it("closes the run in runs-service when a job completes", async () => {
+    const runs = [{ id: "run-4", windmillJobId: "job-4", status: "running", runId: "runs-svc-id-1", orgId: "org-1" }];
+    const mockDb = createMockDb(runs);
+    const mockClient = createMockWindmillClient();
+    mockGetJob.mockResolvedValue({ running: false, success: true, result: { ok: true } });
+
+    const poller = new JobPoller(mockDb, mockClient, mockTable, 60_000);
+    const pollMethod = (poller as any).poll.bind(poller);
+    await pollMethod();
+
+    expect(mockCloseRun).toHaveBeenCalledWith("runs-svc-id-1", "completed", "org-1");
+  });
+
+  it("closes the run in runs-service as failed when a job fails", async () => {
+    const runs = [{ id: "run-5", windmillJobId: "job-5", status: "running", runId: "runs-svc-id-2", orgId: "org-2" }];
+    const mockDb = createMockDb(runs);
+    const mockClient = createMockWindmillClient();
+    mockGetJob.mockResolvedValue({ running: false, success: false, result: "error" });
+
+    const poller = new JobPoller(mockDb, mockClient, mockTable, 60_000);
+    const pollMethod = (poller as any).poll.bind(poller);
+    await pollMethod();
+
+    expect(mockCloseRun).toHaveBeenCalledWith("runs-svc-id-2", "failed", "org-2");
+  });
+
+  it("does not call closeRun when run has no runId", async () => {
+    const runs = [{ id: "run-6", windmillJobId: "job-6", status: "running", runId: null, orgId: "org-1" }];
+    const mockDb = createMockDb(runs);
+    const mockClient = createMockWindmillClient();
+    mockGetJob.mockResolvedValue({ running: false, success: true, result: {} });
+
+    const poller = new JobPoller(mockDb, mockClient, mockTable, 60_000);
+    const pollMethod = (poller as any).poll.bind(poller);
+    await pollMethod();
+
+    expect(mockCloseRun).not.toHaveBeenCalled();
+  });
+
+  it("does not crash if closeRun fails", async () => {
+    const runs = [{ id: "run-7", windmillJobId: "job-7", status: "running", runId: "runs-svc-id-3", orgId: "org-1" }];
+    const mockDb = createMockDb(runs);
+    const mockClient = createMockWindmillClient();
+    mockGetJob.mockResolvedValue({ running: false, success: true, result: {} });
+    mockCloseRun.mockRejectedValue(new Error("runs-service down"));
+
+    const poller = new JobPoller(mockDb, mockClient, mockTable, 60_000);
+    const pollMethod = (poller as any).poll.bind(poller);
+    await pollMethod();
+
+    // DB update still happened
+    expect(dbSetCalls.length).toBe(1);
+    expect(dbSetCalls[0].status).toBe("completed");
   });
 });
