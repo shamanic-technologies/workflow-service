@@ -9,7 +9,7 @@ on:
       - "src/lib/windmill-client.ts"
 
 jobs:
-  deploy:
+  deploy-nodes:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

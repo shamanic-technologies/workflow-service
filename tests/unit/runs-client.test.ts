@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createRun, createPlatformRun, closePlatformRun } from "../../src/lib/runs-client.js";
+import { createRun, closeRun, createPlatformRun, closePlatformRun } from "../../src/lib/runs-client.js";
 
 describe("createRun", () => {
   const originalUrl = process.env.RUNS_SERVICE_URL;
@@ -218,6 +218,76 @@ describe("createRun", () => {
     await expect(
       createRun({ parentRunId: "caller-run-5", orgId: "org-1", userId: "user-1", taskName: "execute-workflow" })
     ).rejects.toThrow("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be set");
+  });
+});
+
+describe("closeRun", () => {
+  const originalUrl = process.env.RUNS_SERVICE_URL;
+  const originalKey = process.env.RUNS_SERVICE_API_KEY;
+
+  beforeEach(() => {
+    process.env.RUNS_SERVICE_URL = "http://localhost:5000";
+    process.env.RUNS_SERVICE_API_KEY = "test-runs-key";
+  });
+
+  afterEach(() => {
+    process.env.RUNS_SERVICE_URL = originalUrl;
+    process.env.RUNS_SERVICE_API_KEY = originalKey;
+    vi.restoreAllMocks();
+  });
+
+  it("calls PATCH /v1/runs/:id with status body and org header", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true })
+    );
+
+    await closeRun("run-abc", "completed", "org-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:5000/v1/runs/run-abc",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": "test-runs-key",
+          "x-org-id": "org-1",
+        },
+        body: JSON.stringify({ status: "completed" }),
+      })
+    );
+  });
+
+  it("sends 'failed' status when run fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true })
+    );
+
+    await closeRun("run-def", "failed", "org-2");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:5000/v1/runs/run-def",
+      expect.objectContaining({
+        body: JSON.stringify({ status: "failed" }),
+      })
+    );
+  });
+
+  it("throws on non-2xx response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: () => Promise.resolve("run not found"),
+      })
+    );
+
+    await expect(
+      closeRun("run-missing", "completed", "org-1")
+    ).rejects.toThrow("runs-service error: PATCH /v1/runs/run-missing");
   });
 });
 

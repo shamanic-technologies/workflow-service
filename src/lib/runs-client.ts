@@ -109,6 +109,32 @@ export async function createPlatformRun(opts: {
   return { runId: data.id };
 }
 
+/** PATCH /v1/runs/:id — close a child run */
+export async function closeRun(
+  runId: string,
+  status: "completed" | "failed",
+  orgId: string,
+): Promise<void> {
+  const { baseUrl, apiKey } = getRunsServiceConfig();
+
+  const res = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(runId)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "x-org-id": orgId,
+    },
+    body: JSON.stringify({ status }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `runs-service error: PATCH /v1/runs/${runId} -> ${res.status} ${res.statusText}: ${text}`
+    );
+  }
+}
+
 /** PATCH /v1/platform-runs/:id — close a platform-level run */
 export async function closePlatformRun(
   runId: string,
