@@ -1,5 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import type { WindmillClient } from "./windmill-client.js";
+import { closeRun } from "./runs-client.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -58,6 +59,15 @@ export class JobPoller {
                 completedAt: new Date(),
               })
               .where(eq(table.id, run.id));
+
+            // Close the run in runs-service
+            if (run.runId && run.orgId) {
+              try {
+                await closeRun(run.runId, newStatus, run.orgId);
+              } catch (err) {
+                console.error(`[workflow-service] JobPoller: failed to close run ${run.runId} in runs-service:`, err);
+              }
+            }
 
             console.log(`[workflow-service] JobPoller: run ${run.id} → ${newStatus}`);
           } else if (run.status === "queued") {

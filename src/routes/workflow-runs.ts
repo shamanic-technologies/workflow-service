@@ -8,7 +8,7 @@ import { requireApiKey, requireExecutionHeaders } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
 import { collectServiceEnvs } from "../lib/service-envs.js";
-import { createRun } from "../lib/runs-client.js";
+import { createRun, closeRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 import { parseWindmillError } from "../lib/error-parser.js";
 import { resolveFeatureDynastySlugs } from "../lib/features-client.js";
@@ -374,6 +374,15 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
             .where(eq(workflowRuns.id, run.id))
             .returning();
 
+          // Close the run in runs-service
+          if (run.runId && run.orgId) {
+            try {
+              await closeRun(run.runId, newStatus, run.orgId);
+            } catch (err) {
+              console.error(`[workflow-service] Failed to close run ${run.runId} in runs-service:`, err);
+            }
+          }
+
           res.json(formatRun(updated));
           return;
         } else if (run.status === "queued") {
@@ -542,6 +551,15 @@ router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
       .set({ status: "cancelled", completedAt: new Date() })
       .where(eq(workflowRuns.id, run.id))
       .returning();
+
+    // Close the run in runs-service as failed (cancelled = failed from runs-service perspective)
+    if (run.runId && run.orgId) {
+      try {
+        await closeRun(run.runId, "failed", run.orgId);
+      } catch (err) {
+        console.error(`[workflow-service] Failed to close cancelled run ${run.runId} in runs-service:`, err);
+      }
+    }
 
     res.json(formatRun(updated));
   } catch (err) {
