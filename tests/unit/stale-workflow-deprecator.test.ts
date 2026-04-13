@@ -13,6 +13,8 @@ vi.mock("../../src/db/index.js", () => ({
 
 import { deprecateStaleWorkflows } from "../../src/lib/stale-workflow-deprecator.js";
 
+const TWO_WEEKS_AGO = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     id: overrides.id ?? `wf-${Math.random().toString(36).slice(2, 8)}`,
@@ -21,6 +23,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     featureSlug: overrides.featureSlug ?? "sales-cold-email",
     status: "active",
     orgId: "org-1",
+    createdAt: overrides.createdAt ?? TWO_WEEKS_AGO,
     ...overrides,
   };
 }
@@ -196,6 +199,31 @@ describe("deprecateStaleWorkflows", () => {
     // Only 1 deprecated (wf-a4 from feat-a). feat-b has only 2
     expect(result.deprecatedCount).toBe(1);
     expect(result.keptByRecency).toBe(5); // 3 from feat-a + 2 from feat-b
+  });
+
+  it("does not deprecate workflows created less than 1 week ago", async () => {
+    const recentDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(); // 2 days ago
+    const wfs = [
+      makeWorkflow({ id: "wf-1", slug: "slug-1", featureSlug: "feat-a" }),
+      makeWorkflow({ id: "wf-2", slug: "slug-2", featureSlug: "feat-a" }),
+      makeWorkflow({ id: "wf-3", slug: "slug-3", featureSlug: "feat-a" }),
+      makeWorkflow({ id: "wf-new", slug: "slug-new", featureSlug: "feat-a", createdAt: recentDate }),
+    ];
+
+    const lastRuns = [
+      { workflowId: "wf-1", lastRun: "2026-03-30T10:00:00Z" },
+      { workflowId: "wf-2", lastRun: "2026-03-29T10:00:00Z" },
+      { workflowId: "wf-3", lastRun: "2026-03-28T10:00:00Z" },
+    ];
+
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+
+    const mockDb = createMockDb(wfs, lastRuns);
+    const result = await deprecateStaleWorkflows(mockDb as any);
+
+    // wf-new is excluded from consideration entirely (grace period), so only 3 eligible = no deprecation
+    expect(result.deprecatedCount).toBe(0);
+    expect(mockDb._updateMock).not.toHaveBeenCalled();
   });
 
   it("workflows with no runs are considered least recent", async () => {

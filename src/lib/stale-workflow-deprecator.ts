@@ -14,6 +14,7 @@ import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
 type Database = typeof DbInstance;
 
 const KEEP_TOP_N = 3;
+const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 
 interface DeprecationResult {
   deprecatedCount: number;
@@ -31,15 +32,23 @@ interface DeprecationResult {
 export async function deprecateStaleWorkflows(
   database: Database,
 ): Promise<DeprecationResult> {
+  const now = Date.now();
+
   // 1. Fetch all active workflows
-  const activeWorkflows = await database
+  const allActiveWorkflows = await database
     .select()
     .from(workflows)
     .where(eq(workflows.status, "active"));
 
-  if (activeWorkflows.length === 0) {
+  if (allActiveWorkflows.length === 0) {
     return { deprecatedCount: 0, keptByRecency: 0, keptByCampaign: 0, skippedNoCampaignService: false };
   }
+
+  // 1b. Exclude workflows created less than 1 week ago — they haven't had a chance to run yet
+  const activeWorkflows = allActiveWorkflows.filter((wf) => {
+    const createdAt = wf.createdAt ? new Date(wf.createdAt).getTime() : now;
+    return now - createdAt >= GRACE_PERIOD_MS;
+  });
 
   // 2. Get last run date for each active workflow
   const lastRunRows = await database
