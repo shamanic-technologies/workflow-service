@@ -13,6 +13,9 @@ vi.mock("../../src/db/index.js", () => ({
 
 import { deprecateStaleWorkflows } from "../../src/lib/stale-workflow-deprecator.js";
 
+const TWO_WEEKS_AGO = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     id: overrides.id ?? `wf-${Math.random().toString(36).slice(2, 8)}`,
@@ -21,11 +24,12 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     featureSlug: overrides.featureSlug ?? "sales-cold-email",
     status: "active",
     orgId: "org-1",
+    createdAt: overrides.createdAt ?? TWO_WEEKS_AGO,
     ...overrides,
   };
 }
 
-function createMockDb(activeWorkflows: unknown[], lastRuns: { workflowId: string; lastRun: string }[]) {
+function createMockDb(activeWorkflows: unknown[], runWorkflowIds: string[]) {
   let selectCallCount = 0;
 
   const updateWhereMock = vi.fn().mockResolvedValue(undefined);
@@ -42,13 +46,11 @@ function createMockDb(activeWorkflows: unknown[], lastRuns: { workflowId: string
             // First select: active workflows
             return { where: vi.fn().mockResolvedValue(activeWorkflows) };
           }
-          // Second select: last run dates
+          // Second select: workflow IDs that have runs
           return {
-            where: vi.fn().mockReturnValue({
-              groupBy: vi.fn().mockResolvedValue(
-                lastRuns.map((r) => ({ workflowId: r.workflowId, lastRun: r.lastRun })),
-              ),
-            }),
+            where: vi.fn().mockResolvedValue(
+              runWorkflowIds.map((id) => ({ workflowId: id })),
+            ),
           };
         }),
       };
@@ -75,93 +77,69 @@ describe("deprecateStaleWorkflows", () => {
     expect(mockFetchActiveWorkflowSlugs).not.toHaveBeenCalled();
   });
 
-  it("does not deprecate when a feature has <= 3 active workflows", async () => {
+  it("does not deprecate workflows created less than 1 week ago", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-2", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-3", featureSlug: "feat-a" }),
+      makeWorkflow({ id: "wf-new", slug: "slug-new", createdAt: TWO_DAYS_AGO }),
     ];
     const mockDb = createMockDb(wfs, []);
     const result = await deprecateStaleWorkflows(mockDb as any);
 
     expect(result.deprecatedCount).toBe(0);
-    expect(result.keptByRecency).toBe(3);
     expect(mockFetchActiveWorkflowSlugs).not.toHaveBeenCalled();
   });
 
-  it("deprecates workflows outside top 3 by recency when no active campaigns", async () => {
+  it("does not deprecate workflows that have runs", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "wf-slug-1", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-2", slug: "wf-slug-2", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-3", slug: "wf-slug-3", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-4", slug: "wf-slug-4", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-5", slug: "wf-slug-5", featureSlug: "feat-a" }),
+      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
+      makeWorkflow({ id: "wf-2", slug: "slug-2" }),
     ];
+    const mockDb = createMockDb(wfs, ["wf-1", "wf-2"]);
+    const result = await deprecateStaleWorkflows(mockDb as any);
 
-    const lastRuns = [
-      { workflowId: "wf-1", lastRun: "2026-03-30T10:00:00Z" },
-      { workflowId: "wf-2", lastRun: "2026-03-29T10:00:00Z" },
-      { workflowId: "wf-3", lastRun: "2026-03-28T10:00:00Z" },
-      { workflowId: "wf-4", lastRun: "2026-03-27T10:00:00Z" },
-      { workflowId: "wf-5", lastRun: "2026-03-26T10:00:00Z" },
+    expect(result.deprecatedCount).toBe(0);
+    expect(mockFetchActiveWorkflowSlugs).not.toHaveBeenCalled();
+  });
+
+  it("deprecates old workflows with zero runs and no active campaign", async () => {
+    const wfs = [
+      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
+      makeWorkflow({ id: "wf-2", slug: "slug-2" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
 
-    const mockDb = createMockDb(wfs, lastRuns);
+    const mockDb = createMockDb(wfs, []);
     const result = await deprecateStaleWorkflows(mockDb as any);
 
     expect(result.deprecatedCount).toBe(2);
-    expect(result.keptByRecency).toBe(3);
-    expect(result.keptByCampaign).toBe(0);
     expect(mockDb._updateMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps stale workflows that are used by active campaigns", async () => {
+  it("keeps zero-run workflows that are used by active campaigns", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "wf-slug-1", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-2", slug: "wf-slug-2", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-3", slug: "wf-slug-3", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-4", slug: "wf-slug-4", featureSlug: "feat-a" }),
+      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
+      makeWorkflow({ id: "wf-2", slug: "slug-2" }),
     ];
 
-    const lastRuns = [
-      { workflowId: "wf-1", lastRun: "2026-03-30T10:00:00Z" },
-      { workflowId: "wf-2", lastRun: "2026-03-29T10:00:00Z" },
-      { workflowId: "wf-3", lastRun: "2026-03-28T10:00:00Z" },
-      { workflowId: "wf-4", lastRun: "2026-03-27T10:00:00Z" },
-    ];
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set(["slug-1"]));
 
-    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set(["wf-slug-4"]));
-
-    const mockDb = createMockDb(wfs, lastRuns);
+    const mockDb = createMockDb(wfs, []);
     const result = await deprecateStaleWorkflows(mockDb as any);
 
-    expect(result.deprecatedCount).toBe(0);
+    expect(result.deprecatedCount).toBe(1); // only wf-2
     expect(result.keptByCampaign).toBe(1);
-    expect(mockDb._updateMock).not.toHaveBeenCalled();
   });
 
   it("skips deprecation when campaign-service is unreachable", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-2", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-3", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-4", featureSlug: "feat-a" }),
-    ];
-
-    const lastRuns = [
-      { workflowId: "wf-1", lastRun: "2026-03-30T10:00:00Z" },
-      { workflowId: "wf-2", lastRun: "2026-03-29T10:00:00Z" },
-      { workflowId: "wf-3", lastRun: "2026-03-28T10:00:00Z" },
-      { workflowId: "wf-4", lastRun: "2026-03-26T10:00:00Z" },
+      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockRejectedValue(
       new Error("CAMPAIGN_SERVICE_URL and CAMPAIGN_SERVICE_API_KEY must be set"),
     );
 
-    const mockDb = createMockDb(wfs, lastRuns);
+    const mockDb = createMockDb(wfs, []);
     const result = await deprecateStaleWorkflows(mockDb as any);
 
     expect(result.deprecatedCount).toBe(0);
@@ -169,54 +147,17 @@ describe("deprecateStaleWorkflows", () => {
     expect(mockDb._updateMock).not.toHaveBeenCalled();
   });
 
-  it("handles multiple features independently", async () => {
+  it("only deprecates workflows with zero runs, keeps those with runs", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-a1", slug: "slug-a1", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-a2", slug: "slug-a2", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-a3", slug: "slug-a3", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-a4", slug: "slug-a4", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-b1", slug: "slug-b1", featureSlug: "feat-b" }),
-      makeWorkflow({ id: "wf-b2", slug: "slug-b2", featureSlug: "feat-b" }),
-    ];
-
-    const lastRuns = [
-      { workflowId: "wf-a1", lastRun: "2026-03-30T10:00:00Z" },
-      { workflowId: "wf-a2", lastRun: "2026-03-29T10:00:00Z" },
-      { workflowId: "wf-a3", lastRun: "2026-03-28T10:00:00Z" },
-      { workflowId: "wf-a4", lastRun: "2026-03-27T10:00:00Z" },
-      { workflowId: "wf-b1", lastRun: "2026-03-30T10:00:00Z" },
-      { workflowId: "wf-b2", lastRun: "2026-03-29T10:00:00Z" },
+      makeWorkflow({ id: "wf-has-runs", slug: "slug-has-runs" }),
+      makeWorkflow({ id: "wf-no-runs", slug: "slug-no-runs" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
 
-    const mockDb = createMockDb(wfs, lastRuns);
+    const mockDb = createMockDb(wfs, ["wf-has-runs"]);
     const result = await deprecateStaleWorkflows(mockDb as any);
 
-    // Only 1 deprecated (wf-a4 from feat-a). feat-b has only 2
-    expect(result.deprecatedCount).toBe(1);
-    expect(result.keptByRecency).toBe(5); // 3 from feat-a + 2 from feat-b
-  });
-
-  it("workflows with no runs are considered least recent", async () => {
-    const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "slug-1", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-2", slug: "slug-2", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-3", slug: "slug-3", featureSlug: "feat-a" }),
-      makeWorkflow({ id: "wf-no-runs", slug: "slug-no-runs", featureSlug: "feat-a" }),
-    ];
-
-    const lastRuns = [
-      { workflowId: "wf-1", lastRun: "2026-03-30T10:00:00Z" },
-      { workflowId: "wf-2", lastRun: "2026-03-29T10:00:00Z" },
-      { workflowId: "wf-3", lastRun: "2026-03-28T10:00:00Z" },
-    ];
-
-    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
-
-    const mockDb = createMockDb(wfs, lastRuns);
-    const result = await deprecateStaleWorkflows(mockDb as any);
-
-    expect(result.deprecatedCount).toBe(1); // wf-no-runs deprecated
+    expect(result.deprecatedCount).toBe(1); // only wf-no-runs
   });
 });

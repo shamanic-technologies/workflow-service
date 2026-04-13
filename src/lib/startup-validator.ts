@@ -46,7 +46,7 @@ export async function validateAndUpgradeWorkflows(
     const result = await deprecateStaleWorkflows(database);
     if (result.deprecatedCount > 0) {
       console.log(
-        `[workflow-service] Stale deprecation: ${result.deprecatedCount} deprecated, ${result.keptByRecency} kept by recency, ${result.keptByCampaign} kept by active campaign`,
+        `[workflow-service] Stale deprecation: ${result.deprecatedCount} deprecated, ${result.keptByCampaign} kept by active campaign`,
       );
     }
     if (result.skippedNoCampaignService) {

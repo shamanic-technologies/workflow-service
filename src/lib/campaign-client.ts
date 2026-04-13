@@ -53,7 +53,7 @@ export async function fetchAllCampaigns(
  * Returns the set of workflow slugs that are currently "in use" by a campaign.
  * A campaign is considered in-use if:
  *   - status is "active", OR
- *   - toResumeAt is non-null (periodic campaign temporarily paused, will resume)
+ *   - toResumeAt is non-null (periodic campaign scheduled to resume)
  */
 export async function fetchActiveWorkflowSlugs(
   downstreamHeaders?: DownstreamHeaders,
