@@ -655,3 +655,43 @@ export const DAG_WITH_HYPHENATED_CONDITION: DAG = {
     { from: "check-lead", to: "end-run" },
   ],
 };
+
+/**
+ * Regression: both edges from condition are conditional, and the false-branch
+ * target (end-run) is also reachable from the true-branch tail (email-send).
+ * end-run is a convergence point and must appear AFTER the branchone, not
+ * inside either branch.
+ */
+export const DAG_WITH_BRANCH_CONVERGENCE: DAG = {
+  nodes: [
+    {
+      id: "fetch-lead",
+      type: "http.call",
+      config: { service: "lead", method: "POST", path: "/buffer/next" },
+      retries: 0,
+    },
+    { id: "check-lead", type: "condition" },
+    {
+      id: "email-gen",
+      type: "http.call",
+      config: { service: "ai", method: "POST", path: "/generate" },
+    },
+    {
+      id: "email-send",
+      type: "http.call",
+      config: { service: "email", method: "POST", path: "/send" },
+    },
+    {
+      id: "end-run",
+      type: "http.call",
+      config: { service: "runs", method: "POST", path: "/runs/end" },
+    },
+  ],
+  edges: [
+    { from: "fetch-lead", to: "check-lead" },
+    { from: "check-lead", to: "email-gen", condition: "results.fetch_lead.found == true" },
+    { from: "check-lead", to: "end-run", condition: "results.fetch_lead.found == false" },
+    { from: "email-gen", to: "email-send" },
+    { from: "email-send", to: "end-run" },
+  ],
+};

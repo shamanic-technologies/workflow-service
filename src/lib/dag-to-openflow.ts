@@ -187,14 +187,22 @@ function collectBranchNodes(
     outEdges.filter((e) => !e.condition).map((e) => e.to),
   );
 
-  // Group conditional edges by expression
+  // Group conditional edges by expression.
+  // A conditional edge target that ALSO has incoming edges from other nodes
+  // is a convergence point — it must run after the branchone, not inside a branch.
   const branchRoots = new Map<string, Set<string>>();
   for (const edge of outEdges) {
     if (!edge.condition) continue;
-    if (!branchRoots.has(edge.condition)) {
-      branchRoots.set(edge.condition, new Set());
+    const targetIncoming = incomingEdges.get(edge.to) ?? [];
+    const hasOtherIncoming = targetIncoming.some((inc) => inc.from !== conditionNodeId);
+    if (hasOtherIncoming) {
+      afterNodes.add(edge.to);
+    } else {
+      if (!branchRoots.has(edge.condition)) {
+        branchRoots.set(edge.condition, new Set());
+      }
+      branchRoots.get(edge.condition)!.add(edge.to);
     }
-    branchRoots.get(edge.condition)!.add(edge.to);
   }
 
   const branchNodeSets = new Map<string, Set<string>>();
