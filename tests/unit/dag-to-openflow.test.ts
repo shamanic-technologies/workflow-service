@@ -20,6 +20,7 @@ import {
   DAG_WITH_TWO_BRANCHES,
   DAG_WITH_PATH_PARAMS,
   DAG_WITH_HYPHENATED_CONDITION,
+  DAG_WITH_BRANCH_CONVERGENCE,
 } from "../helpers/fixtures.js";
 
 describe("dagToOpenFlow", () => {
@@ -630,6 +631,41 @@ describe("dagToOpenFlow", () => {
       if (mod.value.type === "script") {
         expect(mod.timeout).toEqual({ type: "static", value: 3600 });
       }
+    }
+  });
+
+  it("regression: convergence node after branch runs on both paths", () => {
+    const result = dagToOpenFlow(DAG_WITH_BRANCH_CONVERGENCE, "Convergence");
+
+    // Top-level: fetch-lead, check-lead (branchone), end-run
+    expect(result.value.modules).toHaveLength(3);
+    expect(result.value.modules[0].id).toBe("fetch_lead");
+    expect(result.value.modules[1].id).toBe("check_lead");
+    expect(result.value.modules[2].id).toBe("end_run");
+
+    const condModule = result.value.modules[1];
+    expect(condModule.value.type).toBe("branchone");
+
+    if (condModule.value.type === "branchone") {
+      expect(condModule.value.branches).toHaveLength(2);
+
+      // True branch: email-gen → email-send
+      const trueBranch = condModule.value.branches.find(
+        (b) => b.expr === "results.fetch_lead.found == true",
+      );
+      expect(trueBranch).toBeDefined();
+      expect(trueBranch!.modules).toHaveLength(2);
+      expect(trueBranch!.modules[0].id).toBe("email_gen");
+      expect(trueBranch!.modules[1].id).toBe("email_send");
+
+      // False branch: empty — end-run was promoted to after-branch
+      const falseBranch = condModule.value.branches.find(
+        (b) => b.expr === "results.fetch_lead.found == false",
+      );
+      expect(falseBranch).toBeDefined();
+      expect(falseBranch!.modules).toHaveLength(0);
+
+      expect(condModule.value.default).toHaveLength(0);
     }
   });
 
