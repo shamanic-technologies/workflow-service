@@ -122,11 +122,12 @@ export async function fetchSpecsForServices(
     }),
   );
 
-  for (const result of results) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
     if (result.status === "fulfilled") {
       specs.set(result.value.name, result.value.spec);
     } else {
-      console.warn(`[api-registry] Failed to fetch spec: ${result.reason}`);
+      console.warn(`[workflow-service] Failed to fetch spec for "${unique[i]}" — service may no longer exist: ${result.reason}`);
     }
   }
 
