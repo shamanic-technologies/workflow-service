@@ -222,6 +222,7 @@ describe("validateAndUpgradeWorkflows", () => {
   }
 
   beforeEach(() => {
+    mockFetchServiceList.mockReset();
     mockFetchSpecsForServices.mockReset();
     mockUpgradeWorkflow.mockReset();
 
@@ -233,6 +234,30 @@ describe("validateAndUpgradeWorkflows", () => {
     dbSignatureMatchResult = [];
     delete process.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
     delete process.env.ADMIN_NOTIFICATION_EMAIL;
+
+    // By default, API Registry is reachable
+    mockFetchServiceList.mockResolvedValue([{ service: "campaign" }]);
+  });
+
+  it("skips entire upgrade cycle when API Registry is unreachable", async () => {
+    mockFetchServiceList.mockRejectedValue(new Error("Connection refused"));
+    dbSelectResult = [BROKEN_WORKFLOW];
+
+    const consoleErrorSpy = vi.spyOn(console, "error");
+
+    await validateAndUpgradeWorkflows({
+      db: createMockDb() as any,
+      windmillClient: null,
+    });
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("API Registry unreachable — skipping upgrade cycle"),
+      expect.any(String),
+    );
+    // Must NOT call fetchSpecsForServices or upgradeWorkflow
+    expect(mockFetchSpecsForServices).not.toHaveBeenCalled();
+    expect(mockUpgradeWorkflow).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
   });
 
   it("logs success when all workflows are valid", async () => {
