@@ -41,7 +41,20 @@ export async function validateAndUpgradeWorkflows(
 ): Promise<void> {
   const { db: database, windmillClient } = deps;
 
-  // 0. Deprecate stale workflows BEFORE validation — avoids paying for LLM upgrades on unused workflows
+  // 0a. Verify API Registry is reachable before any validation/upgrade.
+  // If unreachable, we can't trust spec results — a missing spec might just be infra flaking,
+  // not a genuinely removed service. Skip the entire cycle to avoid wasting LLM costs.
+  try {
+    await fetchServiceList();
+  } catch (err) {
+    console.error(
+      "[workflow-service] API Registry unreachable — skipping upgrade cycle. No workflows will be validated or upgraded.",
+      err instanceof Error ? err.message : err,
+    );
+    return;
+  }
+
+  // 0b. Deprecate stale workflows BEFORE validation — avoids paying for LLM upgrades on unused workflows
   try {
     const result = await deprecateStaleWorkflows(database);
     if (result.deprecatedCount > 0) {
