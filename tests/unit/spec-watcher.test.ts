@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock API registry client
+const mockFetchServiceList = vi.fn();
 const mockFetchSpecsForServices = vi.fn();
 vi.mock("../../src/lib/api-registry-client.js", () => ({
+  fetchServiceList: (...args: unknown[]) => mockFetchServiceList(...args),
   fetchSpecsForServices: (...args: unknown[]) => mockFetchSpecsForServices(...args),
 }));
 
@@ -49,14 +51,39 @@ describe("SpecWatcher", () => {
     vi.clearAllMocks();
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Let console.error pass through so test failures are visible
-    vi.spyOn(console, "error").mockImplementation((...args) => {
-      process.stderr.write(`[test-stderr] ${args.map(String).join(" ")}\n`);
-    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // By default, API Registry is reachable
+    mockFetchServiceList.mockResolvedValue([{ service: "lead-service" }]);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("skips check cycle when API Registry is unreachable", async () => {
+    mockFetchServiceList.mockRejectedValue(new Error("fetch failed"));
+
+    const fakeDb = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: "w1", slug: "test-wf", dag: makeDag("lead-service", "GET", "/leads"), status: "active" },
+          ]),
+        }),
+      }),
+    };
+
+    const watcher = new SpecWatcher({ db: fakeDb as any, windmillClient: null });
+    await watcher.check();
+
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("API Registry unreachable"),
+      expect.any(String),
+    );
+    // Must NOT proceed to fetch specs or trigger upgrades
+    expect(mockFetchSpecsForServices).not.toHaveBeenCalled();
+    expect(mockValidateAndUpgradeWorkflows).not.toHaveBeenCalled();
   });
 
   it("stores baseline hash on first check and does not trigger upgrade", async () => {

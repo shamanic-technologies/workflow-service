@@ -4,7 +4,7 @@ import { workflows } from "../db/schema.js";
 import type { db as DbInstance } from "../db/index.js";
 import type { DAG } from "./dag-validator.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
-import { fetchSpecsForServices } from "./api-registry-client.js";
+import { fetchServiceList, fetchSpecsForServices } from "./api-registry-client.js";
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
 import { validateAndUpgradeWorkflows } from "./startup-validator.js";
 import type { WindmillClient } from "./windmill-client.js";
@@ -72,6 +72,18 @@ export class SpecWatcher {
   }
 
   private async doCheck(): Promise<void> {
+    // 0. Verify API Registry is reachable before anything.
+    // If it's down, spec fetches will fail and we'd wrongly flag valid endpoints as broken.
+    try {
+      await fetchServiceList();
+    } catch (err) {
+      console.error(
+        "[workflow-service] SpecWatcher: API Registry unreachable — skipping check cycle.",
+        err instanceof Error ? err.message : err,
+      );
+      return;
+    }
+
     // 1. Fetch all active workflows
     const activeWorkflows = await this.deps.db
       .select()
