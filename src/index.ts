@@ -81,8 +81,10 @@ if (process.env.NODE_ENV !== "test") {
       });
 
       // Validate & upgrade workflows AFTER listening — so the service can serve
-      // health checks and traffic while upgrades run (avoids Railway 502s)
-      if (process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY) {
+      // health checks and traffic while upgrades run (avoids Railway 502s).
+      // Only in production — staging upgrades waste LLM costs on transient spec changes.
+      const isProduction = process.env.RAILWAY_ENVIRONMENT === "production";
+      if (isProduction && process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY) {
         try {
           await validateAndUpgradeWorkflows({ db, windmillClient });
         } catch (err) {
@@ -96,6 +98,8 @@ if (process.env.NODE_ENV !== "test") {
         const specWatcher = new SpecWatcher({ db, windmillClient });
         await specWatcher.check(); // Store baseline hash (no-op on first call)
         specWatcher.start();
+      } else if (!isProduction) {
+        console.log("[workflow-service] Skipping workflow validation/upgrade — not production");
       }
     } catch (err) {
       console.error("Startup failed:", err);
