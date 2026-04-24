@@ -726,6 +726,27 @@ export const DynastyStatsResponseSchema = z
   })
   .openapi("DynastyStatsResponse");
 
+// --- Internal: Transfer Brand ---
+
+export const TransferBrandRequestSchema = z
+  .object({
+    brandId: z.string().min(1).describe("The brand ID to transfer."),
+    sourceOrgId: z.string().min(1).describe("The org that currently owns the brand."),
+    targetOrgId: z.string().min(1).describe("The org to transfer the brand to."),
+  })
+  .openapi("TransferBrandRequest");
+
+export const TransferBrandResponseSchema = z
+  .object({
+    updatedTables: z.array(
+      z.object({
+        tableName: z.string().describe("Name of the database table."),
+        count: z.number().int().describe("Number of rows updated."),
+      })
+    ).describe("Tables and counts of rows updated."),
+  })
+  .openapi("TransferBrandResponse");
+
 // --- Common ---
 
 export const ErrorResponseSchema = z
@@ -1312,6 +1333,35 @@ registry.registerPath({
     },
     404: {
       description: "Workflow not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+// --- Internal endpoints ---
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/transfer-brand",
+  summary: "Transfer a brand from one org to another",
+  description:
+    "Re-assigns all solo-brand rows from sourceOrgId to targetOrgId. " +
+    "Skips co-branding rows (multiple brand IDs). Idempotent.",
+  tags: ["Internal"],
+  security: [{ apiKey: [] }],
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: TransferBrandRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Transfer complete",
+      content: { "application/json": { schema: TransferBrandResponseSchema } },
+    },
+    400: {
+      description: "Validation error",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

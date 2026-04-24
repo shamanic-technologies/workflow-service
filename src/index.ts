@@ -14,6 +14,7 @@ import workflowsRoutes from "./routes/workflows.js";
 import workflowRunsRoutes from "./routes/workflow-runs.js";
 import openapiRoutes from "./routes/openapi.js";
 import publicWorkflowsRoutes from "./routes/public-workflows.js";
+import internalRoutes from "./routes/internal.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -25,6 +26,9 @@ app.use(express.json());
 app.use(healthRoutes);
 app.use(openapiRoutes);
 app.use(publicWorkflowsRoutes);
+
+// Internal routes (x-api-key only, no identity headers)
+app.use(internalRoutes);
 
 // Identity-gated routes
 app.use(requireIdentity);
