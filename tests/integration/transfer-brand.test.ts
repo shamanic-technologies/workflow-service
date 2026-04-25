@@ -162,11 +162,20 @@ describe("POST /internal/transfer-brand", () => {
       { tableName: "workflow_runs", count: 3 },
     ]);
 
-    // workflows table should set both orgId and createdForBrandId
-    const workflowUpdate = updateCalls.find((c) => c.table === "workflows");
-    expect(workflowUpdate).toBeDefined();
-    expect(workflowUpdate!.set.orgId).toBe("org-target");
-    expect(workflowUpdate!.set.createdForBrandId).toBe("brand-456");
+    // Step 1: workflows table sets orgId only
+    const step1Update = updateCalls[0];
+    expect(step1Update).toBeDefined();
+    expect(step1Update!.set.orgId).toBe("org-target");
+    expect(step1Update!.set).not.toHaveProperty("createdForBrandId");
+
+    // Step 2: workflows table rewrites createdForBrandId only
+    const step2Update = updateCalls[1];
+    expect(step2Update).toBeDefined();
+    expect(step2Update!.set.createdForBrandId).toBe("brand-456");
+    expect(step2Update!.set).not.toHaveProperty("orgId");
+
+    // Two execute calls: step 1 (move org) + step 2 (rewrite brand)
+    expect(executeCalls.length).toBe(2);
   });
 
   it("does not rewrite brand references when targetBrandId is absent", async () => {
