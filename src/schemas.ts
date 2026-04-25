@@ -730,9 +730,10 @@ export const DynastyStatsResponseSchema = z
 
 export const TransferBrandRequestSchema = z
   .object({
-    brandId: z.string().min(1).describe("The brand ID to transfer."),
+    sourceBrandId: z.string().min(1).describe("The brand ID to transfer (in the source org)."),
     sourceOrgId: z.string().min(1).describe("The org that currently owns the brand."),
     targetOrgId: z.string().min(1).describe("The org to transfer the brand to."),
+    targetBrandId: z.string().min(1).optional().describe("The existing brand ID in the target org to rewrite to. When present, brand references are rewritten from sourceBrandId to targetBrandId."),
   })
   .openapi("TransferBrandRequest");
 
