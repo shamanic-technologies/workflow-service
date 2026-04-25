@@ -1607,10 +1607,10 @@
       "TransferBrandRequest": {
         "type": "object",
         "properties": {
-          "brandId": {
+          "sourceBrandId": {
             "type": "string",
             "minLength": 1,
-            "description": "The brand ID to transfer."
+            "description": "The brand ID to transfer (in the source org)."
           },
           "sourceOrgId": {
             "type": "string",
@@ -1621,10 +1621,15 @@
             "type": "string",
             "minLength": 1,
             "description": "The org to transfer the brand to."
+          },
+          "targetBrandId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The existing brand ID in the target org to rewrite to. When present, brand references are rewritten from sourceBrandId to targetBrandId."
           }
         },
         "required": [
-          "brandId",
+          "sourceBrandId",
           "sourceOrgId",
           "targetOrgId"
         ]

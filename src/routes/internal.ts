@@ -15,32 +15,54 @@ router.post("/internal/transfer-brand", requireApiKey, async (req, res) => {
     return;
   }
 
-  const { brandId, sourceOrgId, targetOrgId } = parsed.data;
+  const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = parsed.data;
 
-  // workflows: created_for_brand_id is a single text column
-  const workflowsResult = await db
+  // Step 1: Move rows to the target org (filter by sourceOrgId + sourceBrandId)
+  const workflowsStep1 = await db
     .update(workflows)
     .set({ orgId: targetOrgId })
     .where(
       and(
         eq(workflows.orgId, sourceOrgId),
-        eq(workflows.createdForBrandId, brandId),
+        eq(workflows.createdForBrandId, sourceBrandId),
       )
     );
 
-  // workflow_runs: brand_ids is a text[] — only update solo-brand rows (array length = 1, element = brandId)
-  const workflowRunsResult = await db.execute(
+  const workflowRunsStep1 = await db.execute(
     sql`UPDATE workflow_runs
         SET org_id = ${targetOrgId}
         WHERE org_id = ${sourceOrgId}
-          AND brand_ids = ARRAY[${brandId}]::text[]`
+          AND brand_ids = ARRAY[${sourceBrandId}]::text[]`
   );
 
-  const workflowsCount = (workflowsResult as unknown as { rowCount?: number }).rowCount ?? 0;
-  const workflowRunsCount = (workflowRunsResult as unknown as { rowCount?: number }).rowCount ?? 0;
+  // Step 2: Rewrite brand references (no org filter — catches all remaining refs to sourceBrandId)
+  let workflowsStep2Count = 0;
+  let workflowRunsStep2Count = 0;
+  if (targetBrandId) {
+    const workflowsStep2 = await db
+      .update(workflows)
+      .set({ createdForBrandId: targetBrandId })
+      .where(eq(workflows.createdForBrandId, sourceBrandId));
+
+    const workflowRunsStep2 = await db.execute(
+      sql`UPDATE workflow_runs
+          SET brand_ids = ARRAY[${targetBrandId}]::text[]
+          WHERE brand_ids = ARRAY[${sourceBrandId}]::text[]`
+    );
+
+    workflowsStep2Count = (workflowsStep2 as unknown as { rowCount?: number }).rowCount ?? 0;
+    workflowRunsStep2Count = (workflowRunsStep2 as unknown as { rowCount?: number }).rowCount ?? 0;
+  }
+
+  const workflowsStep1Count = (workflowsStep1 as unknown as { rowCount?: number }).rowCount ?? 0;
+  const workflowRunsStep1Count = (workflowRunsStep1 as unknown as { rowCount?: number }).rowCount ?? 0;
+
+  // When targetBrandId is present, step 2 rewrites brand refs (superset of step 1 rows). Report the higher count.
+  const workflowsCount = Math.max(workflowsStep1Count, workflowsStep2Count);
+  const workflowRunsCount = Math.max(workflowRunsStep1Count, workflowRunsStep2Count);
 
   console.log(
-    `[workflow-service] transfer-brand: brandId=${brandId} from=${sourceOrgId} to=${targetOrgId} — ` +
+    `[workflow-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} — ` +
     `workflows=${workflowsCount}, workflow_runs=${workflowRunsCount}`
   );
 
