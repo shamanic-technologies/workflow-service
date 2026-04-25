@@ -15,32 +15,40 @@ router.post("/internal/transfer-brand", requireApiKey, async (req, res) => {
     return;
   }
 
-  const { brandId, sourceOrgId, targetOrgId } = parsed.data;
+  const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = parsed.data;
 
   // workflows: created_for_brand_id is a single text column
   const workflowsResult = await db
     .update(workflows)
-    .set({ orgId: targetOrgId })
+    .set({
+      orgId: targetOrgId,
+      ...(targetBrandId ? { createdForBrandId: targetBrandId } : {}),
+    })
     .where(
       and(
         eq(workflows.orgId, sourceOrgId),
-        eq(workflows.createdForBrandId, brandId),
+        eq(workflows.createdForBrandId, sourceBrandId),
       )
     );
 
-  // workflow_runs: brand_ids is a text[] — only update solo-brand rows (array length = 1, element = brandId)
+  // workflow_runs: brand_ids is a text[] — only update solo-brand rows (array length = 1, element = sourceBrandId)
   const workflowRunsResult = await db.execute(
-    sql`UPDATE workflow_runs
-        SET org_id = ${targetOrgId}
-        WHERE org_id = ${sourceOrgId}
-          AND brand_ids = ARRAY[${brandId}]::text[]`
+    targetBrandId
+      ? sql`UPDATE workflow_runs
+            SET org_id = ${targetOrgId}, brand_ids = ARRAY[${targetBrandId}]::text[]
+            WHERE org_id = ${sourceOrgId}
+              AND brand_ids = ARRAY[${sourceBrandId}]::text[]`
+      : sql`UPDATE workflow_runs
+            SET org_id = ${targetOrgId}
+            WHERE org_id = ${sourceOrgId}
+              AND brand_ids = ARRAY[${sourceBrandId}]::text[]`
   );
 
   const workflowsCount = (workflowsResult as unknown as { rowCount?: number }).rowCount ?? 0;
   const workflowRunsCount = (workflowRunsResult as unknown as { rowCount?: number }).rowCount ?? 0;
 
   console.log(
-    `[workflow-service] transfer-brand: brandId=${brandId} from=${sourceOrgId} to=${targetOrgId} — ` +
+    `[workflow-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} — ` +
     `workflows=${workflowsCount}, workflow_runs=${workflowRunsCount}`
   );
 

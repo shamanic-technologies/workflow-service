@@ -96,7 +96,7 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 401 without x-api-key", async () => {
     const res = await request
       .post("/internal/transfer-brand")
-      .send({ brandId: "b1", sourceOrgId: "org1", targetOrgId: "org2" });
+      .send({ sourceBrandId: "b1", sourceOrgId: "org1", targetOrgId: "org2" });
     expect(res.status).toBe(401);
   });
 
@@ -104,16 +104,16 @@ describe("POST /internal/transfer-brand", () => {
     const res = await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
-      .send({ brandId: "b1" });
+      .send({ sourceBrandId: "b1" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Validation error");
   });
 
-  it("returns 400 when brandId is empty", async () => {
+  it("returns 400 when sourceBrandId is empty", async () => {
     const res = await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
-      .send({ brandId: "", sourceOrgId: "org1", targetOrgId: "org2" });
+      .send({ sourceBrandId: "", sourceOrgId: "org1", targetOrgId: "org2" });
     expect(res.status).toBe(400);
   });
 
@@ -121,7 +121,7 @@ describe("POST /internal/transfer-brand", () => {
     const res = await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
-      .send({ brandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
+      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
@@ -134,7 +134,7 @@ describe("POST /internal/transfer-brand", () => {
     await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
-      .send({ brandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
+      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
 
     const workflowUpdate = updateCalls.find((c) => c.table === "workflows");
     expect(workflowUpdate).toBeDefined();
@@ -145,9 +145,40 @@ describe("POST /internal/transfer-brand", () => {
     await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
-      .send({ brandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
+      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
 
     expect(executeCalls.length).toBe(1);
+  });
+
+  it("rewrites brand references when targetBrandId is present", async () => {
+    const res = await request
+      .post("/internal/transfer-brand")
+      .set(API_KEY)
+      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target", targetBrandId: "brand-456" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updatedTables).toEqual([
+      { tableName: "workflows", count: 2 },
+      { tableName: "workflow_runs", count: 3 },
+    ]);
+
+    // workflows table should set both orgId and createdForBrandId
+    const workflowUpdate = updateCalls.find((c) => c.table === "workflows");
+    expect(workflowUpdate).toBeDefined();
+    expect(workflowUpdate!.set.orgId).toBe("org-target");
+    expect(workflowUpdate!.set.createdForBrandId).toBe("brand-456");
+  });
+
+  it("does not rewrite brand references when targetBrandId is absent", async () => {
+    await request
+      .post("/internal/transfer-brand")
+      .set(API_KEY)
+      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
+
+    const workflowUpdate = updateCalls.find((c) => c.table === "workflows");
+    expect(workflowUpdate).toBeDefined();
+    expect(workflowUpdate!.set.orgId).toBe("org-target");
+    expect(workflowUpdate!.set).not.toHaveProperty("createdForBrandId");
   });
 
   it("is idempotent — returns zero counts when already transferred", async () => {
@@ -164,7 +195,7 @@ describe("POST /internal/transfer-brand", () => {
     const res = await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
-      .send({ brandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
+      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
