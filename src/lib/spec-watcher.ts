@@ -6,7 +6,6 @@ import type { DAG } from "./dag-validator.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
 import { fetchServiceList, fetchSpecsForServices } from "./api-registry-client.js";
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
-import { validateAndUpgradeWorkflows } from "./startup-validator.js";
 import type { WindmillClient } from "./windmill-client.js";
 
 type Database = typeof DbInstance;
@@ -139,16 +138,11 @@ export class SpecWatcher {
       return;
     }
 
-    // 6. Trigger full upgrade (may use LLM for broken workflows)
-    try {
-      await validateAndUpgradeWorkflows(this.deps);
-      console.log("[workflow-service] SpecWatcher: upgrade cycle completed");
-    } catch (err) {
-      console.error(
-        "[workflow-service] SpecWatcher: upgrade cycle failed:",
-        err instanceof Error ? err.message : err,
-      );
-    }
+    // LLM auto-upgrade DISABLED — was burning Gemini credits every 5 minutes.
+    // Just log the issue; do NOT call validateAndUpgradeWorkflows which triggers LLM.
+    console.warn(
+      "[workflow-service] SpecWatcher: spec change broke workflow(s) — LLM upgrade disabled, skipping",
+    );
   }
 }
 

@@ -135,7 +135,7 @@ describe("SpecWatcher", () => {
     expect(mockValidateAndUpgradeWorkflows).not.toHaveBeenCalled();
   });
 
-  it("triggers upgrade when specs change AND workflow has issues", async () => {
+  it("logs warning when specs change AND workflow has issues (LLM upgrade disabled)", async () => {
     const dag = makeDag("lead-service", "GET", "/leads");
 
     const specV1 = makeSpec({ "/leads": { get: { responses: { "200": {} } } } });
@@ -156,17 +156,21 @@ describe("SpecWatcher", () => {
       .mockResolvedValueOnce(new Map([["lead-service", specV1]]))
       .mockResolvedValueOnce(new Map([["lead-service", specV2]]));
 
-    mockValidateAndUpgradeWorkflows.mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(console, "warn");
 
     const watcher = new SpecWatcher({ db: fakeDb as any, windmillClient: null });
 
     // First check — baseline
     await watcher.check();
-    expect(mockValidateAndUpgradeWorkflows).not.toHaveBeenCalled();
 
-    // Second check — specs changed, /leads is gone → workflow broken → upgrade
+    // Second check — specs changed, /leads is gone → workflow broken → log warning (no LLM)
     await watcher.check();
-    expect(mockValidateAndUpgradeWorkflows).toHaveBeenCalledTimes(1);
+    expect(mockValidateAndUpgradeWorkflows).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("LLM upgrade disabled"),
+    );
+
+    warnSpy.mockRestore();
   });
 
   it("does not trigger upgrade when specs change but workflows are still valid", async () => {

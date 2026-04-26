@@ -315,93 +315,33 @@ describe("validateAndUpgradeWorkflows", () => {
     consoleSpy.mockRestore();
   });
 
-  it("throws when broken workflow cannot be upgraded (no platform key)", async () => {
-    dbSelectResult = [BROKEN_WORKFLOW];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-    mockUpgradeWorkflow.mockRejectedValue(new Error("chat-service unavailable"));
-
-    // Should throw to crash the service at startup
-    await expect(
-      validateAndUpgradeWorkflows({
-        db: createMockDb() as any,
-        windmillClient: null,
-      }),
-    ).rejects.toThrow("workflow(s) have broken endpoints that could not be auto-upgraded");
-
-    // Should NOT deprecate — no DB updates to set status deprecated
-    const deprecations = dbUpdates.filter((u) => u.values.status === "deprecated");
-    expect(deprecations.length).toBe(0);
-  });
-
-  it("upgrades broken workflow using platform key and tracks run", async () => {
+  it("does not call LLM upgrade when workflow has broken endpoints (upgrade disabled)", async () => {
     dbSelectResult = [BROKEN_WORKFLOW];
     mockFetchSpecsForServices.mockResolvedValue(
       new Map([["campaign", CAMPAIGN_SPEC]]),
     );
 
-    mockCreatePlatformRun.mockResolvedValue({ runId: "platform-run-123" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(console, "warn");
 
-    const fixedDag = {
-      nodes: [
-        {
-          id: "gate-check",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/gate-check" },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
-
+    // Should NOT throw — broken workflows are kept active without LLM upgrade
     await validateAndUpgradeWorkflows({
       db: createMockDb() as any,
       windmillClient: null,
     });
 
-    // Should have created a platform run
-    expect(mockCreatePlatformRun).toHaveBeenCalledWith({
-      serviceName: "workflow",
-      taskName: "startup-upgrade",
-      workflowSlug: "sales-email-cold-outreach-Broken",  // uses wf.slug
-    });
+    // upgradeWorkflow (LLM) should never be called
+    expect(mockUpgradeWorkflow).not.toHaveBeenCalled();
 
-    // Should have called upgradeWorkflow with no identity (platform-level)
-    expect(mockUpgradeWorkflow).toHaveBeenCalledWith(
-      BROKEN_WORKFLOW.dag,
-      expect.any(Array), // invalidEndpoints
-      expect.any(Array), // fieldErrors
-      undefined,
-      expect.objectContaining({ category: "sales" }),
+    // Should log that LLM upgrade is disabled
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("LLM upgrade disabled"),
     );
 
-    // Should have inserted a new workflow with a NEW slug (versioned)
-    expect(dbInserts.length).toBe(1);
-    expect(dbInserts[0].status).toBe("active");
-    expect(dbInserts[0].slug).toMatch(/^sales-email-cold-outreach-/);
-    expect(dbInserts[0].slug).not.toBe(BROKEN_WORKFLOW.slug); // slug must change with new version
-    // name is the human-readable display name (dynasty name + version suffix)
-    expect(dbInserts[0].name).toMatch(/^Sales Cold Outreach Broken/);
-    expect(dbInserts[0].dynastyName).toBe(BROKEN_WORKFLOW.dynastyName);
-    expect(dbInserts[0].createdByUserId).toBe("workflow-service");
-    expect(dbInserts[0].createdByRunId).toBe("platform-run-123");
-
-    // Should have deprecated the old workflow first, then updated its upgradedTo pointer
-    expect(dbUpdates.length).toBeGreaterThanOrEqual(2);
-    expect(dbUpdates[0].values.status).toBe("deprecated");
-
-    // Should have closed the platform run as completed
-    expect(mockClosePlatformRun).toHaveBeenCalledWith("platform-run-123", "completed");
+    warnSpy.mockRestore();
   });
+
+  // --- LLM upgrade tests removed: auto-upgrade is disabled to stop Gemini billing ---
+  // When re-enabling LLM upgrades, restore these tests from git history.
 
   it("handles empty workflow list gracefully", async () => {
     dbSelectResult = [];
@@ -419,107 +359,7 @@ describe("validateAndUpgradeWorkflows", () => {
     consoleSpy.mockRestore();
   });
 
-  it("upgrades workflow with field errors even when all endpoints are valid", async () => {
-    // Workflow has a valid endpoint path but is missing a required body field
-    const FIELD_ISSUES_WORKFLOW = {
-      ...VALID_WORKFLOW,
-      id: "wf-field",
-      slug: "sales-email-cold-outreach-FieldIssue",
-      name: "Sales Cold Outreach FieldIssue",
-      dynastyName: "Sales Cold Outreach FieldIssue",
-      signatureName: "FieldIssue",
-      dag: {
-        nodes: [
-          {
-            id: "end-run",
-            type: "http.call",
-            config: { service: "campaign", method: "POST", path: "/end-run" },
-            // Missing required "orgId" in body
-            inputMapping: { "body.status": "$ref:flow_input.status" },
-          },
-        ],
-        edges: [],
-      },
-    };
-
-    // Spec declares orgId as required for /end-run
-    const SPEC_WITH_REQUIRED = {
-      paths: {
-        "/end-run": {
-          post: {
-            requestBody: {
-              content: {
-                "application/json": {
-                  schema: {
-                    type: "object",
-                    required: ["orgId", "status"],
-                    properties: {
-                      orgId: { type: "string" },
-                      status: { type: "string" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-
-    dbSelectResult = [FIELD_ISSUES_WORKFLOW];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", SPEC_WITH_REQUIRED]]),
-    );
-
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "field-run-1" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    const fixedDag = {
-      nodes: [
-        {
-          id: "end-run",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/end-run" },
-          inputMapping: {
-            "body.status": "$ref:flow_input.status",
-            "body.orgId": "$ref:flow_input.orgId",
-          },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
-
-    await validateAndUpgradeWorkflows({
-      db: createMockDb() as any,
-      windmillClient: null,
-    });
-
-    // Should attempt upgrade with field errors passed through
-    expect(mockUpgradeWorkflow).toHaveBeenCalledTimes(1);
-
-    // upgradeWorkflow should receive empty invalidEndpoints but non-empty fieldErrors
-    const callArgs = mockUpgradeWorkflow.mock.calls[0];
-    expect(callArgs[1]).toEqual([]); // invalidEndpoints
-    expect(callArgs[2]).toEqual([   // fieldErrors
-      expect.objectContaining({ nodeId: "end-run", field: "orgId", severity: "error" }),
-    ]);
-
-    // Should have inserted a new upgraded workflow
-    expect(dbInserts.length).toBe(1);
-    expect(dbInserts[0].status).toBe("active");
-  });
-
   it("does not attempt upgrade for warning-only field issues", async () => {
-    // Workflow sends "bodyHtml" which is not in the spec — this is a warning, not an error
     const WARNING_ONLY_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-warning",
@@ -542,7 +382,6 @@ describe("validateAndUpgradeWorkflows", () => {
       },
     };
 
-    // Spec has success and stopCampaign as valid fields but NOT bodyHtml
     const SPEC_WITH_KNOWN_FIELDS = {
       paths: {
         "/end-run": {
@@ -579,16 +418,13 @@ describe("validateAndUpgradeWorkflows", () => {
       windmillClient: null,
     });
 
-    // Should NOT attempt upgrade — warnings don't trigger upgrades
     expect(mockUpgradeWorkflow).not.toHaveBeenCalled();
 
-    // Should still log the warnings for visibility
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('has 1 field issue(s)'),
       expect.stringContaining('bodyHtml'),
     );
 
-    // Should count as valid (not failed)
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining("1 valid"),
     );
@@ -598,7 +434,6 @@ describe("validateAndUpgradeWorkflows", () => {
   });
 
   it("does not crash startup when warnings exist and chat-service is down", async () => {
-    // Regression: warning-only field issues + chat-service 502 should NOT crash the service
     const WARNING_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-warning-crash",
@@ -621,7 +456,6 @@ describe("validateAndUpgradeWorkflows", () => {
       },
     };
 
-    // Spec says /end-run accepts success + stopCampaign; extraField is unknown → warnings only
     const CAMPAIGN_SPEC_STRICT = {
       paths: {
         "/end-run": {
@@ -650,12 +484,10 @@ describe("validateAndUpgradeWorkflows", () => {
       new Map([["campaign", CAMPAIGN_SPEC_STRICT]]),
     );
 
-    // chat-service would fail if called — but it should NOT be called
     mockUpgradeWorkflow.mockRejectedValue(
       new Error("chat-service error: POST /complete -> 502 Bad Gateway: Billing service unavailable"),
     );
 
-    // Should NOT throw — warnings alone don't trigger upgrades or crash
     await expect(
       validateAndUpgradeWorkflows({
         db: createMockDb() as any,
@@ -663,393 +495,7 @@ describe("validateAndUpgradeWorkflows", () => {
       }),
     ).resolves.toBeUndefined();
 
-    // Should NOT have attempted upgrade
     expect(mockUpgradeWorkflow).not.toHaveBeenCalled();
   });
-
-  it("throws when upgrade fails (LLM error) and closes platform run as failed", async () => {
-    dbSelectResult = [BROKEN_WORKFLOW];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "platform-run-456" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-    mockUpgradeWorkflow.mockRejectedValue(new Error("LLM error"));
-
-    // Should throw to crash the service at startup
-    await expect(
-      validateAndUpgradeWorkflows({
-        db: createMockDb() as any,
-        windmillClient: null,
-      }),
-    ).rejects.toThrow("workflow(s) have broken endpoints that could not be auto-upgraded");
-
-    // Should have closed the platform run as failed
-    expect(mockClosePlatformRun).toHaveBeenCalledWith("platform-run-456", "failed");
-
-    // Should NOT deprecate the workflow
-    const deprecations = dbUpdates.filter((u) => u.values.status === "deprecated");
-    expect(deprecations.length).toBe(0);
-  });
-
-  it("updates existing flow via updateFlow (no createFlow needed)", async () => {
-    dbSelectResult = [BROKEN_WORKFLOW];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "run-1" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    const fixedDag = {
-      nodes: [
-        {
-          id: "gate-check",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/gate-check" },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
-
-    const mockCreateFlow = vi.fn();
-    const mockUpdateFlow = vi.fn().mockResolvedValue(undefined);
-
-    await validateAndUpgradeWorkflows({
-      db: createMockDb() as any,
-      windmillClient: {
-        createFlow: mockCreateFlow,
-        updateFlow: mockUpdateFlow,
-      } as any,
-    });
-
-    // Should have called updateFlow during upgrade + once during sync
-    expect(mockUpdateFlow).toHaveBeenCalledTimes(2);
-    expect(mockCreateFlow).not.toHaveBeenCalled();
-
-    // The new workflow should still be inserted in the DB
-    expect(dbInserts.length).toBe(1);
-    expect(dbInserts[0].status).toBe("active");
-  });
-
-  it("falls back to createFlow when updateFlow returns 'not found'", async () => {
-    dbSelectResult = [BROKEN_WORKFLOW];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "run-2" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    const fixedDag = {
-      nodes: [
-        {
-          id: "gate-check",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/gate-check" },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
-
-    const mockUpdateFlow = vi.fn().mockRejectedValue(new Error("Flow not found"));
-    const mockCreateFlow = vi.fn().mockResolvedValue(undefined);
-
-    await validateAndUpgradeWorkflows({
-      db: createMockDb() as any,
-      windmillClient: {
-        createFlow: mockCreateFlow,
-        updateFlow: mockUpdateFlow,
-      } as any,
-    });
-
-    // Upgrade: updateFlow fails → createFlow fallback (1 each)
-    // Sync: updateFlow on the newly-created workflow (may fail, caught by sync loop)
-    expect(mockUpdateFlow).toHaveBeenCalledTimes(2);
-    // createFlow only called once — during upgrade. Sync uses updateFlow with stored path, no fallback.
-    expect(mockCreateFlow).toHaveBeenCalledTimes(1);
-
-    expect(dbInserts.length).toBe(1);
-    expect(dbInserts[0].status).toBe("active");
-  });
-
-  it("logs error for non-'not found' updateFlow failures without crashing", async () => {
-    dbSelectResult = [BROKEN_WORKFLOW];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "run-3" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    const fixedDag = {
-      nodes: [
-        {
-          id: "gate-check",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/gate-check" },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
-
-    const mockUpdateFlow = vi.fn().mockRejectedValue(new Error("Windmill API error: 500 Internal Server Error"));
-    const mockCreateFlow = vi.fn();
-
-    const consoleSpy = vi.spyOn(console, "error");
-
-    await validateAndUpgradeWorkflows({
-      db: createMockDb() as any,
-      windmillClient: {
-        createFlow: mockCreateFlow,
-        updateFlow: mockUpdateFlow,
-      } as any,
-    });
-
-    // Should NOT have called createFlow (error is not "not found")
-    expect(mockCreateFlow).not.toHaveBeenCalled();
-
-    // Should have logged the error
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to update flow"),
-      expect.any(Error),
-    );
-    consoleSpy.mockRestore();
-  });
-
-  it("deduplicates when upgraded signature matches an existing active workflow", async () => {
-    // Regression: two broken workflows upgrade to the same DAG signature.
-    // The second should deprecate + point to the first, not fail on unique constraint.
-    const BROKEN_A = {
-      ...BROKEN_WORKFLOW,
-      id: "wf-dup-a",
-      slug: "sales-email-cold-outreach-DupA",
-      name: "Sales Cold Outreach DupA",
-      dynastyName: "Sales Cold Outreach DupA",
-      signatureName: "DupA",
-      signature: "old-sig-a",
-    };
-    const BROKEN_B = {
-      ...BROKEN_WORKFLOW,
-      id: "wf-dup-b",
-      slug: "sales-email-cold-outreach-DupB",
-      name: "Sales Cold Outreach DupB",
-      dynastyName: "Sales Cold Outreach DupB",
-      signatureName: "DupB",
-      signature: "old-sig-b",
-    };
-
-    dbSelectResult = [BROKEN_A, BROKEN_B];
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-
-    mockCreatePlatformRun.mockResolvedValue({ runId: "dedup-run-1" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    const fixedDag = {
-      nodes: [
-        {
-          id: "gate-check",
-          type: "http.call",
-          config: { service: "campaign", method: "POST", path: "/gate-check" },
-        },
-      ],
-      edges: [],
-    };
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: fixedDag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed workflow",
-    });
-
-    // Use a custom mock DB where the insert side-effects set the signature
-    // match result, simulating what the real DB would do: after the first
-    // workflow is inserted, the second's signature-match query finds it.
-    const deduplicatingMockDb = createMockDb();
-    const originalInsert = deduplicatingMockDb.insert;
-    (deduplicatingMockDb as any).insert = () => {
-      const chain = originalInsert();
-      const originalValues = chain.values;
-      chain.values = (row: Record<string, unknown>) => {
-        // After inserting, future signature-match queries will find this workflow
-        dbSignatureMatchResult = [{ id: "wf-first-upgraded" }];
-        return originalValues(row);
-      };
-      return chain;
-    };
-
-    const consoleSpy = vi.spyOn(console, "log");
-
-    await validateAndUpgradeWorkflows({
-      db: deduplicatingMockDb as any,
-      windmillClient: null,
-    });
-
-    // Both workflows go through upgradeWorkflow (need the result DAG to compute signature)
-    // but only the first one inserts — the second deduplicates
-    expect(mockUpgradeWorkflow).toHaveBeenCalledTimes(2);
-    expect(dbInserts.length).toBe(1); // Only 1 insert, not 2
-
-    // Both should count as upgraded (not failed)
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("2 upgraded"),
-    );
-
-    // Second workflow should log the dedup path
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("upgraded by dedup"),
-    );
-
-    consoleSpy.mockRestore();
-  });
-
-  it("upgrades workflows with recent runs before dormant ones", async () => {
-    const DORMANT_BROKEN = {
-      ...BROKEN_WORKFLOW,
-      id: "wf-dormant",
-      slug: "sales-email-cold-outreach-Dormant",
-      name: "Sales Cold Outreach Dormant",
-      dynastyName: "Sales Cold Outreach Dormant",
-      signatureName: "Dormant",
-    };
-    const ACTIVE_BROKEN = {
-      ...BROKEN_WORKFLOW,
-      id: "wf-active",
-      slug: "sales-email-cold-outreach-Active",
-      name: "Sales Cold Outreach Active",
-      dynastyName: "Sales Cold Outreach Active",
-      signatureName: "Active",
-    };
-
-    // Return dormant first in DB order — upgrade should reorder
-    dbSelectResult = [DORMANT_BROKEN, ACTIVE_BROKEN];
-
-    mockFetchSpecsForServices.mockResolvedValue(
-      new Map([["campaign", CAMPAIGN_SPEC]]),
-    );
-    mockCreatePlatformRun.mockResolvedValue({ runId: "run-1" });
-    mockClosePlatformRun.mockResolvedValue(undefined);
-
-    mockUpgradeWorkflow.mockResolvedValue({
-      dag: VALID_WORKFLOW.dag,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
-      description: "Fixed",
-    });
-
-    const warnSpy = vi.spyOn(console, "warn");
-
-    // Mock DB that returns run data showing wf-active was used recently
-    function createMockDbWithRuns() {
-      let callCount = 0;
-      return {
-        select: (selectArg?: any) => ({
-          from: (table: unknown) => {
-            callCount++;
-
-            // workflowRuns query → return last run for wf-active only
-            if (table === workflowRuns) {
-              const result = Promise.resolve([]);
-              (result as any).where = () => {
-                const grouped = Promise.resolve([]);
-                (grouped as any).groupBy = () =>
-                  Promise.resolve([
-                    { workflowId: "wf-active", lastRun: "2026-03-17T08:00:00Z" },
-                  ]);
-                return grouped;
-              };
-              return result;
-            }
-
-            // Signature-match dedup query
-            if (selectArg && 'id' in selectArg && !('signatureName' in selectArg)) {
-              const promise = Promise.resolve(dbSignatureMatchResult);
-              (promise as any).where = () => Promise.resolve(dbSignatureMatchResult);
-              return promise;
-            }
-
-            const signatureData = () =>
-              Promise.resolve(
-                dbSelectResult.map((r) => ({ signatureName: (r as Record<string, unknown>).signatureName })),
-              );
-            const fullData = () => Promise.resolve(dbSelectResult);
-            const promise = signatureData();
-            (promise as any).where = () => fullData();
-            return promise;
-          },
-        }),
-        insert: () => ({
-          values: (row: Record<string, unknown>) => {
-            const newRow = {
-              id: "wf-new-" + Math.random().toString(36).slice(2, 8),
-              ...row,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            };
-            dbInserts.push(newRow);
-            return { returning: () => Promise.resolve([newRow]) };
-          },
-        }),
-        update: () => ({
-          set: (values: Record<string, unknown>) => ({
-            where: () => {
-              dbUpdates.push({ values, id: "unknown" });
-              return { returning: () => Promise.resolve([]) };
-            },
-          }),
-        }),
-      };
-    }
-
-    try {
-      await validateAndUpgradeWorkflows({
-        db: createMockDbWithRuns() as any,
-        windmillClient: null,
-      });
-    } catch {
-      // May throw due to failedCount — that's OK for this test
-    }
-
-    // wf-active (recent run) should be upgraded before wf-dormant (no runs)
-    // Check order via console.warn calls which log the workflow name
-    const brokenEndpointWarns = warnSpy.mock.calls
-      .filter((call) => typeof call[0] === "string" && call[0].includes("broken endpoint"))
-      .map((call) => call[0] as string);
-
-    expect(brokenEndpointWarns).toHaveLength(2);
-    expect(brokenEndpointWarns[0]).toContain("Active");
-    expect(brokenEndpointWarns[1]).toContain("Dormant");
-
-    warnSpy.mockRestore();
-  });
 });
+
