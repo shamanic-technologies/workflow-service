@@ -1,4 +1,4 @@
-import { eq, inArray, desc, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { workflows, workflowRuns, type Workflow } from "../db/schema.js";
 import type { db as DbInstance } from "../db/index.js";
 import type { DAG } from "./dag-validator.js";
@@ -7,13 +7,9 @@ import {
   fetchServiceList,
   fetchSpecsForServices,
 } from "./api-registry-client.js";
-import { validateWorkflowEndpoints, type FieldValidationIssue } from "./validate-workflow-endpoints.js";
-import { upgradeWorkflow } from "./workflow-upgrader.js";
+import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
-import { computeDAGSignature } from "./dag-signature.js";
-import { pickSignatureName } from "./signature-words.js";
 import type { WindmillClient } from "./windmill-client.js";
-import { createPlatformRun, closePlatformRun } from "./runs-client.js";
 import { deprecateStaleWorkflows } from "./stale-workflow-deprecator.js";
 
 type Database = typeof DbInstance;
@@ -149,56 +145,18 @@ export async function validateAndUpgradeWorkflows(
       );
     }
 
-    // Attempt upgrade — pass ALL field issues (errors + warnings) so the LLM can fix everything
-    try {
-      const upgraded = await attemptUpgrade(
-        wf,
-        dag,
-        result.invalidEndpoints,
-        result.fieldIssues,
-        database,
-        windmillClient,
-      );
-
-      if (upgraded) {
-        upgradedCount++;
-        console.log(
-          `[workflow-service] Workflow "${wf.slug}" upgraded successfully -> new ID: ${upgraded}`,
-        );
-      } else {
-        // Upgrade skipped — keep workflow active
-        failedCount++;
-        console.warn(
-          `[workflow-service] Workflow "${wf.slug}" has broken endpoints but upgrade skipped — keeping active`,
-        );
-      }
-    } catch (err) {
-      // Upgrade failed — keep workflow active rather than breaking all campaigns
-      failedCount++;
-      console.error(
-        `[workflow-service] Workflow "${wf.slug}" upgrade failed — keeping active:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-
-    // Send admin notification
-    try {
-      await sendAdminNotification(wf, result.invalidEndpoints, upgradedCount > failedCount);
-    } catch {
-      // Non-blocking — log and continue
-      console.warn(`[workflow-service] Failed to send admin notification for "${wf.slug}"`);
-    }
+    // LLM auto-upgrade DISABLED — was burning Gemini credits on every startup/spec change.
+    // Keeping workflows active with broken endpoints rather than paying for LLM fixes.
+    // To re-enable: restore the attemptUpgrade() call here.
+    failedCount++;
+    console.warn(
+      `[workflow-service] Workflow "${wf.slug}" has broken endpoints — LLM upgrade disabled, keeping active`,
+    );
   }
 
   console.log(
-    `[workflow-service] Validated ${activeWorkflows.length} workflows: ${validCount} valid, ${upgradedCount} upgraded, ${failedCount} failed`,
+    `[workflow-service] Validated ${activeWorkflows.length} workflows: ${validCount} valid, ${failedCount} broken (LLM upgrade disabled)`,
   );
-
-  if (failedCount > 0) {
-    throw new Error(
-      `[workflow-service] ${failedCount} workflow(s) have broken endpoints that could not be auto-upgraded. Fix the workflows or ensure chat-service is available, then restart.`,
-    );
-  }
 
   // 5. Sync all active workflows to Windmill — ensures DB DAG changes
   //    (e.g. new inputMapping fields) are reflected in Windmill flows.
@@ -225,183 +183,6 @@ export async function validateAndUpgradeWorkflows(
   }
 }
 
-async function attemptUpgrade(
-  wf: Workflow,
-  dag: DAG,
-  invalidEndpoints: Array<{ service: string; method: string; path: string; reason: string }>,
-  fieldErrors: FieldValidationIssue[],
-  database: Database,
-  windmillClient: WindmillClient | null,
-): Promise<string | null> {
-  // Track this upgrade as a platform-level run
-  let platformRunId: string | undefined;
-  try {
-    const run = await createPlatformRun({
-      serviceName: "workflow",
-      taskName: "startup-upgrade",
-      workflowSlug: wf.slug,
-    });
-    platformRunId = run.runId;
-  } catch (err) {
-    console.warn(
-      "[workflow-service] Failed to create platform run — continuing without tracking:",
-      err instanceof Error ? err.message : err,
-    );
-  }
-
-  try {
-    const result = await upgradeWorkflow(
-      dag,
-      invalidEndpoints,
-      fieldErrors,
-      undefined,
-      {
-        category: wf.category ?? "",
-        channel: wf.channel ?? "",
-        audienceType: wf.audienceType ?? "",
-        description: wf.description ?? "",
-      },
-    );
-
-    // Compute new signature
-    const newSignature = computeDAGSignature(result.dag);
-
-    // Check if an active workflow with this signature already exists in the same org.
-    // This happens when multiple workflows upgrade to the same DAG — the second one
-    // should just deprecate and point to the already-upgraded workflow.
-    const [existingMatch] = await database
-      .select({ id: workflows.id })
-      .from(workflows)
-      .where(
-        sql`${workflows.orgId} = ${wf.orgId} AND ${workflows.signature} = ${newSignature} AND ${workflows.status} = 'active'`,
-      );
-
-    if (existingMatch) {
-      await deprecateWorkflow(database, wf.id, existingMatch.id);
-      console.log(
-        `[workflow-service] Workflow "${wf.slug}" upgraded by dedup — points to existing ${existingMatch.id}`,
-      );
-
-      if (platformRunId) {
-        try { await closePlatformRun(platformRunId, "completed"); } catch { /* non-blocking */ }
-      }
-
-      return existingMatch.id;
-    }
-
-    // Get used signature names to avoid collisions
-    const existingWorkflows = await database
-      .select({ signatureName: workflows.signatureName })
-      .from(workflows);
-    const usedNames = new Set<string>(existingWorkflows.map((w) => w.signatureName));
-
-    const newSignatureName = pickSignatureName(newSignature, usedNames);
-
-    // Build the new slug from the dynasty; increment version
-    const newVersion = wf.version + 1;
-    const baseSlug = wf.dynastySlug;
-    const newSlug = newVersion >= 2 ? `${baseSlug}-v${newVersion}` : baseSlug;
-    const newName = newVersion >= 2 ? `${wf.dynastyName} v${newVersion}` : wf.dynastyName;
-
-    // Deploy to Windmill
-    const openFlow = dagToOpenFlow(result.dag, newSlug);
-    const flowPath = `f/workflows/${wf.orgId}/${newSlug.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
-    let windmillFlowPath: string | null = null;
-
-    if (windmillClient) {
-      try {
-        await windmillClient.updateFlow(flowPath, {
-          summary: newSlug,
-          description: result.description,
-          value: openFlow.value,
-          schema: openFlow.schema,
-        });
-        windmillFlowPath = flowPath;
-      } catch (updateErr) {
-        const msg = updateErr instanceof Error ? updateErr.message : String(updateErr);
-        if (msg.includes("not found") || msg.includes("404")) {
-          try {
-            await windmillClient.createFlow({
-              path: flowPath,
-              summary: newSlug,
-              description: result.description,
-              value: openFlow.value,
-              schema: openFlow.schema,
-            });
-            windmillFlowPath = flowPath;
-          } catch (createErr) {
-            console.error("[workflow-service] Failed to create flow in Windmill:", createErr);
-          }
-        } else {
-          console.error("[workflow-service] Failed to update flow in Windmill:", updateErr);
-        }
-      }
-    }
-
-    // Deprecate old workflow FIRST (frees the unique slug index for the replacement)
-    await deprecateWorkflow(database, wf.id, null);
-
-    // Insert new active workflow with incremented version
-    const [created] = await database
-      .insert(workflows)
-      .values({
-        orgId: wf.orgId,
-        createdForBrandId: wf.createdForBrandId,
-        featureSlug: wf.featureSlug,
-        humanId: wf.humanId,
-        campaignId: wf.campaignId,
-        subrequestId: wf.subrequestId,
-        styleName: wf.styleName,
-        slug: newSlug,
-        name: newName,
-        dynastyName: wf.dynastyName,
-        dynastySlug: wf.dynastySlug,
-        description: result.description,
-        category: result.category,
-        channel: result.channel,
-        audienceType: result.audienceType,
-        signature: newSignature,
-        signatureName: wf.signatureName,
-        version: newVersion,
-        dag: result.dag,
-        tags: wf.tags as string[],
-        status: "active",
-        createdByUserId: "workflow-service",
-        createdByRunId: platformRunId ?? "startup-upgrade",
-        windmillFlowPath,
-        windmillWorkspace: wf.windmillWorkspace,
-      })
-      .returning();
-
-    // Update the deprecated workflow's upgradedTo pointer
-    await database
-      .update(workflows)
-      .set({ upgradedTo: created.id })
-      .where(eq(workflows.id, wf.id));
-
-    // Close platform run as completed
-    if (platformRunId) {
-      try {
-        await closePlatformRun(platformRunId, "completed");
-      } catch {
-        // Non-blocking
-      }
-    }
-
-    return created.id;
-  } catch (err) {
-    // Close platform run as failed
-    if (platformRunId) {
-      try {
-        await closePlatformRun(platformRunId, "failed");
-      } catch {
-        // Non-blocking
-      }
-    }
-    throw err;
-  }
-}
-
 async function syncFlowToWindmill(
   wf: Workflow,
   windmillClient: WindmillClient,
@@ -421,68 +202,3 @@ async function syncFlowToWindmill(
   });
 }
 
-async function deprecateWorkflow(
-  database: Database,
-  workflowId: string,
-  upgradedTo: string | null,
-): Promise<void> {
-  await database
-    .update(workflows)
-    .set({
-      status: "deprecated",
-      upgradedTo,
-      updatedAt: new Date(),
-    })
-    .where(eq(workflows.id, workflowId));
-}
-
-async function sendAdminNotification(
-  wf: Workflow,
-  invalidEndpoints: Array<{ service: string; method: string; path: string; reason: string }>,
-  upgraded: boolean,
-): Promise<void> {
-  const emailServiceUrl = process.env.TRANSACTIONAL_EMAIL_SERVICE_URL;
-  const emailApiKey = process.env.TRANSACTIONAL_EMAIL_SERVICE_API_KEY;
-  const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
-
-  if (!emailServiceUrl || !emailApiKey || !adminEmail) {
-    return;
-  }
-
-  const endpointList = invalidEndpoints
-    .map((ep) => `${ep.method} ${ep.service}${ep.path} — ${ep.reason}`)
-    .join("\n");
-
-  const subject = upgraded
-    ? `[Workflow Service] Workflow "${wf.slug}" auto-upgraded`
-    : `[Workflow Service] Workflow "${wf.slug}" deprecated — manual intervention required`;
-
-  const body = `Workflow: ${wf.slug} (${wf.id})
-Org ID: ${wf.orgId}
-Status: ${upgraded ? "Auto-upgraded successfully" : "Deprecated — upgrade failed"}
-
-Invalid endpoints:
-${endpointList}
-
-${upgraded ? "A new version has been created with corrected endpoints." : "The workflow has been deprecated but could not be automatically fixed. Please review and fix manually."}
-
-Warning: If an endpoint is actually valid but missing from the OpenAPI spec, update the spec in the source service and redeploy.`;
-
-  try {
-    await fetch(`${emailServiceUrl}/send`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": emailApiKey,
-        "x-service-name": "workflow-service",
-      },
-      body: JSON.stringify({
-        to: adminEmail,
-        subject,
-        bodyText: body,
-      }),
-    });
-  } catch {
-    // Non-blocking
-  }
-}
