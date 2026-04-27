@@ -38,8 +38,6 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
         id: w.id,
         slug: w.slug,
         name: w.name,
-        dynastyName: w.dynastyName,
-        dynastySlug: w.dynastySlug,
         version: w.version,
         status: w.status,
         featureSlug: w.featureSlug,
