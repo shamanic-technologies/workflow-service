@@ -171,7 +171,7 @@ export const UpdateWorkflowSchema = z
       "Optional new DAG. When omitted, only metadata (description, tags) is updated in-place. " +
       "When provided with the same structural signature, the DAG is updated in-place. " +
       "When provided with a different structural signature, a new workflow is created (fork) " +
-      "and the original is kept active (unless its dynasty has zero campaign runs, in which case it is deprecated)."
+      "and the original is kept active (unless its lineage has zero campaign runs, in which case it is deprecated)."
     ),
   })
   .openapi("UpdateWorkflowRequest", {
@@ -202,16 +202,14 @@ export const WorkflowResponseSchema = z
     styleName: z.string().nullable().describe("Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."),
     slug: z.string().describe("Unique technical identifier. Use this to execute via /workflows/by-slug/{slug}/execute."),
     name: z.string().describe("Human-readable display name. Globally unique."),
-    dynastyName: z.string().describe("Stable name for the lineage. Constant across all versions of a dynasty."),
-    dynastySlug: z.string().describe("Stable slug for the lineage. Constant across all versions of a dynasty. Use this as key for dynasty-level lookups."),
     description: z.string().nullable(),
     category: WorkflowCategorySchema.nullable().describe("Optional workflow category tag."),
     channel: WorkflowChannelSchema.nullable().describe("Optional workflow channel tag."),
     audienceType: WorkflowAudienceTypeSchema.nullable().describe("Optional workflow audience type tag."),
     tags: z.array(z.string()).describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
-    signatureName: z.string().describe("Poetic word for this dynasty (e.g. 'sequoia'). Set once at dynasty creation."),
-    version: z.number().int().describe("Version number within the dynasty. Starts at 1."),
+    signatureName: z.string().describe("Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation."),
+    version: z.number().int().describe("Version number within the lineage. Starts at 1."),
     dag: z.unknown().describe("The DAG definition as submitted."),
     status: z.enum(["active", "deprecated"]).describe("Workflow lifecycle status. Only active workflows can be executed."),
     upgradedTo: z.string().uuid().nullable().describe("If deprecated, the ID of the replacement workflow."),
@@ -228,7 +226,7 @@ export const WorkflowResponseSchema = z
 export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
   _action: z.enum(["updated", "forked"]).describe(
     "What happened: 'updated' means the existing workflow was modified in-place (metadata or same-signature DAG). " +
-    "'forked' means a new workflow was created with a new dynasty because the DAG signature changed."
+    "'forked' means a new workflow was created with a new lineage because the DAG signature changed."
   ),
   _forkedFromName: z.string().optional().describe(
     "Present only when _action='forked'. The display name of the original workflow that was forked."
@@ -237,8 +235,8 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     "Present only when _action='forked'. The ID of the original workflow that was forked."
   ),
   _sourceDynastyDeprecated: z.boolean().optional().describe(
-    "Present only when _action='forked'. True if the source dynasty was deprecated (had zero campaign runs). " +
-    "False if the source dynasty was kept active."
+    "Present only when _action='forked'. True if the source lineage was deprecated (had zero campaign runs). " +
+    "False if the source lineage was kept active."
   ),
 }).openapi("WorkflowMutationResponse", {
   example: {
@@ -251,8 +249,6 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     styleName: null,
     slug: "pr-cold-email-outreach-sequoia",
     name: "Pr Cold Email Outreach Sequoia",
-    dynastyName: "Pr Cold Email Outreach Sequoia",
-    dynastySlug: "pr-cold-email-outreach-sequoia",
     description: "Cold outreach sequence for PR campaigns",
     featureSlug: "pr-cold-email-outreach",
     category: "pr",
@@ -423,14 +419,13 @@ export const DeployWorkflowsSchema = z
 export const DeployWorkflowResultSchema = z
   .object({
     id: z.string().uuid(),
-    slug: z.string().describe("Unique technical identifier: {featureDynastySlug}-{signatureName}[-v{N}]."),
-    name: z.string().describe("Human-readable name: {dynastyName}[ v{N}]."),
-    dynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
+    slug: z.string().describe("Unique technical identifier: {featureSlug}-{signatureName}[-v{N}]."),
+    name: z.string().describe("Human-readable name: {featureName} {SignatureName}[ v{N}]."),
     featureSlug: z.string().describe("Feature slug used to build the name."),
     tags: z.array(z.string()).describe("Tags assigned to this workflow."),
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
-    signatureName: z.string().describe("Poetic word for this dynasty (auto-generated by workflow-service)."),
-    version: z.number().int().describe("Version number within the dynasty."),
+    signatureName: z.string().describe("Poetic word for this lineage (auto-generated by workflow-service)."),
+    version: z.number().int().describe("Version number within the lineage."),
     action: z.enum(["created", "updated", "deprecated-to-existing"]),
   })
   .openapi("DeployWorkflowResult");
@@ -599,9 +594,7 @@ export const WorkflowMetadataSchema = z
     id: z.string().uuid(),
     slug: z.string().describe("Unique technical identifier."),
     name: z.string().describe("Human-readable display name."),
-    dynastyName: z.string().describe("Stable lineage name (constant across versions)."),
-    dynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
-    version: z.number().int().describe("Version number within the dynasty."),
+    version: z.number().int().describe("Version number within the lineage."),
     createdForBrandId: z.string().nullable(),
     featureSlug: z.string().describe("Feature slug for grouping and naming."),
     signature: z.string(),
@@ -635,9 +628,7 @@ export const PublicWorkflowItemSchema = z
     id: z.string().uuid().describe("Workflow ID."),
     slug: z.string().describe("Unique technical identifier."),
     name: z.string().describe("Human-readable display name."),
-    dynastyName: z.string().describe("Stable dynasty name across versions."),
-    dynastySlug: z.string().describe("Stable dynasty slug across versions."),
-    version: z.number().int().describe("Version number within the dynasty."),
+    version: z.number().int().describe("Version number within the lineage."),
     status: z.string().describe("Workflow status: active or deprecated."),
     featureSlug: z.string().describe("Versioned feature slug."),
     createdForBrandId: z.string().nullable().describe("Brand ID this workflow was created for, or null."),
@@ -693,38 +684,6 @@ export const WorkflowConflictResponseSchema = z
     existingWorkflowSlug: z.string().describe("Slug of the existing workflow that already has this DAG signature."),
   })
   .openapi("WorkflowConflictResponse");
-
-// --- Dynasty lookup schemas ---
-
-export const DynastySlugsResponseSchema = z
-  .object({
-    dynastySlug: z.string().describe("The dynasty slug used for lookup."),
-    dynastyName: z.string().describe("Human-readable dynasty name."),
-    slugs: z.array(z.string()).describe("All workflow slugs in this dynasty (all versions, all statuses)."),
-  })
-  .openapi("DynastySlugsResponse");
-
-export const DynastyEntrySchema = z
-  .object({
-    dynastySlug: z.string().describe("Stable dynasty slug."),
-    dynastyName: z.string().describe("Human-readable dynasty name."),
-    slugs: z.array(z.string()).describe("All versioned workflow slugs in this dynasty."),
-  })
-  .openapi("DynastyEntry");
-
-export const DynastiesResponseSchema = z
-  .object({
-    dynasties: z.array(DynastyEntrySchema).describe("All dynasties with their versioned slugs."),
-  })
-  .openapi("DynastiesResponse");
-
-export const DynastyStatsResponseSchema = z
-  .object({
-    dynastySlug: z.string().describe("The dynasty slug."),
-    dynastyName: z.string().describe("Human-readable dynasty name."),
-    stats: WorkflowStatsSchema.describe("Aggregated stats across all versions of this dynasty."),
-  })
-  .openapi("DynastyStatsResponse");
 
 // --- Internal: Transfer Brand ---
 
@@ -842,10 +801,8 @@ registry.registerPath({
       brandId: z.string().optional(),
       humanId: z.string().optional(),
       campaignId: z.string().optional(),
-      featureSlug: z.string().optional().describe("Exact match on the versioned feature slug stored in the workflow."),
-      featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service."),
-      workflowSlug: z.string().optional().describe("Exact match on the versioned workflow slug."),
-      workflowDynastySlug: z.string().optional().describe("Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions)."),
+      featureSlug: z.string().optional().describe("Exact match on the feature slug stored in the workflow."),
+      workflowSlug: z.string().optional().describe("Exact match on the workflow slug."),
       category: WorkflowCategorySchema.optional(),
       channel: WorkflowChannelSchema.optional(),
       audienceType: WorkflowAudienceTypeSchema.optional(),
@@ -928,10 +885,10 @@ registry.registerPath({
     "**Metadata only** (no `dag` in body): updates description/tags in-place. Returns `_action: 'updated'`.\n\n" +
     "**DAG with same signature**: the DAG structure hasn't changed (e.g. only config tweaks that don't affect the hash). " +
     "Updates in-place. Returns `_action: 'updated'`.\n\n" +
-    "**DAG with new signature**: creates a new workflow in a new dynasty (fork). The original workflow is kept active " +
-    "unless its entire dynasty has zero campaign runs, in which case it is deprecated. " +
+    "**DAG with new signature**: creates a new workflow in a new lineage (fork). The original workflow is kept active " +
+    "unless its entire lineage has zero campaign runs, in which case it is deprecated. " +
     "Returns `_action: 'forked'` with the new workflow data, plus `_forkedFromName`, `_forkedFromId`, " +
-    "and `_sourceDynastyDeprecated` to indicate what happened.\n\n" +
+    "and `_sourceDynastyDeprecated` to indicate what happened to the source lineage.\n\n" +
     "The new workflow's ID is in the response — use it going forward. " +
     "Returns 201 for forks, 200 for in-place updates.",
   tags: ["Workflows"],
@@ -1106,10 +1063,8 @@ registry.registerPath({
       workflowId: z.string().uuid().optional(),
       orgId: z.string().optional(),
       campaignId: z.string().optional(),
-      featureSlug: z.string().optional().describe("Exact match on the versioned feature slug stored in the run."),
-      featureDynastySlug: z.string().optional().describe("Filter by feature dynasty slug — resolves to all versioned feature slugs in the lineage via features-service."),
-      workflowSlug: z.string().optional().describe("Exact match on the versioned workflow slug stored in the run."),
-      workflowDynastySlug: z.string().optional().describe("Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID."),
+      featureSlug: z.string().optional().describe("Exact match on the feature slug stored in the run."),
+      workflowSlug: z.string().optional().describe("Exact match on the workflow slug stored in the run."),
       status: z.string().optional(),
     }),
   },
@@ -1179,101 +1134,6 @@ registry.registerPath({
     },
     422: {
       description: "LLM generated an invalid DAG that could not be fixed after retries",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-// --- Dynasty endpoints ---
-
-registry.registerPath({
-  method: "get",
-  path: "/workflows/dynasties",
-  summary: "List all dynasties with their versioned slugs",
-  description:
-    "Returns all dynasties with the list of versioned workflow slugs for each. " +
-    "Useful for building a reverse map (slug → dynastySlug) to aggregate stats by dynasty.",
-  tags: ["Dynasty"],
-  security: [{ apiKey: [] }],
-  request: {
-    headers: IdentityHeaders,
-  },
-  responses: {
-    200: {
-      description: "All dynasties",
-      content: {
-        "application/json": { schema: DynastiesResponseSchema },
-      },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/workflows/dynasty/slugs",
-  summary: "Resolve a dynasty slug to all versioned workflow slugs",
-  description:
-    "Returns all workflow slugs (across all versions and statuses) that belong to the given dynasty. " +
-    "Use this to aggregate stats across all versions of a workflow in external services.",
-  tags: ["Dynasty"],
-  security: [{ apiKey: [] }],
-  request: {
-    headers: IdentityHeaders,
-    query: z.object({
-      dynastySlug: z.string().describe("The dynasty slug to resolve."),
-    }),
-  },
-  responses: {
-    200: {
-      description: "Dynasty slugs resolved",
-      content: {
-        "application/json": { schema: DynastySlugsResponseSchema },
-      },
-    },
-    400: {
-      description: "Missing dynastySlug query parameter",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    404: {
-      description: "No workflows found for this dynasty slug",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/workflows/dynasty/stats",
-  summary: "Get aggregated stats for a dynasty",
-  description:
-    "Returns performance stats aggregated across all versions of the given dynasty. " +
-    "This includes costs, email metrics, and completed runs from the entire upgrade chain.",
-  tags: ["Dynasty"],
-  security: [{ apiKey: [] }],
-  request: {
-    headers: IdentityHeaders,
-    query: z.object({
-      dynastySlug: z.string().describe("The dynasty slug to get stats for."),
-      objective: RankedWorkflowObjectiveSchema.describe("Stats key to optimize for (e.g. 'emailsReplied', 'emailsClicked'). Required."),
-    }),
-  },
-  responses: {
-    200: {
-      description: "Dynasty stats",
-      content: {
-        "application/json": { schema: DynastyStatsResponseSchema },
-      },
-    },
-    400: {
-      description: "Missing dynastySlug query parameter",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    404: {
-      description: "No workflows found for this dynasty slug",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    502: {
-      description: "External service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

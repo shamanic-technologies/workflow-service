@@ -73,21 +73,8 @@ vi.mock("../../src/lib/content-generation-client.js", () => ({
     mockFetchPromptTemplates(...args),
 }));
 
-// Mock features-client (for fork dynasty name resolution)
-vi.mock("../../src/lib/features-client.js", () => ({
-  resolveFeatureDynasty: vi.fn().mockImplementation((featureSlug: string) => {
-    const dynastySlug = featureSlug.replace(/-v\d+$/, "");
-    const dynastyName = dynastySlug
-      .split("-")
-      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" ");
-    return Promise.resolve({ featureDynastyName: dynastyName, featureDynastySlug: dynastySlug });
-  }),
-  resolveFeatureDynastySlugs: vi.fn().mockImplementation((dynastySlug: string) => {
-    // Simulate: dynasty slug resolves to itself + versioned variants
-    return Promise.resolve([dynastySlug, `${dynastySlug}-v2`, `${dynastySlug}-v3`]);
-  }),
-}));
+// Mock features-client
+vi.mock("../../src/lib/features-client.js", () => ({}));
 
 // Mock Windmill client
 vi.mock("../../src/lib/windmill-client.js", () => ({
@@ -139,7 +126,6 @@ describe("POST /workflows", () => {
     expect(res.status).toBe(201);
     expect(res.body.slug).toBeTruthy();
     expect(res.body.name).toBeTruthy();
-    expect(res.body.dynastyName).toBeTruthy();
     expect(res.body.version).toBe(1);
     expect(res.body.orgId).toBe("org-1");
     expect(res.body.featureSlug).toBe("sales-cold-email-outreach");
@@ -219,7 +205,6 @@ describe("GET /workflows", () => {
       orgId: "org-1",
       slug: "flow-1",
       name: "Flow 1",
-      dynastyName: "Flow 1",
       version: 1,
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
@@ -238,7 +223,6 @@ describe("GET /workflows", () => {
       orgId: "org-1",
       slug: "flow-1",
       name: "Flow 1",
-      dynastyName: "Flow 1",
       version: 1,
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
@@ -277,7 +261,6 @@ describe("GET /workflows", () => {
       orgId: "org-1",
       slug: "outlet-database-discovery-sequoia",
       name: "Outlet Database Discovery Sequoia",
-      dynastyName: "Outlet Database Discovery Sequoia",
       version: 1,
       featureSlug: "outlet-database-discovery",
       category: "outlets",
@@ -299,62 +282,12 @@ describe("GET /workflows", () => {
     expect(res.body.workflows[0].featureSlug).toBe("outlet-database-discovery");
   });
 
-  it("filters workflows by featureDynastySlug via features-service resolution", async () => {
-    mockDbRows.push({
-      id: WF_FEATURE_ID,
-      orgId: "org-1",
-      slug: "outlet-database-discovery-sequoia",
-      name: "Outlet Database Discovery Sequoia",
-      dynastyName: "Outlet Database Discovery Sequoia",
-      version: 1,
-      featureSlug: "outlet-database-discovery",
-      status: "active",
-      dag: VALID_LINEAR_DAG,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    const res = await request
-      .get("/workflows")
-      .query({ featureDynastySlug: "outlet-database-discovery" })
-      .set(AUTH);
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows).toBeDefined();
-  });
-
-  it("filters workflows by workflowDynastySlug", async () => {
-    mockDbRows.push({
-      id: WF_FEATURE_ID,
-      orgId: "org-1",
-      slug: "sales-cold-email-outreach-sequoia-v2",
-      name: "Sales Cold Email Outreach Sequoia v2",
-      dynastyName: "Sales Cold Email Outreach Sequoia",
-      dynastySlug: "sales-cold-email-outreach-sequoia",
-      version: 2,
-      featureSlug: "sales-cold-email-outreach",
-      status: "active",
-      dag: VALID_LINEAR_DAG,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    const res = await request
-      .get("/workflows")
-      .query({ workflowDynastySlug: "sales-cold-email-outreach-sequoia" })
-      .set(AUTH);
-
-    expect(res.status).toBe(200);
-    expect(res.body.workflows).toBeDefined();
-  });
-
   it("filters workflows by workflowSlug", async () => {
     mockDbRows.push({
       id: WF_FEATURE_ID,
       orgId: "org-1",
       slug: "sales-cold-email-outreach-sequoia",
       name: "Sales Cold Email Outreach Sequoia",
-      dynastyName: "Sales Cold Email Outreach Sequoia",
       version: 1,
       featureSlug: "sales-cold-email-outreach",
       status: "active",
@@ -378,7 +311,6 @@ describe("GET /workflows", () => {
       orgId: "org-1",
       slug: "sales-cold-email-outreach-sequoia",
       name: "Sales Cold Email Outreach Sequoia",
-      dynastyName: "Sales Cold Email Outreach Sequoia",
       version: 1,
       featureSlug: "sales-cold-email-outreach",
       category: "sales",
@@ -573,7 +505,6 @@ describe("PUT /workflows/upgrade", () => {
       orgId: "org-deploy",
       slug: "sales-cold-email-outreach-sequoia",
       name: "Sales Cold Email Outreach Sequoia",
-      dynastyName: "Sales Cold Email Outreach Sequoia",
       version: 1,
       signatureName: "sequoia",
       signature: sig,
@@ -895,7 +826,6 @@ describe("GET /workflows/:id/required-providers", () => {
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
-      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL_CHAIN,
       createdAt: new Date(),
@@ -935,7 +865,6 @@ describe("GET /workflows/:id/required-providers", () => {
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
-      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL_CHAIN,
       createdAt: new Date(),
@@ -967,7 +896,6 @@ describe("GET /workflows/:id/required-providers", () => {
       orgId: "org-1",
       slug: "legacy-flow",
       name: "Legacy Flow",
-      dynastyName: "Legacy Flow",
       version: 1,
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
       createdAt: new Date(),
@@ -1000,7 +928,6 @@ describe("GET /workflows/:id/required-providers", () => {
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
-      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL,
       createdAt: new Date(),
@@ -1027,7 +954,6 @@ describe("GET /workflows/:id/required-providers", () => {
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
-      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL,
       createdAt: new Date(),
@@ -1053,7 +979,6 @@ describe("GET /workflows/:id/required-providers", () => {
       orgId: "org-1",
       slug: "http-flow",
       name: "HTTP Flow",
-      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL,
       createdAt: new Date(),
@@ -1094,8 +1019,6 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
       orgId: "org-1",
       slug: "sales-email-cold-outreach-maple",
       name: "Sales Email Cold Outreach Maple",
-      dynastyName: "Sales Email Cold Outreach Maple",
-      dynastySlug: "sales-email-cold-outreach-maple",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "maple",
       signature: "abc123",
@@ -1132,8 +1055,6 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
       orgId: "org-1",
       slug: "sales-email-cold-outreach-maple",
       name: "Sales Email Cold Outreach Maple",
-      dynastyName: "Sales Email Cold Outreach Maple",
-      dynastySlug: "sales-email-cold-outreach-maple",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "maple",
       signature: realSig,
@@ -1167,8 +1088,6 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
       orgId: "org-1",
       slug: "sales-email-cold-outreach-pine",
       name: "Sales Email Cold Outreach Pine",
-      dynastyName: "Sales Email Cold Outreach Pine",
-      dynastySlug: "sales-email-cold-outreach-pine",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "pine",
       signature: "old-sig-123",
@@ -1210,8 +1129,6 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
       orgId: "org-1",
       slug: "sales-email-cold-outreach-pine",
       name: "Sales Email Cold Outreach Pine",
-      dynastyName: "Sales Email Cold Outreach Pine",
-      dynastySlug: "sales-email-cold-outreach-pine",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "pine",
       signature: "old-sig-123",
@@ -1267,7 +1184,6 @@ describe("POST /workflows/:id/validate", () => {
       orgId: "org-1",
       slug: "flow-1",
       name: "Flow 1",
-      dynastyName: "Flow 1",
       version: 1,
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
@@ -28,13 +28,6 @@ import { fetchProviderRequirements } from "../lib/key-service-client.js";
 import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIssue, type TemplateRef } from "../lib/validate-template-contracts.js";
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
-import {
-  getUpgradeChainIds,
-  computeWorkflowScores,
-  aggregateSectionStats,
-  handleExternalServiceError,
-} from "../lib/workflow-scoring.js";
-import { resolveFeatureDynasty, resolveFeatureDynastySlugs } from "../lib/features-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 
 const router = Router();
@@ -53,6 +46,11 @@ function generateFlowPath(scope: string, slug: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
   return `f/workflows/${scope}/${sanitized}`;
+}
+
+/** Convert feature slug to display name: "pr-cold-email-outreach" → "PR Cold Email Outreach" */
+function featureSlugToName(slug: string): string {
+  return slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 /** Compose slug with version suffix: no -v1 for v1, -v2 for v2+. */
@@ -187,12 +185,12 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         signatureName = pickSignatureName(signature, usedNames);
       }
 
-      const dynasty = await resolveFeatureDynasty(body.featureSlug, extractDownstreamHeaders(req));
-      const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-      const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
+      const featureName = featureSlugToName(body.featureSlug);
+      const baseSlug = `${body.featureSlug}-${signatureName}`;
+      const baseName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
       const newVersion = existing ? existing.version + 1 : 1;
-      const slug = composeSlug(dynastySlug, newVersion);
-      const name = composeName(dynastyName, newVersion);
+      const slug = composeSlug(baseSlug, newVersion);
+      const name = composeName(baseName, newVersion);
 
       const openFlow = dagToOpenFlow(dag, slug);
       const flowPath = generateFlowPath(orgId, slug);
@@ -226,8 +224,6 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
           orgId,
           slug,
           name,
-          dynastyName,
-          dynastySlug,
           description: generated.description,
           featureSlug: body.featureSlug,
           category: generated.category,
@@ -313,11 +309,9 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(signature, usedNames);
 
-    const dynasty = await resolveFeatureDynasty(body.featureSlug, extractDownstreamHeaders(req));
-    const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-    const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
-    const slug = dynastySlug;
-    const name = dynastyName;
+    const featureName = featureSlugToName(body.featureSlug);
+    const slug = `${body.featureSlug}-${signatureName}`;
+    const name = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
 
     // Translate to OpenFlow
     const openFlow = dagToOpenFlow(dag, slug);
@@ -350,8 +344,6 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         subrequestId: body.subrequestId,
         slug,
         name,
-        dynastyName,
-        dynastySlug,
         description: body.description,
         category: body.category,
         channel: body.channel,
@@ -496,7 +488,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       .where(sql`true`);
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; slug: string; name: string; dynastySlug: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
+    const results: { id: string; slug: string; name: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
@@ -556,7 +548,6 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           id: updated.id,
           slug: updated.slug,
           name: updated.name,
-          dynastySlug: updated.dynastySlug,
           featureSlug: updated.featureSlug,
           tags: (updated.tags as string[]) ?? [],
           signature: updated.signature,
@@ -596,7 +587,6 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             id: convergenceTarget.id,
             slug: convergenceTarget.slug,
             name: convergenceTarget.name,
-            dynastySlug: convergenceTarget.dynastySlug,
             featureSlug: convergenceTarget.featureSlug,
             tags: (convergenceTarget.tags as string[]) ?? [],
             signature: convergenceTarget.signature,
@@ -605,16 +595,14 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             action: "deprecated-to-existing",
           });
         } else {
-          // Upgrade: deprecate old, create new version in the same dynasty
+          // Upgrade: deprecate old, create new version in the same lineage
           const newVersion = activeForFeature.version + 1;
-          const dynastyName = activeForFeature.dynastyName;
-          const dynastySlug = activeForFeature.dynastySlug;
           const signatureName = activeForFeature.signatureName;
-
-          // Use dynastySlug as the base for versioned slugs
-          const baseSlug = dynastySlug;
+          const featureName = featureSlugToName(wf.featureSlug);
+          const baseSlug = `${wf.featureSlug}-${signatureName}`;
+          const baseName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
           const newSlug = composeSlug(baseSlug, newVersion);
-          const newName = composeName(dynastyName, newVersion);
+          const newName = composeName(baseName, newVersion);
 
           console.log(
             `[workflow-service] deploy: sig=${signature.slice(0, 12)} upgrade "${activeForFeature.slug}" -> "${newSlug}" (v${newVersion})`,
@@ -655,8 +643,6 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
               featureSlug: wf.featureSlug,
               slug: newSlug,
               name: newName,
-              dynastyName,
-              dynastySlug,
               description: wf.description,
               category: wf.category,
               channel: wf.channel,
@@ -682,7 +668,6 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             id: created.id,
             slug: created.slug,
             name: created.name,
-            dynastySlug: created.dynastySlug,
             featureSlug: created.featureSlug,
             tags: (created.tags as string[]) ?? [],
             signature: created.signature,
@@ -692,15 +677,13 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           });
         }
       } else {
-        // No active workflow for this featureSlug — new dynasty
+        // No active workflow for this featureSlug — new lineage
         const signatureName = pickSignatureName(signature, usedNames);
         usedNames.add(signatureName);
 
-        const dynasty = await resolveFeatureDynasty(wf.featureSlug, extractDownstreamHeaders(req));
-        const dynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-        const dynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
-        const slug = dynastySlug;
-        const name = dynastyName;
+        const featureName = featureSlugToName(wf.featureSlug);
+        const slug = `${wf.featureSlug}-${signatureName}`;
+        const name = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
 
         console.log(
           `[workflow-service] deploy: sig=${signature.slice(0, 12)} new dynasty -> "${slug}"`,
@@ -732,8 +715,6 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             featureSlug: wf.featureSlug,
             slug,
             name,
-            dynastyName,
-            dynastySlug,
             description: wf.description,
             category: wf.category,
             channel: wf.channel,
@@ -753,7 +734,6 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           id: created.id,
           slug: created.slug,
           name: created.name,
-          dynastySlug: created.dynastySlug,
           featureSlug: created.featureSlug,
           tags: (created.tags as string[]) ?? [],
           signature: created.signature,
@@ -781,137 +761,10 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
   }
 });
 
-// GET /workflows/dynasties — List all dynasties with their versioned slugs
-router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
-  try {
-    const allWorkflows = await db
-      .select({ slug: workflows.slug, dynastySlug: workflows.dynastySlug, dynastyName: workflows.dynastyName })
-      .from(workflows);
-
-    const dynastyMap = new Map<string, { dynastyName: string; slugs: string[] }>();
-    for (const w of allWorkflows) {
-      const entry = dynastyMap.get(w.dynastySlug);
-      if (entry) {
-        entry.slugs.push(w.slug);
-      } else {
-        dynastyMap.set(w.dynastySlug, { dynastyName: w.dynastyName, slugs: [w.slug] });
-      }
-    }
-
-    const dynasties = [...dynastyMap.entries()].map(([dynastySlug, { dynastyName, slugs }]) => ({
-      dynastySlug,
-      dynastyName,
-      slugs,
-    }));
-
-    res.json({ dynasties });
-  } catch (err) {
-    console.error("[workflow-service] GET dynasties error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// GET /workflows/dynasty/slugs — Resolve a dynasty slug to all versioned workflow slugs
-router.get("/workflows/dynasty/slugs", requireApiKey, async (req, res) => {
-  try {
-    const dynastySlug = req.query.dynastySlug;
-    if (!dynastySlug || typeof dynastySlug !== "string") {
-      res.status(400).json({ error: "Missing required query parameter: dynastySlug" });
-      return;
-    }
-
-    const matching = await db
-      .select({ slug: workflows.slug, dynastyName: workflows.dynastyName })
-      .from(workflows)
-      .where(eq(workflows.dynastySlug, dynastySlug));
-
-    if (matching.length === 0) {
-      res.status(404).json({ error: `No workflows found for dynastySlug: ${dynastySlug}` });
-      return;
-    }
-
-    res.json({
-      dynastySlug,
-      dynastyName: matching[0].dynastyName,
-      slugs: matching.map((w) => w.slug),
-    });
-  } catch (err) {
-    console.error("[workflow-service] GET dynasty/slugs error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// GET /workflows/dynasty/stats — Aggregated stats for a dynasty (full upgrade chain)
-router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
-  try {
-    const dynastySlug = req.query.dynastySlug;
-    if (!dynastySlug || typeof dynastySlug !== "string") {
-      res.status(400).json({ error: "Missing required query parameter: dynastySlug" });
-      return;
-    }
-
-    const objectiveParam = req.query.objective;
-    if (!objectiveParam || typeof objectiveParam !== "string") {
-      res.status(400).json({ error: "Missing required query parameter: objective (stats key, e.g. 'emailsReplied')" });
-      return;
-    }
-    const objective = objectiveParam;
-
-    const dsHeaders = extractDownstreamHeaders(req);
-
-    const allDynastyWorkflows = await db
-      .select()
-      .from(workflows)
-      .where(eq(workflows.dynastySlug, dynastySlug));
-
-    if (allDynastyWorkflows.length === 0) {
-      res.status(404).json({ error: `No workflows found for dynastySlug: ${dynastySlug}` });
-      return;
-    }
-
-    const activeWorkflows = allDynastyWorkflows.filter((w) => w.status === "active");
-    const deprecatedWorkflows = allDynastyWorkflows.filter((w) => w.status === "deprecated");
-
-    if (activeWorkflows.length === 0) {
-      res.json({
-        dynastySlug,
-        dynastyName: allDynastyWorkflows[0].dynastyName,
-        stats: {
-          totalCostInUsdCents: 0,
-          totalOutcomes: 0,
-          costPerOutcome: null,
-          completedRuns: 0,
-          email: {
-            transactional: { sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, recipients: 0 },
-            broadcast: { sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, recipients: 0 },
-          },
-        },
-      });
-      return;
-    }
-
-    // Dynasty-level: pass all deprecated workflows so chain aggregation happens
-    const { scores } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", downstreamHeaders: dsHeaders });
-
-    const stats = aggregateSectionStats(scores);
-
-    res.json({
-      dynastySlug,
-      dynastyName: allDynastyWorkflows[0].dynastyName,
-      stats,
-    });
-  } catch (err: unknown) {
-    if (!handleExternalServiceError(err, res, "dynasty/stats")) {
-      console.error("[workflow-service] GET dynasty/stats error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  }
-});
-
 // GET /workflows — List workflows (defaults to active only; ?status=all for all)
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, brandId, humanId, campaignId, featureSlug, featureDynastySlug, workflowSlug, workflowDynastySlug, tag, status } = req.query;
+    const { orgId, brandId, humanId, campaignId, featureSlug, workflowSlug, tag, status } = req.query;
 
     const conditions: ReturnType<typeof eq>[] = [];
 
@@ -935,15 +788,8 @@ router.get("/workflows", requireApiKey, async (req, res) => {
     if (featureSlug && typeof featureSlug === "string") {
       conditions.push(eq(workflows.featureSlug, featureSlug));
     }
-    if (featureDynastySlug && typeof featureDynastySlug === "string") {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractDownstreamHeaders(req));
-      conditions.push(inArray(workflows.featureSlug, versionedSlugs));
-    }
     if (workflowSlug && typeof workflowSlug === "string") {
       conditions.push(eq(workflows.slug, workflowSlug));
-    }
-    if (workflowDynastySlug && typeof workflowDynastySlug === "string") {
-      conditions.push(eq(workflows.dynastySlug, workflowDynastySlug));
     }
     if (tag && typeof tag === "string") {
       conditions.push(sql`${workflows.tags} @> ${JSON.stringify([tag])}::jsonb`);
@@ -1152,12 +998,9 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
     const signatureName = pickSignatureName(newSignature, usedNames);
 
-    // Resolve dynasty naming from features-service
-    const dynasty = await resolveFeatureDynasty(existing.featureSlug, extractDownstreamHeaders(req));
-    const baseDynastyName = `${dynasty.featureDynastyName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-    const baseDynastySlug = `${dynasty.featureDynastySlug}-${signatureName}`;
-    const newSlug = baseDynastySlug; // version 1, no suffix
-    const newName = baseDynastyName; // version 1, no suffix
+    const featureName = featureSlugToName(existing.featureSlug);
+    const newSlug = `${existing.featureSlug}-${signatureName}`;
+    const newName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
 
     const openFlow = dagToOpenFlow(dag, newSlug);
     const flowPath = generateFlowPath(orgId, newSlug);
@@ -1204,8 +1047,6 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
           styleName: existing.styleName,
           slug: newSlug,
           name: newName,
-          dynastyName: baseDynastyName,
-          dynastySlug: baseDynastySlug,
           description: body.description ?? existing.description,
           category: existing.category,
           channel: existing.channel,
@@ -1240,7 +1081,12 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const dynastyWorkflows = await db
       .select({ id: workflows.id })
       .from(workflows)
-      .where(eq(workflows.dynastySlug, existing.dynastySlug));
+      .where(
+        and(
+          eq(workflows.featureSlug, existing.featureSlug),
+          eq(workflows.signatureName, existing.signatureName),
+        )
+      );
     const dynastyWorkflowIds = dynastyWorkflows.map((w) => w.id);
 
     if (dynastyWorkflowIds.length > 0) {

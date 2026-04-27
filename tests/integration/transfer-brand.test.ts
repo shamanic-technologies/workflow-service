@@ -72,11 +72,6 @@ vi.mock("../../src/lib/key-service-client.js", () => ({
 
 // --- Mock features-client ---
 vi.mock("../../src/lib/features-client.js", () => ({
-  resolveFeatureDynasty: vi.fn().mockResolvedValue({
-    featureDynastyName: "Test Feature",
-    featureDynastySlug: "test-feature",
-  }),
-  resolveFeatureDynastySlugs: vi.fn().mockResolvedValue(["test-feature"]),
   fetchFeatureOutputs: vi.fn().mockResolvedValue([]),
   fetchStatsRegistry: vi.fn().mockResolvedValue({}),
 }));
