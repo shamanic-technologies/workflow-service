@@ -84,8 +84,6 @@ describe("validateAndUpgradeWorkflows", () => {
     orgId: "org-1",
     slug: "sales-email-cold-outreach-Sequoia",
     name: "Sales Cold Outreach Sequoia",
-    dynastyName: "Sales Cold Outreach Sequoia",
-    dynastySlug: "sales-email-cold-outreach-Sequoia",
     version: 1,
     featureSlug: "sales-email-cold-outreach",
     category: "sales",
@@ -125,8 +123,6 @@ describe("validateAndUpgradeWorkflows", () => {
     id: "wf-2",
     slug: "sales-email-cold-outreach-Broken",
     name: "Sales Cold Outreach Broken",
-    dynastyName: "Sales Cold Outreach Broken",
-    dynastySlug: "sales-email-cold-outreach-Broken",
     signatureName: "Broken",
     dag: {
       nodes: [
@@ -365,7 +361,6 @@ describe("validateAndUpgradeWorkflows", () => {
       id: "wf-warning",
       slug: "sales-email-cold-outreach-WarningOnly",
       name: "Sales Cold Outreach WarningOnly",
-      dynastyName: "Sales Cold Outreach WarningOnly",
       signatureName: "WarningOnly",
       dag: {
         nodes: [
@@ -439,7 +434,6 @@ describe("validateAndUpgradeWorkflows", () => {
       id: "wf-warning-crash",
       slug: "press-kit-page-generation-cascade",
       name: "Press Kit Page Generation Cascade",
-      dynastyName: "Press Kit Page Generation Cascade",
       signatureName: "Cascade",
       dag: {
         nodes: [

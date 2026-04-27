@@ -22,8 +22,6 @@ export const workflows = pgTable(
     styleName: text("style_name"),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
-    dynastyName: text("dynasty_name").notNull(),
-    dynastySlug: text("dynasty_slug").notNull(),
     description: text("description"),
     featureSlug: text("feature_slug").notNull(),
     category: text("category"),
@@ -46,7 +44,7 @@ export const workflows = pgTable(
   },
   (table) => [
     uniqueIndex("idx_workflows_slug_unique").on(table.slug),
-    index("idx_workflows_dynasty_slug").on(table.dynastySlug),
+    index("idx_workflows_feature_signature").on(table.featureSlug, table.signatureName),
   ]
 );
 

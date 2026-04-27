@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
@@ -11,9 +11,6 @@ import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun, closeRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 import { parseWindmillError } from "../lib/error-parser.js";
-import { resolveFeatureDynastySlugs } from "../lib/features-client.js";
-import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
-
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
@@ -414,7 +411,7 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
 // GET /workflow-runs — List runs
 router.get("/workflow-runs", requireApiKey, async (req, res) => {
   try {
-    const { workflowId, orgId, campaignId, featureSlug, featureDynastySlug, workflowSlug, workflowDynastySlug, status } = req.query;
+    const { workflowId, orgId, campaignId, featureSlug, workflowSlug, status } = req.query;
 
     const conditions = [];
 
@@ -430,25 +427,8 @@ router.get("/workflow-runs", requireApiKey, async (req, res) => {
     if (featureSlug && typeof featureSlug === "string") {
       conditions.push(eq(workflowRuns.featureSlug, featureSlug));
     }
-    if (featureDynastySlug && typeof featureDynastySlug === "string") {
-      const versionedSlugs = await resolveFeatureDynastySlugs(featureDynastySlug, extractDownstreamHeaders(req));
-      conditions.push(inArray(workflowRuns.featureSlug, versionedSlugs));
-    }
     if (workflowSlug && typeof workflowSlug === "string") {
       conditions.push(eq(workflowRuns.workflowSlug, workflowSlug));
-    }
-    if (workflowDynastySlug && typeof workflowDynastySlug === "string") {
-      // Resolve via subquery: find all workflow IDs with this dynasty slug
-      const dynastyWorkflows = await db
-        .select({ id: workflows.id })
-        .from(workflows)
-        .where(eq(workflows.dynastySlug, workflowDynastySlug));
-      const wfIds = dynastyWorkflows.map((w) => w.id);
-      if (wfIds.length === 0) {
-        res.json({ workflowRuns: [] });
-        return;
-      }
-      conditions.push(inArray(workflowRuns.workflowId, wfIds));
     }
     if (status && typeof status === "string") {
       conditions.push(eq(workflowRuns.status, status));

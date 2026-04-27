@@ -183,6 +183,13 @@
       "when": 1775200000000,
       "tag": "0025_drop_unused_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1775286400000,
+      "tag": "0026_drop_dynasty_columns",
+      "breakpoints": true
     }
   ]
 }
