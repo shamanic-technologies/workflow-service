@@ -127,7 +127,7 @@ export class SpecWatcher {
       if (!result.valid || result.fieldIssues.length > 0) {
         hasIssues = true;
         console.log(
-          `[workflow-service] SpecWatcher: workflow "${wf.slug}" has issues — triggering upgrade`,
+          `[workflow-service] SpecWatcher: workflow "${wf.workflowSlug}" has issues — triggering upgrade`,
         );
         break;
       }

@@ -33,11 +33,24 @@ import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 const router = Router();
 
 function formatWorkflow(w: typeof workflows.$inferSelect) {
+  const { dynastySlug, dynastyName, ...rest } = w;
   return {
-    ...w,
+    ...rest,
+    workflowDynastySlug: dynastySlug,
+    workflowDynastyName: dynastyName,
     createdAt: w.createdAt?.toISOString() ?? null,
     updatedAt: w.updatedAt?.toISOString() ?? null,
   };
+}
+
+/** Strip version suffix from slug: "cold-outreach-obsidian-v3" → "cold-outreach-obsidian" */
+function toDynastySlug(slug: string): string {
+  return slug.replace(/-v\d+$/, "");
+}
+
+/** Strip version suffix from name: "Cold Outreach Obsidian v3" → "Cold Outreach Obsidian" */
+function toDynastyName(name: string): string {
+  return name.replace(/ v\d+$/, "");
 }
 
 function generateFlowPath(scope: string, slug: string): string {
@@ -99,8 +112,9 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
     type DeployResult = {
       id: string;
-      slug: string;
-      name: string;
+      workflowSlug: string;
+      workflowName: string;
+      workflowDynastySlug: string;
       featureSlug: string;
       tags: string[];
       signature: string;
@@ -111,12 +125,12 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     let result: DeployResult;
 
     if (existing && existing.signature === signature) {
-      const openFlow = dagToOpenFlow(dag, existing.slug);
+      const openFlow = dagToOpenFlow(dag, existing.workflowSlug);
       const client = getWindmillClient();
       if (client && existing.windmillFlowPath) {
         try {
           await client.updateFlow(existing.windmillFlowPath, {
-            summary: existing.slug,
+            summary: existing.workflowSlug,
             description: generated.description,
             value: openFlow.value,
             schema: openFlow.schema,
@@ -141,8 +155,9 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
       result = {
         id: updated.id,
-        slug: updated.slug,
-        name: updated.name,
+        workflowSlug: updated.workflowSlug,
+        workflowName: updated.workflowName,
+        workflowDynastySlug: updated.dynastySlug,
         featureSlug: updated.featureSlug,
         tags: (updated.tags as string[]) ?? [],
         signature: updated.signature,
@@ -186,21 +201,21 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       }
 
       const featureName = featureSlugToName(body.featureSlug);
-      const baseSlug = `${body.featureSlug}-${signatureName}`;
-      const baseName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+      const dynastySlug = `${body.featureSlug}-${signatureName}`;
+      const dynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
       const newVersion = existing ? existing.version + 1 : 1;
-      const slug = composeSlug(baseSlug, newVersion);
-      const name = composeName(baseName, newVersion);
+      const workflowSlug = composeSlug(dynastySlug, newVersion);
+      const workflowName = composeName(dynastyName, newVersion);
 
-      const openFlow = dagToOpenFlow(dag, slug);
-      const flowPath = generateFlowPath(orgId, slug);
+      const openFlow = dagToOpenFlow(dag, workflowSlug);
+      const flowPath = generateFlowPath(orgId, workflowSlug);
       const client = getWindmillClient();
 
       if (client) {
         try {
           await client.createFlow({
             path: flowPath,
-            summary: slug,
+            summary: workflowSlug,
             description: generated.description,
             value: openFlow.value,
             schema: openFlow.schema,
@@ -222,8 +237,10 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         .insert(workflows)
         .values({
           orgId,
-          slug,
-          name,
+          workflowSlug,
+          workflowName,
+          dynastySlug,
+          dynastyName,
           description: generated.description,
           featureSlug: body.featureSlug,
           category: generated.category,
@@ -252,8 +269,9 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
       result = {
         id: created.id,
-        slug: created.slug,
-        name: created.name,
+        workflowSlug: created.workflowSlug,
+        workflowName: created.workflowName,
+        workflowDynastySlug: created.dynastySlug,
         featureSlug: created.featureSlug,
         tags: (created.tags as string[]) ?? [],
         signature: created.signature,
@@ -310,12 +328,14 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     const signatureName = pickSignatureName(signature, usedNames);
 
     const featureName = featureSlugToName(body.featureSlug);
-    const slug = `${body.featureSlug}-${signatureName}`;
-    const name = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const dynastySlug = `${body.featureSlug}-${signatureName}`;
+    const dynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const workflowSlug = dynastySlug; // v1 — no version suffix
+    const workflowName = dynastyName;
 
     // Translate to OpenFlow
-    const openFlow = dagToOpenFlow(dag, slug);
-    const flowPath = generateFlowPath(orgId, slug);
+    const openFlow = dagToOpenFlow(dag, workflowSlug);
+    const flowPath = generateFlowPath(orgId, workflowSlug);
 
     // Push to Windmill (if configured)
     const client = getWindmillClient();
@@ -323,7 +343,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
       try {
         await client.createFlow({
           path: flowPath,
-          summary: slug,
+          summary: workflowSlug,
           description: body.description,
           value: openFlow.value,
           schema: openFlow.schema,
@@ -342,8 +362,10 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         featureSlug: body.featureSlug,
         campaignId: body.campaignId,
         subrequestId: body.subrequestId,
-        slug,
-        name,
+        workflowSlug,
+        workflowName,
+        dynastySlug,
+        dynastyName,
         description: body.description,
         category: body.category,
         channel: body.channel,
@@ -488,7 +510,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       .where(sql`true`);
     const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
 
-    const results: { id: string; slug: string; name: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
+    const results: { id: string; workflowSlug: string; workflowName: string; workflowDynastySlug: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
 
     for (const wf of body.workflows) {
       const dag = wf.dag as DAG;
@@ -508,15 +530,15 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       if (activeForFeature && activeForFeature.signature === signature) {
         // Same DAG already deployed — update metadata in-place
         console.log(
-          `[workflow-service] deploy: sig=${signature.slice(0, 12)} matched "${activeForFeature.slug}" (${activeForFeature.id}) -> update`,
+          `[workflow-service] deploy: sig=${signature.slice(0, 12)} matched "${activeForFeature.workflowSlug}" (${activeForFeature.id}) -> update`,
         );
-        const openFlow = dagToOpenFlow(dag, activeForFeature.slug);
+        const openFlow = dagToOpenFlow(dag, activeForFeature.workflowSlug);
         const client = getWindmillClient();
 
         if (client && activeForFeature.windmillFlowPath) {
           try {
             await client.updateFlow(activeForFeature.windmillFlowPath, {
-              summary: activeForFeature.slug,
+              summary: activeForFeature.workflowSlug,
               description: wf.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -546,8 +568,9 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
         results.push({
           id: updated.id,
-          slug: updated.slug,
-          name: updated.name,
+          workflowSlug: updated.workflowSlug,
+          workflowName: updated.workflowName,
+          workflowDynastySlug: updated.dynastySlug,
           featureSlug: updated.featureSlug,
           tags: (updated.tags as string[]) ?? [],
           signature: updated.signature,
@@ -571,7 +594,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         if (convergenceTarget) {
           // Convergence: deprecate our predecessor, point to the existing active
           console.log(
-            `[workflow-service] deploy: convergence — "${activeForFeature.slug}" -> existing "${convergenceTarget.slug}"`,
+            `[workflow-service] deploy: convergence — "${activeForFeature.workflowSlug}" -> existing "${convergenceTarget.workflowSlug}"`,
           );
 
           await db
@@ -585,8 +608,9 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
           results.push({
             id: convergenceTarget.id,
-            slug: convergenceTarget.slug,
-            name: convergenceTarget.name,
+            workflowSlug: convergenceTarget.workflowSlug,
+            workflowName: convergenceTarget.workflowName,
+            workflowDynastySlug: convergenceTarget.dynastySlug,
             featureSlug: convergenceTarget.featureSlug,
             tags: (convergenceTarget.tags as string[]) ?? [],
             signature: convergenceTarget.signature,
@@ -598,14 +622,13 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
           // Upgrade: deprecate old, create new version in the same lineage
           const newVersion = activeForFeature.version + 1;
           const signatureName = activeForFeature.signatureName;
-          const featureName = featureSlugToName(wf.featureSlug);
-          const baseSlug = `${wf.featureSlug}-${signatureName}`;
-          const baseName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-          const newSlug = composeSlug(baseSlug, newVersion);
-          const newName = composeName(baseName, newVersion);
+          const dynastySlug = activeForFeature.dynastySlug;
+          const dynastyName = activeForFeature.dynastyName;
+          const newSlug = composeSlug(dynastySlug, newVersion);
+          const newName = composeName(dynastyName, newVersion);
 
           console.log(
-            `[workflow-service] deploy: sig=${signature.slice(0, 12)} upgrade "${activeForFeature.slug}" -> "${newSlug}" (v${newVersion})`,
+            `[workflow-service] deploy: sig=${signature.slice(0, 12)} upgrade "${activeForFeature.workflowSlug}" -> "${newSlug}" (v${newVersion})`,
           );
 
           const openFlow = dagToOpenFlow(dag, newSlug);
@@ -641,8 +664,10 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
               orgId,
               createdForBrandId: wf.createdForBrandId,
               featureSlug: wf.featureSlug,
-              slug: newSlug,
-              name: newName,
+              workflowSlug: newSlug,
+              workflowName: newName,
+              dynastySlug,
+              dynastyName,
               description: wf.description,
               category: wf.category,
               channel: wf.channel,
@@ -666,8 +691,9 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
           results.push({
             id: created.id,
-            slug: created.slug,
-            name: created.name,
+            workflowSlug: created.workflowSlug,
+            workflowName: created.workflowName,
+            workflowDynastySlug: created.dynastySlug,
             featureSlug: created.featureSlug,
             tags: (created.tags as string[]) ?? [],
             signature: created.signature,
@@ -682,22 +708,24 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
         usedNames.add(signatureName);
 
         const featureName = featureSlugToName(wf.featureSlug);
-        const slug = `${wf.featureSlug}-${signatureName}`;
-        const name = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+        const dynastySlug = `${wf.featureSlug}-${signatureName}`;
+        const dynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+        const workflowSlug = dynastySlug; // v1 has no version suffix
+        const workflowName = dynastyName;
 
         console.log(
-          `[workflow-service] deploy: sig=${signature.slice(0, 12)} new dynasty -> "${slug}"`,
+          `[workflow-service] deploy: sig=${signature.slice(0, 12)} new dynasty -> "${workflowSlug}"`,
         );
 
-        const openFlow = dagToOpenFlow(dag, slug);
-        const flowPath = generateFlowPath(orgId, slug);
+        const openFlow = dagToOpenFlow(dag, workflowSlug);
+        const flowPath = generateFlowPath(orgId, workflowSlug);
         const client = getWindmillClient();
 
         if (client) {
           try {
             await client.createFlow({
               path: flowPath,
-              summary: slug,
+              summary: workflowSlug,
               description: wf.description,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -713,8 +741,10 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
             orgId,
             createdForBrandId: wf.createdForBrandId,
             featureSlug: wf.featureSlug,
-            slug,
-            name,
+            workflowSlug,
+            workflowName,
+            dynastySlug,
+            dynastyName,
             description: wf.description,
             category: wf.category,
             channel: wf.channel,
@@ -732,8 +762,9 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 
         results.push({
           id: created.id,
-          slug: created.slug,
-          name: created.name,
+          workflowSlug: created.workflowSlug,
+          workflowName: created.workflowName,
+          workflowDynastySlug: created.dynastySlug,
           featureSlug: created.featureSlug,
           tags: (created.tags as string[]) ?? [],
           signature: created.signature,
@@ -764,7 +795,7 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
 // GET /workflows — List workflows (defaults to active only; ?status=all for all)
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
-    const { orgId, brandId, humanId, campaignId, featureSlug, workflowSlug, tag, status } = req.query;
+    const { orgId, brandId, humanId, campaignId, featureSlug, workflowSlug, workflowDynastySlug, tag, status } = req.query;
 
     const conditions: ReturnType<typeof eq>[] = [];
 
@@ -789,7 +820,10 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       conditions.push(eq(workflows.featureSlug, featureSlug));
     }
     if (workflowSlug && typeof workflowSlug === "string") {
-      conditions.push(eq(workflows.slug, workflowSlug));
+      conditions.push(eq(workflows.workflowSlug, workflowSlug));
+    }
+    if (workflowDynastySlug && typeof workflowDynastySlug === "string") {
+      conditions.push(eq(workflows.dynastySlug, workflowDynastySlug));
     }
     if (tag && typeof tag === "string") {
       conditions.push(sql`${workflows.tags} @> ${JSON.stringify([tag])}::jsonb`);
@@ -941,13 +975,13 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       if (body.description !== undefined) updates.description = body.description;
       if (body.tags !== undefined) updates.tags = body.tags;
 
-      const openFlow = dagToOpenFlow(dag, existing.slug);
+      const openFlow = dagToOpenFlow(dag, existing.workflowSlug);
       if (existing.windmillFlowPath) {
         const client = getWindmillClient();
         if (client) {
           try {
             await client.updateFlow(existing.windmillFlowPath, {
-              summary: existing.slug,
+              summary: existing.workflowSlug,
               value: openFlow.value,
               schema: openFlow.schema,
             });
@@ -971,7 +1005,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
 
     // Check for existing active workflow with same signature (conflict)
     const [conflicting] = await db
-      .select({ id: workflows.id, slug: workflows.slug })
+      .select({ id: workflows.id, workflowSlug: workflows.workflowSlug })
       .from(workflows)
       .where(
         and(
@@ -985,7 +1019,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       res.status(409).json({
         error: "A workflow with this DAG signature already exists",
         existingWorkflowId: conflicting.id,
-        existingWorkflowSlug: conflicting.slug,
+        existingWorkflowSlug: conflicting.workflowSlug,
       });
       return;
     }
@@ -999,18 +1033,20 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     const signatureName = pickSignatureName(newSignature, usedNames);
 
     const featureName = featureSlugToName(existing.featureSlug);
-    const newSlug = `${existing.featureSlug}-${signatureName}`;
-    const newName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const newDynastySlug = `${existing.featureSlug}-${signatureName}`;
+    const newDynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const newWorkflowSlug = newDynastySlug; // v1 has no version suffix
+    const newWorkflowName = newDynastyName;
 
-    const openFlow = dagToOpenFlow(dag, newSlug);
-    const flowPath = generateFlowPath(orgId, newSlug);
+    const openFlow = dagToOpenFlow(dag, newWorkflowSlug);
+    const flowPath = generateFlowPath(orgId, newWorkflowSlug);
     const client = getWindmillClient();
 
     if (client) {
       try {
         await client.createFlow({
           path: flowPath,
-          summary: newSlug,
+          summary: newWorkflowSlug,
           description: body.description ?? existing.description ?? undefined,
           value: openFlow.value,
           schema: openFlow.schema,
@@ -1019,7 +1055,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         if (err instanceof Error && err.message.includes("already exists")) {
           try {
             await client.updateFlow(flowPath, {
-              summary: newSlug,
+              summary: newWorkflowSlug,
               description: body.description ?? existing.description ?? undefined,
               value: openFlow.value,
               schema: openFlow.schema,
@@ -1045,8 +1081,10 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
           campaignId: existing.campaignId,
           subrequestId: existing.subrequestId,
           styleName: existing.styleName,
-          slug: newSlug,
-          name: newName,
+          workflowSlug: newWorkflowSlug,
+          workflowName: newWorkflowName,
+          dynastySlug: newDynastySlug,
+          dynastyName: newDynastyName,
           description: body.description ?? existing.description,
           category: existing.category,
           channel: existing.channel,
@@ -1113,11 +1151,11 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         sourceDynastyDeprecated = true;
 
         console.log(
-          `[workflow-service] fork+deprecate: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id}) [dynasty had 0 campaign runs]`,
+          `[workflow-service] fork+deprecate: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [dynasty had 0 campaign runs]`,
         );
       } else {
         console.log(
-          `[workflow-service] fork: "${existing.name}" (${existing.id}) -> "${newName}" (${forked.id}) [source dynasty kept active: ${campaignRuns.length} campaign run(s)]`,
+          `[workflow-service] fork: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [source dynasty kept active: ${campaignRuns.length} campaign run(s)]`,
         );
       }
     }
@@ -1125,7 +1163,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     res.status(201).json({
       ...formatWorkflow(forked),
       _action: "forked" as const,
-      _forkedFromName: existing.name,
+      _forkedFromWorkflowName: existing.workflowName,
       _forkedFromId: existing.id,
       _sourceDynastyDeprecated: sourceDynastyDeprecated,
     });

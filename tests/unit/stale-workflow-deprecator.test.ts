@@ -17,10 +17,13 @@ const TWO_WEEKS_AGO = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOStrin
 const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
+  const workflowSlug = overrides.workflowSlug ?? `workflow-${Math.random().toString(36).slice(2, 8)}`;
   return {
     id: overrides.id ?? `wf-${Math.random().toString(36).slice(2, 8)}`,
-    slug: overrides.slug ?? `workflow-${Math.random().toString(36).slice(2, 8)}`,
-    name: overrides.name ?? "Test Workflow",
+    workflowSlug,
+    workflowName: overrides.workflowName ?? "Test Workflow",
+    dynastySlug: overrides.dynastySlug ?? workflowSlug,
+    dynastyName: overrides.dynastyName ?? "Test Workflow",
     featureSlug: overrides.featureSlug ?? "sales-cold-email",
     status: "active",
     orgId: "org-1",
@@ -79,7 +82,7 @@ describe("deprecateStaleWorkflows", () => {
 
   it("does not deprecate workflows created less than 1 week ago", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-new", slug: "slug-new", createdAt: TWO_DAYS_AGO }),
+      makeWorkflow({ id: "wf-new", workflowSlug: "slug-new", createdAt: TWO_DAYS_AGO }),
     ];
     const mockDb = createMockDb(wfs, []);
     const result = await deprecateStaleWorkflows(mockDb as any);
@@ -90,8 +93,8 @@ describe("deprecateStaleWorkflows", () => {
 
   it("does not deprecate workflows that have runs", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
-      makeWorkflow({ id: "wf-2", slug: "slug-2" }),
+      makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }),
+      makeWorkflow({ id: "wf-2", workflowSlug: "slug-2" }),
     ];
     const mockDb = createMockDb(wfs, ["wf-1", "wf-2"]);
     const result = await deprecateStaleWorkflows(mockDb as any);
@@ -102,8 +105,8 @@ describe("deprecateStaleWorkflows", () => {
 
   it("deprecates old workflows with zero runs and no active campaign", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
-      makeWorkflow({ id: "wf-2", slug: "slug-2" }),
+      makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }),
+      makeWorkflow({ id: "wf-2", workflowSlug: "slug-2" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
@@ -117,8 +120,8 @@ describe("deprecateStaleWorkflows", () => {
 
   it("keeps zero-run workflows that are used by active campaigns", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
-      makeWorkflow({ id: "wf-2", slug: "slug-2" }),
+      makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }),
+      makeWorkflow({ id: "wf-2", workflowSlug: "slug-2" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set(["slug-1"]));
@@ -132,7 +135,7 @@ describe("deprecateStaleWorkflows", () => {
 
   it("skips deprecation when campaign-service is unreachable", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-1", slug: "slug-1" }),
+      makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockRejectedValue(
@@ -149,8 +152,8 @@ describe("deprecateStaleWorkflows", () => {
 
   it("only deprecates workflows with zero runs, keeps those with runs", async () => {
     const wfs = [
-      makeWorkflow({ id: "wf-has-runs", slug: "slug-has-runs" }),
-      makeWorkflow({ id: "wf-no-runs", slug: "slug-no-runs" }),
+      makeWorkflow({ id: "wf-has-runs", workflowSlug: "slug-has-runs" }),
+      makeWorkflow({ id: "wf-no-runs", workflowSlug: "slug-no-runs" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());

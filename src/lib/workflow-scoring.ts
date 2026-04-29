@@ -143,7 +143,7 @@ export async function computeWorkflowScores(
   // 2. Collect all unique workflow slugs across all dynasty chains
   const allChainNames = [
     ...new Set(
-      Object.values(chainWorkflowsById).flatMap((wfs) => wfs.map((w) => w.slug))
+      Object.values(chainWorkflowsById).flatMap((wfs) => wfs.map((w) => w.workflowSlug))
     ),
   ];
 
@@ -197,7 +197,7 @@ export async function computeWorkflowScores(
   for (const wf of activeWorkflows) {
     const chainWfs = chainWorkflowsById[wf.id] ?? [];
     const chainIds = chainWfs.map((w) => w.id);
-    const chainNames = new Set(chainWfs.map((w) => w.slug));
+    const chainNames = new Set(chainWfs.map((w) => w.workflowSlug));
 
     // Costs: aggregate across all dynasty workflow slugs
     let totalCost = 0;
