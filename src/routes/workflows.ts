@@ -29,6 +29,7 @@ import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIssue, type TemplateRef } from "../lib/validate-template-contracts.js";
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
+import { computeWorkflowScores, aggregateSectionStats, handleExternalServiceError } from "../lib/workflow-scoring.js";
 
 const router = Router();
 
@@ -789,6 +790,132 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     }
     console.error("[workflow-service] PUT deploy error:", err);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /workflows/dynasties — List all dynasties with their versioned workflow slugs
+router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
+  try {
+    const allWorkflows = await db
+      .select({ workflowSlug: workflows.workflowSlug, dynastySlug: workflows.dynastySlug, dynastyName: workflows.dynastyName })
+      .from(workflows);
+
+    const dynastyMap = new Map<string, { dynastyName: string; workflowSlugs: string[] }>();
+    for (const w of allWorkflows) {
+      const entry = dynastyMap.get(w.dynastySlug);
+      if (entry) {
+        entry.workflowSlugs.push(w.workflowSlug);
+      } else {
+        dynastyMap.set(w.dynastySlug, { dynastyName: w.dynastyName, workflowSlugs: [w.workflowSlug] });
+      }
+    }
+
+    const dynasties = [...dynastyMap.entries()].map(([workflowDynastySlug, { dynastyName, workflowSlugs }]) => ({
+      workflowDynastySlug,
+      workflowDynastyName: dynastyName,
+      workflowSlugs,
+    }));
+
+    res.json({ dynasties });
+  } catch (err) {
+    console.error("[workflow-service] GET dynasties error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /workflows/dynasty/slugs — Resolve a dynasty slug to all versioned workflow slugs
+router.get("/workflows/dynasty/slugs", requireApiKey, async (req, res) => {
+  try {
+    const dynastySlug = req.query.workflowDynastySlug ?? req.query.dynastySlug;
+    if (!dynastySlug || typeof dynastySlug !== "string") {
+      res.status(400).json({ error: "Missing required query parameter: workflowDynastySlug" });
+      return;
+    }
+
+    const matching = await db
+      .select({ workflowSlug: workflows.workflowSlug, dynastyName: workflows.dynastyName })
+      .from(workflows)
+      .where(eq(workflows.dynastySlug, dynastySlug));
+
+    if (matching.length === 0) {
+      res.status(404).json({ error: `No workflows found for workflowDynastySlug: ${dynastySlug}` });
+      return;
+    }
+
+    res.json({
+      workflowDynastySlug: dynastySlug,
+      workflowDynastyName: matching[0].dynastyName,
+      workflowSlugs: matching.map((w) => w.workflowSlug),
+    });
+  } catch (err) {
+    console.error("[workflow-service] GET dynasty/slugs error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /workflows/dynasty/stats — Aggregated stats for a dynasty (full upgrade chain)
+router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
+  try {
+    const dynastySlug = req.query.workflowDynastySlug ?? req.query.dynastySlug;
+    if (!dynastySlug || typeof dynastySlug !== "string") {
+      res.status(400).json({ error: "Missing required query parameter: workflowDynastySlug" });
+      return;
+    }
+
+    const objectiveParam = req.query.objective;
+    if (!objectiveParam || typeof objectiveParam !== "string") {
+      res.status(400).json({ error: "Missing required query parameter: objective (stats key, e.g. 'emailsReplied')" });
+      return;
+    }
+    const objective = objectiveParam;
+
+    const dsHeaders = extractDownstreamHeaders(req);
+
+    const allDynastyWorkflows = await db
+      .select()
+      .from(workflows)
+      .where(eq(workflows.dynastySlug, dynastySlug));
+
+    if (allDynastyWorkflows.length === 0) {
+      res.status(404).json({ error: `No workflows found for workflowDynastySlug: ${dynastySlug}` });
+      return;
+    }
+
+    const activeWorkflows = allDynastyWorkflows.filter((w) => w.status === "active");
+    const deprecatedWorkflows = allDynastyWorkflows.filter((w) => w.status === "deprecated");
+
+    if (activeWorkflows.length === 0) {
+      res.json({
+        workflowDynastySlug: dynastySlug,
+        workflowDynastyName: allDynastyWorkflows[0].dynastyName,
+        stats: {
+          totalCostInUsdCents: 0,
+          totalOutcomes: 0,
+          costPerOutcome: null,
+          completedRuns: 0,
+          email: {
+            transactional: { sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, recipients: 0 },
+            broadcast: { sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, recipients: 0 },
+          },
+        },
+      });
+      return;
+    }
+
+    const { scores } = await computeWorkflowScores(activeWorkflows, deprecatedWorkflows, objective, { kind: "auth", downstreamHeaders: dsHeaders });
+
+    const stats = aggregateSectionStats(scores);
+
+    res.json({
+      workflowDynastySlug: dynastySlug,
+      workflowDynastyName: allDynastyWorkflows[0].dynastyName,
+      stats,
+    });
+  } catch (err: unknown) {
+    if (!handleExternalServiceError(err, res, "dynasty/stats")) {
+      console.error("[workflow-service] GET dynasty/stats error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
