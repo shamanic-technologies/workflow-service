@@ -103,8 +103,10 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     id: "wf-" + Math.random().toString(36).slice(2, 10),
     orgId: "org1",
-    slug: DEFAULT_WF_SLUG,
-    name: "Sales Email Cold Outreach Alpha",
+    workflowSlug: DEFAULT_WF_SLUG,
+    workflowName: "Sales Email Cold Outreach Alpha",
+    dynastySlug: DEFAULT_WF_SLUG,
+    dynastyName: "Sales Email Cold Outreach Alpha",
     version: 1,
     createdForBrandId: null,
     description: null,
@@ -146,7 +148,7 @@ describe("GET /public/workflows", () => {
 
   it("returns workflows for given feature slugs (mock returns all rows)", async () => {
     const wf1 = makeWorkflow({ id: "wf-a1", featureSlug: "sales-v1", status: "active" });
-    const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", slug: "sales-cold-outreach-alpha-v2", name: "Sales Alpha v2" });
+    const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", workflowSlug: "sales-cold-outreach-alpha-v2", workflowName: "Sales Alpha v2", dynastySlug: "sales-cold-outreach-alpha", dynastyName: "Sales Cold Outreach Alpha" });
     mockWorkflowRows.push(wf1, wf2);
 
     const res = await request
@@ -162,7 +164,7 @@ describe("GET /public/workflows", () => {
   });
 
   it("passes status filter to DB query and returns upgradedTo", async () => {
-    const wfDepr = makeWorkflow({ id: "wf-dep", featureSlug: "feat-x", status: "deprecated", slug: "feat-dep", name: "Depr", upgradedTo: "wf-act-uuid" });
+    const wfDepr = makeWorkflow({ id: "wf-dep", featureSlug: "feat-x", status: "deprecated", workflowSlug: "feat-dep", workflowName: "Depr", dynastySlug: "feat-dep", dynastyName: "Depr", upgradedTo: "wf-act-uuid" });
     mockWorkflowRows.push(wfDepr);
 
     const res = await request
@@ -178,7 +180,7 @@ describe("GET /public/workflows", () => {
 
   it("returns workflows with status=all", async () => {
     const wf1 = makeWorkflow({ id: "wf-all-1", featureSlug: "feat-y", status: "active" });
-    const wf2 = makeWorkflow({ id: "wf-all-2", featureSlug: "feat-y", status: "deprecated", slug: "feat-y-old", name: "Old" });
+    const wf2 = makeWorkflow({ id: "wf-all-2", featureSlug: "feat-y", status: "deprecated", workflowSlug: "feat-y-old", workflowName: "Old", dynastySlug: "feat-y-old", dynastyName: "Old" });
     mockWorkflowRows.push(wf1, wf2);
 
     const res = await request
@@ -193,8 +195,10 @@ describe("GET /public/workflows", () => {
   it("returns correct shape with all expected fields", async () => {
     const wf = makeWorkflow({
       id: "wf-shape",
-      slug: "sales-cold-outreach-obsidian-v3",
-      name: "Sales Cold Outreach Obsidian v3",
+      workflowSlug: "sales-cold-outreach-obsidian-v3",
+      workflowName: "Sales Cold Outreach Obsidian v3",
+      dynastySlug: "sales-cold-outreach-obsidian",
+      dynastyName: "Sales Cold Outreach Obsidian",
       version: 3,
       featureSlug: "sales-cold-outreach-v2",
       createdForBrandId: "brand-123",
@@ -213,8 +217,10 @@ describe("GET /public/workflows", () => {
     const w = res.body.workflows[0];
     expect(w).toEqual({
       id: "wf-shape",
-      slug: "sales-cold-outreach-obsidian-v3",
-      name: "Sales Cold Outreach Obsidian v3",
+      workflowSlug: "sales-cold-outreach-obsidian-v3",
+      workflowName: "Sales Cold Outreach Obsidian v3",
+      workflowDynastySlug: "sales-cold-outreach-obsidian",
+      workflowDynastyName: "Sales Cold Outreach Obsidian",
       version: 3,
       status: "active",
       featureSlug: "sales-cold-outreach-v2",

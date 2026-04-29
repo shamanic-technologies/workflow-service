@@ -36,8 +36,10 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
     res.json({
       workflows: rows.map((w) => ({
         id: w.id,
-        slug: w.slug,
-        name: w.name,
+        workflowSlug: w.workflowSlug,
+        workflowName: w.workflowName,
+        workflowDynastySlug: w.dynastySlug,
+        workflowDynastyName: w.dynastyName,
         version: w.version,
         status: w.status,
         featureSlug: w.featureSlug,

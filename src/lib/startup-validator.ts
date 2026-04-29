@@ -124,7 +124,7 @@ export async function validateAndUpgradeWorkflows(
     // Log all field issues (warnings + errors) for visibility
     if (result.fieldIssues.length > 0) {
       console.warn(
-        `[workflow-service] Workflow "${wf.slug}" (${wf.id}) has ${result.fieldIssues.length} field issue(s):`,
+        `[workflow-service] Workflow "${wf.workflowSlug}" (${wf.id}) has ${result.fieldIssues.length} field issue(s):`,
         result.fieldIssues.map((f) => f.reason).join("; "),
       );
     }
@@ -140,7 +140,7 @@ export async function validateAndUpgradeWorkflows(
 
     if (result.invalidEndpoints.length > 0) {
       console.warn(
-        `[workflow-service] Workflow "${wf.slug}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
+        `[workflow-service] Workflow "${wf.workflowSlug}" (${wf.id}) has ${result.invalidEndpoints.length} broken endpoint(s):`,
         result.invalidEndpoints.map((ep) => `${ep.method} ${ep.service}${ep.path}`).join(", "),
       );
     }
@@ -150,7 +150,7 @@ export async function validateAndUpgradeWorkflows(
     // To re-enable: restore the attemptUpgrade() call here.
     failedCount++;
     console.warn(
-      `[workflow-service] Workflow "${wf.slug}" has broken endpoints — LLM upgrade disabled, keeping active`,
+      `[workflow-service] Workflow "${wf.workflowSlug}" has broken endpoints — LLM upgrade disabled, keeping active`,
     );
   }
 
@@ -174,7 +174,7 @@ export async function validateAndUpgradeWorkflows(
         synced++;
       } catch (err) {
         console.warn(
-          `[workflow-service] Failed to sync flow for "${wf.slug}":`,
+          `[workflow-service] Failed to sync flow for "${wf.workflowSlug}":`,
           err instanceof Error ? err.message : err,
         );
       }
@@ -192,10 +192,10 @@ async function syncFlowToWindmill(
   }
 
   const dag = wf.dag as DAG;
-  const openFlow = dagToOpenFlow(dag, wf.slug);
+  const openFlow = dagToOpenFlow(dag, wf.workflowSlug);
 
   await windmillClient.updateFlow(wf.windmillFlowPath, {
-    summary: wf.slug,
+    summary: wf.workflowSlug,
     description: wf.description ?? "",
     value: openFlow.value,
     schema: openFlow.schema,

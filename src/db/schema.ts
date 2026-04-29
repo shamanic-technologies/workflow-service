@@ -20,8 +20,10 @@ export const workflows = pgTable(
     campaignId: text("campaign_id"),
     subrequestId: text("subrequest_id"),
     styleName: text("style_name"),
-    slug: text("slug").notNull(),
-    name: text("name").notNull(),
+    workflowSlug: text("workflow_slug").notNull(),
+    workflowName: text("workflow_name").notNull(),
+    dynastySlug: text("dynasty_slug").notNull(),
+    dynastyName: text("dynasty_name").notNull(),
     description: text("description"),
     featureSlug: text("feature_slug").notNull(),
     category: text("category"),
@@ -43,7 +45,8 @@ export const workflows = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (table) => [
-    uniqueIndex("idx_workflows_slug_unique").on(table.slug),
+    uniqueIndex("idx_workflows_workflow_slug_unique").on(table.workflowSlug),
+    index("idx_workflows_dynasty_slug").on(table.dynastySlug),
     index("idx_workflows_feature_signature").on(table.featureSlug, table.signatureName),
   ]
 );

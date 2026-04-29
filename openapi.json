@@ -107,13 +107,21 @@
             "nullable": true,
             "description": "Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."
           },
-          "slug": {
+          "workflowSlug": {
             "type": "string",
-            "description": "Unique technical identifier. Use this to execute via /workflows/by-slug/{slug}/execute."
+            "description": "Unique technical identifier. Use this to execute via /workflows/by-slug/{workflowSlug}/execute."
           },
-          "name": {
+          "workflowName": {
             "type": "string",
             "description": "Human-readable display name. Globally unique."
+          },
+          "workflowDynastySlug": {
+            "type": "string",
+            "description": "Stable lineage slug (constant across all versions of a dynasty). Use for dynasty-level grouping."
+          },
+          "workflowDynastyName": {
+            "type": "string",
+            "description": "Stable lineage display name (constant across all versions of a dynasty)."
           },
           "description": {
             "type": "string",
@@ -206,8 +214,10 @@
           "campaignId",
           "subrequestId",
           "styleName",
-          "slug",
-          "name",
+          "workflowSlug",
+          "workflowName",
+          "workflowDynastySlug",
+          "workflowDynastyName",
           "description",
           "category",
           "channel",
@@ -581,7 +591,7 @@
                 ],
                 "description": "What happened: 'updated' means the existing workflow was modified in-place (metadata or same-signature DAG). 'forked' means a new workflow was created with a new lineage because the DAG signature changed."
               },
-              "_forkedFromName": {
+              "_forkedFromWorkflowName": {
                 "type": "string",
                 "description": "Present only when _action='forked'. The display name of the original workflow that was forked."
               },
@@ -608,8 +618,10 @@
           "campaignId": null,
           "subrequestId": null,
           "styleName": null,
-          "slug": "pr-cold-email-outreach-sequoia",
-          "name": "Pr Cold Email Outreach Sequoia",
+          "workflowSlug": "pr-cold-email-outreach-sequoia",
+          "workflowName": "Pr Cold Email Outreach Sequoia",
+          "workflowDynastySlug": "pr-cold-email-outreach-sequoia",
+          "workflowDynastyName": "Pr Cold Email Outreach Sequoia",
           "description": "Cold outreach sequence for PR campaigns",
           "featureSlug": "pr-cold-email-outreach",
           "category": "pr",
@@ -690,7 +702,7 @@
           },
           "existingWorkflowSlug": {
             "type": "string",
-            "description": "Slug of the existing workflow that already has this DAG signature."
+            "description": "Workflow slug of the existing workflow that already has this DAG signature."
           }
         },
         "required": [
@@ -921,7 +933,7 @@
           "workflowSlug": {
             "type": "string",
             "nullable": true,
-            "description": "Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{slug}/execute."
+            "description": "Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{workflowSlug}/execute."
           },
           "subrequestId": {
             "type": "string",
@@ -1074,13 +1086,17 @@
             "type": "string",
             "format": "uuid"
           },
-          "slug": {
+          "workflowSlug": {
             "type": "string",
             "description": "Unique technical identifier: {featureSlug}-{signatureName}[-v{N}]."
           },
-          "name": {
+          "workflowName": {
             "type": "string",
             "description": "Human-readable name: {featureName} {SignatureName}[ v{N}]."
+          },
+          "workflowDynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug (constant across versions)."
           },
           "featureSlug": {
             "type": "string",
@@ -1116,8 +1132,9 @@
         },
         "required": [
           "id",
-          "slug",
-          "name",
+          "workflowSlug",
+          "workflowName",
+          "workflowDynastySlug",
           "featureSlug",
           "tags",
           "signature",
@@ -1248,13 +1265,21 @@
             "format": "uuid",
             "description": "Workflow ID."
           },
-          "slug": {
+          "workflowSlug": {
             "type": "string",
             "description": "Unique technical identifier."
           },
-          "name": {
+          "workflowName": {
             "type": "string",
             "description": "Human-readable display name."
+          },
+          "workflowDynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug across versions."
+          },
+          "workflowDynastyName": {
+            "type": "string",
+            "description": "Stable dynasty name across versions."
           },
           "version": {
             "type": "integer",
@@ -1266,7 +1291,7 @@
           },
           "featureSlug": {
             "type": "string",
-            "description": "Versioned feature slug."
+            "description": "Feature slug."
           },
           "createdForBrandId": {
             "type": "string",
@@ -1282,8 +1307,10 @@
         },
         "required": [
           "id",
-          "slug",
-          "name",
+          "workflowSlug",
+          "workflowName",
+          "workflowDynastySlug",
+          "workflowDynastyName",
           "version",
           "status",
           "featureSlug",
@@ -1583,11 +1610,21 @@
           {
             "schema": {
               "type": "string",
-              "description": "Exact match on the workflow slug."
+              "description": "Exact match on the versioned workflow slug."
             },
             "required": false,
-            "description": "Exact match on the workflow slug.",
+            "description": "Exact match on the versioned workflow slug.",
             "name": "workflowSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions)."
+            },
+            "required": false,
+            "description": "Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions).",
+            "name": "workflowDynastySlug",
             "in": "query"
           },
           {
@@ -2760,11 +2797,21 @@
           {
             "schema": {
               "type": "string",
-              "description": "Exact match on the workflow slug stored in the run."
+              "description": "Exact match on the versioned workflow slug stored in the run."
             },
             "required": false,
-            "description": "Exact match on the workflow slug stored in the run.",
+            "description": "Exact match on the versioned workflow slug stored in the run.",
             "name": "workflowSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID."
+            },
+            "required": false,
+            "description": "Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID.",
+            "name": "workflowDynastySlug",
             "in": "query"
           },
           {
@@ -3169,7 +3216,7 @@
         }
       }
     },
-    "/workflows/by-slug/{slug}/execute": {
+    "/workflows/by-slug/{workflowSlug}/execute": {
       "post": {
         "summary": "Execute a workflow by slug",
         "description": "Starts an async execution of a previously deployed workflow. Returns a run object with an ID — poll GET /workflow-runs/{id} for status (queued → running → completed/failed). Pass runtime data via inputs (accessible in nodes as $ref:flow_input.fieldName).",
@@ -3187,7 +3234,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "slug",
+            "name": "workflowSlug",
             "in": "path"
           },
           {
