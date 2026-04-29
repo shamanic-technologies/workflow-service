@@ -1791,6 +1791,230 @@
         }
       }
     },
+    "/workflows/dynasties": {
+      "get": {
+        "summary": "List all dynasties with their versioned workflow slugs",
+        "tags": [
+          "Dynasties"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of dynasties",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dynasties": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "workflowDynastySlug": {
+                            "type": "string",
+                            "description": "Stable dynasty slug (constant across versions)."
+                          },
+                          "workflowDynastyName": {
+                            "type": "string",
+                            "description": "Stable dynasty display name."
+                          },
+                          "workflowSlugs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "All versioned workflow slugs belonging to this dynasty."
+                          }
+                        },
+                        "required": [
+                          "workflowDynastySlug",
+                          "workflowDynastyName",
+                          "workflowSlugs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "dynasties"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasty/slugs": {
+      "get": {
+        "summary": "Resolve a dynasty slug to all versioned workflow slugs",
+        "tags": [
+          "Dynasties"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The dynasty slug to resolve."
+            },
+            "required": true,
+            "description": "The dynasty slug to resolve.",
+            "name": "workflowDynastySlug",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dynasty resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workflowDynastySlug": {
+                      "type": "string",
+                      "description": "Stable dynasty slug (constant across versions)."
+                    },
+                    "workflowDynastyName": {
+                      "type": "string",
+                      "description": "Stable dynasty display name."
+                    },
+                    "workflowSlugs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "All versioned workflow slugs belonging to this dynasty."
+                    }
+                  },
+                  "required": [
+                    "workflowDynastySlug",
+                    "workflowDynastyName",
+                    "workflowSlugs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No workflows found for this dynasty slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasty/stats": {
+      "get": {
+        "summary": "Aggregated stats for a dynasty (full upgrade chain)",
+        "tags": [
+          "Dynasties"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The dynasty slug to get stats for."
+            },
+            "required": true,
+            "description": "The dynasty slug to get stats for.",
+            "name": "workflowDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Stats key to optimize for (e.g. 'emailsReplied')."
+            },
+            "required": true,
+            "description": "Stats key to optimize for (e.g. 'emailsReplied').",
+            "name": "objective",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dynasty stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workflowDynastySlug": {
+                      "type": "string"
+                    },
+                    "workflowDynastyName": {
+                      "type": "string"
+                    },
+                    "stats": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "description": "Aggregated stats for the dynasty (costs, email metrics, completed runs)."
+                    }
+                  },
+                  "required": [
+                    "workflowDynastySlug",
+                    "workflowDynastyName",
+                    "stats"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No workflows found for this dynasty slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/workflows/{id}": {
       "get": {
         "summary": "Get a workflow",
