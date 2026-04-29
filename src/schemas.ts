@@ -797,6 +797,91 @@ registry.registerPath({
   },
 });
 
+const DynastyItemSchema = z.object({
+  workflowDynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
+  workflowDynastyName: z.string().describe("Stable dynasty display name."),
+  workflowSlugs: z.array(z.string()).describe("All versioned workflow slugs belonging to this dynasty."),
+});
+
+const DynastyStatsSchema = z.object({
+  workflowDynastySlug: z.string(),
+  workflowDynastyName: z.string(),
+  stats: z.record(z.unknown()).describe("Aggregated stats for the dynasty (costs, email metrics, completed runs)."),
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/dynasties",
+  summary: "List all dynasties with their versioned workflow slugs",
+  tags: ["Dynasties"],
+  security: [{ apiKey: [] }],
+  responses: {
+    200: {
+      description: "List of dynasties",
+      content: {
+        "application/json": {
+          schema: z.object({ dynasties: z.array(DynastyItemSchema) }),
+        },
+      },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/dynasty/slugs",
+  summary: "Resolve a dynasty slug to all versioned workflow slugs",
+  tags: ["Dynasties"],
+  security: [{ apiKey: [] }],
+  request: {
+    query: z.object({
+      workflowDynastySlug: z.string().describe("The dynasty slug to resolve."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Dynasty resolved",
+      content: { "application/json": { schema: DynastyItemSchema } },
+    },
+    400: {
+      description: "Missing query parameter",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No workflows found for this dynasty slug",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/dynasty/stats",
+  summary: "Aggregated stats for a dynasty (full upgrade chain)",
+  tags: ["Dynasties"],
+  security: [{ apiKey: [] }],
+  request: {
+    query: z.object({
+      workflowDynastySlug: z.string().describe("The dynasty slug to get stats for."),
+      objective: z.string().describe("Stats key to optimize for (e.g. 'emailsReplied')."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Dynasty stats",
+      content: { "application/json": { schema: DynastyStatsSchema } },
+    },
+    400: {
+      description: "Missing query parameter",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No workflows found for this dynasty slug",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
 registry.registerPath({
   method: "get",
   path: "/workflows",
