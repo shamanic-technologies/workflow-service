@@ -200,8 +200,10 @@ export const WorkflowResponseSchema = z
     campaignId: z.string().nullable(),
     subrequestId: z.string().nullable(),
     styleName: z.string().nullable().describe("Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."),
-    slug: z.string().describe("Unique technical identifier. Use this to execute via /workflows/by-slug/{slug}/execute."),
-    name: z.string().describe("Human-readable display name. Globally unique."),
+    workflowSlug: z.string().describe("Unique technical identifier. Use this to execute via /workflows/by-slug/{workflowSlug}/execute."),
+    workflowName: z.string().describe("Human-readable display name. Globally unique."),
+    workflowDynastySlug: z.string().describe("Stable lineage slug (constant across all versions of a dynasty). Use for dynasty-level grouping."),
+    workflowDynastyName: z.string().describe("Stable lineage display name (constant across all versions of a dynasty)."),
     description: z.string().nullable(),
     category: WorkflowCategorySchema.nullable().describe("Optional workflow category tag."),
     channel: WorkflowChannelSchema.nullable().describe("Optional workflow channel tag."),
@@ -228,7 +230,7 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     "What happened: 'updated' means the existing workflow was modified in-place (metadata or same-signature DAG). " +
     "'forked' means a new workflow was created with a new lineage because the DAG signature changed."
   ),
-  _forkedFromName: z.string().optional().describe(
+  _forkedFromWorkflowName: z.string().optional().describe(
     "Present only when _action='forked'. The display name of the original workflow that was forked."
   ),
   _forkedFromId: z.string().uuid().optional().describe(
@@ -247,8 +249,10 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     campaignId: null,
     subrequestId: null,
     styleName: null,
-    slug: "pr-cold-email-outreach-sequoia",
-    name: "Pr Cold Email Outreach Sequoia",
+    workflowSlug: "pr-cold-email-outreach-sequoia",
+    workflowName: "Pr Cold Email Outreach Sequoia",
+    workflowDynastySlug: "pr-cold-email-outreach-sequoia",
+    workflowDynastyName: "Pr Cold Email Outreach Sequoia",
     description: "Cold outreach sequence for PR campaigns",
     featureSlug: "pr-cold-email-outreach",
     category: "pr",
@@ -345,7 +349,7 @@ export const WorkflowRunResponseSchema = z
     campaignId: z.string().nullable(),
     brandIds: z.array(z.string()).nullable().describe("Brand IDs associated with this run. Multi-brand campaigns produce multiple IDs."),
     featureSlug: z.string().nullable().describe("Feature slug from features-service. Used for per-feature analytics."),
-    workflowSlug: z.string().nullable().describe("Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{slug}/execute."),
+    workflowSlug: z.string().nullable().describe("Slug of the workflow that was executed. Use this to re-execute via /workflows/by-slug/{workflowSlug}/execute."),
     subrequestId: z.string().nullable(),
     userId: z.string().nullable().describe("User ID from the execution context."),
     runId: z.string().nullable().describe("Runs-service run ID for this execution (auto-created)."),
@@ -419,8 +423,9 @@ export const DeployWorkflowsSchema = z
 export const DeployWorkflowResultSchema = z
   .object({
     id: z.string().uuid(),
-    slug: z.string().describe("Unique technical identifier: {featureSlug}-{signatureName}[-v{N}]."),
-    name: z.string().describe("Human-readable name: {featureName} {SignatureName}[ v{N}]."),
+    workflowSlug: z.string().describe("Unique technical identifier: {featureSlug}-{signatureName}[-v{N}]."),
+    workflowName: z.string().describe("Human-readable name: {featureName} {SignatureName}[ v{N}]."),
+    workflowDynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
     featureSlug: z.string().describe("Feature slug used to build the name."),
     tags: z.array(z.string()).describe("Tags assigned to this workflow."),
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
@@ -444,7 +449,7 @@ export const WorkflowDeprecatedResponseSchema = z
     upgradedTo: z.string().uuid().nullable().describe(
       "ID of the replacement workflow. Null if no replacement was set."
     ),
-    upgradedToSlug: z.string().nullable().optional().describe(
+    upgradedToWorkflowSlug: z.string().nullable().optional().describe(
       "Slug of the replacement workflow (for by-slug lookups)."
     ),
   })
@@ -592,8 +597,10 @@ export const WorkflowStatsSchema = z
 export const WorkflowMetadataSchema = z
   .object({
     id: z.string().uuid(),
-    slug: z.string().describe("Unique technical identifier."),
-    name: z.string().describe("Human-readable display name."),
+    workflowSlug: z.string().describe("Unique technical identifier."),
+    workflowName: z.string().describe("Human-readable display name."),
+    workflowDynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
+    workflowDynastyName: z.string().describe("Stable dynasty name (constant across versions)."),
     version: z.number().int().describe("Version number within the lineage."),
     createdForBrandId: z.string().nullable(),
     featureSlug: z.string().describe("Feature slug for grouping and naming."),
@@ -626,11 +633,13 @@ export const PublicWorkflowsQuerySchema = z
 export const PublicWorkflowItemSchema = z
   .object({
     id: z.string().uuid().describe("Workflow ID."),
-    slug: z.string().describe("Unique technical identifier."),
-    name: z.string().describe("Human-readable display name."),
+    workflowSlug: z.string().describe("Unique technical identifier."),
+    workflowName: z.string().describe("Human-readable display name."),
+    workflowDynastySlug: z.string().describe("Stable dynasty slug across versions."),
+    workflowDynastyName: z.string().describe("Stable dynasty name across versions."),
     version: z.number().int().describe("Version number within the lineage."),
     status: z.string().describe("Workflow status: active or deprecated."),
-    featureSlug: z.string().describe("Versioned feature slug."),
+    featureSlug: z.string().describe("Feature slug."),
     createdForBrandId: z.string().nullable().describe("Brand ID this workflow was created for, or null."),
     upgradedTo: z.string().uuid().nullable().describe("ID of the workflow this was upgraded to, or null if still active."),
   })
@@ -681,7 +690,7 @@ export const WorkflowConflictResponseSchema = z
   .object({
     error: z.string(),
     existingWorkflowId: z.string().uuid().describe("ID of the existing workflow that already has this DAG signature."),
-    existingWorkflowSlug: z.string().describe("Slug of the existing workflow that already has this DAG signature."),
+    existingWorkflowSlug: z.string().describe("Workflow slug of the existing workflow that already has this DAG signature."),
   })
   .openapi("WorkflowConflictResponse");
 
@@ -802,7 +811,8 @@ registry.registerPath({
       humanId: z.string().optional(),
       campaignId: z.string().optional(),
       featureSlug: z.string().optional().describe("Exact match on the feature slug stored in the workflow."),
-      workflowSlug: z.string().optional().describe("Exact match on the workflow slug."),
+      workflowSlug: z.string().optional().describe("Exact match on the versioned workflow slug."),
+      workflowDynastySlug: z.string().optional().describe("Filter by workflow dynasty slug — matches all workflows in the dynasty (all versions)."),
       category: WorkflowCategorySchema.optional(),
       channel: WorkflowChannelSchema.optional(),
       audienceType: WorkflowAudienceTypeSchema.optional(),
@@ -1064,7 +1074,8 @@ registry.registerPath({
       orgId: z.string().optional(),
       campaignId: z.string().optional(),
       featureSlug: z.string().optional().describe("Exact match on the feature slug stored in the run."),
-      workflowSlug: z.string().optional().describe("Exact match on the workflow slug stored in the run."),
+      workflowSlug: z.string().optional().describe("Exact match on the versioned workflow slug stored in the run."),
+      workflowDynastySlug: z.string().optional().describe("Filter by workflow dynasty slug — finds all workflows in the dynasty, then matches runs by workflow ID."),
       status: z.string().optional(),
     }),
   },
@@ -1169,7 +1180,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/workflows/by-slug/{slug}/execute",
+  path: "/workflows/by-slug/{workflowSlug}/execute",
   summary: "Execute a workflow by slug",
   description:
     "Starts an async execution of a previously deployed workflow. " +
@@ -1179,7 +1190,7 @@ registry.registerPath({
   security: [{ apiKey: [] }],
   request: {
     headers: ExecutionHeaders,
-    params: z.object({ slug: z.string() }),
+    params: z.object({ workflowSlug: z.string() }),
     body: {
       required: true,
       content: { "application/json": { schema: ExecuteByNameSchema } },

@@ -124,8 +124,8 @@ describe("POST /workflows", () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.slug).toBeTruthy();
-    expect(res.body.name).toBeTruthy();
+    expect(res.body.workflowSlug).toBeTruthy();
+    expect(res.body.workflowName).toBeTruthy();
     expect(res.body.version).toBe(1);
     expect(res.body.orgId).toBe("org-1");
     expect(res.body.featureSlug).toBe("sales-cold-email-outreach");
@@ -203,8 +203,10 @@ describe("GET /workflows", () => {
     mockDbRows.push({
       id: WF_ID,
       orgId: "org-1",
-      slug: "flow-1",
-      name: "Flow 1",
+      workflowSlug: "flow-1",
+      workflowName: "Flow 1",
+      dynastySlug: "flow-1",
+      dynastyName: "Flow 1",
       version: 1,
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
@@ -221,8 +223,10 @@ describe("GET /workflows", () => {
     mockDbRows.push({
       id: WF_ID,
       orgId: "org-1",
-      slug: "flow-1",
-      name: "Flow 1",
+      workflowSlug: "flow-1",
+      workflowName: "Flow 1",
+      dynastySlug: "flow-1",
+      dynastyName: "Flow 1",
       version: 1,
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),
@@ -259,8 +263,10 @@ describe("GET /workflows", () => {
     mockDbRows.push({
       id: WF_FEATURE_ID,
       orgId: "org-1",
-      slug: "outlet-database-discovery-sequoia",
-      name: "Outlet Database Discovery Sequoia",
+      workflowSlug: "outlet-database-discovery-sequoia",
+      workflowName: "Outlet Database Discovery Sequoia",
+      dynastySlug: "outlet-database-discovery-sequoia",
+      dynastyName: "Outlet Database Discovery Sequoia",
       version: 1,
       featureSlug: "outlet-database-discovery",
       category: "outlets",
@@ -286,8 +292,10 @@ describe("GET /workflows", () => {
     mockDbRows.push({
       id: WF_FEATURE_ID,
       orgId: "org-1",
-      slug: "sales-cold-email-outreach-sequoia",
-      name: "Sales Cold Email Outreach Sequoia",
+      workflowSlug: "sales-cold-email-outreach-sequoia",
+      workflowName: "Sales Cold Email Outreach Sequoia",
+      dynastySlug: "sales-cold-email-outreach-sequoia",
+      dynastyName: "Sales Cold Email Outreach Sequoia",
       version: 1,
       featureSlug: "sales-cold-email-outreach",
       status: "active",
@@ -309,8 +317,10 @@ describe("GET /workflows", () => {
     mockDbRows.push({
       id: WF_ID,
       orgId: "org-1",
-      slug: "sales-cold-email-outreach-sequoia",
-      name: "Sales Cold Email Outreach Sequoia",
+      workflowSlug: "sales-cold-email-outreach-sequoia",
+      workflowName: "Sales Cold Email Outreach Sequoia",
+      dynastySlug: "sales-cold-email-outreach-sequoia",
+      dynastyName: "Sales Cold Email Outreach Sequoia",
       version: 1,
       featureSlug: "sales-cold-email-outreach",
       category: "sales",
@@ -428,7 +438,7 @@ describe("PUT /workflows/upgrade", () => {
     expect(wf.featureSlug).toBe("sales-cold-email-outreach");
     expect(wf.signature).toMatch(/^[a-f0-9]{64}$/);
     expect(wf.signatureName).toBeTruthy();
-    expect(wf.slug).toBe(`sales-cold-email-outreach-${wf.signatureName}`);
+    expect(wf.workflowSlug).toBe(`sales-cold-email-outreach-${wf.signatureName}`);
   });
 
   it("creates outlets-database-discovery workflow with correct slug", async () => {
@@ -451,7 +461,7 @@ describe("PUT /workflows/upgrade", () => {
     expect(res.status).toBe(200);
     const wf = res.body.workflows[0];
     expect(wf.featureSlug).toBe("outlet-database-discovery");
-    expect(wf.slug).toBe(`outlet-database-discovery-${wf.signatureName}`);
+    expect(wf.workflowSlug).toBe(`outlet-database-discovery-${wf.signatureName}`);
   });
 
   it("creates journalists-database-discovery workflow with correct slug", async () => {
@@ -474,7 +484,7 @@ describe("PUT /workflows/upgrade", () => {
     expect(res.status).toBe(200);
     const wf = res.body.workflows[0];
     expect(wf.featureSlug).toBe("journalist-database-discovery");
-    expect(wf.slug).toBe(`journalist-database-discovery-${wf.signatureName}`);
+    expect(wf.workflowSlug).toBe(`journalist-database-discovery-${wf.signatureName}`);
   });
 
   it("stores orgId from x-org-id header in DB", async () => {
@@ -503,8 +513,10 @@ describe("PUT /workflows/upgrade", () => {
     mockDbRows.push({
       id: WF_EXISTING_ID,
       orgId: "org-deploy",
-      slug: "sales-cold-email-outreach-sequoia",
-      name: "Sales Cold Email Outreach Sequoia",
+      workflowSlug: "sales-cold-email-outreach-sequoia",
+      workflowName: "Sales Cold Email Outreach Sequoia",
+      dynastySlug: "sales-cold-email-outreach-sequoia",
+      dynastyName: "Sales Cold Email Outreach Sequoia",
       version: 1,
       signatureName: "sequoia",
       signature: sig,
@@ -824,8 +836,10 @@ describe("GET /workflows/:id/required-providers", () => {
     mockDbRows.push({
       id: WF_HTTP_ID,
       orgId: "org-1",
-      slug: "http-flow",
-      name: "HTTP Flow",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      dynastySlug: "http-flow",
+      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL_CHAIN,
       createdAt: new Date(),
@@ -863,8 +877,10 @@ describe("GET /workflows/:id/required-providers", () => {
     mockDbRows.push({
       id: WF_HTTP_ID,
       orgId: "org-1",
-      slug: "http-flow",
-      name: "HTTP Flow",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      dynastySlug: "http-flow",
+      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL_CHAIN,
       createdAt: new Date(),
@@ -894,8 +910,10 @@ describe("GET /workflows/:id/required-providers", () => {
     mockDbRows.push({
       id: WF_LEGACY_ID,
       orgId: "org-1",
-      slug: "legacy-flow",
-      name: "Legacy Flow",
+      workflowSlug: "legacy-flow",
+      workflowName: "Legacy Flow",
+      dynastySlug: "legacy-flow",
+      dynastyName: "Legacy Flow",
       version: 1,
       dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
       createdAt: new Date(),
@@ -926,8 +944,10 @@ describe("GET /workflows/:id/required-providers", () => {
     mockDbRows.push({
       id: WF_HTTP_ID,
       orgId: "org-1",
-      slug: "http-flow",
-      name: "HTTP Flow",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      dynastySlug: "http-flow",
+      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL,
       createdAt: new Date(),
@@ -952,8 +972,10 @@ describe("GET /workflows/:id/required-providers", () => {
     mockDbRows.push({
       id: WF_HTTP_ID,
       orgId: "org-1",
-      slug: "http-flow",
-      name: "HTTP Flow",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      dynastySlug: "http-flow",
+      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL,
       createdAt: new Date(),
@@ -977,8 +999,10 @@ describe("GET /workflows/:id/required-providers", () => {
     mockDbRows.push({
       id: WF_HTTP_ID,
       orgId: "org-1",
-      slug: "http-flow",
-      name: "HTTP Flow",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      dynastySlug: "http-flow",
+      dynastyName: "HTTP Flow",
       version: 1,
       dag: DAG_WITH_HTTP_CALL,
       createdAt: new Date(),
@@ -1017,8 +1041,10 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
     mockDbRows.push({
       id: WF_META_ID,
       orgId: "org-1",
-      slug: "sales-email-cold-outreach-maple",
-      name: "Sales Email Cold Outreach Maple",
+      workflowSlug: "sales-email-cold-outreach-maple",
+      workflowName: "Sales Email Cold Outreach Maple",
+      dynastySlug: "sales-email-cold-outreach-maple",
+      dynastyName: "Sales Email Cold Outreach Maple",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "maple",
       signature: "abc123",
@@ -1053,8 +1079,10 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
     const existingWf = {
       id: WF_META_ID,
       orgId: "org-1",
-      slug: "sales-email-cold-outreach-maple",
-      name: "Sales Email Cold Outreach Maple",
+      workflowSlug: "sales-email-cold-outreach-maple",
+      workflowName: "Sales Email Cold Outreach Maple",
+      dynastySlug: "sales-email-cold-outreach-maple",
+      dynastyName: "Sales Email Cold Outreach Maple",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "maple",
       signature: realSig,
@@ -1086,8 +1114,10 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
     const existingWf = {
       id: WF_DAG_REJECT_ID,
       orgId: "org-1",
-      slug: "sales-email-cold-outreach-pine",
-      name: "Sales Email Cold Outreach Pine",
+      workflowSlug: "sales-email-cold-outreach-pine",
+      workflowName: "Sales Email Cold Outreach Pine",
+      dynastySlug: "sales-email-cold-outreach-pine",
+      dynastyName: "Sales Email Cold Outreach Pine",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "pine",
       signature: "old-sig-123",
@@ -1115,7 +1145,7 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
 
     expect(res.status).toBe(201);
     expect(res.body._action).toBe("forked");
-    expect(res.body._forkedFromName).toBe("Sales Email Cold Outreach Pine");
+    expect(res.body._forkedFromWorkflowName).toBe("Sales Email Cold Outreach Pine");
     expect(res.body._forkedFromId).toBe(WF_DAG_REJECT_ID);
     expect(res.body._sourceDynastyDeprecated).toBe(true);
     expect(res.body.forkedFrom).toBe(WF_DAG_REJECT_ID);
@@ -1127,8 +1157,10 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
     const existingWf = {
       id: WF_DAG_REJECT_ID,
       orgId: "org-1",
-      slug: "sales-email-cold-outreach-pine",
-      name: "Sales Email Cold Outreach Pine",
+      workflowSlug: "sales-email-cold-outreach-pine",
+      workflowName: "Sales Email Cold Outreach Pine",
+      dynastySlug: "sales-email-cold-outreach-pine",
+      dynastyName: "Sales Email Cold Outreach Pine",
       featureSlug: "sales-email-cold-outreach",
       signatureName: "pine",
       signature: "old-sig-123",
@@ -1144,7 +1176,7 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
 
     const conflictingWf = {
       id: conflictingId,
-      slug: "sales-email-cold-outreach-maple",
+      workflowSlug: "sales-email-cold-outreach-maple",
     };
 
     // Queue responses: 1) existing lookup, 2) conflict check (found!)
@@ -1182,8 +1214,10 @@ describe("POST /workflows/:id/validate", () => {
     mockDbRows.push({
       id: WF_ID,
       orgId: "org-1",
-      slug: "flow-1",
-      name: "Flow 1",
+      workflowSlug: "flow-1",
+      workflowName: "Flow 1",
+      dynastySlug: "flow-1",
+      dynastyName: "Flow 1",
       version: 1,
       dag: VALID_LINEAR_DAG,
       createdAt: new Date(),

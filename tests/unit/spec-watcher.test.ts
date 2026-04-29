@@ -68,7 +68,7 @@ describe("SpecWatcher", () => {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
-            { id: "w1", slug: "test-wf", dag: makeDag("lead-service", "GET", "/leads"), status: "active" },
+            { id: "w1", workflowSlug: "test-wf", dag: makeDag("lead-service", "GET", "/leads"), status: "active" },
           ]),
         }),
       }),
@@ -94,7 +94,7 @@ describe("SpecWatcher", () => {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
-            { id: "w1", slug: "test-wf", dag, status: "active" },
+            { id: "w1", workflowSlug: "test-wf", dag, status: "active" },
           ]),
         }),
       }),
@@ -117,7 +117,7 @@ describe("SpecWatcher", () => {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
-            { id: "w1", slug: "test-wf", dag, status: "active" },
+            { id: "w1", workflowSlug: "test-wf", dag, status: "active" },
           ]),
         }),
       }),
@@ -146,7 +146,7 @@ describe("SpecWatcher", () => {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
-            { id: "w1", slug: "test-wf", dag, status: "active" },
+            { id: "w1", workflowSlug: "test-wf", dag, status: "active" },
           ]),
         }),
       }),
@@ -187,7 +187,7 @@ describe("SpecWatcher", () => {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
-            { id: "w1", slug: "test-wf", dag, status: "active" },
+            { id: "w1", workflowSlug: "test-wf", dag, status: "active" },
           ]),
         }),
       }),
@@ -233,7 +233,7 @@ describe("SpecWatcher", () => {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
-            { id: "w1", slug: "test-wf", dag, status: "active" },
+            { id: "w1", workflowSlug: "test-wf", dag, status: "active" },
           ]),
         }),
       }),

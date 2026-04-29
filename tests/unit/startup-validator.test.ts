@@ -82,8 +82,10 @@ describe("validateAndUpgradeWorkflows", () => {
   const VALID_WORKFLOW = {
     id: "wf-1",
     orgId: "org-1",
-    slug: "sales-email-cold-outreach-Sequoia",
-    name: "Sales Cold Outreach Sequoia",
+    workflowSlug: "sales-email-cold-outreach-Sequoia",
+    workflowName: "Sales Cold Outreach Sequoia",
+    dynastySlug: "sales-email-cold-outreach-Sequoia",
+    dynastyName: "Sales Cold Outreach Sequoia",
     version: 1,
     featureSlug: "sales-email-cold-outreach",
     category: "sales",
@@ -121,8 +123,10 @@ describe("validateAndUpgradeWorkflows", () => {
   const BROKEN_WORKFLOW = {
     ...VALID_WORKFLOW,
     id: "wf-2",
-    slug: "sales-email-cold-outreach-Broken",
-    name: "Sales Cold Outreach Broken",
+    workflowSlug: "sales-email-cold-outreach-Broken",
+    workflowName: "Sales Cold Outreach Broken",
+    dynastySlug: "sales-email-cold-outreach-Broken",
+    dynastyName: "Sales Cold Outreach Broken",
     signatureName: "Broken",
     dag: {
       nodes: [
@@ -299,7 +303,7 @@ describe("validateAndUpgradeWorkflows", () => {
     expect(mockUpdateFlow).toHaveBeenCalledWith(
       "f/workflows/org-1/flow", // exact path from DB, not recalculated
       expect.objectContaining({
-        summary: VALID_WORKFLOW.slug,
+        summary: VALID_WORKFLOW.workflowSlug,
         value: expect.any(Object),
         schema: expect.any(Object),
       }),
@@ -359,8 +363,10 @@ describe("validateAndUpgradeWorkflows", () => {
     const WARNING_ONLY_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-warning",
-      slug: "sales-email-cold-outreach-WarningOnly",
-      name: "Sales Cold Outreach WarningOnly",
+      workflowSlug: "sales-email-cold-outreach-WarningOnly",
+      workflowName: "Sales Cold Outreach WarningOnly",
+      dynastySlug: "sales-email-cold-outreach-WarningOnly",
+      dynastyName: "Sales Cold Outreach WarningOnly",
       signatureName: "WarningOnly",
       dag: {
         nodes: [
@@ -432,8 +438,10 @@ describe("validateAndUpgradeWorkflows", () => {
     const WARNING_WORKFLOW = {
       ...VALID_WORKFLOW,
       id: "wf-warning-crash",
-      slug: "press-kit-page-generation-cascade",
-      name: "Press Kit Page Generation Cascade",
+      workflowSlug: "press-kit-page-generation-cascade",
+      workflowName: "Press Kit Page Generation Cascade",
+      dynastySlug: "press-kit-page-generation-cascade",
+      dynastyName: "Press Kit Page Generation Cascade",
       signatureName: "Cascade",
       dag: {
         nodes: [

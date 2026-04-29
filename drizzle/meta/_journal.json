@@ -190,6 +190,13 @@
       "when": 1775286400000,
       "tag": "0026_drop_dynasty_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1775372800000,
+      "tag": "0027_restore_dynasty_rename_slug",
+      "breakpoints": true
     }
   ]
 }

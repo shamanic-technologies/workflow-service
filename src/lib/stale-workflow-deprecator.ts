@@ -85,10 +85,10 @@ export async function deprecateStaleWorkflows(
   let keptByCampaign = 0;
 
   for (const wf of candidates) {
-    if (activeSlugs.has(wf.slug)) {
+    if (activeSlugs.has(wf.workflowSlug)) {
       keptByCampaign++;
       console.log(
-        `[workflow-service] Keeping stale workflow "${wf.slug}" — active campaign exists`,
+        `[workflow-service] Keeping stale workflow "${wf.workflowSlug}" — active campaign exists`,
       );
       continue;
     }
@@ -100,7 +100,7 @@ export async function deprecateStaleWorkflows(
 
     deprecatedCount++;
     console.log(
-      `[workflow-service] Deprecated stale workflow "${wf.slug}" (feature: ${wf.featureSlug}) — >1 week old, zero runs, no active campaign`,
+      `[workflow-service] Deprecated stale workflow "${wf.workflowSlug}" (feature: ${wf.featureSlug}) — >1 week old, zero runs, no active campaign`,
     );
   }
 
