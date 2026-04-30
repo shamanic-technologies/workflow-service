@@ -30,6 +30,7 @@ import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIs
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { computeWorkflowScores, aggregateSectionStats, handleExternalServiceError } from "../lib/workflow-scoring.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -85,6 +86,8 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     const userId = res.locals.userId as string;
     const runId = res.locals.runId as string;
     const dsHeaders = extractDownstreamHeaders(req);
+
+    traceEvent(runId, { service: "workflow-service", event: "generate-start", detail: `Generating workflow for featureSlug="${body.featureSlug}", description="${body.description.slice(0, 100)}"` }, req.headers).catch(() => {});
 
     const generated = await generateWorkflow(
       { description: body.description, hints: body.hints, style: body.style },
@@ -281,6 +284,8 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       };
     }
 
+    traceEvent(runId, { service: "workflow-service", event: "generate-complete", detail: `Generated workflow="${result.workflowSlug}" action=${result.action}, signature=${result.signature.slice(0, 12)}` }, req.headers).catch(() => {});
+
     res.json({
       workflow: result,
       dag: generated.dag,
@@ -398,6 +403,9 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
   try {
     const body = DeployWorkflowsSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
+
+    const deployRunId = res.locals.runId as string;
+    traceEvent(deployRunId, { service: "workflow-service", event: "deploy-start", detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}` }, req.headers).catch(() => {});
 
     console.log(`[workflow-service] deploy: org=${orgId} workflows=${body.workflows.length}`);
 
@@ -781,6 +789,8 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     console.log(
       `[workflow-service] deploy complete: org=${orgId} total=${results.length} created=${createdCount} updated=${updatedCount}`,
     );
+
+    traceEvent(deployRunId, { service: "workflow-service", event: "deploy-complete", detail: `Deployed ${results.length} workflow(s): created=${createdCount} updated=${updatedCount}` }, req.headers).catch(() => {});
 
     res.json({ workflows: results });
   } catch (err: unknown) {
