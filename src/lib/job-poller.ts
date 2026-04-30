@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import type { WindmillClient } from "./windmill-client.js";
 import { closeRun } from "./runs-client.js";
+import { traceEvent } from "./trace-event.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -70,6 +71,23 @@ export class JobPoller {
             }
 
             console.log(`[workflow-service] JobPoller: run ${run.id} → ${newStatus}`);
+
+            if (run.runId) {
+              const pollerHeaders: Record<string, string> = {};
+              if (run.orgId) pollerHeaders["x-org-id"] = run.orgId;
+              if (run.userId) pollerHeaders["x-user-id"] = run.userId;
+              if (run.workflowSlug) pollerHeaders["x-workflow-slug"] = run.workflowSlug;
+              if (run.featureSlug) pollerHeaders["x-feature-slug"] = run.featureSlug;
+              if (run.campaignId) pollerHeaders["x-campaign-id"] = run.campaignId;
+
+              traceEvent(run.runId, {
+                service: "workflow-service",
+                event: "job-completed",
+                detail: `Windmill job ${run.windmillJobId} finished: status=${newStatus} workflowSlug="${run.workflowSlug ?? "unknown"}"`,
+                level: success ? "info" : "error",
+                data: { windmillJobId: run.windmillJobId, workflowSlug: run.workflowSlug, status: newStatus },
+              }, pollerHeaders).catch(() => {});
+            }
           } else if (run.status === "queued") {
             await this.db
               .update(table)
