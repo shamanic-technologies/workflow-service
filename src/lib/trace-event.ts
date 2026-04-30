@@ -1,3 +1,17 @@
+/**
+ * Fire-and-forget structured event logger.
+ * Posts events to runs-service for tracing workflow execution steps.
+ */
+
+const FORWARDED_HEADERS = [
+  "x-org-id",
+  "x-user-id",
+  "x-brand-id",
+  "x-campaign-id",
+  "x-workflow-slug",
+  "x-feature-slug",
+] as const;
+
 export async function traceEvent(
   runId: string,
   payload: {
@@ -7,28 +21,32 @@ export async function traceEvent(
     level?: "info" | "warn" | "error";
     data?: Record<string, unknown>;
   },
-  headers: Record<string, string | string[] | undefined>
+  headers: Record<string, string | string[] | undefined>,
 ): Promise<void> {
   const url = process.env.RUNS_SERVICE_URL;
   const apiKey = process.env.RUNS_SERVICE_API_KEY;
   if (!url || !apiKey) {
-    console.error("[workflow-service] RUNS_SERVICE_URL or RUNS_SERVICE_API_KEY not set, skipping trace");
+    console.error("[workflow-service] RUNS_SERVICE_URL or RUNS_SERVICE_API_KEY not set, skipping trace event");
     return;
   }
-  try {
-    const fetchHeaders: Record<string, string> = {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-    };
-    for (const key of ["x-org-id", "x-user-id", "x-brand-id", "x-campaign-id", "x-workflow-slug", "x-feature-slug"] as const) {
-      const value = headers[key];
-      if (typeof value === "string") {
-        fetchHeaders[key] = value;
-      }
+
+  const baseUrl = url.replace(/\/$/, "");
+  const outHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+  };
+
+  for (const key of FORWARDED_HEADERS) {
+    const value = headers[key];
+    if (typeof value === "string") {
+      outHeaders[key] = value;
     }
-    await fetch(`${url}/v1/runs/${runId}/events`, {
+  }
+
+  try {
+    await fetch(`${baseUrl}/v1/runs/${runId}/events`, {
       method: "POST",
-      headers: fetchHeaders,
+      headers: outHeaders,
       body: JSON.stringify(payload),
     });
   } catch (err) {

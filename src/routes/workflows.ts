@@ -87,7 +87,12 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     const runId = res.locals.runId as string;
     const dsHeaders = extractDownstreamHeaders(req);
 
-    traceEvent(runId, { service: "workflow-service", event: "generate-start", detail: `Generating workflow for featureSlug="${body.featureSlug}", description="${body.description.slice(0, 100)}"` }, req.headers).catch(() => {});
+    traceEvent(runId, {
+      service: "workflow-service",
+      event: "generate-start",
+      detail: `Generating workflow for featureSlug="${body.featureSlug}" description="${body.description.slice(0, 100)}"`,
+      data: { featureSlug: body.featureSlug, hasHints: !!body.hints, hasStyle: !!body.style },
+    }, req.headers).catch(() => {});
 
     const generated = await generateWorkflow(
       { description: body.description, hints: body.hints, style: body.style },
@@ -96,6 +101,13 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
     const dag = generated.dag as DAG;
     const signature = computeDAGSignature(generated.dag);
+
+    traceEvent(runId, {
+      service: "workflow-service",
+      event: "generate-complete",
+      detail: `Generated DAG with ${dag.nodes?.length ?? 0} nodes, signature=${signature.slice(0, 12)}, category=${generated.category ?? "none"}`,
+      data: { nodeCount: dag.nodes?.length ?? 0, signature: signature.slice(0, 12), category: generated.category },
+    }, req.headers).catch(() => {});
 
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
@@ -405,9 +417,15 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     const orgId = res.locals.orgId as string;
 
     const deployRunId = res.locals.runId as string;
-    traceEvent(deployRunId, { service: "workflow-service", event: "deploy-start", detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}` }, req.headers).catch(() => {});
 
     console.log(`[workflow-service] deploy: org=${orgId} workflows=${body.workflows.length}`);
+
+    traceEvent(deployRunId, {
+      service: "workflow-service",
+      event: "deploy-start",
+      detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}`,
+      data: { workflowCount: body.workflows.length, orgId },
+    }, req.headers).catch(() => {});
 
     // Validate ALL DAGs first — reject if any are invalid
     const dagErrors: { index: number; errors: unknown[] }[] = [];
@@ -790,7 +808,12 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       `[workflow-service] deploy complete: org=${orgId} total=${results.length} created=${createdCount} updated=${updatedCount}`,
     );
 
-    traceEvent(deployRunId, { service: "workflow-service", event: "deploy-complete", detail: `Deployed ${results.length} workflow(s): created=${createdCount} updated=${updatedCount}` }, req.headers).catch(() => {});
+    traceEvent(deployRunId, {
+      service: "workflow-service",
+      event: "deploy-complete",
+      detail: `Deploy complete: total=${results.length} created=${createdCount} updated=${updatedCount} slugs=[${results.map(r => r.workflowSlug).join(",")}]`,
+      data: { total: results.length, created: createdCount, updated: updatedCount, slugs: results.map(r => r.workflowSlug) },
+    }, req.headers).catch(() => {});
 
     res.json({ workflows: results });
   } catch (err: unknown) {
