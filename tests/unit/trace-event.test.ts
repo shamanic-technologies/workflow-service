@@ -121,6 +121,17 @@ describe("traceEvent", () => {
     );
   });
 
+  it("does not throw when fetch returns non-2xx", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    );
+
+    await expect(
+      traceEvent("run-500", { service: "workflow-service", event: "test" }, {})
+    ).resolves.toBeUndefined();
+  });
+
   it("only forwards headers that exist (omits missing ones)", async () => {
     vi.stubGlobal(
       "fetch",

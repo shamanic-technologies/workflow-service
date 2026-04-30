@@ -296,6 +296,8 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       };
     }
 
+    traceEvent(runId, { service: "workflow-service", event: "generate-complete", detail: `Generated workflow="${result.workflowSlug}" action=${result.action}, signature=${result.signature.slice(0, 12)}` }, req.headers).catch(() => {});
+
     res.json({
       workflow: result,
       dag: generated.dag,
@@ -414,18 +416,16 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     const body = DeployWorkflowsSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
 
-    const deployRunId = req.headers["x-run-id"] as string | undefined;
+    const deployRunId = res.locals.runId as string;
 
     console.log(`[workflow-service] deploy: org=${orgId} workflows=${body.workflows.length}`);
 
-    if (deployRunId) {
-      traceEvent(deployRunId, {
-        service: "workflow-service",
-        event: "deploy-start",
-        detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}`,
-        data: { workflowCount: body.workflows.length, orgId },
-      }, req.headers).catch(() => {});
-    }
+    traceEvent(deployRunId, {
+      service: "workflow-service",
+      event: "deploy-start",
+      detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}`,
+      data: { workflowCount: body.workflows.length, orgId },
+    }, req.headers).catch(() => {});
 
     // Validate ALL DAGs first — reject if any are invalid
     const dagErrors: { index: number; errors: unknown[] }[] = [];
@@ -808,14 +808,12 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
       `[workflow-service] deploy complete: org=${orgId} total=${results.length} created=${createdCount} updated=${updatedCount}`,
     );
 
-    if (deployRunId) {
-      traceEvent(deployRunId, {
-        service: "workflow-service",
-        event: "deploy-complete",
-        detail: `Deploy complete: total=${results.length} created=${createdCount} updated=${updatedCount} slugs=[${results.map(r => r.workflowSlug).join(",")}]`,
-        data: { total: results.length, created: createdCount, updated: updatedCount, slugs: results.map(r => r.workflowSlug) },
-      }, req.headers).catch(() => {});
-    }
+    traceEvent(deployRunId, {
+      service: "workflow-service",
+      event: "deploy-complete",
+      detail: `Deploy complete: total=${results.length} created=${createdCount} updated=${updatedCount} slugs=[${results.map(r => r.workflowSlug).join(",")}]`,
+      data: { total: results.length, created: createdCount, updated: updatedCount, slugs: results.map(r => r.workflowSlug) },
+    }, req.headers).catch(() => {});
 
     res.json({ workflows: results });
   } catch (err: unknown) {
