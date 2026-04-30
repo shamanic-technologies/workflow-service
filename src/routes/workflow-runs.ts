@@ -11,6 +11,7 @@ import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun, closeRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 import { parseWindmillError } from "../lib/error-parser.js";
+import { traceEvent } from "../lib/trace-event.js";
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
@@ -115,6 +116,8 @@ router.post(
         }
       }
 
+      traceEvent(res.locals.runId as string, { service: "workflow-service", event: "execute-by-slug", detail: `Resolved slug="${req.params.slug}" to workflow="${workflow.workflowSlug}" (${workflow.id})` }, req.headers).catch(() => {});
+
       if (!workflow.windmillFlowPath) {
         res
           .status(400)
@@ -195,6 +198,8 @@ router.post(
         `[workflow-service] Workflow "${workflow.workflowSlug}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
       );
 
+      traceEvent(ownRunId!, { service: "workflow-service", event: "execute-started", detail: `Workflow "${workflow.workflowSlug}" queued: windmillJobId=${windmillJobId ?? "none"}, runId=${ownRunId}` }, req.headers).catch(() => {});
+
       res.status(201).json(formatRun(run));
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "ZodError") {
@@ -245,6 +250,8 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
       res.status(404).json({ error: "Workflow not found" });
       return;
     }
+
+    traceEvent(res.locals.runId as string, { service: "workflow-service", event: "execute-by-id", detail: `Resolved id="${req.params.id}" to workflow="${workflow.workflowSlug}"` }, req.headers).catch(() => {});
 
     if (!workflow.windmillFlowPath) {
       res
@@ -318,6 +325,8 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
       })
       .returning();
 
+    traceEvent(ownRunId!, { service: "workflow-service", event: "execute-started", detail: `Workflow "${workflow.workflowSlug}" queued: windmillJobId=${windmillJobId ?? "none"}, runId=${ownRunId}` }, req.headers).catch(() => {});
+
     res.status(201).json(formatRun(run));
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
@@ -370,6 +379,8 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
             })
             .where(eq(workflowRuns.id, run.id))
             .returning();
+
+          traceEvent(run.runId ?? req.params.id, { service: "workflow-service", event: "job-completed", detail: `Run ${run.id} finished: status=${newStatus}, windmillJobId=${run.windmillJobId}` }, req.headers).catch(() => {});
 
           // Close the run in runs-service
           if (run.runId && run.orgId) {
@@ -525,6 +536,8 @@ router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
         }
       }
     }
+
+    traceEvent(run.runId ?? req.params.id, { service: "workflow-service", event: "run-cancelled", detail: `Run ${run.id} cancelled by user, windmillJobId=${run.windmillJobId ?? "none"}` }, req.headers).catch(() => {});
 
     const [updated] = await db
       .update(workflowRuns)
