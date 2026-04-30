@@ -30,6 +30,7 @@ import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIs
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { computeWorkflowScores, aggregateSectionStats, handleExternalServiceError } from "../lib/workflow-scoring.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -86,6 +87,13 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     const runId = res.locals.runId as string;
     const dsHeaders = extractDownstreamHeaders(req);
 
+    traceEvent(runId, {
+      service: "workflow-service",
+      event: "generate-start",
+      detail: `Generating workflow for featureSlug="${body.featureSlug}" description="${body.description.slice(0, 100)}"`,
+      data: { featureSlug: body.featureSlug, hasHints: !!body.hints, hasStyle: !!body.style },
+    }, req.headers).catch(() => {});
+
     const generated = await generateWorkflow(
       { description: body.description, hints: body.hints, style: body.style },
       dsHeaders,
@@ -93,6 +101,13 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
     const dag = generated.dag as DAG;
     const signature = computeDAGSignature(generated.dag);
+
+    traceEvent(runId, {
+      service: "workflow-service",
+      event: "generate-complete",
+      detail: `Generated DAG with ${dag.nodes?.length ?? 0} nodes, signature=${signature.slice(0, 12)}, category=${generated.category ?? "none"}`,
+      data: { nodeCount: dag.nodes?.length ?? 0, signature: signature.slice(0, 12), category: generated.category },
+    }, req.headers).catch(() => {});
 
     const existingWorkflows = await db
       .select({ signatureName: workflows.signatureName })
@@ -281,6 +296,8 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       };
     }
 
+    traceEvent(runId, { service: "workflow-service", event: "generate-complete", detail: `Generated workflow="${result.workflowSlug}" action=${result.action}, signature=${result.signature.slice(0, 12)}` }, req.headers).catch(() => {});
+
     res.json({
       workflow: result,
       dag: generated.dag,
@@ -399,7 +416,16 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     const body = DeployWorkflowsSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
 
+    const deployRunId = res.locals.runId as string;
+
     console.log(`[workflow-service] deploy: org=${orgId} workflows=${body.workflows.length}`);
+
+    traceEvent(deployRunId, {
+      service: "workflow-service",
+      event: "deploy-start",
+      detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}`,
+      data: { workflowCount: body.workflows.length, orgId },
+    }, req.headers).catch(() => {});
 
     // Validate ALL DAGs first — reject if any are invalid
     const dagErrors: { index: number; errors: unknown[] }[] = [];
@@ -781,6 +807,13 @@ router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
     console.log(
       `[workflow-service] deploy complete: org=${orgId} total=${results.length} created=${createdCount} updated=${updatedCount}`,
     );
+
+    traceEvent(deployRunId, {
+      service: "workflow-service",
+      event: "deploy-complete",
+      detail: `Deploy complete: total=${results.length} created=${createdCount} updated=${updatedCount} slugs=[${results.map(r => r.workflowSlug).join(",")}]`,
+      data: { total: results.length, created: createdCount, updated: updatedCount, slugs: results.map(r => r.workflowSlug) },
+    }, req.headers).catch(() => {});
 
     res.json({ workflows: results });
   } catch (err: unknown) {

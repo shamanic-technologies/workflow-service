@@ -11,6 +11,7 @@ import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun, closeRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 import { parseWindmillError } from "../lib/error-parser.js";
+import { traceEvent } from "../lib/trace-event.js";
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
@@ -115,6 +116,8 @@ router.post(
         }
       }
 
+      traceEvent(res.locals.runId as string, { service: "workflow-service", event: "execute-by-slug", detail: `Resolved slug="${req.params.slug}" to workflow="${workflow.workflowSlug}" (${workflow.id})` }, req.headers).catch(() => {});
+
       if (!workflow.windmillFlowPath) {
         res
           .status(400)
@@ -148,6 +151,13 @@ router.post(
         return;
       }
 
+      traceEvent(ownRunId, {
+        service: "workflow-service",
+        event: "execute-by-slug",
+        detail: `Executing workflow slug="${workflow.workflowSlug}" (id=${workflow.id}) for org=${orgId} campaign=${campaignId ?? "none"} featureSlug=${featureSlug ?? "none"}`,
+        data: { workflowSlug: workflow.workflowSlug, workflowId: workflow.id, orgId, campaignId, featureSlug },
+      }, req.headers).catch(() => {});
+
       // Run in Windmill — inject identity + tracking headers so every node receives them
       // Pass brandId as CSV string so downstream nodes receive it in the same format as the header
       let windmillJobId: string | null = null;
@@ -159,11 +169,25 @@ router.post(
             workflow.windmillFlowPath,
             flowInputs
           );
+
+          traceEvent(ownRunId, {
+            service: "workflow-service",
+            event: "windmill-dispatch",
+            detail: `Dispatched to Windmill: jobId=${windmillJobId} flowPath="${workflow.windmillFlowPath}" inputKeys=${Object.keys(flowInputs).join(",")}`,
+            data: { windmillJobId, flowPath: workflow.windmillFlowPath, inputKeys: Object.keys(flowInputs) },
+          }, req.headers).catch(() => {});
         } catch (err) {
           console.error(
             "[workflow-service] Failed to run flow in Windmill:",
             err
           );
+          traceEvent(ownRunId, {
+            service: "workflow-service",
+            event: "windmill-dispatch",
+            level: "error",
+            detail: `Windmill dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+            data: { flowPath: workflow.windmillFlowPath, error: err instanceof Error ? err.message : String(err) },
+          }, req.headers).catch(() => {});
           res
             .status(502)
             .json({ error: "Failed to start workflow in Windmill" });
@@ -194,6 +218,13 @@ router.post(
       console.log(
         `[workflow-service] Workflow "${workflow.workflowSlug}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
       );
+
+      traceEvent(ownRunId, {
+        service: "workflow-service",
+        event: "execute-queued",
+        detail: `Workflow run queued: dbRunId=${run.id} windmillJobId=${windmillJobId ?? "none"} workflowSlug="${workflow.workflowSlug}"`,
+        data: { dbRunId: run.id, windmillJobId, workflowSlug: workflow.workflowSlug },
+      }, req.headers).catch(() => {});
 
       res.status(201).json(formatRun(run));
     } catch (err: unknown) {
@@ -246,6 +277,8 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
       return;
     }
 
+    traceEvent(res.locals.runId as string, { service: "workflow-service", event: "execute-by-id", detail: `Resolved id="${req.params.id}" to workflow="${workflow.workflowSlug}"` }, req.headers).catch(() => {});
+
     if (!workflow.windmillFlowPath) {
       res
         .status(400)
@@ -279,6 +312,13 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
       return;
     }
 
+    traceEvent(ownRunId, {
+      service: "workflow-service",
+      event: "execute-by-id",
+      detail: `Executing workflow id=${workflow.id} slug="${workflow.workflowSlug}" for org=${orgId} campaign=${execCampaignId ?? "none"}`,
+      data: { workflowId: workflow.id, workflowSlug: workflow.workflowSlug, orgId, campaignId: execCampaignId },
+    }, req.headers).catch(() => {});
+
     // Run in Windmill — inject identity + tracking headers so every node receives them
     let windmillJobId: string | null = null;
     const client = getWindmillClient();
@@ -289,8 +329,22 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
           workflow.windmillFlowPath,
           flowInputs
         );
+
+        traceEvent(ownRunId, {
+          service: "workflow-service",
+          event: "windmill-dispatch",
+          detail: `Dispatched to Windmill: jobId=${windmillJobId} flowPath="${workflow.windmillFlowPath}"`,
+          data: { windmillJobId, flowPath: workflow.windmillFlowPath },
+        }, req.headers).catch(() => {});
       } catch (err) {
         console.error("[workflow-service] Failed to run flow in Windmill:", err);
+        traceEvent(ownRunId, {
+          service: "workflow-service",
+          event: "windmill-dispatch",
+          level: "error",
+          detail: `Windmill dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+          data: { flowPath: workflow.windmillFlowPath, error: err instanceof Error ? err.message : String(err) },
+        }, req.headers).catch(() => {});
         res
           .status(502)
           .json({ error: "Failed to start workflow in Windmill" });
@@ -317,6 +371,13 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         inputs: body.inputs,
       })
       .returning();
+
+    traceEvent(ownRunId, {
+      service: "workflow-service",
+      event: "execute-queued",
+      detail: `Workflow run queued: dbRunId=${run.id} windmillJobId=${windmillJobId ?? "none"}`,
+      data: { dbRunId: run.id, windmillJobId },
+    }, req.headers).catch(() => {});
 
     res.status(201).json(formatRun(run));
   } catch (err: unknown) {
@@ -370,6 +431,8 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
             })
             .where(eq(workflowRuns.id, run.id))
             .returning();
+
+          traceEvent(run.runId ?? req.params.id, { service: "workflow-service", event: "job-completed", detail: `Run ${run.id} finished: status=${newStatus}, windmillJobId=${run.windmillJobId}` }, req.headers).catch(() => {});
 
           // Close the run in runs-service
           if (run.runId && run.orgId) {
@@ -525,6 +588,8 @@ router.post("/workflow-runs/:id/cancel", requireApiKey, async (req, res) => {
         }
       }
     }
+
+    traceEvent(run.runId ?? req.params.id, { service: "workflow-service", event: "run-cancelled", detail: `Run ${run.id} cancelled by user, windmillJobId=${run.windmillJobId ?? "none"}` }, req.headers).catch(() => {});
 
     const [updated] = await db
       .update(workflowRuns)
