@@ -78,35 +78,32 @@ export interface WorkflowScore {
   sourceMetrics: Record<string, number>;
 }
 
+/**
+ * Linear walk back along created_from_workflow links, only following
+ * creation_type='upgrade' edges. Stops at scratch (chain origin) and at fork
+ * boundaries (forks start a fresh dynasty for stats purposes).
+ */
 export function getUpgradeChainIds(
   activeWorkflowId: string,
-  deprecatedWorkflows: { id: string; upgradedTo: string | null }[],
+  allWorkflows: { id: string; creationType: string; createdFromWorkflow: string | null }[],
 ): string[] {
-  const predecessorMap = new Map<string, string[]>();
-  for (const d of deprecatedWorkflows) {
-    if (!d.upgradedTo) continue;
-    const existing = predecessorMap.get(d.upgradedTo) ?? [];
-    existing.push(d.id);
-    predecessorMap.set(d.upgradedTo, existing);
-  }
-
-  const chainIds: string[] = [activeWorkflowId];
-  const queue = [activeWorkflowId];
+  const byId = new Map(allWorkflows.map((w) => [w.id, w]));
+  const chain: string[] = [activeWorkflowId];
   const visited = new Set<string>([activeWorkflowId]);
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const preds = predecessorMap.get(current) ?? [];
-    for (const predId of preds) {
-      if (!visited.has(predId)) {
-        visited.add(predId);
-        chainIds.push(predId);
-        queue.push(predId);
-      }
-    }
+  let current = byId.get(activeWorkflowId);
+  while (
+    current &&
+    current.creationType === "upgrade" &&
+    current.createdFromWorkflow &&
+    !visited.has(current.createdFromWorkflow)
+  ) {
+    visited.add(current.createdFromWorkflow);
+    chain.push(current.createdFromWorkflow);
+    current = byId.get(current.createdFromWorkflow);
   }
 
-  return chainIds;
+  return chain;
 }
 
 type ScoreMode =
@@ -129,14 +126,18 @@ export async function computeWorkflowScores(
   /** Stats registry entries for the objectives — used to fetch from the right source services. */
   registry?: Record<string, StatsRegistryEntry>,
 ): Promise<ScoreResult> {
-  // 1. Build dynasty chains: for each active workflow, collect all workflow names in its upgrade chain
+  // 1. Build dynasty chains: walk back along created_from_workflow edges through
+  //    the union of active + deprecated workflows so cross-dynasty convergence
+  //    (lineages that were merged after an upgrade) is naturally followed.
+  const allForChain = [...activeWorkflows, ...deprecatedWorkflows];
   const chainWorkflowsById: Record<string, (typeof workflows.$inferSelect)[]> = {};
 
   for (const wf of activeWorkflows) {
-    const chainIds = getUpgradeChainIds(wf.id, deprecatedWorkflows);
+    const chainIds = getUpgradeChainIds(wf.id, allForChain);
+    const chainSet = new Set(chainIds);
     chainWorkflowsById[wf.id] = [
       wf,
-      ...deprecatedWorkflows.filter((d) => chainIds.includes(d.id) && d.id !== wf.id),
+      ...deprecatedWorkflows.filter((d) => chainSet.has(d.id) && d.id !== wf.id),
     ];
   }
 

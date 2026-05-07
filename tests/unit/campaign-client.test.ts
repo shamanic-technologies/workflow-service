@@ -56,12 +56,15 @@ describe("campaign-client", () => {
   });
 
   describe("fetchActiveWorkflowSlugs", () => {
-    it("returns slugs for active campaigns and campaigns with toResumeAt", async () => {
+    it("returns slugs for active campaigns and campaigns whose toResumeAt is in the future", async () => {
+      const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const past = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const campaigns = [
         { id: "c1", workflowSlug: "wf-active", status: "active", toResumeAt: null },
         { id: "c2", workflowSlug: "wf-stopped", status: "stopped", toResumeAt: null },
-        { id: "c3", workflowSlug: "wf-paused", status: "paused", toResumeAt: "2026-04-01T00:00:00Z" },
-        { id: "c4", workflowSlug: "wf-completed", status: "completed", toResumeAt: null },
+        { id: "c3", workflowSlug: "wf-paused-future", status: "paused", toResumeAt: future },
+        { id: "c4", workflowSlug: "wf-paused-past", status: "paused", toResumeAt: past },
+        { id: "c5", workflowSlug: "wf-completed", status: "completed", toResumeAt: null },
       ];
 
       vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -71,7 +74,8 @@ describe("campaign-client", () => {
       const { fetchActiveWorkflowSlugs } = await import("../../src/lib/campaign-client.js");
       const result = await fetchActiveWorkflowSlugs();
 
-      expect(result).toEqual(new Set(["wf-active", "wf-paused"]));
+      expect(result).toEqual(new Set(["wf-active", "wf-paused-future"]));
+      expect(result.has("wf-paused-past")).toBe(false);
       expect(result.has("wf-stopped")).toBe(false);
       expect(result.has("wf-completed")).toBe(false);
     });

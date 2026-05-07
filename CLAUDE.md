@@ -86,49 +86,49 @@ name:          "Sales Cold Outreach Obsidian v3"
 
 No `-v1` or `v1` suffix for version 1 — the first version has no version suffix in slug or name.
 
+### Lineage columns
+
+Lineage is tracked by two forward-pointing columns on every workflow row:
+
+| Column | Type | Description |
+|---|---|---|
+| `creation_type` | text, NOT NULL, CHECK in (`scratch`, `upgrade`, `fork`) | How this row was created. |
+| `created_from_workflow` | uuid, nullable | Predecessor row id. Null only when `creation_type='scratch'`. |
+
+The legacy `upgraded_to` and `forked_from` columns are gone. The successor of a deprecated row is found by reverse lookup: `SELECT id FROM workflows WHERE created_from_workflow = <deprecated.id> AND creation_type = 'upgrade'`.
+
 ### Operations and behavior
 
-**Creation (new workflow, new dynasty):**
-- Generate a new `signature_name` (poetic word, unique among active workflows for this `feature_slug`).
-- Fetch `feature_dynasty_name` and `feature_dynasty_slug` from features-service.
-- Set `version = 1`. No version suffix in slug or name.
-- Compose `dynasty_name`, `slug`, `name` per the formulas above.
+**Creation — `POST /workflows/create`:**
+- Body: `{ featureSlug, description, hints?, style? }`. LLM generates the DAG.
+- If an active workflow with the same `(orgId, featureSlug, signature)` already exists, returns 200 with that row unchanged (idempotent).
+- Otherwise inserts a new row with `creation_type='scratch'`, `created_from_workflow=NULL`, `version=1`, no version suffix.
+- This endpoint never upgrades existing dynasties.
 
-**Upgrade (DAG changed) — via `PUT /workflows/upgrade`:**
-- Match existing active workflow by `feature_slug` (one active workflow per feature_slug).
-- If `signature` unchanged → update metadata in-place, no new record.
-- If `signature` changed:
-  - Deprecate the old workflow (`status = "deprecated"`, `upgraded_to = new.id`).
-  - Create new workflow with same `signature_name` and `dynasty_name`.
-  - Increment `version`. Add version suffix to `slug` and `name` (e.g. `-v2`, `v2`).
+**Upgrade — `POST /workflows/upgrade`:**
+- Body: `{ workflowSlug, description, hints? }`. LLM regenerates the DAG.
+- 404 if no active workflow matches `workflowSlug`.
+- If the new signature equals the existing one → in-place update, returns 200.
+- Otherwise inserts a new row in the **same** dynasty (`dynasty_slug`, `dynasty_name` unchanged) with `creation_type='upgrade'`, `created_from_workflow=existing.id`, `version=existing.version+1`, version suffix on `slug`/`name`. The predecessor is deprecated via `deprecateWorkflow()` (which also deletes its Windmill flow when no active campaign still references it). Returns 201.
 
-**Fork (new style):**
-- Creates a new dynasty — new `signature_name`, new `dynasty_name`.
-- `version = 1`, no version suffix.
-- `forked_from` points to the source workflow (for lineage tracking only).
+**Fork — `PUT /workflows/{id}` with a DAG of new signature:**
+- Inserts a new dynasty (new `signature_name`, new `dynasty_name`) with `creation_type='fork'`, `created_from_workflow=existing.id`, `version=1`.
+- The source workflow is **always kept active** — there is no auto-deprecate-on-fork path.
+- Returns 201.
 
-**PATCH (individual workflow):**
-- Metadata-only: can update `description`, `display_name`, `tags`, `category`, etc.
-- DAG changes are forbidden via PATCH. Structural changes go through `PUT /workflows/upgrade`.
-
-### Lineage convergence
-
-When two dynasties evolve independently and eventually produce the same DAG for the same `feature_slug`:
-- The upgrade that arrives second finds an active workflow with the same `(feature_slug, signature)`.
-- It does NOT create a new workflow. Instead, it deprecates its own predecessor and sets `upgraded_to` pointing to the already-existing active workflow.
-- The two lineages now converge on a single active workflow.
-- Ancestors from both branches retain their original `dynasty_name`.
+**Metadata update — `PUT /workflows/{id}` with no DAG (or same signature):**
+- Updates `description`, `tags`, etc. in-place. Returns 200.
+- DAG-only changes that produce a new signature take the fork path above.
 
 ### Stats aggregation across lineages
 
-Stats (costs, email metrics, completed runs) are aggregated across the entire upgrade chain using `getUpgradeChainIds()` in `workflow-scoring.ts`.
+Stats (costs, email metrics, completed runs) are aggregated by walking the upgrade chain in `getUpgradeChainIds()` (`src/lib/workflow-scoring.ts`):
 
-- The function builds a `predecessorMap` (`Map<string, string[]>`) from all deprecated workflows' `upgraded_to` pointers.
-- BFS traversal from the active workflow collects ALL ancestors, including multiple branches when lineages have converged.
-- A `visited` set prevents double-counting.
-- Stats are aggregated by `slug` (formerly `name`) across the entire chain, then summed.
+- Linear walk from the active workflow back along `created_from_workflow`, only following `creation_type='upgrade'` edges.
+- Stops at `creation_type='scratch'` (chain origin) and at `creation_type='fork'` boundaries (forks start a fresh dynasty for stats).
+- A `visited` set prevents infinite loops on any pathological self-references.
 
-This means: if dynasty A and dynasty B converge, the active workflow's stats include runs from both lineages — which is the correct behavior.
+The walker is fed the union of (active + deprecated) workflows so cross-dynasty convergence is followed naturally — when an upgrade was applied across dynasties, the chain crosses into the predecessor's dynasty and keeps walking.
 
 ### Dependency on features-service
 
