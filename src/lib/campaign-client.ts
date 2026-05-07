@@ -53,16 +53,25 @@ export async function fetchAllCampaigns(
  * Returns the set of workflow slugs that are currently "in use" by a campaign.
  * A campaign is considered in-use if:
  *   - status is "active", OR
- *   - toResumeAt is non-null (periodic campaign scheduled to resume)
+ *   - toResumeAt is in the future (periodic campaign scheduled to resume).
+ *
+ * A past toResumeAt is ignored — the campaign was scheduled to resume at some
+ * point in the past and either has resumed (and moved to a non-active status)
+ * or never will.
  */
 export async function fetchActiveWorkflowSlugs(
   downstreamHeaders?: DownstreamHeaders,
 ): Promise<Set<string>> {
   const campaigns = await fetchAllCampaigns(downstreamHeaders);
+  const now = Date.now();
 
   const activeSlugs = new Set<string>();
   for (const c of campaigns) {
-    if (c.status === "active" || c.toResumeAt !== null) {
+    if (c.status === "active") {
+      activeSlugs.add(c.workflowSlug);
+      continue;
+    }
+    if (c.toResumeAt && new Date(c.toResumeAt).getTime() > now) {
       activeSlugs.add(c.workflowSlug);
     }
   }

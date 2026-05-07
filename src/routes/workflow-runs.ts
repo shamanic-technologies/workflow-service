@@ -49,7 +49,8 @@ router.post(
       const orgId = res.locals.orgId as string;
 
       // Look up workflow by slug — only active workflows can be executed
-      let [workflow] = await db
+      type WorkflowRow = typeof workflows.$inferSelect;
+      const activeRows = await db
         .select()
         .from(workflows)
         .where(
@@ -58,50 +59,52 @@ router.post(
             eq(workflows.status, "active"),
           )
         );
+      let workflow: WorkflowRow | undefined = activeRows[0];
 
       if (!workflow) {
-        // Check if deprecated — follow upgrade chain to find active replacement
+        // Check if deprecated — follow upgrade chain to find active replacement.
+        // The chain is now reversed: a successor row points back via
+        // created_from_workflow with creation_type='upgrade'.
         const [deprecated] = await db
           .select()
           .from(workflows)
           .where(eq(workflows.workflowSlug, req.params.slug));
 
         if (deprecated && deprecated.status === "deprecated") {
-          // Follow upgrade chain to the latest active version
-          let currentId = deprecated.upgradedTo;
+          let currentId: string | null = deprecated.id;
+          let firstSuccessor: WorkflowRow | null = null;
           let depth = 0;
           while (currentId && depth < 10) {
-            const [candidate] = await db
+            const successorRows: WorkflowRow[] = await db
               .select()
               .from(workflows)
-              .where(eq(workflows.id, currentId));
+              .where(
+                and(
+                  eq(workflows.createdFromWorkflow, currentId),
+                  eq(workflows.creationType, "upgrade"),
+                )
+              );
+            const successor = successorRows[0];
 
-            if (!candidate) break;
-            if (candidate.status === "active") {
-              workflow = candidate;
+            if (!successor) break;
+            if (depth === 0) firstSuccessor = successor;
+            if (successor.status === "active") {
+              workflow = successor;
               console.log(
-                `[workflow-service] Execute by slug: "${req.params.slug}" is deprecated, following upgrade chain to "${candidate.workflowSlug}" (${candidate.id})`,
+                `[workflow-service] Execute by slug: "${req.params.slug}" is deprecated, following upgrade chain to "${successor.workflowSlug}" (${successor.id})`,
               );
               break;
             }
-            currentId = candidate.upgradedTo;
+            currentId = successor.id;
             depth++;
           }
 
           if (!workflow) {
-            // Dead end — no active workflow at the end of the chain
-            let upgradedToWorkflowSlug: string | null = null;
-            if (deprecated.upgradedTo) {
-              const [replacement] = await db
-                .select()
-                .from(workflows)
-                .where(eq(workflows.id, deprecated.upgradedTo));
-              upgradedToWorkflowSlug = replacement?.workflowSlug ?? null;
-            }
+            // Dead end — no active workflow at the end of the chain.
             res.status(410).json({
               error: "Workflow has been deprecated",
-              upgradedTo: deprecated.upgradedTo,
-              upgradedToWorkflowSlug,
+              upgradedTo: firstSuccessor?.id ?? null,
+              upgradedToWorkflowSlug: firstSuccessor?.workflowSlug ?? null,
             });
             return;
           }
@@ -266,9 +269,18 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
         .where(eq(workflows.id, req.params.id));
 
       if (deprecated && deprecated.status === "deprecated") {
+        const [successor] = await db
+          .select({ id: workflows.id })
+          .from(workflows)
+          .where(
+            and(
+              eq(workflows.createdFromWorkflow, deprecated.id),
+              eq(workflows.creationType, "upgrade"),
+            )
+          );
         res.status(410).json({
           error: "Workflow has been deprecated",
-          upgradedTo: deprecated.upgradedTo,
+          upgradedTo: successor?.id ?? null,
         });
         return;
       }

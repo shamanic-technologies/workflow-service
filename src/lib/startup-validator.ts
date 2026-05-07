@@ -11,6 +11,8 @@ import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
 import type { WindmillClient } from "./windmill-client.js";
 import { deprecateStaleWorkflows } from "./stale-workflow-deprecator.js";
+import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
+import { cleanupOrphanedWindmillFlows } from "./windmill-flow-cleanup.js";
 
 type Database = typeof DbInstance;
 
@@ -180,6 +182,23 @@ export async function validateAndUpgradeWorkflows(
       }
     }
     console.log(`[workflow-service] Synced ${synced}/${currentActive.length} flows to Windmill`);
+
+    // 6. Garbage-collect orphan Windmill flows: deprecated workflows whose flow
+    //    is still in Windmill and whose slug is not referenced by an active
+    //    campaign. Skipped if campaign-service is unreachable so we don't
+    //    delete flows we can't prove are unused.
+    try {
+      const activeCampaignSlugs = await fetchActiveWorkflowSlugs();
+      const result = await cleanupOrphanedWindmillFlows(database, windmillClient, activeCampaignSlugs);
+      console.log(
+        `[workflow-service] Windmill cleanup: deleted=${result.deleted} kept=${result.kept} failed=${result.failed}`,
+      );
+    } catch (err) {
+      console.warn(
+        "[workflow-service] Windmill cleanup skipped — could not fetch active campaigns:",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 }
 

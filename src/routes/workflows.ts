@@ -3,7 +3,7 @@ import { eq, and, sql } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
-import { workflows, workflowRuns } from "../db/schema.js";
+import { workflows } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { createRateLimit } from "../middleware/rate-limit.js";
 import { validateDAG, type DAG } from "../lib/dag-validator.js";
@@ -12,18 +12,17 @@ import { getWindmillClient } from "../lib/windmill-client.js";
 import {
   CreateWorkflowSchema,
   UpdateWorkflowSchema,
-  DeployWorkflowsSchema,
-  GenerateWorkflowSchema,
+  CreateWorkflowFromDescriptionSchema,
+  UpgradeWorkflowFromDescriptionSchema,
 } from "../schemas.js";
 import {
   generateWorkflow,
   GenerationValidationError,
 } from "../lib/workflow-generator.js";
+import { deprecateWorkflow } from "../lib/workflow-deprecation.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import { pickSignatureName } from "../lib/signature-words.js";
 import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
-import { validateWorkflowEndpoints } from "../lib/validate-workflow-endpoints.js";
-import { fetchSpecsForServices } from "../lib/api-registry-client.js";
 import { fetchProviderRequirements } from "../lib/key-service-client.js";
 import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIssue, type TemplateRef } from "../lib/validate-template-contracts.js";
@@ -78,10 +77,17 @@ function composeName(base: string, version: number): string {
   return version >= 2 ? `${base} v${version}` : base;
 }
 
-// POST /workflows/generate — Generate a workflow from natural language
-router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, res) => {
+// POST /workflows/create — Create a workflow from a natural-language description.
+// Behavior:
+//   - If an active workflow already exists for (orgId, featureSlug) and the
+//     newly-generated DAG signature matches, return 200 with the existing row
+//     unchanged (idempotent).
+//   - Otherwise, always create a NEW dynasty (creation_type='scratch'). This
+//     endpoint never upgrades existing dynasties — use POST /workflows/upgrade
+//     for that.
+router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res) => {
   try {
-    const body = GenerateWorkflowSchema.parse(req.body);
+    const body = CreateWorkflowFromDescriptionSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
     const userId = res.locals.userId as string;
     const runId = res.locals.runId as string;
@@ -89,8 +95,8 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
 
     traceEvent(runId, {
       service: "workflow-service",
-      event: "generate-start",
-      detail: `Generating workflow for featureSlug="${body.featureSlug}" description="${body.description.slice(0, 100)}"`,
+      event: "create-start",
+      detail: `Creating workflow for featureSlug="${body.featureSlug}" description="${body.description.slice(0, 100)}"`,
       data: { featureSlug: body.featureSlug, hasHints: !!body.hints, hasStyle: !!body.style },
     }, req.headers).catch(() => {});
 
@@ -102,45 +108,220 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
     const dag = generated.dag as DAG;
     const signature = computeDAGSignature(generated.dag);
 
+    // Idempotent match: same (orgId, featureSlug, signature) returns existing row.
+    const [existingMatch] = await db
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.orgId, orgId),
+          eq(workflows.featureSlug, body.featureSlug),
+          eq(workflows.signature, signature),
+          eq(workflows.status, "active"),
+        )
+      );
+
+    if (existingMatch) {
+      traceEvent(runId, {
+        service: "workflow-service",
+        event: "create-existing-match",
+        detail: `Returning existing active workflow="${existingMatch.workflowSlug}" — same signature`,
+      }, req.headers).catch(() => {});
+
+      res.json({
+        workflow: {
+          id: existingMatch.id,
+          workflowSlug: existingMatch.workflowSlug,
+          workflowName: existingMatch.workflowName,
+          workflowDynastySlug: existingMatch.dynastySlug,
+          featureSlug: existingMatch.featureSlug,
+          tags: (existingMatch.tags as string[]) ?? [],
+          signature: existingMatch.signature,
+          signatureName: existingMatch.signatureName,
+          version: existingMatch.version,
+          action: "existing" as const,
+        },
+        dag: existingMatch.dag,
+        generatedDescription: existingMatch.description ?? generated.description,
+      });
+      return;
+    }
+
+    // New dynasty — pick a unique signatureName (or use a style-derived one).
+    const allRows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows);
+    const usedNames = new Set(allRows.map((w) => w.signatureName));
+
+    let signatureName: string;
+    let styleName: string | null = null;
+    let humanId: string | null = null;
+    let createdForBrandId: string | null = null;
+
+    if (body.style) {
+      styleName = body.style.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+
+      const sameStyle = await db
+        .select({ id: workflows.id })
+        .from(workflows)
+        .where(
+          and(
+            eq(workflows.orgId, orgId),
+            eq(workflows.styleName, styleName),
+          )
+        );
+      const version = sameStyle.length + 1;
+      signatureName = `${styleName}-v${version}`;
+
+      if (body.style.type === "human" && body.style.humanId) {
+        humanId = body.style.humanId;
+      }
+      if (body.style.type === "brand" && body.style.brandId) {
+        createdForBrandId = body.style.brandId;
+      }
+    } else {
+      signatureName = pickSignatureName(signature, usedNames);
+    }
+
+    const featureName = featureSlugToName(body.featureSlug);
+    const dynastySlug = `${body.featureSlug}-${signatureName}`;
+    const dynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
+    const workflowSlug = dynastySlug; // v1 — no version suffix
+    const workflowName = dynastyName;
+
+    const openFlow = dagToOpenFlow(dag, workflowSlug);
+    const flowPath = generateFlowPath(orgId, workflowSlug);
+    const client = getWindmillClient();
+    if (client) {
+      try {
+        await client.createFlow({
+          path: flowPath,
+          summary: workflowSlug,
+          description: generated.description,
+          value: openFlow.value,
+          schema: openFlow.schema,
+        });
+      } catch (err) {
+        console.error("[workflow-service] create: failed to create Windmill flow:", err);
+      }
+    }
+
+    const [created] = await db
+      .insert(workflows)
+      .values({
+        orgId,
+        workflowSlug,
+        workflowName,
+        dynastySlug,
+        dynastyName,
+        description: generated.description,
+        featureSlug: body.featureSlug,
+        category: generated.category,
+        channel: generated.channel,
+        audienceType: generated.audienceType,
+        signature,
+        signatureName,
+        version: 1,
+        dag: generated.dag,
+        windmillFlowPath: flowPath,
+        humanId,
+        createdForBrandId,
+        styleName,
+        creationType: "scratch",
+        createdFromWorkflow: null,
+        createdByUserId: userId,
+        createdByRunId: runId,
+      })
+      .returning();
+
     traceEvent(runId, {
       service: "workflow-service",
-      event: "generate-complete",
-      detail: `Generated DAG with ${dag.nodes?.length ?? 0} nodes, signature=${signature.slice(0, 12)}, category=${generated.category ?? "none"}`,
-      data: { nodeCount: dag.nodes?.length ?? 0, signature: signature.slice(0, 12), category: generated.category },
+      event: "create-complete",
+      detail: `Created workflow="${created.workflowSlug}" creationType=scratch signature=${signature.slice(0, 12)}`,
+      data: { workflowSlug: created.workflowSlug, signature: signature.slice(0, 12) },
     }, req.headers).catch(() => {});
 
-    const existingWorkflows = await db
-      .select({ signatureName: workflows.signatureName })
-      .from(workflows)
-      .where(sql`true`);
-    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
+    res.status(201).json({
+      workflow: {
+        id: created.id,
+        workflowSlug: created.workflowSlug,
+        workflowName: created.workflowName,
+        workflowDynastySlug: created.dynastySlug,
+        featureSlug: created.featureSlug,
+        tags: (created.tags as string[]) ?? [],
+        signature: created.signature,
+        signatureName: created.signatureName,
+        version: created.version,
+        action: "created" as const,
+      },
+      dag: generated.dag,
+      generatedDescription: generated.description,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "ZodError") {
+      res.status(400).json({ error: "Validation error", details: err });
+      return;
+    }
+    if (err instanceof GenerationValidationError) {
+      res.status(422).json({
+        error: err.message,
+        details: err.validationErrors,
+      });
+      return;
+    }
+    console.error("[workflow-service] CREATE error:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error",
+    });
+  }
+});
 
-    // Match by featureSlug — one active workflow per featureSlug
+// POST /workflows/upgrade — Regenerate the DAG of an existing active workflow
+// using an LLM and either update it in-place (signature unchanged) or insert
+// a new version in the same dynasty (signature changed).
+router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, res) => {
+  try {
+    const body = UpgradeWorkflowFromDescriptionSchema.parse(req.body);
+    const orgId = res.locals.orgId as string;
+    const userId = res.locals.userId as string;
+    const runId = res.locals.runId as string;
+    const dsHeaders = extractDownstreamHeaders(req);
+
     const [existing] = await db
       .select()
       .from(workflows)
       .where(
         and(
-          eq(workflows.featureSlug, body.featureSlug),
+          eq(workflows.workflowSlug, body.workflowSlug),
           eq(workflows.status, "active"),
         )
       );
 
-    type DeployResult = {
-      id: string;
-      workflowSlug: string;
-      workflowName: string;
-      workflowDynastySlug: string;
-      featureSlug: string;
-      tags: string[];
-      signature: string;
-      signatureName: string;
-      action: "created" | "updated";
-    };
+    if (!existing) {
+      res.status(404).json({ error: `Active workflow not found for slug "${body.workflowSlug}"` });
+      return;
+    }
 
-    let result: DeployResult;
+    traceEvent(runId, {
+      service: "workflow-service",
+      event: "upgrade-start",
+      detail: `Upgrading workflow="${existing.workflowSlug}" featureSlug="${existing.featureSlug}"`,
+      data: { workflowSlug: existing.workflowSlug, featureSlug: existing.featureSlug },
+    }, req.headers).catch(() => {});
 
-    if (existing && existing.signature === signature) {
+    const generated = await generateWorkflow(
+      { description: body.description, hints: body.hints },
+      dsHeaders,
+    );
+
+    const dag = generated.dag as DAG;
+    const newSignature = computeDAGSignature(generated.dag);
+
+    // Same signature → in-place update.
+    if (newSignature === existing.signature) {
       const openFlow = dagToOpenFlow(dag, existing.workflowSlug);
       const client = getWindmillClient();
       if (client && existing.windmillFlowPath) {
@@ -152,7 +333,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
             schema: openFlow.schema,
           });
         } catch (err) {
-          console.error("[workflow-service] generate: failed to update Windmill flow:", err);
+          console.error("[workflow-service] upgrade: failed to update Windmill flow:", err);
         }
       }
 
@@ -169,121 +350,95 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         .where(eq(workflows.id, existing.id))
         .returning();
 
-      result = {
-        id: updated.id,
-        workflowSlug: updated.workflowSlug,
-        workflowName: updated.workflowName,
-        workflowDynastySlug: updated.dynastySlug,
-        featureSlug: updated.featureSlug,
-        tags: (updated.tags as string[]) ?? [],
-        signature: updated.signature,
-        signatureName: updated.signatureName,
-        action: "updated",
-      };
-    } else {
-      let signatureName: string;
-      let styleName: string | null = null;
-      let humanId: string | null = null;
-      let createdForBrandId: string | null = null;
+      res.json({
+        workflow: {
+          id: updated.id,
+          workflowSlug: updated.workflowSlug,
+          workflowName: updated.workflowName,
+          workflowDynastySlug: updated.dynastySlug,
+          featureSlug: updated.featureSlug,
+          tags: (updated.tags as string[]) ?? [],
+          signature: updated.signature,
+          signatureName: updated.signatureName,
+          version: updated.version,
+          action: "updated" as const,
+        },
+        dag: generated.dag,
+        generatedDescription: generated.description,
+      });
+      return;
+    }
 
-      if (body.style) {
-        styleName = body.style.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "");
+    // New signature → upgrade in same dynasty: bump version, deprecate predecessor.
+    const newVersion = existing.version + 1;
+    const newSlug = composeSlug(existing.dynastySlug, newVersion);
+    const newName = composeName(existing.dynastyName, newVersion);
 
-        // Count existing workflows with same (orgId, styleName) for versioning
-        const sameStyle = await db
-          .select({ id: workflows.id })
-          .from(workflows)
-          .where(
-            and(
-              eq(workflows.orgId, orgId),
-              eq(workflows.styleName, styleName),
-            )
-          );
-        const version = sameStyle.length + 1;
+    // Pick a fresh signatureName among workflows in this feature_slug's
+    // active set so it's unique even after collisions across dynasties.
+    const allRows = await db
+      .select({ signatureName: workflows.signatureName })
+      .from(workflows);
+    const usedNames = new Set(allRows.map((w) => w.signatureName));
+    const freshSignatureName = pickSignatureName(newSignature, usedNames);
 
-        signatureName = `${styleName}-v${version}`;
-
-        if (body.style.type === "human" && body.style.humanId) {
-          humanId = body.style.humanId;
-        }
-        if (body.style.type === "brand" && body.style.brandId) {
-          createdForBrandId = body.style.brandId;
-        }
-      } else {
-        signatureName = pickSignatureName(signature, usedNames);
-      }
-
-      const featureName = featureSlugToName(body.featureSlug);
-      const dynastySlug = `${body.featureSlug}-${signatureName}`;
-      const dynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-      const newVersion = existing ? existing.version + 1 : 1;
-      const workflowSlug = composeSlug(dynastySlug, newVersion);
-      const workflowName = composeName(dynastyName, newVersion);
-
-      const openFlow = dagToOpenFlow(dag, workflowSlug);
-      const flowPath = generateFlowPath(orgId, workflowSlug);
-      const client = getWindmillClient();
-
-      if (client) {
-        try {
-          await client.createFlow({
-            path: flowPath,
-            summary: workflowSlug,
-            description: generated.description,
-            value: openFlow.value,
-            schema: openFlow.schema,
-          });
-        } catch (err) {
-          console.error("[workflow-service] generate: failed to create Windmill flow:", err);
-        }
-      }
-
-      // Deprecate existing if upgrading
-      if (existing) {
-        await db
-          .update(workflows)
-          .set({ status: "deprecated", updatedAt: new Date() })
-          .where(eq(workflows.id, existing.id));
-      }
-
-      const [created] = await db
-        .insert(workflows)
-        .values({
-          orgId,
-          workflowSlug,
-          workflowName,
-          dynastySlug,
-          dynastyName,
+    const openFlow = dagToOpenFlow(dag, newSlug);
+    const flowPath = generateFlowPath(orgId, newSlug);
+    const client = getWindmillClient();
+    if (client) {
+      try {
+        await client.createFlow({
+          path: flowPath,
+          summary: newSlug,
           description: generated.description,
-          featureSlug: body.featureSlug,
-          category: generated.category,
-          channel: generated.channel,
-          audienceType: generated.audienceType,
-          signature,
-          signatureName,
-          version: newVersion,
-          dag: generated.dag,
-          windmillFlowPath: flowPath,
-          humanId,
-          createdForBrandId,
-          styleName,
-          createdByUserId: userId,
-          createdByRunId: runId,
-        })
-        .returning();
-
-      // Set upgradedTo pointer on the deprecated workflow
-      if (existing) {
-        await db
-          .update(workflows)
-          .set({ upgradedTo: created.id })
-          .where(eq(workflows.id, existing.id));
+          value: openFlow.value,
+          schema: openFlow.schema,
+        });
+      } catch (err) {
+        console.error("[workflow-service] upgrade: failed to create Windmill flow:", err);
       }
+    }
 
-      result = {
+    const [created] = await db
+      .insert(workflows)
+      .values({
+        orgId,
+        createdForBrandId: existing.createdForBrandId,
+        humanId: existing.humanId,
+        styleName: existing.styleName,
+        workflowSlug: newSlug,
+        workflowName: newName,
+        dynastySlug: existing.dynastySlug,
+        dynastyName: existing.dynastyName,
+        description: generated.description,
+        featureSlug: existing.featureSlug,
+        category: generated.category,
+        channel: generated.channel,
+        audienceType: generated.audienceType,
+        tags: (existing.tags as string[]) ?? [],
+        signature: newSignature,
+        signatureName: freshSignatureName,
+        version: newVersion,
+        dag: generated.dag,
+        windmillFlowPath: flowPath,
+        creationType: "upgrade",
+        createdFromWorkflow: existing.id,
+        createdByUserId: userId,
+        createdByRunId: runId,
+      })
+      .returning();
+
+    await deprecateWorkflow(db, existing.id, client);
+
+    traceEvent(runId, {
+      service: "workflow-service",
+      event: "upgrade-complete",
+      detail: `Upgraded "${existing.workflowSlug}" -> "${created.workflowSlug}" (v${newVersion})`,
+      data: { from: existing.workflowSlug, to: created.workflowSlug, version: newVersion },
+    }, req.headers).catch(() => {});
+
+    res.status(201).json({
+      workflow: {
         id: created.id,
         workflowSlug: created.workflowSlug,
         workflowName: created.workflowName,
@@ -292,14 +447,9 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
         tags: (created.tags as string[]) ?? [],
         signature: created.signature,
         signatureName: created.signatureName,
-        action: existing ? "updated" : "created",
-      };
-    }
-
-    traceEvent(runId, { service: "workflow-service", event: "generate-complete", detail: `Generated workflow="${result.workflowSlug}" action=${result.action}, signature=${result.signature.slice(0, 12)}` }, req.headers).catch(() => {});
-
-    res.json({
-      workflow: result,
+        version: created.version,
+        action: "upgraded" as const,
+      },
       dag: generated.dag,
       generatedDescription: generated.description,
     });
@@ -315,7 +465,7 @@ router.post("/workflows/generate", requireApiKey, createRateLimit, async (req, r
       });
       return;
     }
-    console.error("[workflow-service] GENERATE error:", err);
+    console.error("[workflow-service] UPGRADE error:", err);
     res.status(500).json({
       error: err instanceof Error ? err.message : "Internal server error",
     });
@@ -410,421 +560,6 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
   }
 });
 
-// PUT /workflows/upgrade — Batch upsert workflows by (orgId + signature)
-router.put("/workflows/upgrade", requireApiKey, async (req, res) => {
-  try {
-    const body = DeployWorkflowsSchema.parse(req.body);
-    const orgId = res.locals.orgId as string;
-
-    const deployRunId = res.locals.runId as string;
-
-    console.log(`[workflow-service] deploy: org=${orgId} workflows=${body.workflows.length}`);
-
-    traceEvent(deployRunId, {
-      service: "workflow-service",
-      event: "deploy-start",
-      detail: `Deploying ${body.workflows.length} workflow(s) for org=${orgId}`,
-      data: { workflowCount: body.workflows.length, orgId },
-    }, req.headers).catch(() => {});
-
-    // Validate ALL DAGs first — reject if any are invalid
-    const dagErrors: { index: number; errors: unknown[] }[] = [];
-    for (let i = 0; i < body.workflows.length; i++) {
-      const validation = validateDAG(body.workflows[i].dag as DAG);
-      if (!validation.valid) {
-        dagErrors.push({ index: i, errors: validation.errors ?? [] });
-      }
-    }
-    if (dagErrors.length > 0) {
-      res.status(400).json({ error: "Invalid DAGs", details: dagErrors });
-      return;
-    }
-
-    // Validate endpoint fields against API registry (if configured)
-    if (process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY) {
-      const allServiceNames = new Set<string>();
-      for (const wf of body.workflows) {
-        for (const ep of extractHttpEndpoints(wf.dag as DAG)) {
-          allServiceNames.add(ep.service);
-        }
-      }
-
-      if (allServiceNames.size > 0) {
-        try {
-          const specs = await fetchSpecsForServices([...allServiceNames], extractDownstreamHeaders(req));
-          const validationErrors: Array<{ index: number; issues: unknown[] }> = [];
-
-          for (let i = 0; i < body.workflows.length; i++) {
-            const result = validateWorkflowEndpoints(body.workflows[i].dag as DAG, specs);
-
-            if (result.fieldIssues.length > 0) {
-              console.warn(
-                `[workflow-service] deploy: workflow[${i}] field issues:`,
-                result.fieldIssues.map((f) => `${f.severity}: ${f.reason}`).join("; "),
-              );
-            }
-
-            const errors = [
-              ...result.invalidEndpoints.map((e) => ({
-                severity: "error",
-                reason: e.reason,
-              })),
-              ...result.fieldIssues.filter((f) => f.severity === "error"),
-            ];
-
-            if (errors.length > 0) {
-              validationErrors.push({ index: i, issues: errors });
-            }
-          }
-
-          if (validationErrors.length > 0) {
-            console.error(
-              `[workflow-service] deploy: rejected — ${validationErrors.length} workflow(s) with field errors`,
-            );
-            res.status(400).json({
-              error: "Endpoint field validation failed",
-              details: validationErrors,
-            });
-            return;
-          }
-        } catch (err) {
-          console.warn("[workflow-service] deploy: api-registry validation skipped:", err);
-          // Don't block deploy if api-registry is unavailable
-        }
-      }
-    }
-
-    // Validate template contracts (variables provided vs declared in prompt templates)
-    try {
-      const allTemplateRefs: TemplateRef[] = [];
-      for (const wf of body.workflows) {
-        allTemplateRefs.push(...extractTemplateRefs(wf.dag as DAG));
-      }
-
-      if (allTemplateRefs.length > 0) {
-        const types = [...new Set(allTemplateRefs.map((r) => r.templateType))];
-        const templates = await fetchPromptTemplates(types, extractDownstreamHeaders(req));
-
-        const templateErrors: Array<{ index: number; issues: TemplateContractIssue[] }> = [];
-        for (let i = 0; i < body.workflows.length; i++) {
-          const result = validateTemplateContracts(body.workflows[i].dag as DAG, templates);
-          const errors = result.issues.filter((issue) => issue.severity === "error");
-          if (errors.length > 0) {
-            templateErrors.push({ index: i, issues: errors });
-          }
-        }
-
-        if (templateErrors.length > 0) {
-          console.error(
-            `[workflow-service] deploy: rejected — ${templateErrors.length} workflow(s) with missing template variables`,
-          );
-          res.status(400).json({
-            error: "Template contract validation failed",
-            details: templateErrors,
-          });
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn("[workflow-service] deploy: template contract validation skipped:", err instanceof Error ? err.message : err);
-      // Don't block deploy if content-generation is unreachable
-    }
-
-    // Fetch all existing signatureNames to avoid collisions (include deprecated)
-    const existingWorkflows = await db
-      .select({ signatureName: workflows.signatureName })
-      .from(workflows)
-      .where(sql`true`);
-    const usedNames = new Set(existingWorkflows.map((w) => w.signatureName));
-
-    const results: { id: string; workflowSlug: string; workflowName: string; workflowDynastySlug: string; featureSlug: string; tags: string[]; signature: string; signatureName: string; version: number; action: "created" | "updated" | "deprecated-to-existing" }[] = [];
-
-    for (const wf of body.workflows) {
-      const dag = wf.dag as DAG;
-      const signature = computeDAGSignature(wf.dag);
-
-      // Match by featureSlug — one active workflow per featureSlug
-      const [activeForFeature] = await db
-        .select()
-        .from(workflows)
-        .where(
-          and(
-            eq(workflows.featureSlug, wf.featureSlug),
-            eq(workflows.status, "active"),
-          )
-        );
-
-      if (activeForFeature && activeForFeature.signature === signature) {
-        // Same DAG already deployed — update metadata in-place
-        console.log(
-          `[workflow-service] deploy: sig=${signature.slice(0, 12)} matched "${activeForFeature.workflowSlug}" (${activeForFeature.id}) -> update`,
-        );
-        const openFlow = dagToOpenFlow(dag, activeForFeature.workflowSlug);
-        const client = getWindmillClient();
-
-        if (client && activeForFeature.windmillFlowPath) {
-          try {
-            await client.updateFlow(activeForFeature.windmillFlowPath, {
-              summary: activeForFeature.workflowSlug,
-              description: wf.description,
-              value: openFlow.value,
-              schema: openFlow.schema,
-            });
-          } catch (err) {
-            console.error("[workflow-service] deploy: failed to update Windmill flow:", err);
-          }
-        }
-
-        const updatedTags = wf.tags ?? (activeForFeature.tags as string[]) ?? [];
-        const [updated] = await db
-          .update(workflows)
-          .set({
-            orgId,
-            createdForBrandId: wf.createdForBrandId,
-            featureSlug: wf.featureSlug ?? activeForFeature.featureSlug,
-            description: wf.description ?? activeForFeature.description,
-            category: wf.category,
-            channel: wf.channel,
-            audienceType: wf.audienceType,
-            tags: updatedTags,
-            dag: wf.dag,
-            updatedAt: new Date(),
-          })
-          .where(eq(workflows.id, activeForFeature.id))
-          .returning();
-
-        results.push({
-          id: updated.id,
-          workflowSlug: updated.workflowSlug,
-          workflowName: updated.workflowName,
-          workflowDynastySlug: updated.dynastySlug,
-          featureSlug: updated.featureSlug,
-          tags: (updated.tags as string[]) ?? [],
-          signature: updated.signature,
-          signatureName: updated.signatureName,
-          version: updated.version,
-          action: "updated",
-        });
-      } else if (activeForFeature) {
-        // DAG changed — check if another active workflow already has this signature (convergence)
-        const [convergenceTarget] = await db
-          .select()
-          .from(workflows)
-          .where(
-            and(
-              eq(workflows.featureSlug, wf.featureSlug),
-              eq(workflows.signature, signature),
-              eq(workflows.status, "active"),
-            )
-          );
-
-        if (convergenceTarget) {
-          // Convergence: deprecate our predecessor, point to the existing active
-          console.log(
-            `[workflow-service] deploy: convergence — "${activeForFeature.workflowSlug}" -> existing "${convergenceTarget.workflowSlug}"`,
-          );
-
-          await db
-            .update(workflows)
-            .set({
-              status: "deprecated",
-              upgradedTo: convergenceTarget.id,
-              updatedAt: new Date(),
-            })
-            .where(eq(workflows.id, activeForFeature.id));
-
-          results.push({
-            id: convergenceTarget.id,
-            workflowSlug: convergenceTarget.workflowSlug,
-            workflowName: convergenceTarget.workflowName,
-            workflowDynastySlug: convergenceTarget.dynastySlug,
-            featureSlug: convergenceTarget.featureSlug,
-            tags: (convergenceTarget.tags as string[]) ?? [],
-            signature: convergenceTarget.signature,
-            signatureName: convergenceTarget.signatureName,
-            version: convergenceTarget.version,
-            action: "deprecated-to-existing",
-          });
-        } else {
-          // Upgrade: deprecate old, create new version in the same lineage
-          const newVersion = activeForFeature.version + 1;
-          const signatureName = activeForFeature.signatureName;
-          const dynastySlug = activeForFeature.dynastySlug;
-          const dynastyName = activeForFeature.dynastyName;
-          const newSlug = composeSlug(dynastySlug, newVersion);
-          const newName = composeName(dynastyName, newVersion);
-
-          console.log(
-            `[workflow-service] deploy: sig=${signature.slice(0, 12)} upgrade "${activeForFeature.workflowSlug}" -> "${newSlug}" (v${newVersion})`,
-          );
-
-          const openFlow = dagToOpenFlow(dag, newSlug);
-          const flowPath = generateFlowPath(orgId, newSlug);
-          const client = getWindmillClient();
-
-          if (client) {
-            try {
-              await client.createFlow({
-                path: flowPath,
-                summary: newSlug,
-                description: wf.description,
-                value: openFlow.value,
-                schema: openFlow.schema,
-              });
-            } catch (err) {
-              console.error("[workflow-service] deploy: failed to create Windmill flow:", err);
-            }
-          }
-
-          // Deprecate old workflow FIRST
-          await db
-            .update(workflows)
-            .set({
-              status: "deprecated",
-              updatedAt: new Date(),
-            })
-            .where(eq(workflows.id, activeForFeature.id));
-
-          const [created] = await db
-            .insert(workflows)
-            .values({
-              orgId,
-              createdForBrandId: wf.createdForBrandId,
-              featureSlug: wf.featureSlug,
-              workflowSlug: newSlug,
-              workflowName: newName,
-              dynastySlug,
-              dynastyName,
-              description: wf.description,
-              category: wf.category,
-              channel: wf.channel,
-              audienceType: wf.audienceType,
-              tags: wf.tags ?? [],
-              signature,
-              signatureName,
-              version: newVersion,
-              dag: wf.dag,
-              windmillFlowPath: flowPath,
-              createdByUserId: res.locals.userId as string,
-              createdByRunId: res.locals.runId as string,
-            })
-            .returning();
-
-          // Set upgradedTo pointer on the deprecated workflow
-          await db
-            .update(workflows)
-            .set({ upgradedTo: created.id })
-            .where(eq(workflows.id, activeForFeature.id));
-
-          results.push({
-            id: created.id,
-            workflowSlug: created.workflowSlug,
-            workflowName: created.workflowName,
-            workflowDynastySlug: created.dynastySlug,
-            featureSlug: created.featureSlug,
-            tags: (created.tags as string[]) ?? [],
-            signature: created.signature,
-            signatureName: created.signatureName,
-            version: created.version,
-            action: "created",
-          });
-        }
-      } else {
-        // No active workflow for this featureSlug — new lineage
-        const signatureName = pickSignatureName(signature, usedNames);
-        usedNames.add(signatureName);
-
-        const featureName = featureSlugToName(wf.featureSlug);
-        const dynastySlug = `${wf.featureSlug}-${signatureName}`;
-        const dynastyName = `${featureName} ${signatureName.charAt(0).toUpperCase() + signatureName.slice(1)}`;
-        const workflowSlug = dynastySlug; // v1 has no version suffix
-        const workflowName = dynastyName;
-
-        console.log(
-          `[workflow-service] deploy: sig=${signature.slice(0, 12)} new dynasty -> "${workflowSlug}"`,
-        );
-
-        const openFlow = dagToOpenFlow(dag, workflowSlug);
-        const flowPath = generateFlowPath(orgId, workflowSlug);
-        const client = getWindmillClient();
-
-        if (client) {
-          try {
-            await client.createFlow({
-              path: flowPath,
-              summary: workflowSlug,
-              description: wf.description,
-              value: openFlow.value,
-              schema: openFlow.schema,
-            });
-          } catch (err) {
-            console.error("[workflow-service] deploy: failed to create Windmill flow:", err);
-          }
-        }
-
-        const [created] = await db
-          .insert(workflows)
-          .values({
-            orgId,
-            createdForBrandId: wf.createdForBrandId,
-            featureSlug: wf.featureSlug,
-            workflowSlug,
-            workflowName,
-            dynastySlug,
-            dynastyName,
-            description: wf.description,
-            category: wf.category,
-            channel: wf.channel,
-            audienceType: wf.audienceType,
-            tags: wf.tags ?? [],
-            signature,
-            signatureName,
-            version: 1,
-            dag: wf.dag,
-            windmillFlowPath: flowPath,
-            createdByUserId: res.locals.userId as string,
-            createdByRunId: res.locals.runId as string,
-          })
-          .returning();
-
-        results.push({
-          id: created.id,
-          workflowSlug: created.workflowSlug,
-          workflowName: created.workflowName,
-          workflowDynastySlug: created.dynastySlug,
-          featureSlug: created.featureSlug,
-          tags: (created.tags as string[]) ?? [],
-          signature: created.signature,
-          signatureName: created.signatureName,
-          version: created.version,
-          action: "created",
-        });
-      }
-    }
-
-    const createdCount = results.filter((r) => r.action === "created").length;
-    const updatedCount = results.filter((r) => r.action === "updated").length;
-    console.log(
-      `[workflow-service] deploy complete: org=${orgId} total=${results.length} created=${createdCount} updated=${updatedCount}`,
-    );
-
-    traceEvent(deployRunId, {
-      service: "workflow-service",
-      event: "deploy-complete",
-      detail: `Deploy complete: total=${results.length} created=${createdCount} updated=${updatedCount} slugs=[${results.map(r => r.workflowSlug).join(",")}]`,
-      data: { total: results.length, created: createdCount, updated: updatedCount, slugs: results.map(r => r.workflowSlug) },
-    }, req.headers).catch(() => {});
-
-    res.json({ workflows: results });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
-      return;
-    }
-    console.error("[workflow-service] PUT deploy error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
 
 // GET /workflows/dynasties — List all dynasties with their versioned workflow slugs
 router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
@@ -1255,7 +990,8 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
           version: 1,
           dag: body.dag,
           status: "active",
-          forkedFrom: existing.id,
+          creationType: "fork",
+          createdFromWorkflow: existing.id,
           windmillFlowPath: flowPath,
           createdByUserId: res.locals.userId as string,
           createdByRunId: res.locals.runId as string,
@@ -1273,59 +1009,15 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       throw dbErr;
     }
 
-    // Determine if the source dynasty should be deprecated:
-    // Deprecate ONLY if the entire dynasty has zero campaign runs.
-    let sourceDynastyDeprecated = false;
-    const dynastyWorkflows = await db
-      .select({ id: workflows.id })
-      .from(workflows)
-      .where(
-        and(
-          eq(workflows.featureSlug, existing.featureSlug),
-          eq(workflows.signatureName, existing.signatureName),
-        )
-      );
-    const dynastyWorkflowIds = dynastyWorkflows.map((w) => w.id);
-
-    if (dynastyWorkflowIds.length > 0) {
-      const campaignRuns = await db
-        .select({ id: workflowRuns.id })
-        .from(workflowRuns)
-        .where(
-          and(
-            sql`${workflowRuns.workflowId} IN (${sql.join(dynastyWorkflowIds.map(id => sql`${id}`), sql`, `)})`,
-            sql`${workflowRuns.campaignId} IS NOT NULL`,
-          )
-        );
-
-      if (campaignRuns.length === 0) {
-        // Dynasty has zero campaign runs — safe to deprecate
-        await db
-          .update(workflows)
-          .set({
-            status: "deprecated",
-            upgradedTo: forked.id,
-            updatedAt: new Date(),
-          })
-          .where(eq(workflows.id, existing.id));
-        sourceDynastyDeprecated = true;
-
-        console.log(
-          `[workflow-service] fork+deprecate: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [dynasty had 0 campaign runs]`,
-        );
-      } else {
-        console.log(
-          `[workflow-service] fork: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [source dynasty kept active: ${campaignRuns.length} campaign run(s)]`,
-        );
-      }
-    }
+    console.log(
+      `[workflow-service] fork: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [source kept active]`,
+    );
 
     res.status(201).json({
       ...formatWorkflow(forked),
       _action: "forked" as const,
       _forkedFromWorkflowName: existing.workflowName,
       _forkedFromId: existing.id,
-      _sourceDynastyDeprecated: sourceDynastyDeprecated,
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 
-// Mock DB (same pattern as workflows.test.ts)
+// Mock DB (same pattern as workflows.test.ts: from() returns thenable + .where())
 const mockDbRows: Record<string, unknown>[] = [];
 
 vi.mock("../../src/db/index.js", () => ({
@@ -22,11 +22,12 @@ vi.mock("../../src/db/index.js", () => ({
       },
     }),
     select: () => ({
-      from: () => ({
-        where: () => {
-          return Promise.resolve(mockDbRows);
-        },
-      }),
+      from: () => {
+        const result = Promise.resolve(mockDbRows);
+        (result as unknown as { where: (c?: unknown) => Promise<unknown[]> }).where = () =>
+          Promise.resolve(mockDbRows);
+        return result;
+      },
     }),
     update: () => ({
       set: (values: Record<string, unknown>) => ({
@@ -86,13 +87,13 @@ const request = supertest(app);
 const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
-describe("POST /workflows/generate", () => {
+describe("POST /workflows/create", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
     mockGenerateWorkflow.mockReset();
   });
 
-  it("generates and deploys a workflow from description", async () => {
+  it("creates a workflow from a description", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
       category: "sales",
@@ -102,14 +103,14 @@ describe("POST /workflows/generate", () => {
     });
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-outreach",
         description: "I want a cold email outreach workflow that finds leads and sends emails",
       });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.workflow).toBeDefined();
     expect(res.body.workflow.action).toBe("created");
     expect(res.body.workflow.featureSlug).toBe("cold-email-outreach");
@@ -120,6 +121,55 @@ describe("POST /workflows/generate", () => {
       { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined, style: undefined },
       { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
+    const inserted = mockDbRows[0] as Record<string, unknown>;
+    expect(inserted.creationType).toBe("scratch");
+    expect(inserted.createdFromWorkflow).toBeNull();
+  });
+
+  it("returns 200 with existing workflow when signature matches", async () => {
+    // Pre-populate an existing active workflow with matching signature
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(VALID_LINEAR_DAG);
+    mockDbRows.push({
+      id: "00000000-0000-4000-8000-000000000111",
+      orgId: "org-1",
+      featureSlug: "cold-email-outreach",
+      signature: sig,
+      signatureName: "obsidian",
+      workflowSlug: "cold-email-outreach-obsidian",
+      workflowName: "Cold Email Outreach Obsidian",
+      dynastySlug: "cold-email-outreach-obsidian",
+      dynastyName: "Cold Email Outreach Obsidian",
+      version: 1,
+      tags: [],
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      description: "Existing description",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+    });
+
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: VALID_LINEAR_DAG,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Regenerated description",
+    });
+
+    const res = await request
+      .post("/workflows/create")
+      .set(AUTH)
+      .send({
+        featureSlug: "cold-email-outreach",
+        description: "Cold email outreach workflow finds leads and sends emails",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.action).toBe("existing");
+    expect(res.body.workflow.id).toBe("00000000-0000-4000-8000-000000000111");
+    // No new row should have been inserted
+    expect(mockDbRows).toHaveLength(1);
   });
 
   it("returns 422 when LLM generates invalid DAG after retries", async () => {
@@ -131,7 +181,7 @@ describe("POST /workflows/generate", () => {
     );
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "bad-workflow",
@@ -145,7 +195,7 @@ describe("POST /workflows/generate", () => {
 
   it("requires authentication", async () => {
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(IDENTITY)
       .send({
         featureSlug: "test-auth",
@@ -157,7 +207,7 @@ describe("POST /workflows/generate", () => {
 
   it("validates request body (missing description)", async () => {
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({});
 
@@ -166,7 +216,7 @@ describe("POST /workflows/generate", () => {
 
   it("validates description minimum length", async () => {
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({ featureSlug: "test", description: "hi" });
 
@@ -183,7 +233,7 @@ describe("POST /workflows/generate", () => {
     });
 
     await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-hints",
@@ -203,7 +253,7 @@ describe("POST /workflows/generate", () => {
     );
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "test-error",
@@ -220,7 +270,7 @@ describe("POST /workflows/generate", () => {
     );
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "test-chat-error",
@@ -233,7 +283,7 @@ describe("POST /workflows/generate", () => {
 
   // --- Style tests ---
 
-  it("generates a styled workflow with human type", async () => {
+  it("creates a styled workflow with human type", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
       category: "sales",
@@ -243,7 +293,7 @@ describe("POST /workflows/generate", () => {
     });
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-outreach",
@@ -251,11 +301,10 @@ describe("POST /workflows/generate", () => {
         style: { type: "human", humanId: "human-123", name: "Hormozi" },
       });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.workflow.action).toBe("created");
     expect(res.body.workflow.signatureName).toBe("hormozi-v1");
     expect(res.body.workflow.workflowSlug).toBe("cold-email-outreach-hormozi-v1");
-    // Verify style was passed through to generator
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
         style: { type: "human", humanId: "human-123", name: "Hormozi" },
@@ -264,7 +313,7 @@ describe("POST /workflows/generate", () => {
     );
   });
 
-  it("generates a styled workflow with brand type", async () => {
+  it("creates a styled workflow with brand type", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
       category: "sales",
@@ -274,7 +323,7 @@ describe("POST /workflows/generate", () => {
     });
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-outreach",
@@ -282,14 +331,14 @@ describe("POST /workflows/generate", () => {
         style: { type: "brand", brandId: "brand-456", name: "My Brand" },
       });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.workflow.signatureName).toBe("my-brand-v1");
     expect(res.body.workflow.workflowSlug).toBe("cold-email-outreach-my-brand-v1");
   });
 
   it("rejects human style without humanId", async () => {
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-outreach",
@@ -302,7 +351,7 @@ describe("POST /workflows/generate", () => {
 
   it("rejects brand style without brandId", async () => {
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-outreach",
@@ -313,7 +362,7 @@ describe("POST /workflows/generate", () => {
     expect(res.status).toBe(400);
   });
 
-  it("generates workflow with random naming when no style provided", async () => {
+  it("creates workflow with random naming when no style provided", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
       category: "sales",
@@ -323,17 +372,16 @@ describe("POST /workflows/generate", () => {
     });
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "cold-email-outreach",
         description: "Standard cold email outreach without any style preference",
       });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.workflow.signatureName).not.toContain("-v");
     expect(res.body.workflow.workflowSlug).toContain("cold-email-outreach-");
-    // signatureName should be a random word, not a versioned style name
     expect(res.body.workflow.signatureName).toMatch(/^[a-z]+$/);
   });
 
@@ -343,7 +391,7 @@ describe("POST /workflows/generate", () => {
     );
 
     const res = await request
-      .post("/workflows/generate")
+      .post("/workflows/create")
       .set(AUTH)
       .send({
         featureSlug: "test-missing-config",
@@ -352,5 +400,70 @@ describe("POST /workflows/generate", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toContain("CHAT_SERVICE_URL");
+  });
+});
+
+describe("POST /workflows/upgrade", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockGenerateWorkflow.mockReset();
+  });
+
+  it("returns 404 when no active workflow matches the slug", async () => {
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "missing-slug",
+        description: "Upgrade something that does not exist at all",
+      });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("upgrades in-place when LLM returns the same signature", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(VALID_LINEAR_DAG);
+
+    mockDbRows.push({
+      id: "00000000-0000-4000-8000-000000000222",
+      orgId: "org-1",
+      featureSlug: "cold-email-outreach",
+      signature: sig,
+      signatureName: "obsidian",
+      workflowSlug: "cold-email-outreach-obsidian",
+      workflowName: "Cold Email Outreach Obsidian",
+      dynastySlug: "cold-email-outreach-obsidian",
+      dynastyName: "Cold Email Outreach Obsidian",
+      version: 1,
+      tags: [],
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      description: "Old description",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+      windmillFlowPath: "f/workflows/org-1/cold_email_outreach_obsidian",
+    });
+
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: VALID_LINEAR_DAG,
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "New description for the same DAG",
+    });
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "cold-email-outreach-obsidian",
+        description: "Upgrade with same DAG produces same signature",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.action).toBe("updated");
+    expect(res.body.workflow.id).toBe("00000000-0000-4000-8000-000000000222");
+    expect(res.body.workflow.version).toBe(1);
   });
 });

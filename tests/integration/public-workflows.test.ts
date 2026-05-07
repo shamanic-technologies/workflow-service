@@ -163,14 +163,38 @@ describe("GET /public/workflows", () => {
     expect(ids).toContain("wf-a2");
   });
 
-  it("passes status filter to DB query and returns upgradedTo", async () => {
-    const wfDepr = makeWorkflow({ id: "wf-dep", featureSlug: "feat-x", status: "deprecated", workflowSlug: "feat-dep", workflowName: "Depr", dynastySlug: "feat-dep", dynastyName: "Depr", upgradedTo: "wf-act-uuid" });
-    mockWorkflowRows.push(wfDepr);
+  it("passes status filter to DB query and computes upgradedTo from successor row", async () => {
+    // upgradedTo is now derived from a successor row that points back via
+    // created_from_workflow with creation_type='upgrade'. The successor must
+    // therefore be in the result set for the lookup to resolve.
+    const wfDepr = makeWorkflow({
+      id: "wf-dep",
+      featureSlug: "feat-x",
+      status: "deprecated",
+      workflowSlug: "feat-dep",
+      workflowName: "Depr",
+      dynastySlug: "feat-dep",
+      dynastyName: "Depr",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+    });
+    const wfActive = makeWorkflow({
+      id: "wf-act-uuid",
+      featureSlug: "feat-x",
+      status: "active",
+      workflowSlug: "feat-act",
+      workflowName: "Act",
+      dynastySlug: "feat-dep",
+      dynastyName: "Depr",
+      creationType: "upgrade",
+      createdFromWorkflow: "wf-dep",
+    });
+    mockWorkflowRows.push(wfDepr, wfActive);
 
     const res = await request
       .get("/public/workflows")
       .set(API_KEY)
-      .query({ featureSlugs: "feat-x", status: "deprecated" });
+      .query({ featureSlugs: "feat-x", status: "all" });
 
     expect(res.status).toBe(200);
     const dep = res.body.workflows.find((w: { id: string }) => w.id === "wf-dep");

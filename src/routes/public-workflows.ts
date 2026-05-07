@@ -33,6 +33,18 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
 
     const rows = await db.select().from(workflows).where(and(...conditions));
 
+    // Build a forward map: deprecated row id -> successor id (whichever upgrade
+    // points back via created_from_workflow). Computed from the same row set so
+    // a single query covers it; deprecated rows whose successor is outside the
+    // filtered set will get null, which matches the legacy behaviour for
+    // already-pruned chains.
+    const upgradedToById = new Map<string, string>();
+    for (const w of rows) {
+      if (w.creationType === "upgrade" && w.createdFromWorkflow) {
+        upgradedToById.set(w.createdFromWorkflow, w.id);
+      }
+    }
+
     res.json({
       workflows: rows.map((w) => ({
         id: w.id,
@@ -44,7 +56,7 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
         status: w.status,
         featureSlug: w.featureSlug,
         createdForBrandId: w.createdForBrandId ?? null,
-        upgradedTo: w.upgradedTo ?? null,
+        upgradedTo: upgradedToById.get(w.id) ?? null,
       })),
     });
   } catch (err: unknown) {
