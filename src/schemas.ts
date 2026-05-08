@@ -214,8 +214,12 @@ export const WorkflowResponseSchema = z
     version: z.number().int().describe("Version number within the lineage. Starts at 1."),
     dag: z.unknown().describe("The DAG definition as submitted."),
     status: z.enum(["active", "deprecated"]).describe("Workflow lifecycle status. Only active workflows can be executed."),
-    upgradedTo: z.string().uuid().nullable().describe("If deprecated, the ID of the replacement workflow."),
-    forkedFrom: z.string().uuid().nullable().describe("If this workflow was forked from another, the ID of the original workflow."),
+    creationType: z.enum(["scratch", "upgrade", "fork"]).describe(
+      "How this workflow was created: 'scratch' = brand-new dynasty, 'upgrade' = new version of an existing dynasty, 'fork' = forked from another workflow."
+    ),
+    createdFromWorkflow: z.string().uuid().nullable().describe(
+      "ID of the workflow this one was derived from (predecessor for 'upgrade', source for 'fork'). Null for 'scratch'."
+    ),
     createdByUserId: z.string().nullable().describe("User ID that created this workflow."),
     createdByRunId: z.string().nullable().describe("Run ID that created this workflow."),
     windmillFlowPath: z.string().nullable().describe("Internal Windmill flow path (managed automatically)."),
@@ -235,10 +239,6 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
   ),
   _forkedFromId: z.string().uuid().optional().describe(
     "Present only when _action='forked'. The ID of the original workflow that was forked."
-  ),
-  _sourceDynastyDeprecated: z.boolean().optional().describe(
-    "Present only when _action='forked'. True if the source lineage was deprecated (had zero campaign runs). " +
-    "False if the source lineage was kept active."
   ),
 }).openapi("WorkflowMutationResponse", {
   example: {
@@ -274,8 +274,8 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
       ],
     },
     status: "active",
-    upgradedTo: null,
-    forkedFrom: "3f8db0d4-ec80-4d06-805d-13b7df8703f9",
+    creationType: "fork",
+    createdFromWorkflow: "3f8db0d4-ec80-4d06-805d-13b7df8703f9",
     createdByUserId: "cfe148ed-e3d8-40a2-8920-f8c040a81934",
     createdByRunId: "48f459aa-3352-4a61-9bd7-72f0a4401f62",
     windmillFlowPath: "f/workflows/b645207b/pr_cold_email_outreach_sequoia",
@@ -370,77 +370,6 @@ export const WorkflowRunResponseSchema = z
   })
   .openapi("WorkflowRunResponse");
 
-// --- Deploy schemas ---
-
-export const DeployWorkflowItemSchema = z
-  .object({
-    createdForBrandId: z.string().optional().describe("Optional brand ID — records which brand context created this workflow."),
-    featureSlug: z.string().min(1).describe("Feature slug from features-service. Required — used to build the workflow name."),
-    description: z.string().optional().describe("Human-readable description."),
-    category: WorkflowCategorySchema.optional().describe("Optional workflow category tag."),
-    channel: WorkflowChannelSchema.optional().describe("Optional workflow channel tag."),
-    audienceType: WorkflowAudienceTypeSchema.optional().describe("Optional workflow audience type tag."),
-    tags: z.array(z.string()).optional().describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
-    dag: DAGSchema,
-  })
-  .openapi("DeployWorkflowItem");
-
-export const DeployWorkflowsSchema = z
-  .object({
-    workflows: z.array(DeployWorkflowItemSchema).min(1).describe("The workflows to deploy."),
-  })
-  .openapi("DeployWorkflowsRequest", {
-    example: {
-      workflows: [
-        {
-          featureSlug: "pr-cold-email-outreach",
-          description: "Cold outreach sequence for PR campaigns",
-          category: "pr",
-          channel: "email",
-          audienceType: "cold-outreach",
-          tags: ["email"],
-          dag: {
-            nodes: [
-              { id: "fetch-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/buffer/next", body: { sourceType: "journalist" } }, inputMapping: { "body.campaignId": "$ref:flow_input.campaignId" } },
-              { id: "check-lead", type: "condition" },
-              { id: "send-email", type: "http.call", config: { service: "email-gateway", method: "POST", path: "/send" }, inputMapping: { "body.to": "$ref:fetch-lead.output.lead.email" }, retries: 0 },
-              { id: "end-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, stopCampaign: false } } },
-              { id: "end-run-no-lead", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, stopCampaign: true } } },
-              { id: "end-run-error", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: false, stopCampaign: false } } },
-            ],
-            edges: [
-              { from: "fetch-lead", to: "check-lead" },
-              { from: "check-lead", to: "send-email", condition: "results['fetch-lead'].found == true" },
-              { from: "check-lead", to: "end-run-no-lead", condition: "results['fetch-lead'].found == false" },
-              { from: "send-email", to: "end-run" },
-            ],
-          },
-        },
-      ],
-    },
-  });
-
-export const DeployWorkflowResultSchema = z
-  .object({
-    id: z.string().uuid(),
-    workflowSlug: z.string().describe("Unique technical identifier: {featureSlug}-{signatureName}[-v{N}]."),
-    workflowName: z.string().describe("Human-readable name: {featureName} {SignatureName}[ v{N}]."),
-    workflowDynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
-    featureSlug: z.string().describe("Feature slug used to build the name."),
-    tags: z.array(z.string()).describe("Tags assigned to this workflow."),
-    signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
-    signatureName: z.string().describe("Poetic word for this lineage (auto-generated by workflow-service)."),
-    version: z.number().int().describe("Version number within the lineage."),
-    action: z.enum(["created", "updated", "deprecated-to-existing"]),
-  })
-  .openapi("DeployWorkflowResult");
-
-export const DeployWorkflowsResponseSchema = z
-  .object({
-    workflows: z.array(DeployWorkflowResultSchema),
-  })
-  .openapi("DeployWorkflowsResponse");
-
 // --- Deprecated workflow response ---
 
 export const WorkflowDeprecatedResponseSchema = z
@@ -509,7 +438,7 @@ export const WorkflowStyleSchema = z
   )
   .openapi("WorkflowStyle");
 
-// --- Generate schemas ---
+// --- Description-driven create/upgrade schemas ---
 
 export const GenerateWorkflowHintsSchema = z
   .object({
@@ -525,10 +454,10 @@ export const GenerateWorkflowHintsSchema = z
   })
   .openapi("GenerateWorkflowHints");
 
-export const GenerateWorkflowSchema = z
+export const CreateWorkflowFromDescriptionSchema = z
   .object({
     description: z.string().min(10).describe(
-      "Natural language description of the desired workflow. Be specific about the steps, services, and data flow."
+      "Natural-language description of the desired workflow."
     ),
     featureSlug: z.string().min(1).describe(
       "Feature slug from features-service. Required — used to build the workflow name."
@@ -537,23 +466,52 @@ export const GenerateWorkflowSchema = z
       "Optional hints to guide generation."
     ),
     style: WorkflowStyleSchema.optional().describe(
-      "Optional style configuration. When provided, the workflow is generated in the style of the specified human or brand, " +
-      "and the signatureName uses the style name with auto-versioning (e.g. 'hormozi-v1')."
+      "Optional style configuration. When provided, the workflow is generated in the style of the specified human or brand."
     ),
   })
-  .openapi("GenerateWorkflowRequest");
+  .openapi("CreateWorkflowFromDescriptionRequest");
 
-export const GenerateWorkflowResponseSchema = z
+export const UpgradeWorkflowFromDescriptionSchema = z
   .object({
-    workflow: DeployWorkflowResultSchema.describe(
-      "The deployed workflow metadata."
+    workflowSlug: z.string().min(1).describe(
+      "Slug of the active workflow to upgrade. Must reference an active row."
     ),
-    dag: DAGSchema.describe("The generated DAG definition."),
-    generatedDescription: z.string().describe(
-      "LLM-generated description of what this workflow does."
+    description: z.string().min(10).describe(
+      "Natural-language description of the desired upgraded workflow."
+    ),
+    hints: GenerateWorkflowHintsSchema.optional().describe(
+      "Optional hints to guide generation."
     ),
   })
-  .openapi("GenerateWorkflowResponse");
+  .openapi("UpgradeWorkflowFromDescriptionRequest");
+
+export const WorkflowFromDescriptionResultSchema = z
+  .object({
+    id: z.string().uuid(),
+    workflowSlug: z.string().describe("Unique technical identifier."),
+    workflowName: z.string().describe("Human-readable name."),
+    workflowDynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
+    featureSlug: z.string().describe("Feature slug used to build the name."),
+    tags: z.array(z.string()).describe("Tags assigned to this workflow."),
+    signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
+    signatureName: z.string().describe("Poetic word for this lineage."),
+    version: z.number().int().describe("Version number within the lineage."),
+    action: z.enum(["created", "updated", "upgraded", "existing"]).describe(
+      "What happened: 'created' = new dynasty inserted (creation_type='scratch'), " +
+      "'existing' = matching active workflow already exists with same signature, " +
+      "'updated' = upgrade with same signature applied in-place, " +
+      "'upgraded' = new version inserted in same dynasty (creation_type='upgrade')."
+    ),
+  })
+  .openapi("WorkflowFromDescriptionResult");
+
+export const WorkflowFromDescriptionResponseSchema = z
+  .object({
+    workflow: WorkflowFromDescriptionResultSchema,
+    dag: DAGSchema,
+    generatedDescription: z.string(),
+  })
+  .openapi("WorkflowFromDescriptionResponse");
 
 // --- Shared stats schemas ---
 
@@ -641,7 +599,7 @@ export const PublicWorkflowItemSchema = z
     status: z.string().describe("Workflow status: active or deprecated."),
     featureSlug: z.string().describe("Feature slug."),
     createdForBrandId: z.string().nullable().describe("Brand ID this workflow was created for, or null."),
-    upgradedTo: z.string().uuid().nullable().describe("ID of the workflow this was upgraded to, or null if still active."),
+    upgradedTo: z.string().uuid().nullable().describe("ID of the active workflow this one was upgraded to, computed from successor lineage. Null when this is the active row or no successor was found in the result set."),
   })
   .openapi("PublicWorkflowItem");
 
@@ -1198,34 +1156,77 @@ registry.registerPath({
   },
 });
 
-// NOTE: PUT /workflows/upgrade is an internal-only endpoint (used by apps at startup).
-// It is NOT registered in OpenAPI to avoid exposing it to external clients.
-// External clients should use PUT /workflows/{id} for all workflow modifications.
-
 registry.registerPath({
   method: "post",
-  path: "/workflows/generate",
-  summary: "Generate a workflow from natural language",
+  path: "/workflows/create",
+  summary: "Create a workflow from a natural-language description",
   description:
-    "Uses an LLM (Claude) to transform a natural language description into a valid DAG workflow. " +
-    "Validates the generated DAG and deploys it automatically. " +
-    "Returns the deployed workflow metadata along with the generated DAG.",
+    "Uses an LLM to transform a natural-language description into a valid DAG workflow and deploy it. " +
+    "If an active workflow already exists for (orgId, featureSlug) with the same DAG signature, " +
+    "returns 200 with the existing row unchanged. Otherwise creates a brand-new dynasty " +
+    "(creation_type='scratch'). This endpoint never upgrades existing dynasties — use POST /workflows/upgrade.",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
     headers: IdentityHeaders,
     body: {
       required: true,
-      content: { "application/json": { schema: GenerateWorkflowSchema } },
+      content: { "application/json": { schema: CreateWorkflowFromDescriptionSchema } },
     },
   },
   responses: {
     200: {
-      description: "Workflow generated and deployed",
-      content: { "application/json": { schema: GenerateWorkflowResponseSchema } },
+      description: "Existing matching workflow returned (idempotent match)",
+      content: { "application/json": { schema: WorkflowFromDescriptionResponseSchema } },
+    },
+    201: {
+      description: "New workflow created in a new dynasty",
+      content: { "application/json": { schema: WorkflowFromDescriptionResponseSchema } },
     },
     400: {
       description: "Invalid request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    422: {
+      description: "LLM generated an invalid DAG that could not be fixed after retries",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/upgrade",
+  summary: "Upgrade an existing active workflow via natural-language description",
+  description:
+    "Regenerates the DAG of an existing active workflow using an LLM. " +
+    "If the new DAG signature matches the existing one, the workflow is updated in-place " +
+    "(returns 200). If the signature changes, a new version is inserted in the same dynasty " +
+    "with creation_type='upgrade' and the predecessor is deprecated (returns 201).",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    body: {
+      required: true,
+      content: { "application/json": { schema: UpgradeWorkflowFromDescriptionSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Workflow upgraded in-place (signature unchanged)",
+      content: { "application/json": { schema: WorkflowFromDescriptionResponseSchema } },
+    },
+    201: {
+      description: "New version of the workflow created in the same dynasty",
+      content: { "application/json": { schema: WorkflowFromDescriptionResponseSchema } },
+    },
+    400: {
+      description: "Invalid request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "Workflow with the given slug is not active or does not exist",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     422: {

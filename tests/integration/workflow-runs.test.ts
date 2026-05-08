@@ -288,8 +288,8 @@ describe("POST /workflows/:id/execute", () => {
       [{   // 2. any-status lookup → deprecated
         id: WF_OLD_ID,
         status: "deprecated",
-        upgradedTo: WF_NEW_ID,
       }],
+      [{ id: WF_NEW_ID }], // 3. successor lookup via created_from_workflow
     );
 
     const res = await request
@@ -525,9 +525,8 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
         dynastyName: "Deprecated Flow",
         version: 1,
         status: "deprecated",
-        upgradedTo: WF_NEW_ID,
       }],
-      [{   // 3. chain follow: replacement is active → execute it
+      [{   // 3. successor lookup via created_from_workflow → active replacement
         id: WF_NEW_ID,
         workflowSlug: "replacement-flow",
         workflowName: "Replacement Flow",
@@ -565,9 +564,8 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
         dynastyName: "Old Flow",
         version: 1,
         status: "deprecated",
-        upgradedTo: WF_V2_ID,
       }],
-      [{   // 3. chain hop 1: v2 is also deprecated
+      [{   // 3. successor of v1 → v2 (also deprecated)
         id: WF_V2_ID,
         workflowSlug: "mid-flow",
         workflowName: "Mid Flow",
@@ -575,9 +573,8 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
         dynastyName: "Mid Flow",
         version: 2,
         status: "deprecated",
-        upgradedTo: WF_V3_ID,
       }],
-      [{   // 4. chain hop 2: v3 is active → execute it
+      [{   // 4. successor of v2 → v3 (active)
         id: WF_V3_ID,
         workflowSlug: "current-flow",
         workflowName: "Current Flow",
@@ -607,7 +604,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
   it("returns 410 when upgrade chain ends without active workflow", async () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
-      [{   // 2. any-status lookup → deprecated, no replacement
+      [{   // 2. any-status lookup → deprecated, no successor
         id: WF_DEAD_ID,
         workflowSlug: "dead-flow",
         workflowName: "Dead Flow",
@@ -615,8 +612,8 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
         dynastyName: "Dead Flow",
         version: 1,
         status: "deprecated",
-        upgradedTo: null,
       }],
+      [],  // 3. successor lookup → none
     );
 
     const res = await request
@@ -630,10 +627,10 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     expect(res.body.upgradedToWorkflowSlug).toBeNull();
   });
 
-  it("returns 410 when upgrade chain points to missing workflow", async () => {
+  it("returns 410 with first successor when chain leads to a deprecated successor with no further upgrade", async () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup → not found
-      [{   // 2. any-status lookup → deprecated with upgradedTo
+      [{   // 2. any-status lookup → original deprecated row
         id: WF_OLD_ID,
         workflowSlug: "orphan-flow",
         workflowName: "Orphan Flow",
@@ -641,12 +638,13 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
         dynastyName: "Orphan Flow",
         version: 1,
         status: "deprecated",
-        upgradedTo: WF_MISSING_ID,
       }],
-      [],  // 3. chain follow: replacement not found → dead end
-      [{   // 4. 410 replacement slug lookup → not found
-        // empty — replacement doesn't exist
+      [{   // 3. successor → also deprecated
+        id: WF_MISSING_ID,
+        workflowSlug: "orphan-successor",
+        status: "deprecated",
       }],
+      [],  // 4. successor of the successor → none, break
     );
 
     const res = await request
@@ -657,6 +655,7 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     expect(res.status).toBe(410);
     expect(res.body.error).toBe("Workflow has been deprecated");
     expect(res.body.upgradedTo).toBe(WF_MISSING_ID);
+    expect(res.body.upgradedToWorkflowSlug).toBe("orphan-successor");
   });
 
   it("uses campaignId from header into Windmill flow inputs (by slug)", async () => {
