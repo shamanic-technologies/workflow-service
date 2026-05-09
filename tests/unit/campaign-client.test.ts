@@ -27,8 +27,8 @@ describe("campaign-client", () => {
 
     it("fetches campaigns from campaign-service", async () => {
       const campaigns = [
-        { id: "c1", workflowSlug: "wf-1", status: "active", toResumeAt: null },
-        { id: "c2", workflowSlug: "wf-2", status: "stopped", toResumeAt: null },
+        { id: "c1", workflowSlug: "wf-1", status: "ongoing", nextRunAt: null },
+        { id: "c2", workflowSlug: "wf-2", status: "stopped", nextRunAt: null },
       ];
 
       vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -56,15 +56,14 @@ describe("campaign-client", () => {
   });
 
   describe("fetchActiveWorkflowSlugs", () => {
-    it("returns slugs for active campaigns and campaigns whose toResumeAt is in the future", async () => {
+    it("returns slugs only for ongoing campaigns (gate-blocked campaigns stay ongoing with nextRunAt set)", async () => {
       const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       const past = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const campaigns = [
-        { id: "c1", workflowSlug: "wf-active", status: "active", toResumeAt: null },
-        { id: "c2", workflowSlug: "wf-stopped", status: "stopped", toResumeAt: null },
-        { id: "c3", workflowSlug: "wf-paused-future", status: "paused", toResumeAt: future },
-        { id: "c4", workflowSlug: "wf-paused-past", status: "paused", toResumeAt: past },
-        { id: "c5", workflowSlug: "wf-completed", status: "completed", toResumeAt: null },
+        { id: "c1", workflowSlug: "wf-ongoing", status: "ongoing", nextRunAt: null },
+        { id: "c2", workflowSlug: "wf-gate-blocked", status: "ongoing", nextRunAt: future },
+        { id: "c3", workflowSlug: "wf-stopped", status: "stopped", nextRunAt: null },
+        { id: "c4", workflowSlug: "wf-stopped-past", status: "stopped", nextRunAt: past },
       ];
 
       vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -74,10 +73,9 @@ describe("campaign-client", () => {
       const { fetchActiveWorkflowSlugs } = await import("../../src/lib/campaign-client.js");
       const result = await fetchActiveWorkflowSlugs();
 
-      expect(result).toEqual(new Set(["wf-active", "wf-paused-future"]));
-      expect(result.has("wf-paused-past")).toBe(false);
+      expect(result).toEqual(new Set(["wf-ongoing", "wf-gate-blocked"]));
       expect(result.has("wf-stopped")).toBe(false);
-      expect(result.has("wf-completed")).toBe(false);
+      expect(result.has("wf-stopped-past")).toBe(false);
     });
   });
 });
