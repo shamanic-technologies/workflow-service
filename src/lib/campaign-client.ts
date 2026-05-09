@@ -10,7 +10,7 @@ interface Campaign {
   id: string;
   workflowSlug: string;
   status: string;
-  toResumeAt: string | null;
+  nextRunAt: string | null;
 }
 
 /**
@@ -50,28 +50,21 @@ export async function fetchAllCampaigns(
 }
 
 /**
- * Returns the set of workflow slugs that are currently "in use" by a campaign.
- * A campaign is considered in-use if:
- *   - status is "active", OR
- *   - toResumeAt is in the future (periodic campaign scheduled to resume).
+ * Returns the set of workflow slugs currently in use by a campaign.
  *
- * A past toResumeAt is ignored — the campaign was scheduled to resume at some
- * point in the past and either has resumed (and moved to a non-active status)
- * or never will.
+ * A campaign is in-use iff its status is "ongoing". Campaign-service uses two
+ * statuses: "ongoing" and "stopped". Gate-blocked campaigns (e.g. waiting for a
+ * budget window) stay "ongoing" with `nextRunAt` set, so a single status check
+ * covers them.
  */
 export async function fetchActiveWorkflowSlugs(
   downstreamHeaders?: DownstreamHeaders,
 ): Promise<Set<string>> {
   const campaigns = await fetchAllCampaigns(downstreamHeaders);
-  const now = Date.now();
 
   const activeSlugs = new Set<string>();
   for (const c of campaigns) {
-    if (c.status === "active") {
-      activeSlugs.add(c.workflowSlug);
-      continue;
-    }
-    if (c.toResumeAt && new Date(c.toResumeAt).getTime() > now) {
+    if (c.status === "ongoing") {
       activeSlugs.add(c.workflowSlug);
     }
   }
