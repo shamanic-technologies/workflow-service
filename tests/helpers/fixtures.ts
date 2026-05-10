@@ -414,7 +414,7 @@ export const DAG_WITH_DOT_NOTATION_AND_STATIC_BASE: DAG = {
         body: { tag: "cold-email", type: "broadcast", metadata: { source: "campaign-service" } },
       },
       inputMapping: {
-        "body.to": "$ref:start-run.output.lead.data.email",
+        "body.to": "$ref:start-run.output.lead.email",
         "body.orgId": "$ref:start-run.output.orgId",
         "body.subject": "$ref:email-generate.output.subject",
         "body.metadata.emailGenerationId": "$ref:email-generate.output.id",
