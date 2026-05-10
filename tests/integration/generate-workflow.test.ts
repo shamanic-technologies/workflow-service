@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 
-// Mock DB (same pattern as workflows.test.ts: from() returns thenable + .where())
+// Mock DB. Same pattern as workflows.test.ts: optional queue overrides .where() responses.
 const mockDbRows: Record<string, unknown>[] = [];
+const mockSelectResponses: Record<string, unknown>[][] = [];
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
@@ -25,7 +26,9 @@ vi.mock("../../src/db/index.js", () => ({
       from: () => {
         const result = Promise.resolve(mockDbRows);
         (result as unknown as { where: (c?: unknown) => Promise<unknown[]> }).where = () =>
-          Promise.resolve(mockDbRows);
+          Promise.resolve(
+            mockSelectResponses.length > 0 ? mockSelectResponses.shift()! : mockDbRows,
+          );
         return result;
       },
     }),
@@ -90,6 +93,7 @@ const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 describe("POST /workflows/create", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
     mockGenerateWorkflow.mockReset();
   });
 
@@ -118,7 +122,7 @@ describe("POST /workflows/create", () => {
     expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined, style: undefined },
+      { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined },
       { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
     const inserted = mockDbRows[0] as Record<string, unknown>;
@@ -135,11 +139,11 @@ describe("POST /workflows/create", () => {
       orgId: "org-1",
       featureSlug: "cold-email-outreach",
       signature: sig,
-      signatureName: "obsidian",
+      workflowDynastySignatureName: "obsidian",
       workflowSlug: "cold-email-outreach-obsidian",
       workflowName: "Cold Email Outreach Obsidian",
-      dynastySlug: "cold-email-outreach-obsidian",
-      dynastyName: "Cold Email Outreach Obsidian",
+      workflowDynastySlug: "cold-email-outreach-obsidian",
+      workflowDynastyName: "Cold Email Outreach Obsidian",
       version: 1,
       tags: [],
       status: "active",
@@ -242,7 +246,7 @@ describe("POST /workflows/create", () => {
       });
 
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] }, style: undefined },
+      { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] } },
       { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
   });
@@ -281,16 +285,18 @@ describe("POST /workflows/create", () => {
     expect(res.body.error).toContain("chat-service error:");
   });
 
-  // --- Style tests ---
-
-  it("creates a styled workflow with human type", async () => {
+  // AC2 — body.style is stripped (Zod), poetic word, no -v suffix.
+  it("ignores body.style and produces a poetic single-word signature name", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
       category: "sales",
       channel: "email",
       audienceType: "cold-outreach",
-      description: "Hormozi-style cold outreach",
+      description: "Cold outreach",
     });
+
+    // Selects: 1) idempotent existence (no match), 2) feature-scoped name set (empty)
+    mockSelectResponses.push([], []);
 
     const res = await request
       .post("/workflows/create")
@@ -302,87 +308,94 @@ describe("POST /workflows/create", () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.workflow.action).toBe("created");
-    expect(res.body.workflow.signatureName).toBe("hormozi-v1");
-    expect(res.body.workflow.workflowSlug).toBe("cold-email-outreach-hormozi-v1");
+    expect(res.body.workflow.workflowDynastySignatureName).toMatch(/^[a-z]+$/);
+    expect(res.body.workflow.workflowDynastySignatureName).not.toContain("-v");
+    expect(res.body.workflow.workflowSlug).toMatch(/^cold-email-outreach-[a-z]+$/);
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        style: { type: "human", humanId: "human-123", name: "Hormozi" },
-      }),
-      { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
+      expect.not.objectContaining({ style: expect.anything() }),
+      expect.anything(),
     );
   });
 
-  it("creates a styled workflow with brand type", async () => {
+  // AC1 — three creates with different DAGs produce three distinct dictionary words, never *-v{N}.
+  it("produces three distinct words across three creates with different DAGs (no -v suffix)", async () => {
+    const DAG_A = VALID_LINEAR_DAG;
+    const DAG_B = { ...VALID_LINEAR_DAG, edges: [...(VALID_LINEAR_DAG.edges as unknown[]), { from: "x", to: "y" }] };
+    const DAG_C = { ...VALID_LINEAR_DAG, edges: [...(VALID_LINEAR_DAG.edges as unknown[]), { from: "y", to: "z" }] };
+
+    const dags = [DAG_A, DAG_B, DAG_C];
+    const names: string[] = [];
+
+    for (const dag of dags) {
+      mockGenerateWorkflow.mockResolvedValueOnce({
+        dag,
+        category: "sales",
+        channel: "email",
+        audienceType: "cold-outreach",
+        description: "ok",
+      });
+      // No idempotent match; feature-scoped name set is the names already taken on this feature.
+      const taken = mockDbRows.map((r) => ({ workflowDynastySignatureName: r.workflowDynastySignatureName }));
+      mockSelectResponses.push([], taken);
+
+      const res = await request
+        .post("/workflows/create")
+        .set(AUTH)
+        .send({ featureSlug: "ac1-feature", description: "Workflow description for AC1 testing" });
+      expect(res.status).toBe(201);
+      names.push(res.body.workflow.workflowDynastySignatureName);
+    }
+
+    expect(new Set(names).size).toBe(3);
+    for (const name of names) {
+      expect(name).toMatch(/^[a-z]+$/);
+      expect(name).not.toContain("-v");
+    }
+  });
+
+  // AC4 — feature-scope burn crosses orgs.
+  it("does not reuse a name burned on the same feature by another org", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
-      dag: VALID_LINEAR_DAG,
+      dag: { ...VALID_LINEAR_DAG, edges: [{ from: "z1", to: "z2" }] },
       category: "sales",
       channel: "email",
       audienceType: "cold-outreach",
-      description: "Brand-style cold outreach",
+      description: "org-B asks for the same feature",
     });
 
+    // Idempotent existence check (org-B's signature, no match) → empty.
+    // Feature-scoped name set: 'obsidian' is already burned by org-A on this feature.
+    mockSelectResponses.push([], [{ workflowDynastySignatureName: "obsidian" }]);
+
     const res = await request
       .post("/workflows/create")
-      .set(AUTH)
-      .send({
-        featureSlug: "cold-email-outreach",
-        description: "Cold email outreach in my brand style with good copy",
-        style: { type: "brand", brandId: "brand-456", name: "My Brand" },
-      });
+      .set({ ...AUTH, "x-org-id": "org-B" })
+      .send({ featureSlug: "shared-feature", description: "Org B requests new workflow on the shared feature" });
 
     expect(res.status).toBe(201);
-    expect(res.body.workflow.signatureName).toBe("my-brand-v1");
-    expect(res.body.workflow.workflowSlug).toBe("cold-email-outreach-my-brand-v1");
+    expect(res.body.workflow.workflowDynastySignatureName).not.toBe("obsidian");
   });
 
-  it("rejects human style without humanId", async () => {
-    const res = await request
-      .post("/workflows/create")
-      .set(AUTH)
-      .send({
-        featureSlug: "cold-email-outreach",
-        description: "Cold email outreach in expert style",
-        style: { type: "human", name: "Hormozi" },
-      });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects brand style without brandId", async () => {
-    const res = await request
-      .post("/workflows/create")
-      .set(AUTH)
-      .send({
-        featureSlug: "cold-email-outreach",
-        description: "Cold email outreach in brand style long description",
-        style: { type: "brand", name: "My Brand" },
-      });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("creates workflow with random naming when no style provided", async () => {
+  // AC5 — burned for life, even after deprecation.
+  it("does not reuse a name that has been deprecated for the same feature (burned for life)", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
-      dag: VALID_LINEAR_DAG,
+      dag: { ...VALID_LINEAR_DAG, edges: [{ from: "p1", to: "p2" }] },
       category: "sales",
       channel: "email",
       audienceType: "cold-outreach",
-      description: "Standard cold outreach",
+      description: "fresh dag",
     });
+
+    // Idempotent existence: empty. Feature-scoped name set still includes the deprecated 'obsidian' row.
+    mockSelectResponses.push([], [{ workflowDynastySignatureName: "obsidian" }]);
 
     const res = await request
       .post("/workflows/create")
       .set(AUTH)
-      .send({
-        featureSlug: "cold-email-outreach",
-        description: "Standard cold email outreach without any style preference",
-      });
+      .send({ featureSlug: "burn-feature", description: "Brand new scratch workflow on a feature with a deprecated burn" });
 
     expect(res.status).toBe(201);
-    expect(res.body.workflow.signatureName).not.toContain("-v");
-    expect(res.body.workflow.workflowSlug).toContain("cold-email-outreach-");
-    expect(res.body.workflow.signatureName).toMatch(/^[a-z]+$/);
+    expect(res.body.workflow.workflowDynastySignatureName).not.toBe("obsidian");
   });
 
   it("returns 500 when CHAT_SERVICE_URL is not configured", async () => {
@@ -406,6 +419,7 @@ describe("POST /workflows/create", () => {
 describe("POST /workflows/upgrade", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
     mockGenerateWorkflow.mockReset();
   });
 
@@ -430,11 +444,11 @@ describe("POST /workflows/upgrade", () => {
       orgId: "org-1",
       featureSlug: "cold-email-outreach",
       signature: sig,
-      signatureName: "obsidian",
+      workflowDynastySignatureName: "obsidian",
       workflowSlug: "cold-email-outreach-obsidian",
       workflowName: "Cold Email Outreach Obsidian",
-      dynastySlug: "cold-email-outreach-obsidian",
-      dynastyName: "Cold Email Outreach Obsidian",
+      workflowDynastySlug: "cold-email-outreach-obsidian",
+      workflowDynastyName: "Cold Email Outreach Obsidian",
       version: 1,
       tags: [],
       status: "active",
@@ -465,5 +479,47 @@ describe("POST /workflows/upgrade", () => {
     expect(res.body.workflow.action).toBe("updated");
     expect(res.body.workflow.id).toBe("00000000-0000-4000-8000-000000000222");
     expect(res.body.workflow.version).toBe(1);
+  });
+
+  // AC6 — upgrade keeps the same workflow_dynasty_signature_name; v2 slug.
+  it("preserves the dynasty signature name on upgrade and bumps to -v2", async () => {
+    mockDbRows.push({
+      id: "00000000-0000-4000-8000-000000000ac6",
+      orgId: "org-1",
+      featureSlug: "feature",
+      signature: "old-sig",
+      workflowDynastySignatureName: "obsidian",
+      workflowSlug: "feature-obsidian",
+      workflowName: "Feature Obsidian",
+      workflowDynastySlug: "feature-obsidian",
+      workflowDynastyName: "Feature Obsidian",
+      version: 1,
+      tags: [],
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      description: "v1",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+      windmillFlowPath: "f/workflows/org-1/feature_obsidian",
+    });
+
+    mockGenerateWorkflow.mockResolvedValueOnce({
+      dag: { ...VALID_LINEAR_DAG, edges: [{ from: "x1", to: "y1" }] },
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      description: "Upgraded v2",
+    });
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({ workflowSlug: "feature-obsidian", description: "Upgrade with a new signature for AC6" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.workflow.action).toBe("upgraded");
+    expect(res.body.workflow.workflowDynastySignatureName).toBe("obsidian");
+    expect(res.body.workflow.workflowSlug).toBe("feature-obsidian-v2");
+    expect(res.body.workflow.version).toBe(2);
   });
 });

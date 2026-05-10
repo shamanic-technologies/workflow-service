@@ -1,5 +1,5 @@
 /**
- * ~500 memorable words used to generate human-readable signatureNames.
+ * ~500 memorable words used to generate human-readable workflow_dynasty_signature_name values.
  * Grouped by theme: constellations, trees, minerals, mythical places,
  * animals, elements, weather, geography, colors, and more.
  */
@@ -105,39 +105,31 @@ const WORDS: string[] = [
   "windward", "current", "drift", "voyage", "odyssey",
 ];
 
-// Deduplicate (some words appear in multiple categories)
 const UNIQUE_WORDS = [...new Set(WORDS)];
 
 /**
- * Picks a signatureName from the word list based on the signature hash.
+ * Picks a workflow_dynasty_signature_name from the word list based on the signature hash.
  * If the deterministic pick collides with an existing name in the scope,
  * walks forward through the list. Falls back to numeric suffix if all
  * words are exhausted.
- *
- * @param signature - The SHA-256 hex hash of the DAG
- * @param usedNames - Set of signatureNames already taken in this (orgId) scope
- * @returns A unique signatureName
  */
-export function pickSignatureName(
+export function pickWorkflowDynastySignatureName(
   signature: string,
-  usedNames: Set<string>,
+  existingWorkflowDynastySignatureNamesForFeature: Set<string>,
 ): string {
-  // Use first 8 hex chars of signature as a seed index
   const seed = parseInt(signature.slice(0, 8), 16);
   const total = UNIQUE_WORDS.length;
 
-  // Try the deterministic pick first, then walk forward
   for (let offset = 0; offset < total; offset++) {
     const word = UNIQUE_WORDS[(seed + offset) % total];
-    if (!usedNames.has(word)) {
+    if (!existingWorkflowDynastySignatureNamesForFeature.has(word)) {
       return word;
     }
   }
 
-  // All words exhausted — add numeric suffix to the deterministic pick
   const baseWord = UNIQUE_WORDS[seed % total];
   let suffix = 2;
-  while (usedNames.has(`${baseWord}-${suffix}`)) {
+  while (existingWorkflowDynastySignatureNamesForFeature.has(`${baseWord}-${suffix}`)) {
     suffix++;
   }
   return `${baseWord}-${suffix}`;
