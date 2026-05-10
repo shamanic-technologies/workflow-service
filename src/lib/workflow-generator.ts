@@ -24,12 +24,6 @@ export interface GenerateWorkflowInput {
     nodeTypes?: string[];
     expectedInputs?: string[];
   };
-  style?: {
-    type: "human" | "brand";
-    name: string;
-    humanId?: string;
-    brandId?: string;
-  };
 }
 
 export interface GenerateWorkflowResult {
@@ -88,11 +82,7 @@ export async function generateWorkflow(
   // Pre-fetch all service context upfront
   const serviceContext = await fetchServiceContext(downstreamHeaders);
 
-  const styleDirective = input.style
-    ? `This workflow MUST be created in the style of ${input.style.name}. Adopt their methodology, tone, and strategic patterns.`
-    : undefined;
-
-  const systemPrompt = buildSystemPrompt({ styleDirective, serviceContext });
+  const systemPrompt = buildSystemPrompt({ serviceContext });
 
   let userMessage = input.description;
   if (input.hints?.services?.length) {
@@ -103,9 +93,6 @@ export async function generateWorkflow(
   }
   if (input.hints?.expectedInputs?.length) {
     userMessage += `\nExpected flow_input fields: ${input.hints.expectedInputs.join(", ")}`;
-  }
-  if (input.style) {
-    userMessage += `\n\nStyle: Generate this workflow in the style of "${input.style.name}".`;
   }
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

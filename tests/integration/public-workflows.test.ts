@@ -105,8 +105,8 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     orgId: "org1",
     workflowSlug: DEFAULT_WF_SLUG,
     workflowName: "Sales Email Cold Outreach Alpha",
-    dynastySlug: DEFAULT_WF_SLUG,
-    dynastyName: "Sales Email Cold Outreach Alpha",
+    workflowDynastySlug: DEFAULT_WF_SLUG,
+    workflowDynastyName: "Sales Email Cold Outreach Alpha",
     version: 1,
     createdForBrandId: null,
     description: null,
@@ -115,7 +115,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
     channel: "email",
     audienceType: "cold-outreach",
     signature: "sig-" + Math.random().toString(36).slice(2, 8),
-    signatureName: "alpha",
+    workflowDynastySignatureName: "alpha",
     dag: VALID_LINEAR_DAG,
     windmillFlowPath: "f/workflows/test/flow",
     windmillWorkspace: "prod",
@@ -148,7 +148,7 @@ describe("GET /public/workflows", () => {
 
   it("returns workflows for given feature slugs (mock returns all rows)", async () => {
     const wf1 = makeWorkflow({ id: "wf-a1", featureSlug: "sales-v1", status: "active" });
-    const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", workflowSlug: "sales-cold-outreach-alpha-v2", workflowName: "Sales Alpha v2", dynastySlug: "sales-cold-outreach-alpha", dynastyName: "Sales Cold Outreach Alpha" });
+    const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", workflowSlug: "sales-cold-outreach-alpha-v2", workflowName: "Sales Alpha v2", workflowDynastySlug: "sales-cold-outreach-alpha", workflowDynastyName: "Sales Cold Outreach Alpha" });
     mockWorkflowRows.push(wf1, wf2);
 
     const res = await request
@@ -173,8 +173,8 @@ describe("GET /public/workflows", () => {
       status: "deprecated",
       workflowSlug: "feat-dep",
       workflowName: "Depr",
-      dynastySlug: "feat-dep",
-      dynastyName: "Depr",
+      workflowDynastySlug: "feat-dep",
+      workflowDynastyName: "Depr",
       creationType: "scratch",
       createdFromWorkflow: null,
     });
@@ -184,8 +184,8 @@ describe("GET /public/workflows", () => {
       status: "active",
       workflowSlug: "feat-act",
       workflowName: "Act",
-      dynastySlug: "feat-dep",
-      dynastyName: "Depr",
+      workflowDynastySlug: "feat-dep",
+      workflowDynastyName: "Depr",
       creationType: "upgrade",
       createdFromWorkflow: "wf-dep",
     });
@@ -204,7 +204,7 @@ describe("GET /public/workflows", () => {
 
   it("returns workflows with status=all", async () => {
     const wf1 = makeWorkflow({ id: "wf-all-1", featureSlug: "feat-y", status: "active" });
-    const wf2 = makeWorkflow({ id: "wf-all-2", featureSlug: "feat-y", status: "deprecated", workflowSlug: "feat-y-old", workflowName: "Old", dynastySlug: "feat-y-old", dynastyName: "Old" });
+    const wf2 = makeWorkflow({ id: "wf-all-2", featureSlug: "feat-y", status: "deprecated", workflowSlug: "feat-y-old", workflowName: "Old", workflowDynastySlug: "feat-y-old", workflowDynastyName: "Old" });
     mockWorkflowRows.push(wf1, wf2);
 
     const res = await request
@@ -221,8 +221,8 @@ describe("GET /public/workflows", () => {
       id: "wf-shape",
       workflowSlug: "sales-cold-outreach-obsidian-v3",
       workflowName: "Sales Cold Outreach Obsidian v3",
-      dynastySlug: "sales-cold-outreach-obsidian",
-      dynastyName: "Sales Cold Outreach Obsidian",
+      workflowDynastySlug: "sales-cold-outreach-obsidian",
+      workflowDynastyName: "Sales Cold Outreach Obsidian",
       version: 3,
       featureSlug: "sales-cold-outreach-v2",
       createdForBrandId: "brand-123",

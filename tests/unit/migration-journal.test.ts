@@ -85,12 +85,34 @@ describe("Drizzle migration journal", () => {
     expect(dropStatements?.length).toBe(ifExistsStatements?.length);
   });
 
-  it("includes style columns migration (0010)", () => {
+  it("0010 historical migration still references human_id (style_name dropped in 0031)", () => {
     const entry = journal.entries.find((e) => e.tag === "0010_add_style_columns");
     expect(entry).toBeDefined();
 
     const sql = readFileSync(resolve(DRIZZLE_DIR, "0010_add_style_columns.sql"), "utf-8");
     expect(sql).toContain("human_id");
-    expect(sql).toContain("style_name");
+  });
+
+  it("migration 0031 renames dynasty columns, drops style_name, and is idempotent", () => {
+    const entry = journal.entries.find((e) => e.tag === "0031_rename_workflow_dynasty_columns_drop_style");
+    expect(entry).toBeDefined();
+    expect(entry?.idx).toBe(31);
+    expect(entry?.breakpoints).toBe(true);
+
+    const sql = readFileSync(
+      resolve(DRIZZLE_DIR, "0031_rename_workflow_dynasty_columns_drop_style.sql"),
+      "utf-8",
+    );
+    expect(sql).toContain('RENAME COLUMN "dynasty_slug" TO "workflow_dynasty_slug"');
+    expect(sql).toContain('RENAME COLUMN "dynasty_name" TO "workflow_dynasty_name"');
+    expect(sql).toContain('RENAME COLUMN "signature_name" TO "workflow_dynasty_signature_name"');
+    expect(sql).toContain('DROP COLUMN IF EXISTS "style_name"');
+    expect(sql).toContain('DROP INDEX IF EXISTS "idx_workflows_feature_signature"');
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "idx_workflows_feature_signature" ON "workflows" ("feature_slug", "workflow_dynasty_signature_name")',
+    );
+    // Idempotency guards on each RENAME
+    expect(sql.match(/DO \$\$/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(sql).toContain('--> statement-breakpoint');
   });
 });

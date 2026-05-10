@@ -102,11 +102,6 @@
             "type": "string",
             "nullable": true
           },
-          "styleName": {
-            "type": "string",
-            "nullable": true,
-            "description": "Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."
-          },
           "workflowSlug": {
             "type": "string",
             "description": "Unique technical identifier. Use this to execute via /workflows/by-slug/{workflowSlug}/execute."
@@ -147,9 +142,9 @@
             "type": "string",
             "description": "Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."
           },
-          "signatureName": {
+          "workflowDynastySignatureName": {
             "type": "string",
-            "description": "Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation."
+            "description": "Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."
           },
           "version": {
             "type": "integer",
@@ -216,7 +211,6 @@
           "humanId",
           "campaignId",
           "subrequestId",
-          "styleName",
           "workflowSlug",
           "workflowName",
           "workflowDynastySlug",
@@ -227,7 +221,7 @@
           "audienceType",
           "tags",
           "signature",
-          "signatureName",
+          "workflowDynastySignatureName",
           "version",
           "status",
           "creationType",
@@ -616,7 +610,6 @@
           "humanId": null,
           "campaignId": null,
           "subrequestId": null,
-          "styleName": null,
           "workflowSlug": "pr-cold-email-outreach-sequoia",
           "workflowName": "Pr Cold Email Outreach Sequoia",
           "workflowDynastySlug": "pr-cold-email-outreach-sequoia",
@@ -630,7 +623,7 @@
             "email"
           ],
           "signature": "4c4239e8d9bec64c85a178cb12b6669d3a69b6e68bafc0cb45c1797377ce9a8a",
-          "signatureName": "sequoia",
+          "workflowDynastySignatureName": "sequoia",
           "version": 1,
           "dag": {
             "nodes": [
@@ -1112,7 +1105,7 @@
             "type": "string",
             "description": "SHA-256 hash of the canonical DAG JSON."
           },
-          "signatureName": {
+          "workflowDynastySignatureName": {
             "type": "string",
             "description": "Poetic word for this lineage."
           },
@@ -1139,7 +1132,7 @@
           "featureSlug",
           "tags",
           "signature",
-          "signatureName",
+          "workflowDynastySignatureName",
           "version",
           "action"
         ]
@@ -1190,40 +1183,6 @@
         },
         "description": "Optional hints to guide generation."
       },
-      "WorkflowStyleType": {
-        "type": "string",
-        "enum": [
-          "human",
-          "brand"
-        ],
-        "description": "Style source type. \"human\" for an industry expert, \"brand\" for a company/organization."
-      },
-      "WorkflowStyle": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "$ref": "#/components/schemas/WorkflowStyleType"
-          },
-          "humanId": {
-            "type": "string",
-            "description": "Human ID from human-service. Required when type is 'human'."
-          },
-          "brandId": {
-            "type": "string",
-            "description": "Brand ID from brand-service. Required when type is 'brand'."
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Display name of the human or brand (e.g. 'Hormozi', 'My Brand'). Used to build the signatureName (e.g. 'hormozi-v1')."
-          }
-        },
-        "required": [
-          "type",
-          "name"
-        ],
-        "description": "Optional style configuration. When provided, the workflow is generated in the style of the specified human or brand."
-      },
       "CreateWorkflowFromDescriptionRequest": {
         "type": "object",
         "properties": {
@@ -1239,9 +1198,6 @@
           },
           "hints": {
             "$ref": "#/components/schemas/GenerateWorkflowHints"
-          },
-          "style": {
-            "$ref": "#/components/schemas/WorkflowStyle"
           }
         },
         "required": [

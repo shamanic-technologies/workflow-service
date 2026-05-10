@@ -51,37 +51,46 @@ When adding a migration:
 
 ## Workflow naming and versioning
 
-Workflows follow a dynasty model: each workflow belongs to a lineage (dynasty) that tracks its evolution through upgrades. Names and slugs are derived from the feature dynasty name (from features-service) and a poetic signature name generated once per dynasty.
+Workflows follow a dynasty model: each workflow belongs to a lineage (dynasty) that tracks its evolution through upgrades. Names and slugs are derived from the `feature_slug` and a poetic `workflow_dynasty_signature_name` generated once per dynasty.
+
+### Naming rule
+
+The bare word `dynasty` does not exist in this repo — always `workflow_dynasty_*` (and `workflowDynasty*` in TypeScript). Never bare `signature_name` either: the column is `workflow_dynasty_signature_name` (Drizzle field `workflowDynastySignatureName`). Indexes prefixed `idx_workflows_*` stay as-is — the table prefix in the index name already disambiguates.
+
+### Scope rule
+
+`workflow_dynasty_signature_name` is unique among **all** workflows (any `status`, any `org_id`) within the same `feature_slug`. Once a name is chosen for a feature, it is burned for that feature forever — even after deprecation. The dedup query uses `WHERE feature_slug = ?` only — no `org_id` filter, no `status` filter.
 
 ### Database columns
 
 | Column | Type | Unique? | Description |
 |---|---|---|---|
-| `slug` | text | Yes (globally) | Technical identifier, immutable once created. Used as API key for execution (`POST /execute/:slug`). |
-| `name` | text | Yes (globally) | Human-readable display name. |
-| `signature_name` | text | Unique among active workflows within the same `feature_slug` | Poetic word generated deterministically from the DAG hash. Set once at dynasty creation, never changes within the dynasty. |
-| `dynasty_name` | text | No | Stable name for the lineage. Constant across all versions of a dynasty. |
+| `workflow_slug` | text | Yes (globally) | Technical identifier, immutable once created. Used as API key for execution (`POST /workflows/by-slug/:workflowSlug/execute`). |
+| `workflow_name` | text | Yes (globally) | Human-readable display name. |
+| `workflow_dynasty_signature_name` | text | Unique per `feature_slug` (any status, any org) | Poetic word generated deterministically from the DAG hash. Set once at dynasty creation, never changes within the dynasty. Burned for life. |
+| `workflow_dynasty_slug` | text | No | Stable lineage slug. Constant across all versions of a dynasty. |
+| `workflow_dynasty_name` | text | No | Stable lineage display name. Constant across all versions of a dynasty. |
 | `signature` | text | Unique per `(feature_slug, status='active')` | Hash of the DAG structure. Used for deduplication on upgrade. |
 | `version` | integer | No | Version number within the dynasty. Starts at 1. |
 | `feature_slug` | text | No | Reference to the feature in features-service. Passed by clients. |
 
 ### Name composition
 
-All workflow names are derived from two sources:
-- **`feature_dynasty_name`** and **`feature_dynasty_slug`**: fetched from features-service using the `feature_slug`. These are the stable (unversioned) names of the feature. Never use `feature_name` or `feature_slug` directly, as those may contain version suffixes (e.g. "Sales Cold Outreach v2").
-- **`signature_name`**: the poetic word generated once at dynasty creation (e.g. "obsidian").
+```
+workflow_dynasty_slug = feature_slug + "-" + workflow_dynasty_signature_name
+workflow_dynasty_name = TitleCase(feature_slug.replace("-", " ")) + " " + Capitalize(workflow_dynasty_signature_name)
+workflow_slug         = workflow_dynasty_slug                        if version == 1
+                      | workflow_dynasty_slug + "-v{version}"        if version >= 2
+workflow_name         = workflow_dynasty_name                        if version == 1
+                      | workflow_dynasty_name + " v{version}"        if version >= 2
+```
 
+Example with `feature_slug = "sales-cold-outreach"`, `workflow_dynasty_signature_name = "obsidian"`, version 3:
 ```
-dynasty_name = feature_dynasty_name + " " + signature_name
-slug         = feature_dynasty_slug + "-" + signature_name [+ "-v{N}" if N >= 2]
-name         = dynasty_name [+ " v{N}" if N >= 2]
-```
-
-Example with `feature_dynasty_name = "Sales Cold Outreach"`, `signature_name = "obsidian"`, version 3:
-```
-dynasty_name:  "Sales Cold Outreach Obsidian"
-slug:          "sales-cold-outreach-obsidian-v3"
-name:          "Sales Cold Outreach Obsidian v3"
+workflow_dynasty_slug: "sales-cold-outreach-obsidian"
+workflow_dynasty_name: "Sales Cold Outreach Obsidian"
+workflow_slug:         "sales-cold-outreach-obsidian-v3"
+workflow_name:         "Sales Cold Outreach Obsidian v3"
 ```
 
 No `-v1` or `v1` suffix for version 1 — the first version has no version suffix in slug or name.
@@ -100,7 +109,7 @@ The legacy `upgraded_to` and `forked_from` columns are gone. The successor of a 
 ### Operations and behavior
 
 **Creation — `POST /workflows/create`:**
-- Body: `{ featureSlug, description, hints?, style? }`. LLM generates the DAG.
+- Body: `{ featureSlug, description, hints? }`. LLM generates the DAG.
 - If an active workflow with the same `(orgId, featureSlug, signature)` already exists, returns 200 with that row unchanged (idempotent).
 - Otherwise inserts a new row with `creation_type='scratch'`, `created_from_workflow=NULL`, `version=1`, no version suffix.
 - This endpoint never upgrades existing dynasties.
@@ -109,10 +118,10 @@ The legacy `upgraded_to` and `forked_from` columns are gone. The successor of a 
 - Body: `{ workflowSlug, description, hints? }`. LLM regenerates the DAG.
 - 404 if no active workflow matches `workflowSlug`.
 - If the new signature equals the existing one → in-place update, returns 200.
-- Otherwise inserts a new row in the **same** dynasty (`dynasty_slug`, `dynasty_name` unchanged) with `creation_type='upgrade'`, `created_from_workflow=existing.id`, `version=existing.version+1`, version suffix on `slug`/`name`. The predecessor is deprecated via `deprecateWorkflow()` (which also deletes its Windmill flow when no active campaign still references it). Returns 201.
+- Otherwise inserts a new row in the **same** dynasty (`workflow_dynasty_slug`, `workflow_dynasty_name`, `workflow_dynasty_signature_name` all unchanged — the dynasty signature name is immutable per dynasty) with `creation_type='upgrade'`, `created_from_workflow=existing.id`, `version=existing.version+1`, version suffix on `workflow_slug`/`workflow_name`. The predecessor is deprecated via `deprecateWorkflow()` (which also deletes its Windmill flow when no active campaign still references it). Returns 201.
 
 **Fork — `PUT /workflows/{id}` with a DAG of new signature:**
-- Inserts a new dynasty (new `signature_name`, new `dynasty_name`) with `creation_type='fork'`, `created_from_workflow=existing.id`, `version=1`.
+- Inserts a new dynasty (new `workflow_dynasty_signature_name`, new `workflow_dynasty_slug`, new `workflow_dynasty_name`) with `creation_type='fork'`, `created_from_workflow=existing.id`, `version=1`.
 - The source workflow is **always kept active** — there is no auto-deprecate-on-fork path.
 - Returns 201.
 
@@ -130,11 +139,6 @@ Stats (costs, email metrics, completed runs) are aggregated by walking the upgra
 
 The walker is fed the union of (active + deprecated) workflows so cross-dynasty convergence is followed naturally — when an upgrade was applied across dynasties, the chain crosses into the predecessor's dynasty and keeps walking.
 
-### Dependency on features-service
+### Feature naming
 
-Workflow-service needs `feature_dynasty_name` and `feature_dynasty_slug` from features-service. These are the stable, unversioned identifiers for a feature (as opposed to `feature_name`/`feature_slug` which may carry version suffixes).
-
-- Workflow-service receives only `feature_slug` from clients in requests.
-- It calls `GET /features/dynasty?slug=<featureSlug>` on features-service to resolve `feature_dynasty_name` and `feature_dynasty_slug`.
-- Falls back to slug derivation (strip `-v{N}`, capitalize words) if features-service is not configured or unreachable.
-- Requires env vars: `FEATURES_SERVICE_URL`, `FEATURES_SERVICE_API_KEY`.
+Workflow-service uses `feature_slug` directly to derive both the slug and the display name — there is no remote lookup, no `feature_dynasty_*` concept. The `featureSlugToName` helper titlecases the slug (`"sales-cold-outreach"` → `"Sales Cold Outreach"`) for display, and the slug itself is used verbatim in `workflow_dynasty_slug`. Clients only ever pass `featureSlug`.

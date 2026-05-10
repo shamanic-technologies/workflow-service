@@ -87,20 +87,6 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("every minute");
   });
 
-  it("includes style directive when provided", () => {
-    const prompt = buildSystemPrompt({
-      styleDirective: "This workflow MUST be created in the style of Hormozi. Adopt their methodology, tone, and strategic patterns.",
-    });
-    expect(prompt).toContain("Style Directive");
-    expect(prompt).toContain("Hormozi");
-    expect(prompt).toContain("methodology, tone, and strategic patterns");
-  });
-
-  it("does not include style directive when not provided", () => {
-    const prompt = buildSystemPrompt();
-    expect(prompt).not.toContain("Style Directive");
-  });
-
   it("includes JSON output format instructions", () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain("Output Format");
@@ -373,47 +359,4 @@ describe("generateWorkflow", () => {
     expect(mockComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("includes style directive in system prompt when style is provided", async () => {
-    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
-
-    await generateWorkflow(
-      {
-        description: "Cold email outreach",
-        style: { type: "human", name: "Hormozi", humanId: "human-123" },
-      },
-      TEST_IDENTITY,
-    );
-
-    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
-    expect(call.systemPrompt).toContain("Style Directive");
-    expect(call.systemPrompt).toContain("Hormozi");
-  });
-
-  it("appends style to user message when style is provided", async () => {
-    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
-
-    await generateWorkflow(
-      {
-        description: "Cold email outreach",
-        style: { type: "brand", name: "My Brand", brandId: "brand-456" },
-      },
-      TEST_IDENTITY,
-    );
-
-    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
-    expect(call.message).toContain('Style: Generate this workflow in the style of "My Brand"');
-  });
-
-  it("does not include style in prompt when style is not provided", async () => {
-    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
-
-    await generateWorkflow(
-      { description: "Cold email outreach" },
-      TEST_IDENTITY,
-    );
-
-    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
-    expect(call.systemPrompt).not.toContain("Style Directive");
-    expect(call.message).not.toContain("Style:");
-  });
 });
