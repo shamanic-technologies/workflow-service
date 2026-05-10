@@ -68,7 +68,7 @@ Example:
 {
   "id": "fetch-lead",
   "type": "http.call",
-  "config": { "service": "lead", "method": "POST", "path": "/buffer/next" },
+  "config": { "service": "lead", "method": "POST", "path": "<endpoint to pull next lead from buffer>" },
   "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId" },
   "retries": 0
 }
@@ -92,8 +92,12 @@ Dot-notation keys create nested objects:
 
 Static body fields go in config.body, dynamic overrides go in inputMapping with dot-notation.
 
+### Placeholders in examples
+
+Examples below use natural-language placeholders like \`<path to X>\` for any value that lives in another service's OpenAPI spec (endpoint paths and response field paths). These are NOT literal strings — you MUST resolve every \`<...>\` against the live OpenAPI specs injected later in this prompt and emit the actual JSON path. Emitting a literal \`<...>\` token in the final DAG is a hard failure.
+
 For path parameters (e.g. \`/internal/brands/{brandId}\`), use \`params.*\` in inputMapping:
-- "params.brandId": "$ref:start-run.output.brandId" → replaces {brandId} in the path
+- "params.brandId": "$ref:start-run.output.<path to brandId in start-run response>" → replaces {brandId} in the path
 
 ## Special Config Keys (stripped before passing to script)
 
@@ -121,20 +125,20 @@ Prefer "http.call" over legacy named types for new workflows.
 When using content-generation service (\`POST /generate\`):
 - \`body.type\` MUST be "cold-email" (matches the registered prompt type) — do NOT use "email", "cold_outreach", or other variants
 - **CRITICAL: \`body.variables\` MUST contain FLAT keys only.** Each variable must be a separate scalar mapping. NEVER pass an entire object like \`"body.variables.lead": "$ref:fetch-lead.output.lead"\`. Instead, map each field individually:
-  - \`"body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName"\`
-  - \`"body.variables.leadLastName": "$ref:fetch-lead.output.lead.data.lastName"\`
-  - \`"body.variables.leadTitle": "$ref:fetch-lead.output.lead.data.title"\`
-  - \`"body.variables.leadEmail": "$ref:fetch-lead.output.lead.data.email"\`
-  - \`"body.variables.leadCompanyName": "$ref:fetch-lead.output.lead.data.organizationName"\`
-  - \`"body.variables.leadCompanyDomain": "$ref:fetch-lead.output.lead.data.organizationDomain"\`
-  - \`"body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview"\`
-  - \`"body.variables.clientValueProposition": "$ref:brand-profile.output.profile.valueProposition"\`
-  - \`"body.variables.clientTargetAudience": "$ref:brand-profile.output.profile.targetAudience"\`
+  - \`"body.variables.leadFirstName": "$ref:fetch-lead.output.<path to lead's first name>"\`
+  - \`"body.variables.leadLastName": "$ref:fetch-lead.output.<path to lead's last name>"\`
+  - \`"body.variables.leadTitle": "$ref:fetch-lead.output.<path to lead's job title or headline>"\`
+  - \`"body.variables.leadEmail": "$ref:fetch-lead.output.<path to lead's email>"\`
+  - \`"body.variables.leadCompanyName": "$ref:fetch-lead.output.<path to lead's company name>"\`
+  - \`"body.variables.leadCompanyDomain": "$ref:fetch-lead.output.<path to lead's company domain>"\`
+  - \`"body.variables.clientCompanyOverview": "$ref:brand-profile.output.<path to brand company overview>"\`
+  - \`"body.variables.clientValueProposition": "$ref:brand-profile.output.<path to brand value proposition>"\`
+  - \`"body.variables.clientTargetAudience": "$ref:brand-profile.output.<path to brand target audience>"\`
 - Include tracking fields: \`body.brandId\`, \`body.campaignId\`, \`body.leadId\`, \`body.workflowSlug\`, \`body.apolloEnrichmentId\`
 - Response contains \`subject\` (string) and \`sequence\` (array of { step, bodyHtml, bodyText, daysSinceLastStep })
 
 When sending via email-gateway (\`POST /send\` with \`type: "broadcast"\`):
-- Pass the ENTIRE \`sequence\` array from content-generation output: \`"body.sequence": "$ref:email-generate.output.sequence"\`
+- Pass the ENTIRE \`sequence\` array from content-generation output: \`"body.sequence": "$ref:email-generate.output.<path to generated email sequence array>"\`
 - Required fields: \`to\`, \`subject\`, \`sequence\`, \`recipientFirstName\`, \`recipientLastName\`, \`recipientCompany\`
 - The sequence is variable-length (LLM determines how many follow-up steps) — always pass it as-is
 
@@ -176,84 +180,84 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     {
       "id": "gate-check",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/gate-check", "stopAfterIf": "result.allowed == false" },
+      "config": { "service": "campaign", "method": "POST", "path": "<endpoint to gate-check campaign budget>", "stopAfterIf": "result.allowed == false" },
       "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
     },
     {
       "id": "start-run",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/start-run" },
+      "config": { "service": "campaign", "method": "POST", "path": "<endpoint to start a campaign run>" },
       "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:flow_input.orgId" }
     },
     {
       "id": "fetch-lead",
       "type": "http.call",
-      "config": { "service": "lead", "method": "POST", "path": "/buffer/next" },
-      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:start-run.output.orgId" },
+      "config": { "service": "lead", "method": "POST", "path": "<endpoint to pull next lead from buffer>" },
+      "inputMapping": { "body.campaignId": "$ref:flow_input.campaignId", "body.orgId": "$ref:start-run.output.<path to orgId in start-run response>" },
       "retries": 0
     },
     { "id": "check-lead", "type": "condition" },
     {
       "id": "brand-profile",
       "type": "http.call",
-      "config": { "service": "brand", "method": "GET", "path": "/internal/brands/{brandId}" },
-      "inputMapping": { "params.brandId": "$ref:start-run.output.brandId" }
+      "config": { "service": "brand", "method": "GET", "path": "<endpoint to fetch a brand profile by id>" },
+      "inputMapping": { "params.brandId": "$ref:start-run.output.<path to brandId in start-run response>" }
     },
     {
       "id": "email-generate",
       "type": "http.call",
-      "config": { "service": "content-generation", "method": "POST", "path": "/generate", "body": { "type": "cold-email", "includeAiDisclaimer": true } },
+      "config": { "service": "content-generation", "method": "POST", "path": "<endpoint to generate content>", "body": { "type": "cold-email", "includeAiDisclaimer": true } },
       "inputMapping": {
-        "body.brandId": "$ref:start-run.output.brandId",
+        "body.brandId": "$ref:start-run.output.<path to brandId in start-run response>",
         "body.campaignId": "$ref:flow_input.campaignId",
-        "body.leadId": "$ref:fetch-lead.output.lead.leadId",
-        "body.workflowSlug": "$ref:start-run.output.workflowSlug",
-        "body.apolloEnrichmentId": "$ref:fetch-lead.output.lead.externalId",
-        "body.variables.leadEmail": "$ref:fetch-lead.output.lead.data.email",
-        "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
-        "body.variables.leadLastName": "$ref:fetch-lead.output.lead.data.lastName",
-        "body.variables.leadTitle": "$ref:fetch-lead.output.lead.data.title",
-        "body.variables.leadCompanyName": "$ref:fetch-lead.output.lead.data.organizationName",
-        "body.variables.leadCompanyDomain": "$ref:fetch-lead.output.lead.data.organizationDomain",
-        "body.variables.clientBrandUrl": "$ref:start-run.output.brandUrl",
-        "body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview",
-        "body.variables.clientValueProposition": "$ref:brand-profile.output.profile.valueProposition",
-        "body.variables.clientTargetAudience": "$ref:brand-profile.output.profile.targetAudience"
+        "body.leadId": "$ref:fetch-lead.output.<path to leadId in fetch-lead response>",
+        "body.workflowSlug": "$ref:start-run.output.<path to workflowSlug in start-run response>",
+        "body.apolloEnrichmentId": "$ref:fetch-lead.output.<path to apollo person/enrichment id in fetch-lead response>",
+        "body.variables.leadEmail": "$ref:fetch-lead.output.<path to lead's email>",
+        "body.variables.leadFirstName": "$ref:fetch-lead.output.<path to lead's first name>",
+        "body.variables.leadLastName": "$ref:fetch-lead.output.<path to lead's last name>",
+        "body.variables.leadTitle": "$ref:fetch-lead.output.<path to lead's job title or headline>",
+        "body.variables.leadCompanyName": "$ref:fetch-lead.output.<path to lead's company name>",
+        "body.variables.leadCompanyDomain": "$ref:fetch-lead.output.<path to lead's company domain>",
+        "body.variables.clientBrandUrl": "$ref:start-run.output.<path to brand url in start-run response>",
+        "body.variables.clientCompanyOverview": "$ref:brand-profile.output.<path to brand company overview>",
+        "body.variables.clientValueProposition": "$ref:brand-profile.output.<path to brand value proposition>",
+        "body.variables.clientTargetAudience": "$ref:brand-profile.output.<path to brand target audience>"
       },
       "retries": 0
     },
     {
       "id": "email-send",
       "type": "http.call",
-      "config": { "service": "email-gateway", "method": "POST", "path": "/send", "body": { "type": "broadcast", "tag": "cold-email" }, "validateResponse": { "field": "success", "equals": true } },
+      "config": { "service": "email-gateway", "method": "POST", "path": "<endpoint to send a broadcast email>", "body": { "type": "broadcast", "tag": "cold-email" }, "validateResponse": { "field": "success", "equals": true } },
       "inputMapping": {
-        "body.to": "$ref:fetch-lead.output.lead.data.email",
-        "body.subject": "$ref:email-generate.output.subject",
-        "body.sequence": "$ref:email-generate.output.sequence",
-        "body.leadId": "$ref:fetch-lead.output.lead.leadId",
-        "body.brandId": "$ref:start-run.output.brandId",
+        "body.to": "$ref:fetch-lead.output.<path to lead's email>",
+        "body.subject": "$ref:email-generate.output.<path to generated subject>",
+        "body.sequence": "$ref:email-generate.output.<path to generated email sequence array>",
+        "body.leadId": "$ref:fetch-lead.output.<path to leadId in fetch-lead response>",
+        "body.brandId": "$ref:start-run.output.<path to brandId in start-run response>",
         "body.campaignId": "$ref:flow_input.campaignId",
-        "body.workflowSlug": "$ref:start-run.output.workflowSlug",
-        "body.recipientFirstName": "$ref:fetch-lead.output.lead.data.firstName",
-        "body.recipientLastName": "$ref:fetch-lead.output.lead.data.lastName",
-        "body.recipientCompany": "$ref:fetch-lead.output.lead.data.organizationName"
+        "body.workflowSlug": "$ref:start-run.output.<path to workflowSlug in start-run response>",
+        "body.recipientFirstName": "$ref:fetch-lead.output.<path to lead's first name>",
+        "body.recipientLastName": "$ref:fetch-lead.output.<path to lead's last name>",
+        "body.recipientCompany": "$ref:fetch-lead.output.<path to lead's company name>"
       },
       "retries": 0
     },
     {
       "id": "end-run",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true, "stopCampaign": false } }
+      "config": { "service": "campaign", "method": "POST", "path": "<endpoint to end a campaign run>", "body": { "success": true, "stopCampaign": false } }
     },
     {
       "id": "end-run-no-lead",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": true, "stopCampaign": true } }
+      "config": { "service": "campaign", "method": "POST", "path": "<endpoint to end a campaign run>", "body": { "success": true, "stopCampaign": true } }
     },
     {
       "id": "end-run-error",
       "type": "http.call",
-      "config": { "service": "campaign", "method": "POST", "path": "/end-run", "body": { "success": false, "stopCampaign": false } }
+      "config": { "service": "campaign", "method": "POST", "path": "<endpoint to end a campaign run>", "body": { "success": false, "stopCampaign": false } }
     }
   ],
   "edges": [
@@ -275,9 +279,9 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 \`\`\`json
 {
   "nodes": [
-    { "id": "fetch-contacts", "type": "http.call", "config": { "service": "client", "method": "GET", "path": "/users" } },
-    { "id": "loop-contacts", "type": "for-each", "config": { "iterator": "results.fetch_contacts.users", "parallel": false } },
-    { "id": "send-email", "type": "http.call", "config": { "service": "transactional-email", "method": "POST", "path": "/send" }, "inputMapping": { "body.recipientEmail": "$ref:loop-contacts.output.email" }, "retries": 0 }
+    { "id": "fetch-contacts", "type": "http.call", "config": { "service": "client", "method": "GET", "path": "<endpoint to list contacts/users>" } },
+    { "id": "loop-contacts", "type": "for-each", "config": { "iterator": "results.fetch_contacts.<path to array of contacts in fetch-contacts response>", "parallel": false } },
+    { "id": "send-email", "type": "http.call", "config": { "service": "transactional-email", "method": "POST", "path": "<endpoint to send a transactional email>" }, "inputMapping": { "body.recipientEmail": "$ref:loop-contacts.output.<path to email field on the iterated contact>" }, "retries": 0 }
   ],
   "edges": [
     { "from": "fetch-contacts", "to": "loop-contacts" },

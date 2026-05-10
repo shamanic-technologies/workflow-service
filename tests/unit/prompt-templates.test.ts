@@ -12,9 +12,12 @@ describe("buildSystemPrompt", () => {
   });
 
   it("passes sequence array to email-gateway (not bodyHtml)", () => {
-    // email-send node should reference sequence, not bodyHtml
-    expect(prompt).toContain("$ref:email-generate.output.sequence");
-    expect(prompt).not.toContain("$ref:email-generate.output.bodyHtml");
+    // email-send node should reference the generated sequence array, not bodyHtml.
+    // Output paths are placeholders ("<path to ...>") that the LLM resolves from
+    // the live OpenAPI spec — we only assert intent is preserved.
+    expect(prompt).toContain('"body.sequence"');
+    expect(prompt).toMatch(/\$ref:email-generate\.output\.<[^>]*sequence[^>]*>/);
+    expect(prompt).not.toMatch(/\$ref:email-generate\.output\.bodyHtml/);
   });
 
   it("includes required content-generation fields in the example", () => {

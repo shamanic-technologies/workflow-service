@@ -37,12 +37,12 @@ describe("buildInputTransforms", () => {
 
   it("uses optional chaining for deeply nested output paths", () => {
     const result = buildInputTransforms(undefined, {
-      email: "$ref:fetch-lead.output.lead.data.email",
+      companyName: "$ref:fetch-lead.output.lead.data.organization.name",
     });
 
-    expect(result.email).toEqual({
+    expect(result.companyName).toEqual({
       type: "javascript",
-      expr: "results.fetch_lead?.lead?.data?.email",
+      expr: "results.fetch_lead?.lead?.data?.organization?.name",
     });
   });
 
