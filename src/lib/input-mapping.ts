@@ -40,7 +40,7 @@ export function buildInputTransforms(
           // Optional chaining after node_id prevents TypeError when Windmill
           // returns null for a step result (e.g. internal fetch error).
           // Deep paths chain all intermediates:
-          // "node-id.output.lead.data.email" → "results.node_id?.lead?.data?.email"
+          // "node-id.output.a.b.c" → "results.node_id?.a?.b?.c"
           const parts = path.split(".");
           const nodeId = parts[0].replace(/-/g, "_");
           // Skip "output" part if present
