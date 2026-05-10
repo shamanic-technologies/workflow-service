@@ -218,6 +218,13 @@
       "when": 1778198400000,
       "tag": "0030_drop_old_lineage_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1778284800000,
+      "tag": "0031_rename_workflow_dynasty_columns_drop_style",
+      "breakpoints": true
     }
   ]
 }

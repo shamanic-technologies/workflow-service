@@ -199,7 +199,6 @@ export const WorkflowResponseSchema = z
     humanId: z.string().nullable().describe("Human ID if this workflow was generated in a human expert's style."),
     campaignId: z.string().nullable(),
     subrequestId: z.string().nullable(),
-    styleName: z.string().nullable().describe("Base style name used for versioned naming (e.g. 'hormozi'). Null for non-styled workflows."),
     workflowSlug: z.string().describe("Unique technical identifier. Use this to execute via /workflows/by-slug/{workflowSlug}/execute."),
     workflowName: z.string().describe("Human-readable display name. Globally unique."),
     workflowDynastySlug: z.string().describe("Stable lineage slug (constant across all versions of a dynasty). Use for dynasty-level grouping."),
@@ -210,7 +209,7 @@ export const WorkflowResponseSchema = z
     audienceType: WorkflowAudienceTypeSchema.nullable().describe("Optional workflow audience type tag."),
     tags: z.array(z.string()).describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
-    signatureName: z.string().describe("Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation."),
+    workflowDynastySignatureName: z.string().describe("Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."),
     version: z.number().int().describe("Version number within the lineage. Starts at 1."),
     dag: z.unknown().describe("The DAG definition as submitted."),
     status: z.enum(["active", "deprecated"]).describe("Workflow lifecycle status. Only active workflows can be executed."),
@@ -248,7 +247,6 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     humanId: null,
     campaignId: null,
     subrequestId: null,
-    styleName: null,
     workflowSlug: "pr-cold-email-outreach-sequoia",
     workflowName: "Pr Cold Email Outreach Sequoia",
     workflowDynastySlug: "pr-cold-email-outreach-sequoia",
@@ -260,7 +258,7 @@ export const WorkflowMutationResponseSchema = WorkflowResponseSchema.extend({
     audienceType: "cold-outreach",
     tags: ["email"],
     signature: "4c4239e8d9bec64c85a178cb12b6669d3a69b6e68bafc0cb45c1797377ce9a8a",
-    signatureName: "sequoia",
+    workflowDynastySignatureName: "sequoia",
     version: 1,
     dag: {
       nodes: [
@@ -405,39 +403,6 @@ export const ExecuteByNameSchema = z
     },
   });
 
-// --- Style schema ---
-
-export const WorkflowStyleTypeSchema = z
-  .enum(["human", "brand"])
-  .describe('Style source type. "human" for an industry expert, "brand" for a company/organization.')
-  .openapi("WorkflowStyleType");
-
-export const WorkflowStyleSchema = z
-  .object({
-    type: WorkflowStyleTypeSchema,
-    humanId: z.string().optional().describe(
-      "Human ID from human-service. Required when type is 'human'."
-    ),
-    brandId: z.string().optional().describe(
-      "Brand ID from brand-service. Required when type is 'brand'."
-    ),
-    name: z.string().min(1).describe(
-      "Display name of the human or brand (e.g. 'Hormozi', 'My Brand'). " +
-      "Used to build the signatureName (e.g. 'hormozi-v1')."
-    ),
-  })
-  .refine(
-    (data) => {
-      if (data.type === "human") return !!data.humanId;
-      if (data.type === "brand") return !!data.brandId;
-      return true;
-    },
-    {
-      message: "humanId is required when type is 'human'; brandId is required when type is 'brand'",
-    }
-  )
-  .openapi("WorkflowStyle");
-
 // --- Description-driven create/upgrade schemas ---
 
 export const GenerateWorkflowHintsSchema = z
@@ -465,9 +430,6 @@ export const CreateWorkflowFromDescriptionSchema = z
     hints: GenerateWorkflowHintsSchema.optional().describe(
       "Optional hints to guide generation."
     ),
-    style: WorkflowStyleSchema.optional().describe(
-      "Optional style configuration. When provided, the workflow is generated in the style of the specified human or brand."
-    ),
   })
   .openapi("CreateWorkflowFromDescriptionRequest");
 
@@ -494,7 +456,7 @@ export const WorkflowFromDescriptionResultSchema = z
     featureSlug: z.string().describe("Feature slug used to build the name."),
     tags: z.array(z.string()).describe("Tags assigned to this workflow."),
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
-    signatureName: z.string().describe("Poetic word for this lineage."),
+    workflowDynastySignatureName: z.string().describe("Poetic word for this lineage."),
     version: z.number().int().describe("Version number within the lineage."),
     action: z.enum(["created", "updated", "upgraded", "existing"]).describe(
       "What happened: 'created' = new dynasty inserted (creation_type='scratch'), " +
@@ -563,7 +525,7 @@ export const WorkflowMetadataSchema = z
     createdForBrandId: z.string().nullable(),
     featureSlug: z.string().describe("Feature slug for grouping and naming."),
     signature: z.string(),
-    signatureName: z.string(),
+    workflowDynastySignatureName: z.string(),
   })
   .openapi("WorkflowMetadata");
 

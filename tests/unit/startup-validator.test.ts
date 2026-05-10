@@ -42,9 +42,9 @@ vi.mock("../../src/lib/dag-signature.js", () => ({
   computeDAGSignature: vi.fn().mockReturnValue("new-signature-hash"),
 }));
 
-// Mock signature-words
-vi.mock("../../src/lib/signature-words.js", () => ({
-  pickSignatureName: vi.fn().mockReturnValue("Redwood"),
+// Mock workflow-dynasty-signature-name
+vi.mock("../../src/lib/workflow-dynasty-signature-name.js", () => ({
+  pickWorkflowDynastySignatureName: vi.fn().mockReturnValue("Redwood"),
 }));
 
 // Mock DB
@@ -84,8 +84,8 @@ describe("validateAndUpgradeWorkflows", () => {
     orgId: "org-1",
     workflowSlug: "sales-email-cold-outreach-Sequoia",
     workflowName: "Sales Cold Outreach Sequoia",
-    dynastySlug: "sales-email-cold-outreach-Sequoia",
-    dynastyName: "Sales Cold Outreach Sequoia",
+    workflowDynastySlug: "sales-email-cold-outreach-Sequoia",
+    workflowDynastyName: "Sales Cold Outreach Sequoia",
     version: 1,
     featureSlug: "sales-email-cold-outreach",
     category: "sales",
@@ -94,7 +94,7 @@ describe("validateAndUpgradeWorkflows", () => {
     description: "Test",
     status: "active",
     signature: "sig-1",
-    signatureName: "Sequoia",
+    workflowDynastySignatureName: "Sequoia",
     windmillWorkspace: "prod",
     windmillFlowPath: "f/workflows/org-1/flow",
     dag: {
@@ -112,7 +112,6 @@ describe("validateAndUpgradeWorkflows", () => {
     humanId: null,
     campaignId: null,
     subrequestId: null,
-    styleName: null,
     upgradedTo: null,
     createdByUserId: null,
     createdByRunId: null,
@@ -125,9 +124,9 @@ describe("validateAndUpgradeWorkflows", () => {
     id: "wf-2",
     workflowSlug: "sales-email-cold-outreach-Broken",
     workflowName: "Sales Cold Outreach Broken",
-    dynastySlug: "sales-email-cold-outreach-Broken",
-    dynastyName: "Sales Cold Outreach Broken",
-    signatureName: "Broken",
+    workflowDynastySlug: "sales-email-cold-outreach-Broken",
+    workflowDynastyName: "Sales Cold Outreach Broken",
+    workflowDynastySignatureName: "Broken",
     dag: {
       nodes: [
         {
@@ -177,17 +176,19 @@ describe("validateAndUpgradeWorkflows", () => {
           }
 
           // Signature-match dedup query: select({ id: ... }).from(workflows).where(...)
-          // Distinguished by select arg having 'id' key but not 'signatureName'
-          if (selectArg && 'id' in selectArg && !('signatureName' in selectArg)) {
+          // Distinguished by select arg having 'id' key but not 'workflowDynastySignatureName'
+          if (selectArg && 'id' in selectArg && !('workflowDynastySignatureName' in selectArg)) {
             const promise = Promise.resolve(dbSignatureMatchResult);
             (promise as any).where = () => Promise.resolve(dbSignatureMatchResult);
             return promise;
           }
 
-          // Non-where calls after the first return signatureName-only (for collision detection)
+          // Non-where calls after the first return workflowDynastySignatureName-only (for collision detection)
           const signatureData = () =>
             Promise.resolve(
-              dbSelectResult.map((r) => ({ signatureName: (r as Record<string, unknown>).signatureName })),
+              dbSelectResult.map((r) => ({
+                workflowDynastySignatureName: (r as Record<string, unknown>).workflowDynastySignatureName,
+              })),
             );
 
           // .where() calls always return full workflow objects (active workflows query + sync query)
@@ -365,9 +366,9 @@ describe("validateAndUpgradeWorkflows", () => {
       id: "wf-warning",
       workflowSlug: "sales-email-cold-outreach-WarningOnly",
       workflowName: "Sales Cold Outreach WarningOnly",
-      dynastySlug: "sales-email-cold-outreach-WarningOnly",
-      dynastyName: "Sales Cold Outreach WarningOnly",
-      signatureName: "WarningOnly",
+      workflowDynastySlug: "sales-email-cold-outreach-WarningOnly",
+      workflowDynastyName: "Sales Cold Outreach WarningOnly",
+      workflowDynastySignatureName: "WarningOnly",
       dag: {
         nodes: [
           {
@@ -440,9 +441,9 @@ describe("validateAndUpgradeWorkflows", () => {
       id: "wf-warning-crash",
       workflowSlug: "press-kit-page-generation-cascade",
       workflowName: "Press Kit Page Generation Cascade",
-      dynastySlug: "press-kit-page-generation-cascade",
-      dynastyName: "Press Kit Page Generation Cascade",
-      signatureName: "Cascade",
+      workflowDynastySlug: "press-kit-page-generation-cascade",
+      workflowDynastyName: "Press Kit Page Generation Cascade",
+      workflowDynastySignatureName: "Cascade",
       dag: {
         nodes: [
           {

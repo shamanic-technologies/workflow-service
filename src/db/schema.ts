@@ -19,18 +19,17 @@ export const workflows = pgTable(
     humanId: text("human_id"),
     campaignId: text("campaign_id"),
     subrequestId: text("subrequest_id"),
-    styleName: text("style_name"),
     workflowSlug: text("workflow_slug").notNull(),
     workflowName: text("workflow_name").notNull(),
-    dynastySlug: text("dynasty_slug").notNull(),
-    dynastyName: text("dynasty_name").notNull(),
+    workflowDynastySlug: text("workflow_dynasty_slug").notNull(),
+    workflowDynastyName: text("workflow_dynasty_name").notNull(),
     description: text("description"),
     featureSlug: text("feature_slug").notNull(),
     category: text("category"),
     channel: text("channel"),
     audienceType: text("audience_type"),
     signature: text("signature").notNull(),
-    signatureName: text("signature_name").notNull(),
+    workflowDynastySignatureName: text("workflow_dynasty_signature_name").notNull(),
     version: integer("version").notNull().default(1),
     dag: jsonb("dag").notNull(),
     tags: jsonb("tags").default([]),
@@ -46,8 +45,8 @@ export const workflows = pgTable(
   },
   (table) => [
     uniqueIndex("idx_workflows_workflow_slug_unique").on(table.workflowSlug),
-    index("idx_workflows_dynasty_slug").on(table.dynastySlug),
-    index("idx_workflows_feature_signature").on(table.featureSlug, table.signatureName),
+    index("idx_workflows_dynasty_slug").on(table.workflowDynastySlug),
+    index("idx_workflows_feature_signature").on(table.featureSlug, table.workflowDynastySignatureName),
   ]
 );
 

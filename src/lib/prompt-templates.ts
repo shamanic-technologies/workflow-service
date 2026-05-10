@@ -6,12 +6,11 @@ export interface ServiceContext {
 }
 
 export interface BuildSystemPromptOptions {
-  styleDirective?: string;
   serviceContext?: ServiceContext;
 }
 
 export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
-  const { styleDirective, serviceContext } = options ?? {};
+  const { serviceContext } = options ?? {};
 
   const nodeTypes = Object.entries(NODE_TYPE_REGISTRY)
     .map(([type, path]) => {
@@ -290,7 +289,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 }
 \`\`\`
 
-${styleDirective ? `## Style Directive\n\n${styleDirective}\n\n` : ""}## Output Format
+## Output Format
 
 You MUST respond with a JSON object matching this exact shape:
 
