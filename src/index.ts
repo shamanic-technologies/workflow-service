@@ -7,6 +7,7 @@ import { getWindmillClient } from "./lib/windmill-client.js";
 import { JobPoller } from "./lib/job-poller.js";
 import { requireIdentity } from "./middleware/auth.js";
 import { checkApiRegistryHealth, validateAndUpgradeWorkflows } from "./lib/startup-validator.js";
+import { assertEnvironmentConsistency } from "./lib/env-safety.js";
 import { deployNodes } from "./lib/deploy-nodes.js";
 import { SpecWatcher } from "./lib/spec-watcher.js";
 import healthRoutes from "./routes/health.js";
@@ -43,6 +44,9 @@ app.use((_req, res) => {
 if (process.env.NODE_ENV !== "test") {
   (async () => {
     try {
+      // Fail loud before any side-effect if env URLs cross production/staging boundaries.
+      assertEnvironmentConsistency();
+
       // Run migrations
       await migrate(db, { migrationsFolder: "./drizzle" });
       console.log("Migrations complete");
