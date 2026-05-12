@@ -359,4 +359,58 @@ describe("generateWorkflow", () => {
     expect(mockComplete).toHaveBeenCalledTimes(1);
   });
 
+  it("filters out the 'api' service from LLM context (services list + specs map)", async () => {
+    mockFetchLlmContext.mockResolvedValueOnce({
+      _description: "LLM-friendly context",
+      _usage: "Use this to discover services",
+      services: [
+        { service: "lead", description: "Lead service", endpointCount: 2 },
+        { service: "api", description: "Proxy", endpointCount: 99 },
+        { service: "campaign", description: "Campaign service", endpointCount: 1 },
+      ],
+    });
+    mockFetchSpecsForServices.mockResolvedValueOnce(new Map([
+      ["lead", { paths: { "/buffer/next": { post: {} } } }],
+      ["campaign", { paths: { "/gate-check": { post: {} } } }],
+    ]));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
+
+    // 'api' must NOT be passed to fetchSpecsForServices
+    expect(mockFetchSpecsForServices).toHaveBeenCalledWith(
+      ["lead", "campaign"],
+      TEST_IDENTITY,
+    );
+
+    // 'api' must NOT appear in system prompt service list
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).not.toContain("- **api**:");
+    expect(call.systemPrompt).toContain("- **lead**:");
+    expect(call.systemPrompt).toContain("- **campaign**:");
+  });
+
+  it("filters 'api' from specs map even if returned by registry", async () => {
+    mockFetchLlmContext.mockResolvedValueOnce({
+      _description: "LLM-friendly context",
+      _usage: "Use this to discover services",
+      services: [
+        { service: "lead", description: "Lead service", endpointCount: 2 },
+        { service: "api", description: "Proxy", endpointCount: 99 },
+      ],
+    });
+    // Registry still returns api spec defensively — generator must drop it
+    mockFetchSpecsForServices.mockResolvedValueOnce(new Map([
+      ["lead", { paths: { "/buffer/next": { post: {} } } }],
+      ["api", { paths: { "/v1/campaigns/pipeline/gate-check": { post: {} } } }],
+    ]));
+    mockComplete.mockResolvedValueOnce(createMockResponse(VALID_LINEAR_DAG));
+
+    await generateWorkflow({ description: "test workflow" }, TEST_IDENTITY);
+
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).not.toContain("/v1/campaigns/pipeline/gate-check");
+    expect(call.systemPrompt).not.toContain('"api":');
+  });
+
 });
