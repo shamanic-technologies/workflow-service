@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import type {
   ChatServiceCompleteRequest,
@@ -7,26 +7,40 @@ import type {
 import type { DownstreamHeaders } from "../../src/lib/downstream-headers.js";
 
 // Mock the API registry client
+const mockFetchLlmContext = vi.fn();
+const mockFetchSpecsForServices = vi.fn();
+
 vi.mock("../../src/lib/api-registry-client.js", () => ({
-  fetchLlmContext: vi.fn().mockResolvedValue({
-    services: [
-      {
-        service: "campaign",
-        description: "Campaign service",
-        endpointCount: 3,
-      },
-    ],
-  }),
-  fetchSpecsForServices: vi.fn().mockResolvedValue(new Map([
-    ["campaign", {
-      paths: {
-        "/gate-check": { post: {} },
-        "/start-run": { post: {} },
-        "/end-run": { post: {} },
-      },
-    }],
-  ])),
+  fetchLlmContext: (...args: unknown[]) => mockFetchLlmContext(...args),
+  fetchSpecsForServices: (...args: unknown[]) => mockFetchSpecsForServices(...args),
 }));
+
+const DEFAULT_LLM_CONTEXT = {
+  services: [
+    {
+      service: "campaign",
+      description: "Campaign service",
+      endpointCount: 3,
+    },
+  ],
+};
+
+const DEFAULT_SPECS_MAP = new Map<string, unknown>([
+  ["campaign", {
+    paths: {
+      "/gate-check": { post: {} },
+      "/start-run": { post: {} },
+      "/end-run": { post: {} },
+    },
+  }],
+]);
+
+beforeEach(() => {
+  mockFetchLlmContext.mockReset();
+  mockFetchSpecsForServices.mockReset();
+  mockFetchLlmContext.mockResolvedValue(DEFAULT_LLM_CONTEXT);
+  mockFetchSpecsForServices.mockResolvedValue(DEFAULT_SPECS_MAP);
+});
 
 import {
   upgradeWorkflow,
@@ -198,5 +212,45 @@ describe("upgradeWorkflow", () => {
     // which routes to chatServicePlatformComplete (no org/user/run headers)
     const headers = mockComplete.mock.calls[0][1];
     expect(headers).toBeUndefined();
+  });
+
+  it("filters 'api' from LLM context (services list, invalidEndpoint, fieldError, specs map)", async () => {
+    mockFetchLlmContext.mockResolvedValueOnce({
+      services: [
+        { service: "campaign", description: "Campaign service", endpointCount: 3 },
+        { service: "api", description: "Proxy", endpointCount: 99 },
+      ],
+    });
+    // Registry defensively still returns api spec — upgrader must drop it.
+    // Use a unique marker path that does NOT appear elsewhere (e.g. broken
+    // endpoint list) so the assertion can prove the api spec was filtered.
+    mockFetchSpecsForServices.mockResolvedValueOnce(new Map<string, unknown>([
+      ["campaign", { paths: { "/gate-check": { post: {} } } }],
+      ["api", { paths: { "/UNIQUE_API_ONLY_MARKER_PATH": { post: {} } } }],
+    ]));
+
+    const mockComplete = vi.fn().mockResolvedValue(createMockResponse(FIXED_DAG));
+    setUpgradeChatServiceClient(mockComplete);
+
+    await upgradeWorkflow(
+      BROKEN_DAG,
+      // Broken endpoint references the api service — must still be filtered out of context
+      [{ service: "api", method: "POST", path: "/v1/campaigns/pipeline/gate-check", reason: "not found" }],
+      [{ nodeId: "x", service: "api", method: "POST", path: "/x", field: "body.y", reason: "unknown field" }],
+      IDENTITY,
+      METADATA,
+    );
+
+    // 'api' must NOT be passed to fetchSpecsForServices
+    const specsCallArg = mockFetchSpecsForServices.mock.calls[0][0] as string[];
+    expect(specsCallArg).not.toContain("api");
+    expect(specsCallArg).toContain("campaign");
+
+    // 'api' spec must NOT appear in system prompt. The broken endpoint path
+    // /v1/campaigns/pipeline/gate-check will appear in the Broken Endpoints
+    // section by design; assert on the api-spec-only marker instead.
+    const call = mockComplete.mock.calls[0][0] as ChatServiceCompleteRequest;
+    expect(call.systemPrompt).not.toContain("/UNIQUE_API_ONLY_MARKER_PATH");
+    expect(call.systemPrompt).not.toContain('"api":');
   });
 });

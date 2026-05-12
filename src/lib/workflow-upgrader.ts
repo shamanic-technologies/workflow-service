@@ -35,6 +35,11 @@ async function callComplete(
   return chatServicePlatformComplete(request);
 }
 
+// api-service is a proxy — the prompt forbids `service: "api"`. Filter it out of
+// the registry context entirely so the LLM cannot see api-service paths during
+// an upgrade and reapply them to the wrong service.
+const HIDDEN_SERVICES = new Set(["api"]);
+
 async function fetchServiceContext(
   invalidEndpoints: InvalidEndpoint[],
   fieldErrors: FieldValidationIssue[],
@@ -48,20 +53,28 @@ async function fetchServiceContext(
   let services: Array<{ name: string; description: string; endpointCount: number }> = [];
   try {
     const context = await fetchLlmContext(downstreamHeaders);
-    services = context.services.map((s: { service: string; description?: string; endpointCount: number }) => ({
+    const visibleContextServices = context.services.filter(
+      (s: { service: string }) => !HIDDEN_SERVICES.has(s.service),
+    );
+    services = visibleContextServices.map((s: { service: string; description?: string; endpointCount: number }) => ({
       name: s.service,
       description: s.description ?? "",
       endpointCount: s.endpointCount,
     }));
     // Also add all service names from the context so the LLM can find replacements
-    for (const s of context.services) serviceNames.add(s.service);
+    for (const s of visibleContextServices) serviceNames.add(s.service);
   } catch {
     // Non-blocking — proceed with just the broken service specs
   }
 
+  for (const hidden of HIDDEN_SERVICES) serviceNames.delete(hidden);
+
   const specsMap = await fetchSpecsForServices([...serviceNames], downstreamHeaders);
   const specs: Record<string, unknown> = {};
-  for (const [name, spec] of specsMap) specs[name] = spec;
+  for (const [name, spec] of specsMap) {
+    if (HIDDEN_SERVICES.has(name)) continue;
+    specs[name] = spec;
+  }
 
   return { services, specs };
 }

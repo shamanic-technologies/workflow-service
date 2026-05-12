@@ -51,16 +51,28 @@ async function callComplete(
   return chatServiceComplete(request, downstreamHeaders);
 }
 
+// api-service is a proxy — the prompt forbids `service: "api"`. Filter it out of
+// the registry context entirely so the LLM cannot see api-service paths and
+// copy them onto another service's call (e.g. /v1/campaigns/pipeline/gate-check
+// being attached to service="campaign"), which would otherwise 422 on validation.
+const HIDDEN_SERVICES = new Set(["api"]);
+
 async function fetchServiceContext(downstreamHeaders: DownstreamHeaders): Promise<ServiceContext> {
   const context = await fetchLlmContext(downstreamHeaders);
-  const serviceNames = context.services.map((s: { service: string }) => s.service);
+  const visibleServices = context.services.filter(
+    (s: { service: string }) => !HIDDEN_SERVICES.has(s.service),
+  );
+  const serviceNames = visibleServices.map((s: { service: string }) => s.service);
   const specsMap = await fetchSpecsForServices(serviceNames, downstreamHeaders);
 
   const specs: Record<string, unknown> = {};
-  for (const [name, spec] of specsMap) specs[name] = spec;
+  for (const [name, spec] of specsMap) {
+    if (HIDDEN_SERVICES.has(name)) continue;
+    specs[name] = spec;
+  }
 
   return {
-    services: context.services.map((s: { service: string; description?: string; endpointCount: number }) => ({
+    services: visibleServices.map((s: { service: string; description?: string; endpointCount: number }) => ({
       name: s.service,
       description: s.description ?? "",
       endpointCount: s.endpointCount,
