@@ -26,6 +26,8 @@ import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
 import { fetchProviderRequirements } from "../lib/key-service-client.js";
 import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
 import { extractTemplateRefs, validateTemplateContracts, type TemplateContractIssue, type TemplateRef } from "../lib/validate-template-contracts.js";
+import { validateWorkflowEndpoints } from "../lib/validate-workflow-endpoints.js";
+import { fetchSpecsForServices } from "../lib/api-registry-client.js";
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { computeWorkflowScores, aggregateSectionStats, handleExternalServiceError } from "../lib/workflow-scoring.js";
@@ -1072,6 +1074,18 @@ router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
     const dag = workflow.dag as DAG;
     const validation = validateDAG(dag);
 
+    // Endpoint validation: every http.call must match a real path/method in the
+    // current OpenAPI spec served by the API Registry. Field-level checks
+    // (required body fields, unknown body fields, output $ref paths) are
+    // included. Fails loud if the registry is unreachable — a silent skip
+    // would let drifted workflows look healthy.
+    const httpEndpoints = extractHttpEndpoints(dag);
+    const serviceNames = [...new Set(httpEndpoints.map((e) => e.service))];
+    const specs = serviceNames.length > 0
+      ? await fetchSpecsForServices(serviceNames, extractDownstreamHeaders(req))
+      : new Map<string, Record<string, unknown>>();
+    const endpointResult = validateWorkflowEndpoints(dag, specs);
+
     // Template contract validation (best-effort — doesn't block if content-gen is unreachable)
     let templateContract: { valid: boolean; templateRefs: TemplateRef[]; issues: TemplateContractIssue[] } | undefined;
     try {
@@ -1085,9 +1099,14 @@ router.post("/workflows/:id/validate", requireApiKey, async (req, res) => {
       console.warn("[workflow-service] Template contract check skipped:", err instanceof Error ? err.message : err);
     }
 
-    const result: Record<string, unknown> = { ...validation };
+    const result: Record<string, unknown> = {
+      ...validation,
+      valid: validation.valid && endpointResult.valid,
+      invalidEndpoints: endpointResult.invalidEndpoints,
+      fieldIssues: endpointResult.fieldIssues,
+    };
     if (templateContract) {
-      result.valid = validation.valid && templateContract.valid;
+      result.valid = (result.valid as boolean) && templateContract.valid;
       result.templateContract = templateContract;
     }
 

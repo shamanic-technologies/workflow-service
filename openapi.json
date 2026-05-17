@@ -771,6 +771,68 @@
           }
         }
       },
+      "InvalidEndpoint": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "method",
+          "path",
+          "reason"
+        ]
+      },
+      "FieldValidationIssue": {
+        "type": "object",
+        "properties": {
+          "nodeId": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "service",
+          "method",
+          "path",
+          "field",
+          "severity",
+          "reason"
+        ]
+      },
       "TemplateRef": {
         "type": "object",
         "properties": {
@@ -856,6 +918,20 @@
               ]
             }
           },
+          "invalidEndpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvalidEndpoint"
+            },
+            "description": "http.call endpoints that do not exist in the corresponding service's current OpenAPI spec."
+          },
+          "fieldIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldValidationIssue"
+            },
+            "description": "Body/output field mismatches between http.call nodes and the current OpenAPI specs."
+          },
           "templateContract": {
             "type": "object",
             "properties": {
@@ -886,7 +962,9 @@
           }
         },
         "required": [
-          "valid"
+          "valid",
+          "invalidEndpoints",
+          "fieldIssues"
         ]
       },
       "WorkflowRunResponse": {
