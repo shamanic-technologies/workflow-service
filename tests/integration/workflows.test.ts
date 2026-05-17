@@ -73,6 +73,64 @@ vi.mock("../../src/lib/content-generation-client.js", () => ({
     mockFetchPromptTemplates(...args),
 }));
 
+// Mock api-registry-client (used by /validate to fetch OpenAPI specs)
+const buildContentGenSpec = () => ({
+  paths: {
+    "/generate": {
+      post: {
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  type: { type: "string" },
+                  variables: {
+                    type: "object",
+                    additionalProperties: true,
+                  },
+                },
+                required: ["type"],
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    email: { type: "string" },
+                    subject: { type: "string" },
+                    bodyHtml: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+const mockFetchSpecsForServices = vi.fn(async (services: string[]) => {
+  const specs = new Map<string, Record<string, unknown>>();
+  for (const s of services) {
+    if (s === "content-generation") specs.set(s, buildContentGenSpec());
+  }
+  return specs;
+});
+vi.mock("../../src/lib/api-registry-client.js", () => ({
+  fetchSpecsForServices: (...args: unknown[]) =>
+    mockFetchSpecsForServices(...(args as [string[]])),
+  fetchServiceList: vi.fn().mockResolvedValue([]),
+  fetchServiceSpec: vi.fn().mockResolvedValue({}),
+  fetchLlmContext: vi.fn().mockResolvedValue({ services: [] }),
+  fetchServiceEndpoints: vi.fn().mockResolvedValue({ service: "", endpoints: [] }),
+}));
+
 // Mock features-client
 vi.mock("../../src/lib/features-client.js", () => ({}));
 
@@ -731,6 +789,7 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
 describe("POST /workflows/:id/validate", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
+    mockFetchSpecsForServices.mockClear();
   });
 
   it("validates the DAG of an existing workflow", async () => {
@@ -753,6 +812,103 @@ describe("POST /workflows/:id/validate", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.valid).toBe(true);
+    expect(res.body.invalidEndpoints).toEqual([]);
+    expect(mockFetchSpecsForServices).toHaveBeenCalledTimes(1);
+    expect(mockFetchSpecsForServices.mock.calls[0][0]).toEqual(["content-generation"]);
+  });
+
+  it("rejects when http.call references a path missing from the OpenAPI spec", async () => {
+    const dagWithBadPath = {
+      nodes: [
+        {
+          id: "gen",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/does-not-exist" },
+          inputMapping: { "body.type": "cold-email" },
+        },
+      ],
+      edges: [],
+    };
+    mockDbRows.push({
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "flow-bad",
+      workflowName: "Bad",
+      workflowDynastySlug: "flow-bad",
+      workflowDynastyName: "Bad",
+      version: 1,
+      dag: dagWithBadPath,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .post(`/workflows/${WF_ID}/validate`)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
+    expect(res.body.invalidEndpoints).toHaveLength(1);
+    expect(res.body.invalidEndpoints[0].path).toBe("/does-not-exist");
+  });
+
+  it("rejects when http.call body is missing a required field", async () => {
+    const dagMissingRequired = {
+      nodes: [
+        {
+          id: "gen",
+          type: "http.call",
+          // Missing required `type` body field — content-generation spec requires it
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: { "body.variables.foo": "bar" },
+        },
+      ],
+      edges: [],
+    };
+    mockDbRows.push({
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "flow-missing",
+      workflowName: "Missing",
+      workflowDynastySlug: "flow-missing",
+      workflowDynastyName: "Missing",
+      version: 1,
+      dag: dagMissingRequired,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .post(`/workflows/${WF_ID}/validate`)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
+    expect(res.body.fieldIssues.some((i: { severity: string; field: string }) =>
+      i.severity === "error" && i.field === "type",
+    )).toBe(true);
+  });
+
+  it("returns 500 when the API Registry is unreachable", async () => {
+    mockFetchSpecsForServices.mockRejectedValueOnce(new Error("api-registry error: 503"));
+    mockDbRows.push({
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "flow-down",
+      workflowName: "Down",
+      workflowDynastySlug: "flow-down",
+      workflowDynastyName: "Down",
+      version: 1,
+      dag: VALID_LINEAR_DAG,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .post(`/workflows/${WF_ID}/validate`)
+      .set(AUTH);
+
+    expect(res.status).toBe(500);
   });
 });
 

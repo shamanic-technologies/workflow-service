@@ -302,12 +302,39 @@ export const TemplateRefSchema = z
   })
   .openapi("TemplateRef");
 
+export const InvalidEndpointSchema = z
+  .object({
+    service: z.string(),
+    method: z.string(),
+    path: z.string(),
+    reason: z.string(),
+  })
+  .openapi("InvalidEndpoint");
+
+export const FieldValidationIssueSchema = z
+  .object({
+    nodeId: z.string(),
+    service: z.string(),
+    method: z.string(),
+    path: z.string(),
+    field: z.string(),
+    severity: z.enum(["error", "warning"]),
+    reason: z.string(),
+  })
+  .openapi("FieldValidationIssue");
+
 export const ValidationResultSchema = z
   .object({
     valid: z.boolean(),
     errors: z
       .array(z.object({ field: z.string(), message: z.string() }))
       .optional(),
+    invalidEndpoints: z
+      .array(InvalidEndpointSchema)
+      .describe("http.call endpoints that do not exist in the corresponding service's current OpenAPI spec."),
+    fieldIssues: z
+      .array(FieldValidationIssueSchema)
+      .describe("Body/output field mismatches between http.call nodes and the current OpenAPI specs."),
     templateContract: z
       .object({
         valid: z.boolean(),
