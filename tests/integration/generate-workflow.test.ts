@@ -251,7 +251,7 @@ describe("POST /workflows/create", () => {
     );
   });
 
-  it("returns 500 when LLM throws unexpected error", async () => {
+  it("returns 500 with stage='unknown' when LLM throws unexpected error", async () => {
     mockGenerateWorkflow.mockRejectedValueOnce(
       new Error("Unexpected LLM error"),
     );
@@ -266,9 +266,10 @@ describe("POST /workflows/create", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toContain("Unexpected LLM error");
+    expect(res.body.stage).toBe("unknown");
   });
 
-  it("returns 500 when generator throws unexpected error", async () => {
+  it("returns 500 with stage='llm' when generator throws chat-service error", async () => {
     mockGenerateWorkflow.mockRejectedValueOnce(
       new Error("chat-service error: POST /complete -> 502 Bad Gateway: upstream unavailable"),
     );
@@ -283,6 +284,25 @@ describe("POST /workflows/create", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toContain("chat-service error:");
+    expect(res.body.stage).toBe("llm");
+  });
+
+  it("returns 500 with stage='registry' when generator throws api-registry error", async () => {
+    mockGenerateWorkflow.mockRejectedValueOnce(
+      new Error("api-registry error: GET /llm-context -> 500 Internal Server Error: db down"),
+    );
+
+    const res = await request
+      .post("/workflows/create")
+      .set(AUTH)
+      .send({
+        featureSlug: "test-registry-error",
+        description: "Some workflow description for testing api-registry errors",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("api-registry error:");
+    expect(res.body.stage).toBe("registry");
   });
 
   // AC2 — body.style is stripped (Zod), poetic word, no -v suffix.
@@ -398,7 +418,7 @@ describe("POST /workflows/create", () => {
     expect(res.body.workflow.workflowDynastySignatureName).not.toBe("obsidian");
   });
 
-  it("returns 500 when CHAT_SERVICE_URL is not configured", async () => {
+  it("returns 500 with stage='config' when CHAT_SERVICE_URL is not configured", async () => {
     mockGenerateWorkflow.mockRejectedValueOnce(
       new Error("CHAT_SERVICE_URL and CHAT_SERVICE_API_KEY must be set for LLM calls"),
     );
@@ -413,6 +433,7 @@ describe("POST /workflows/create", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toContain("CHAT_SERVICE_URL");
+    expect(res.body.stage).toBe("config");
   });
 });
 
@@ -521,5 +542,82 @@ describe("POST /workflows/upgrade", () => {
     expect(res.body.workflow.workflowDynastySignatureName).toBe("obsidian");
     expect(res.body.workflow.workflowSlug).toBe("feature-obsidian-v2");
     expect(res.body.workflow.version).toBe(2);
+  });
+
+  function pushActiveWorkflowFixture(): void {
+    mockDbRows.push({
+      id: "00000000-0000-4000-8000-0000000003e8",
+      orgId: "org-1",
+      featureSlug: "stage-test-feature",
+      signature: "fixture-sig",
+      workflowDynastySignatureName: "umber",
+      workflowSlug: "stage-test-feature-umber",
+      workflowName: "Stage Test Feature Umber",
+      workflowDynastySlug: "stage-test-feature-umber",
+      workflowDynastyName: "Stage Test Feature Umber",
+      version: 1,
+      tags: [],
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      description: "fixture",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+      windmillFlowPath: "f/workflows/org-1/stage_test_feature_umber",
+    });
+  }
+
+  it("returns 500 with stage='llm' when generator throws chat-service error", async () => {
+    pushActiveWorkflowFixture();
+    mockGenerateWorkflow.mockRejectedValueOnce(
+      new Error("chat-service error: POST /complete -> 502 Bad Gateway: upstream unavailable"),
+    );
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "stage-test-feature-umber",
+        description: "Upgrade that will fail at the LLM call",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("chat-service error:");
+    expect(res.body.stage).toBe("llm");
+  });
+
+  it("returns 500 with stage='registry' when generator throws api-registry error", async () => {
+    pushActiveWorkflowFixture();
+    mockGenerateWorkflow.mockRejectedValueOnce(
+      new Error("api-registry error: GET /llm-context -> 500 Internal Server Error: db down"),
+    );
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "stage-test-feature-umber",
+        description: "Upgrade that will fail at the registry call",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("api-registry error:");
+    expect(res.body.stage).toBe("registry");
+  });
+
+  it("returns 500 with stage='unknown' when generator throws an unrecognized error", async () => {
+    pushActiveWorkflowFixture();
+    mockGenerateWorkflow.mockRejectedValueOnce(new Error("kaboom"));
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "stage-test-feature-umber",
+        description: "Upgrade that will fail with an unrecognized error",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("kaboom");
+    expect(res.body.stage).toBe("unknown");
   });
 });
