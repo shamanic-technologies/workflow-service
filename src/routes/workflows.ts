@@ -32,6 +32,7 @@ import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { computeWorkflowScores, aggregateSectionStats, handleExternalServiceError } from "../lib/workflow-scoring.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { classifyWorkflowError } from "../lib/classify-workflow-error.js";
 
 const router = Router();
 
@@ -248,6 +249,7 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
     console.error("[workflow-service] CREATE error:", err);
     res.status(500).json({
       error: err instanceof Error ? err.message : "Internal server error",
+      stage: classifyWorkflowError(err),
     });
   }
 });
@@ -433,6 +435,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     console.error("[workflow-service] UPGRADE error:", err);
     res.status(500).json({
       error: err instanceof Error ? err.message : "Internal server error",
+      stage: classifyWorkflowError(err),
     });
   }
 });
