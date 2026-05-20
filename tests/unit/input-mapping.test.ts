@@ -217,7 +217,7 @@ describe("buildInputTransforms", () => {
       { body: { type: "cold-email" } },
       {
         "body.variables.leadFirstName": "$ref:fetch-lead.output.lead.data.firstName",
-        "body.variables.clientCompanyOverview": "$ref:brand-profile.output.profile.companyOverview",
+        "body.variables.clientCompanyOverview": "$ref:brand-extract.output.fields.companyOverview.value",
         "body.brandId": "$ref:start-run.output.brandId",
       },
     );
@@ -227,7 +227,7 @@ describe("buildInputTransforms", () => {
 
     // body.variables.* expressions should coalesce undefined to ""
     expect(result.body.expr).toContain('results.fetch_lead?.lead?.data?.firstName ?? ""');
-    expect(result.body.expr).toContain('results.brand_profile?.profile?.companyOverview ?? ""');
+    expect(result.body.expr).toContain('results.brand_extract?.fields?.companyOverview?.value ?? ""');
 
     // Non-variables $ref should NOT coalesce
     expect(result.body.expr).toMatch(/results\.start_run\?\.brandId(?!\s*\?\?)/);
