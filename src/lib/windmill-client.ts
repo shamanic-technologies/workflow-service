@@ -135,6 +135,32 @@ export class WindmillClient {
     await this.request("POST", `/jobs/queue/cancel/${jobId}`, { reason });
   }
 
+  // === GLOBAL INSTANCE SETTINGS ===
+
+  /**
+   * Set an instance-wide global setting (not workspace-scoped).
+   * Requires the API token to belong to a superadmin user.
+   * See Windmill `POST /api/settings/global/{key}` (operationId `setGlobal`).
+   */
+  async setGlobalSetting(key: string, value: unknown): Promise<void> {
+    const url = `${this.baseUrl}/api/settings/global/${key}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ value }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+        `Windmill setGlobalSetting "${key}" failed: ${res.status} ${res.statusText}: ${text}`,
+      );
+    }
+  }
+
   // === HEALTH ===
 
   async healthCheck(): Promise<boolean> {
