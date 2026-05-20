@@ -5,6 +5,7 @@ import { db } from "./db/index.js";
 import { workflowRuns } from "./db/schema.js";
 import { getWindmillClient } from "./lib/windmill-client.js";
 import { JobPoller } from "./lib/job-poller.js";
+import { PeriodicCleanup } from "./lib/periodic-cleanup.js";
 import { requireIdentity } from "./middleware/auth.js";
 import { checkApiRegistryHealth, validateAndUpgradeWorkflows } from "./lib/startup-validator.js";
 import { assertEnvironmentConsistency } from "./lib/env-safety.js";
@@ -66,7 +67,22 @@ if (process.env.NODE_ENV !== "test") {
 
       // Start job poller (only if Windmill is configured)
       const windmillClient = getWindmillClient();
+      let periodicCleanup: PeriodicCleanup | null = null;
       if (windmillClient) {
+        // Set instance-wide retention for Windmill completed_job rows.
+        // 7 days = 604_800 s. CE caps at 30 days; our value is well under.
+        // Requires the API token to be superadmin — fail loud (warn) if not,
+        // but do not block boot: cleanup still works without retention set.
+        try {
+          await windmillClient.setGlobalSetting("retention_period_secs", 604800);
+          console.log("[workflow-service] Windmill retention_period_secs set to 604800 (7 days)");
+        } catch (err) {
+          console.warn(
+            "[workflow-service] Failed to set Windmill retention_period_secs — token may not be superadmin:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+
         // Sync node scripts to Windmill — idempotent, skips unchanged scripts
         try {
           const deployed = await deployNodes(windmillClient);
@@ -80,9 +96,24 @@ if (process.env.NODE_ENV !== "test") {
 
         const poller = new JobPoller(db, windmillClient, workflowRuns);
         poller.start();
+
+        // Periodic cleanup: re-runs stale-deprecation + Windmill orphan-flow
+        // cleanup every 24h. Boot already runs them once in validateAndUpgradeWorkflows;
+        // this keeps the system tidy without requiring service restarts.
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+        periodicCleanup = new PeriodicCleanup(db, windmillClient, ONE_DAY_MS);
+        periodicCleanup.start();
       } else {
         console.log("Windmill not configured (WINDMILL_SERVER_URL / WINDMILL_SERVER_API_KEY missing) — job poller disabled");
       }
+
+      const shutdown = (signal: string) => {
+        console.log(`[workflow-service] ${signal} received — shutting down`);
+        periodicCleanup?.stop();
+        process.exit(0);
+      };
+      process.on("SIGTERM", () => shutdown("SIGTERM"));
+      process.on("SIGINT", () => shutdown("SIGINT"));
 
       app.listen(Number(PORT), "::", () => {
         console.log(`workflow-service running on port ${PORT}`);

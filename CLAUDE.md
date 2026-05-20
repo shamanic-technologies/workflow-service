@@ -20,6 +20,7 @@ Workflow orchestration service powered by Windmill. Translates internal DAG form
 - `src/lib/node-type-registry.ts` — Maps node types to Windmill script paths
 - `src/lib/input-mapping.ts` — Translates $ref syntax to Windmill input transforms
 - `src/lib/job-poller.ts` — Background polling of running Windmill jobs
+- `src/lib/periodic-cleanup.ts` — 24h interval re-running stale-deprecation + Windmill orphan-flow cleanup
 - `scripts/nodes/` — TypeScript scripts deployed to Windmill (one per node type)
 
 ## Key concepts
@@ -28,6 +29,7 @@ Workflow orchestration service powered by Windmill. Translates internal DAG form
 - Input mapping: `$ref:node-id.output.field` → `results.node_id.field` in Windmill
 - Node scripts in Windmill call our existing services via HTTP
 - Stubs throw errors with clear messages until the real service is built
+- **Windmill job retention** (`completed_job` rows) is set instance-wide at boot via `POST /api/settings/global/retention_period_secs` with value 604800 (7 days). The API requires the Windmill token to be superadmin; we log a warn but do not block boot if it isn't. CE caps retention at 30 days — anything over is clamped server-side.
 
 ## Rules
 - Never edit `openapi.json` manually — regenerate with `npm run generate:openapi`
