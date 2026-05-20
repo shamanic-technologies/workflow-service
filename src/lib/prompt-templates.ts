@@ -130,9 +130,9 @@ When using content-generation service (\`POST /generate\`):
   - \`"body.variables.leadEmail": "$ref:fetch-lead.output.<path to lead's email>"\`
   - \`"body.variables.leadCompanyName": "$ref:fetch-lead.output.<path to lead's company name>"\`
   - \`"body.variables.leadCompanyDomain": "$ref:fetch-lead.output.<path to lead's company domain>"\`
-  - \`"body.variables.clientCompanyOverview": "$ref:brand-profile.output.<path to brand company overview>"\`
-  - \`"body.variables.clientValueProposition": "$ref:brand-profile.output.<path to brand value proposition>"\`
-  - \`"body.variables.clientTargetAudience": "$ref:brand-profile.output.<path to brand target audience>"\`
+  - \`"body.variables.clientCompanyOverview": "$ref:brand-extract.output.fields.companyOverview.value"\`
+  - \`"body.variables.clientValueProposition": "$ref:brand-extract.output.fields.valueProposition.value"\`
+  - \`"body.variables.clientTargetAudience": "$ref:brand-extract.output.fields.targetAudience.value"\`
 - Include tracking fields: \`body.brandId\`, \`body.campaignId\`, \`body.leadId\`, \`body.workflowSlug\`, \`body.apolloEnrichmentId\`
 - Response contains \`subject\` (string) and \`sequence\` (array of { step, bodyHtml, bodyText, daysSinceLastStep })
 
@@ -197,10 +197,21 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     },
     { "id": "check-lead", "type": "condition" },
     {
-      "id": "brand-profile",
+      "id": "brand-extract",
       "type": "http.call",
-      "config": { "service": "brand", "method": "GET", "path": "<endpoint to fetch a brand profile by id>" },
-      "inputMapping": { "params.brandId": "$ref:start-run.output.<path to brandId in start-run response>" }
+      "config": {
+        "service": "brand",
+        "method": "POST",
+        "path": "<endpoint to extract fields from one or more brands via AI>",
+        "body": {
+          "fields": [
+            { "key": "companyOverview", "description": "A 2-3 sentence neutral summary of what the company does, who it serves, and its main product or service. Written in third person. No marketing language." },
+            { "key": "valueProposition", "description": "The single sharpest reason a customer would pick this company over alternatives. One sentence. Outcome-focused (what the customer gets), not feature-focused." },
+            { "key": "targetAudience", "description": "The ideal customer profile as an array of strings. Each string is one distinct ICP segment (job title, company size, industry, or use case). Return 1-5 segments." }
+          ]
+        }
+      },
+      "inputMapping": { "brandId": "$ref:start-run.output.<path to brandId in start-run response>" }
     },
     {
       "id": "email-generate",
@@ -219,9 +230,9 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
         "body.variables.leadCompanyName": "$ref:fetch-lead.output.<path to lead's company name>",
         "body.variables.leadCompanyDomain": "$ref:fetch-lead.output.<path to lead's company domain>",
         "body.variables.clientBrandUrl": "$ref:start-run.output.<path to brand url in start-run response>",
-        "body.variables.clientCompanyOverview": "$ref:brand-profile.output.<path to brand company overview>",
-        "body.variables.clientValueProposition": "$ref:brand-profile.output.<path to brand value proposition>",
-        "body.variables.clientTargetAudience": "$ref:brand-profile.output.<path to brand target audience>"
+        "body.variables.clientCompanyOverview": "$ref:brand-extract.output.fields.companyOverview.value",
+        "body.variables.clientValueProposition": "$ref:brand-extract.output.fields.valueProposition.value",
+        "body.variables.clientTargetAudience": "$ref:brand-extract.output.fields.targetAudience.value"
       },
       "retries": 0
     },
@@ -263,8 +274,8 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
     { "from": "gate-check", "to": "start-run" },
     { "from": "start-run", "to": "fetch-lead" },
     { "from": "fetch-lead", "to": "check-lead" },
-    { "from": "check-lead", "to": "brand-profile", "condition": "results.fetch_lead.found == true" },
-    { "from": "brand-profile", "to": "email-generate" },
+    { "from": "check-lead", "to": "brand-extract", "condition": "results.fetch_lead.found == true" },
+    { "from": "brand-extract", "to": "email-generate" },
     { "from": "email-generate", "to": "email-send" },
     { "from": "email-send", "to": "end-run" },
     { "from": "check-lead", "to": "end-run-no-lead" }

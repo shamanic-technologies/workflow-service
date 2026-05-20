@@ -37,7 +37,7 @@ export const VALID_LINEAR_DAG: DAG = {
 export const DAG_WITH_CYCLE: DAG = {
   nodes: [
     { id: "a", type: "lead-service" },
-    { id: "b", type: "brand-intel" },
+    { id: "b", type: "content-sentiment" },
     { id: "c", type: "outbound-sending" },
   ],
   edges: [
@@ -62,7 +62,7 @@ export const DAG_WITH_BAD_REF: DAG = {
     { id: "a", type: "lead-service" },
     {
       id: "b",
-      type: "brand-intel",
+      type: "content-sentiment",
       inputMapping: { data: "$ref:nonexistent.output.field" },
     },
   ],
@@ -72,7 +72,7 @@ export const DAG_WITH_BAD_REF: DAG = {
 export const DAG_WITH_DUPLICATE_IDS: DAG = {
   nodes: [
     { id: "a", type: "lead-service" },
-    { id: "a", type: "brand-intel" },
+    { id: "a", type: "content-sentiment" },
   ],
   edges: [],
 };
@@ -80,7 +80,7 @@ export const DAG_WITH_DUPLICATE_IDS: DAG = {
 export const DAG_NO_ENTRY_NODE: DAG = {
   nodes: [
     { id: "a", type: "lead-service" },
-    { id: "b", type: "brand-intel" },
+    { id: "b", type: "content-sentiment" },
   ],
   edges: [
     { from: "a", to: "b" },

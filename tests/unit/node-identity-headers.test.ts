@@ -166,11 +166,6 @@ describe("node scripts inject identity headers", () => {
     });
   });
 
-  const brandEnvs: Record<string, string> = {
-    BRAND_SERVICE_URL: "https://brand.example.com",
-    BRAND_SERVICE_API_KEY: "brand-key-123",
-  };
-
   const replyQualEnvs: Record<string, string> = {
     REPLY_QUALIFICATION_URL: "https://reply.example.com",
     REPLY_QUALIFICATION_API_KEY: "reply-key-123",
@@ -185,43 +180,6 @@ describe("node scripts inject identity headers", () => {
     OUTBOUND_SENDING_URL: "https://outbound.example.com",
     OUTBOUND_SENDING_API_KEY: "outbound-key-123",
   };
-
-  describe("brand-intel", () => {
-    it("sends identity headers via top-level params", async () => {
-      const { main } = await import("../../scripts/nodes/brand-intel.js");
-      mockFetch.mockResolvedValueOnce(jsonResponse({ name: "Acme" }));
-
-      await main(
-        "get",                                    // action
-        { orgId: "ctx-org", brandId: "brand-1" }, // context
-        brandEnvs,                                // serviceEnvs
-        "org-uuid-1",                             // orgId (top-level)
-        "user-uuid-1",                            // userId
-        "run-uuid-1",                             // runId
-      );
-
-      const [, options] = mockFetch.mock.calls[0];
-      expect(options.headers["x-org-id"]).toBe("org-uuid-1");
-      expect(options.headers["x-user-id"]).toBe("user-uuid-1");
-      expect(options.headers["x-run-id"]).toBe("run-uuid-1");
-    });
-
-    it("falls back to context.orgId when top-level orgId is undefined", async () => {
-      const { main } = await import("../../scripts/nodes/brand-intel.js");
-      mockFetch.mockResolvedValueOnce(jsonResponse({ name: "Acme" }));
-
-      await main(
-        "get",
-        { orgId: "ctx-org", brandId: "brand-1" },
-        brandEnvs,
-      );
-
-      const [, options] = mockFetch.mock.calls[0];
-      expect(options.headers["x-org-id"]).toBe("ctx-org");
-      expect(options.headers["x-user-id"]).toBeUndefined();
-      expect(options.headers["x-run-id"]).toBeUndefined();
-    });
-  });
 
   describe("content-sentiment", () => {
     it("sends identity headers via top-level params", async () => {
