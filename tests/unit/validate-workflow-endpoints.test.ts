@@ -659,7 +659,7 @@ describe("field validation — nested object detection in additionalProperties",
     paths: {
       "/internal/brands/{brandId}": {
         get: {
-          summary: "Get brand sales profile",
+          summary: "Get a single brand by ID (canonical minimal shape)",
           responses: {
             "200": {
               content: {
@@ -667,14 +667,65 @@ describe("field validation — nested object detection in additionalProperties",
                   schema: {
                     type: "object",
                     properties: {
-                      profile: {
+                      brand: {
                         type: "object",
                         properties: {
-                          companyOverview: { type: "string" },
-                          valueProposition: { type: "string" },
+                          id: { type: "string" },
+                          domain: { type: "string" },
+                          url: { type: "string" },
+                          name: { type: "string" },
+                          logoUrl: { type: "string" },
+                          createdAt: { type: "string" },
+                          updatedAt: { type: "string" },
                         },
+                        required: ["id", "domain", "url", "name", "logoUrl", "createdAt", "updatedAt"],
                       },
                     },
+                    required: ["brand"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/orgs/brands/extract-fields": {
+        post: {
+          summary: "Extract fields from one or more brands via AI",
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    fields: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          key: { type: "string" },
+                          description: { type: "string" },
+                        },
+                        required: ["key", "description"],
+                      },
+                    },
+                  },
+                  required: ["fields"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      brands: { type: "array" },
+                      fields: { type: "object" },
+                    },
+                    required: ["brands", "fields"],
                   },
                 },
               },
