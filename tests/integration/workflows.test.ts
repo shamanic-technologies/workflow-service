@@ -211,7 +211,7 @@ describe("POST /workflows", () => {
     expect(res.body.tags).toEqual(["email", "linkedin"]);
   });
 
-  it("rejects an invalid DAG", async () => {
+  it("rejects an invalid DAG (unknown node type rejected by Zod enum)", async () => {
     const res = await request
       .post("/workflows")
       .set(AUTH)
@@ -225,7 +225,7 @@ describe("POST /workflows", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Invalid DAG");
+    expect(res.body.error).toBe("Validation error");
     expect(res.body.details).toBeDefined();
   });
 

@@ -78,6 +78,28 @@ Example:
 - "wait": delay. config: { seconds: number }
 - "for-each": loop over items. config: { iterator: string (JS expression), parallel?: boolean, skipFailures?: boolean }
 
+## Inline Script Node
+
+Use "script" for small inline transforms (date stamping, normalisation, simple shape changes) when no microservice fits. Avoid for anything non-trivial — push real logic into a service instead.
+
+- config.code (REQUIRED, string): the JS body. \`return { … }\` to produce outputs. The returned object is the node's \`output\`, addressable via \`$ref:node-id.output.field\`.
+- config.language (optional, default "bun"): "bun" | "deno". Windmill compiles to rawscript.
+- inputMapping: declares inputs. Each key becomes a top-level variable in the script body. Example: \`{ "first": "$ref:flow_input.firstName" }\` → \`first\` is in scope.
+
+Example — inject \`currentDate\` for a downstream LLM prompt:
+
+\`\`\`json
+{
+  "id": "get-date",
+  "type": "script",
+  "config": {
+    "code": "return { currentDate: new Date().toISOString().split('T')[0] };"
+  }
+}
+\`\`\`
+
+Then map it downstream: \`"body.variables.currentDate": "$ref:get-date.output.currentDate"\`.
+
 ## Input Mapping ($ref syntax)
 
 Use inputMapping to pass dynamic data between nodes:

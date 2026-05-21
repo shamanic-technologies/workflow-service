@@ -3,10 +3,13 @@ import {
   OpenAPIRegistry,
   extendZodWithOpenApi,
 } from "@asteasolutions/zod-to-openapi";
+import { NODE_TYPE_REGISTRY } from "./lib/node-type-registry.js";
 
 extendZodWithOpenApi(z);
 
 export const registry = new OpenAPIRegistry();
+
+const REGISTERED_NODE_TYPES = Object.keys(NODE_TYPE_REGISTRY) as [string, ...string[]];
 
 // --- Security scheme ---
 registry.registerComponent("securitySchemes", "apiKey", {
@@ -20,10 +23,12 @@ registry.registerComponent("securitySchemes", "apiKey", {
 export const DAGNodeSchema = z
   .object({
     id: z.string().min(1).describe("Unique identifier for this node within the DAG. Used in edges and $ref input mappings."),
-    type: z.string().min(1).describe(
-      "Node type. Use \"http.call\" to call any microservice (recommended), or a specific node type. " +
-      "http.call config requires: service (name, e.g. \"stripe\"), method (HTTP verb), path (endpoint path). " +
-      "Native flow control types: " +
+    type: z.enum(REGISTERED_NODE_TYPES).describe(
+      "Node type. Must be one of the registered types — unknown strings are rejected (no silent fallback). " +
+      "Preferred: \"http.call\" — call any microservice. config requires { service, method, path }. " +
+      "Inline JS: \"script\" — runs node.config.code (string) inline as a Windmill rawscript. " +
+      "config = { code: string, language?: \"bun\" | \"deno\" }. Inputs via inputMapping, outputs via `return { … }`. " +
+      "Native flow control: " +
       "\"condition\" — if/then/else branching (uses Windmill branchone). " +
       "Outgoing edges with 'condition' define branches; nodes downstream of a conditional edge are nested inside that branch. " +
       "Outgoing edges without 'condition' define after-branch steps that always execute. " +
@@ -32,6 +37,7 @@ export const DAGNodeSchema = z
     ),
     config: z.record(z.unknown()).optional().describe(
       "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. " +
+      "For script: { code (string, required, inline JS), language? (\"bun\" | \"deno\", default \"bun\") }. " +
       "For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. " +
       "Each key becomes a direct parameter of the underlying script. " +
       "Special config keys (stripped before passing to script): " +

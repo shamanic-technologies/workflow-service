@@ -1,4 +1,4 @@
-import { isKnownNodeType } from "./node-type-registry.js";
+import { isKnownNodeType, NODE_TYPE_REGISTRY } from "./node-type-registry.js";
 
 export interface DAGNode {
   id: string;
@@ -56,11 +56,12 @@ export function validateDAG(dag: DAG): ValidationResult {
   }
 
   // 2. Unknown node types
+  const allowedTypes = Object.keys(NODE_TYPE_REGISTRY).join(", ");
   for (const node of dag.nodes) {
     if (!isKnownNodeType(node.type)) {
       errors.push({
         field: `nodes[${node.id}].type`,
-        message: `Unknown node type: "${node.type}"`,
+        message: `Unknown node type: "${node.type}". Allowed: ${allowedTypes}`,
       });
     }
   }
@@ -146,6 +147,18 @@ export function validateDAG(dag: DAG): ValidationResult {
       field: "onError",
       message: `onError references unknown node: "${dag.onError}"`,
     });
+  }
+
+  // 9. Validate script nodes: require non-empty config.code
+  for (const node of dag.nodes) {
+    if (node.type !== "script") continue;
+    const code = node.config?.code;
+    if (typeof code !== "string" || !code.trim()) {
+      errors.push({
+        field: `nodes[${node.id}].config.code`,
+        message: `script node "${node.id}" is missing required config field "code" (non-empty string of inline JS).`,
+      });
+    }
   }
 
   return { valid: errors.length === 0, errors };
