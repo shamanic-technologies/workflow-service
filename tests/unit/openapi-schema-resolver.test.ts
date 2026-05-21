@@ -222,6 +222,145 @@ describe("walkSchemaPath", () => {
   });
 });
 
+describe("walkSchemaPath with additionalProperties (dynamic keys)", () => {
+  // Mirrors brand-service POST /orgs/brands/extract-fields response:
+  //   { brands: BrandMeta[], fields: { <dynamic-key>: MultiBrandFieldValue } }
+  // The `fields` object uses `additionalProperties` (caller-chosen keys), so
+  // walkSchemaPath must descend into the additionalProperties value schema
+  // when a property lookup fails instead of rejecting with empty availableAt.
+  const brandSpec = {
+    components: {
+      schemas: {
+        MultiBrandFieldValue: {
+          type: "object",
+          properties: {
+            value: { type: "string" },
+            byBrand: {
+              type: "object",
+              additionalProperties: { $ref: "#/components/schemas/BrandFieldDetail" },
+            },
+          },
+          required: ["value", "byBrand"],
+        },
+        BrandFieldDetail: {
+          type: "object",
+          properties: {
+            value: { type: "string" },
+            cached: { type: "boolean" },
+          },
+          required: ["value", "cached"],
+        },
+      },
+    },
+  };
+
+  const brandResponseSchema = resolveSchema(
+    {
+      type: "object",
+      properties: {
+        brands: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { brandId: { type: "string" }, domain: { type: "string" } },
+          },
+        },
+        fields: {
+          type: "object",
+          additionalProperties: { $ref: "#/components/schemas/MultiBrandFieldValue" },
+        },
+      },
+      required: ["brands", "fields"],
+    },
+    brandSpec,
+  )!;
+
+  it("accepts dynamic key then known sub-property (fields.founders.value)", () => {
+    const result = walkSchemaPath(
+      brandResponseSchema,
+      ["fields", "founders", "value"],
+      brandSpec,
+    );
+    expect(result.valid).toBe(true);
+    expect(result.resolvedPath).toEqual(["fields", "founders", "value"]);
+  });
+
+  it("accepts terminal dynamic key (fields.anyKey)", () => {
+    const result = walkSchemaPath(brandResponseSchema, ["fields", "anyKey"], brandSpec);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects unknown sub-property after dynamic key (fields.founders.bogus)", () => {
+    const result = walkSchemaPath(
+      brandResponseSchema,
+      ["fields", "founders", "bogus"],
+      brandSpec,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.availableAt).toContain("value");
+    expect(result.availableAt).toContain("byBrand");
+  });
+
+  it("traverses nested additionalProperties (fields.founders.byBrand.acme.value)", () => {
+    const result = walkSchemaPath(
+      brandResponseSchema,
+      ["fields", "founders", "byBrand", "acme.com", "value"],
+      brandSpec,
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("handles additionalProperties: true (open map, accepts any further path)", () => {
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          meta: { type: "object", additionalProperties: true },
+        },
+      },
+      {},
+    )!;
+    expect(walkSchemaPath(schema, ["meta", "whatever"], {}).valid).toBe(true);
+    expect(walkSchemaPath(schema, ["meta", "deep", "key"], {}).valid).toBe(true);
+  });
+
+  it("mixed properties + additionalProperties: named key resolves via properties", () => {
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          mixed: {
+            type: "object",
+            properties: { knownField: { type: "string" } },
+            additionalProperties: { type: "number" },
+          },
+        },
+      },
+      {},
+    )!;
+    expect(walkSchemaPath(schema, ["mixed", "knownField"], {}).valid).toBe(true);
+    expect(walkSchemaPath(schema, ["mixed", "anyOtherKey"], {}).valid).toBe(true);
+  });
+
+  it("regression: schema without additionalProperties still rejects unknown keys", () => {
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          strict: {
+            type: "object",
+            properties: { knownField: { type: "string" } },
+          },
+        },
+      },
+      {},
+    )!;
+    const result = walkSchemaPath(schema, ["strict", "unknown"], {});
+    expect(result.valid).toBe(false);
+    expect(result.availableAt).toEqual(["knownField"]);
+  });
+});
+
 describe("getRequestBodySchema", () => {
   const spec = {
     paths: {
