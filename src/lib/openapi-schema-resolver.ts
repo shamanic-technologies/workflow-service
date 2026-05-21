@@ -1,6 +1,18 @@
 export interface ResolvedSchema {
   properties: Record<string, unknown>;
   required: string[];
+  /**
+   * Schema for values keyed by dynamic (caller-chosen) keys. Set when the source
+   * schema declares `additionalProperties`. Used by walkSchemaPath to descend
+   * into maps whose keys are not statically known (e.g. brand-service
+   * extract-fields returns `fields: { <caller-chosen-key>: MultiBrandFieldValue }`).
+   *
+   * Values:
+   *   - `Record<string, unknown>` — value schema; dynamic keys must match it
+   *   - `true` — open map; any value shape allowed
+   *   - undefined — no fallback (strict properties-only object)
+   */
+  additionalProperties?: Record<string, unknown> | true;
 }
 
 /**
@@ -56,15 +68,34 @@ export function resolveSchema(
     }
   }
 
-  // Direct schema with properties
-  if (typeof schema.properties === "object" && schema.properties !== null) {
-    return {
-      properties: schema.properties as Record<string, unknown>,
+  // Direct schema with properties and/or additionalProperties
+  const hasProperties =
+    typeof schema.properties === "object" && schema.properties !== null;
+  const additional = normalizeAdditionalProperties(schema.additionalProperties);
+
+  if (hasProperties || additional !== undefined) {
+    const resolved: ResolvedSchema = {
+      properties: hasProperties
+        ? (schema.properties as Record<string, unknown>)
+        : {},
       required: Array.isArray(schema.required) ? (schema.required as string[]) : [],
     };
+    if (additional !== undefined) {
+      resolved.additionalProperties = additional;
+    }
+    return resolved;
   }
 
   return null;
+}
+
+function normalizeAdditionalProperties(
+  raw: unknown,
+): Record<string, unknown> | true | undefined {
+  if (raw === true) return true;
+  if (raw === false || raw === null || raw === undefined) return undefined;
+  if (typeof raw === "object") return raw as Record<string, unknown>;
+  return undefined;
 }
 
 /**
@@ -133,10 +164,27 @@ export function walkSchemaPath(
 
     const prop = current.properties[segment];
     if (!prop) {
-      // If the segment is a numeric index and the current schema wraps an
-      // array (e.g. a top-level "results" that is type: array), we should
-      // not reach here because current would be ResolvedSchema (object).
-      // However, check if any property is an array we can descend into.
+      // Fallback: dynamic-key maps declared via `additionalProperties`.
+      // Brand-service extract-fields returns `fields: { <caller-key>: MultiBrandFieldValue }`,
+      // so a path like fields.founders.value must descend into the value schema
+      // without rejecting "founders" as unknown.
+      if (current.additionalProperties !== undefined) {
+        resolvedPath.push(segment);
+        if (resolvedPath.length === path.length) {
+          return { valid: true, resolvedPath };
+        }
+        if (current.additionalProperties === true) {
+          // Open map: any remaining segments are accepted
+          for (let i = resolvedPath.length; i < path.length; i++) {
+            resolvedPath.push(path[i]);
+          }
+          return { valid: true, resolvedPath };
+        }
+        const rawAdditional = resolveRawSchema(current.additionalProperties, spec);
+        current = resolveSchema(rawAdditional, spec);
+        currentRaw = rawAdditional;
+        continue;
+      }
       return {
         valid: false,
         resolvedPath,
