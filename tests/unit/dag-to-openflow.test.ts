@@ -21,6 +21,9 @@ import {
   DAG_WITH_PATH_PARAMS,
   DAG_WITH_HYPHENATED_CONDITION,
   DAG_WITH_BRANCH_CONVERGENCE,
+  DAG_WITH_SCRIPT_NODE,
+  DAG_WITH_SCRIPT_NODE_INPUTS,
+  DAG_WITH_SCRIPT_NODE_DENO,
 } from "../helpers/fixtures.js";
 
 describe("dagToOpenFlow", () => {
@@ -679,5 +682,77 @@ describe("dagToOpenFlow", () => {
     const result = dagToOpenFlow(DAG_WITH_WAIT, "Wait Timeout");
     const waitMod = result.value.modules.find((m) => m.id === "pause");
     expect(waitMod!.timeout).toBeUndefined();
+  });
+
+  it("translates a script node to a rawscript module with bun language by default", () => {
+    const result = dagToOpenFlow(DAG_WITH_SCRIPT_NODE, "Script Flow");
+
+    const scriptModule = result.value.modules.find((m) => m.id === "get_date");
+    expect(scriptModule).toBeDefined();
+    expect(scriptModule!.value.type).toBe("rawscript");
+
+    if (scriptModule!.value.type === "rawscript") {
+      expect(scriptModule!.value.content).toBe(
+        "export async function main() { return { currentDate: new Date().toISOString().split('T')[0] }; }"
+      );
+      expect(scriptModule!.value.language).toBe("bun");
+    }
+  });
+
+  it("downstream node can $ref a script node's output", () => {
+    const result = dagToOpenFlow(DAG_WITH_SCRIPT_NODE, "Script Ref");
+
+    const useDate = result.value.modules.find((m) => m.id === "use_date");
+    expect(useDate).toBeDefined();
+    expect(useDate!.value.type).toBe("script");
+
+    if (useDate!.value.type === "script") {
+      const transforms = useDate!.value.input_transforms as Record<
+        string,
+        { type: string; expr?: string; value?: unknown }
+      >;
+      expect(transforms.body).toBeDefined();
+      expect(transforms.body.type).toBe("javascript");
+      expect(transforms.body.expr).toContain("results.get_date?.currentDate");
+    }
+  });
+
+  it("populates rawscript input_transforms from inputMapping", () => {
+    const result = dagToOpenFlow(DAG_WITH_SCRIPT_NODE_INPUTS, "Script Inputs");
+
+    const mod = result.value.modules[0];
+    expect(mod.value.type).toBe("rawscript");
+
+    if (mod.value.type === "rawscript") {
+      const transforms = mod.value.input_transforms as Record<
+        string,
+        { type: string; expr?: string; value?: unknown }
+      >;
+      expect(transforms.first).toEqual({
+        type: "javascript",
+        expr: "flow_input.firstName",
+      });
+      expect(transforms.last).toEqual({
+        type: "javascript",
+        expr: "flow_input.lastName",
+      });
+    }
+  });
+
+  it("honours an explicit config.language for script nodes", () => {
+    const result = dagToOpenFlow(DAG_WITH_SCRIPT_NODE_DENO, "Script Deno");
+
+    const mod = result.value.modules[0];
+    expect(mod.value.type).toBe("rawscript");
+
+    if (mod.value.type === "rawscript") {
+      expect(mod.value.language).toBe("deno");
+    }
+  });
+
+  it("sets timeout on script modules", () => {
+    const result = dagToOpenFlow(DAG_WITH_SCRIPT_NODE, "Script Timeout");
+    const scriptModule = result.value.modules.find((m) => m.id === "get_date");
+    expect(scriptModule!.timeout).toEqual({ type: "static", value: 3600 });
   });
 });

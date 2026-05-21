@@ -78,6 +78,28 @@ Example:
 - "wait": delay. config: { seconds: number }
 - "for-each": loop over items. config: { iterator: string (JS expression), parallel?: boolean, skipFailures?: boolean }
 
+## Inline Script Node
+
+Use "script" for small inline transforms (date stamping, normalisation, simple shape changes) when no microservice fits. Avoid for anything non-trivial — push real logic into a service instead.
+
+- config.code (REQUIRED, string): a Windmill rawscript. MUST export an \`async function main(...)\` whose return value becomes the node's \`output\`, addressable via \`$ref:node-id.output.field\`.
+- config.language (optional, default "bun"): "bun" | "deno". Windmill compiles to rawscript.
+- inputMapping: declares the args of \`main\`. Each key in inputMapping becomes a positional argument of \`main\` in declaration order. Example: \`{ "first": "$ref:flow_input.firstName", "last": "$ref:flow_input.lastName" }\` → signature \`export async function main(first: string, last: string)\`.
+
+Example — inject \`currentDate\` for a downstream LLM prompt:
+
+\`\`\`json
+{
+  "id": "get-date",
+  "type": "script",
+  "config": {
+    "code": "export async function main() { return { currentDate: new Date().toISOString().split('T')[0] }; }"
+  }
+}
+\`\`\`
+
+Then map it downstream: \`"body.variables.currentDate": "$ref:get-date.output.currentDate"\`.
+
 ## Input Mapping ($ref syntax)
 
 Use inputMapping to pass dynamic data between nodes:

@@ -25,6 +25,11 @@ import {
   DAG_WITH_HTTP_CALL_MISSING_SERVICE,
   DAG_WITH_HTTP_CALL_MISSING_METHOD,
   DAG_WITH_HTTP_CALL_MISSING_PATH,
+  DAG_WITH_SCRIPT_NODE,
+  DAG_WITH_SCRIPT_NODE_INPUTS,
+  DAG_WITH_SCRIPT_NODE_DENO,
+  DAG_WITH_SCRIPT_NODE_MISSING_CODE,
+  DAG_WITH_SCRIPT_NODE_EMPTY_CODE,
 } from "../helpers/fixtures.js";
 
 describe("validateDAG", () => {
@@ -177,6 +182,59 @@ describe("validateDAG", () => {
     expect(result.valid).toBe(false);
     expect(
       result.errors.some((e) => e.message.includes('missing required config field "path"'))
+    ).toBe(true);
+  });
+
+  it("enriches unknown-node-type errors with the list of registered types", () => {
+    const result = validateDAG(DAG_WITH_UNKNOWN_TYPE);
+    expect(result.valid).toBe(false);
+    const unknownTypeError = result.errors.find((e) =>
+      e.message.includes("Unknown node type")
+    );
+    expect(unknownTypeError).toBeDefined();
+    expect(unknownTypeError!.message).toContain("Allowed:");
+    expect(unknownTypeError!.message).toContain("http.call");
+    expect(unknownTypeError!.message).toContain("script");
+    expect(unknownTypeError!.message).toContain("condition");
+    expect(unknownTypeError!.message).toContain("wait");
+    expect(unknownTypeError!.message).toContain("for-each");
+  });
+
+  it("accepts a DAG with a valid script node", () => {
+    const result = validateDAG(DAG_WITH_SCRIPT_NODE);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a DAG with a script node that has input mapping", () => {
+    const result = validateDAG(DAG_WITH_SCRIPT_NODE_INPUTS);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a DAG with a script node using language: deno", () => {
+    const result = validateDAG(DAG_WITH_SCRIPT_NODE_DENO);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("rejects a script node missing config.code", () => {
+    const result = validateDAG(DAG_WITH_SCRIPT_NODE_MISSING_CODE);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.message.includes('missing required config field "code"')
+      )
+    ).toBe(true);
+  });
+
+  it("rejects a script node with blank config.code", () => {
+    const result = validateDAG(DAG_WITH_SCRIPT_NODE_EMPTY_CODE);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.message.includes('missing required config field "code"')
+      )
     ).toBe(true);
   });
 
