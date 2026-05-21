@@ -373,6 +373,40 @@ function nodeToModule(node: DAGNode, dag: DAG): FlowModule | null {
     };
   }
 
+  if (node.type === "script") {
+    const code = node.config?.code as string;
+    const language = (node.config?.language as string) ?? "bun";
+    const retries = node.retries
+      ?? (typeof node.config?.retries === "number" ? node.config.retries : 3);
+    const stopAfterIf = typeof node.config?.stopAfterIf === "string"
+      ? node.config.stopAfterIf : undefined;
+    const skipIf = typeof node.config?.skipIf === "string"
+      ? node.config.skipIf : undefined;
+    const inputTransforms = buildInputTransforms(undefined, node.inputMapping);
+
+    const mod: FlowModule = {
+      id: moduleId,
+      summary: `script: ${node.id}`,
+      value: {
+        type: "rawscript",
+        content: code,
+        language,
+        input_transforms: inputTransforms,
+      },
+      timeout: { type: "static", value: NODE_TIMEOUT_SECONDS },
+      retry: retries > 0
+        ? { constant: { attempts: retries, seconds: 5 } }
+        : { constant: { attempts: 0, seconds: 0 } },
+    };
+    if (stopAfterIf) {
+      mod.stop_after_if = { expr: stopAfterIf, skip_if_stopped: true };
+    }
+    if (skipIf) {
+      mod.skip_if = { expr: skipIf };
+    }
+    return mod;
+  }
+
   // Normal node: script reference
   const scriptPath = getScriptPath(node.type);
   if (scriptPath === undefined || scriptPath === null) {

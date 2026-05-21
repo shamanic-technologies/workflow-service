@@ -258,15 +258,49 @@
           },
           "type": {
             "type": "string",
-            "minLength": 1,
-            "description": "Node type. Use \"http.call\" to call any microservice (recommended), or a specific node type. http.call config requires: service (name, e.g. \"stripe\"), method (HTTP verb), path (endpoint path). Native flow control types: \"condition\" — if/then/else branching (uses Windmill branchone). Outgoing edges with 'condition' define branches; nodes downstream of a conditional edge are nested inside that branch. Outgoing edges without 'condition' define after-branch steps that always execute. \"wait\" — sleep/delay. \"for-each\" — loop over items (body nodes are nested inside the loop). Legacy named types: stripe.createProduct, client.createUser, transactional-email.send."
+            "enum": [
+              "lead-service",
+              "outbound-sending",
+              "content-sentiment",
+              "client-service",
+              "stripe.createProduct",
+              "stripe.getProduct",
+              "stripe.createPrice",
+              "stripe.getPricesByProduct",
+              "stripe.createCoupon",
+              "stripe.getCoupon",
+              "stripe.createCheckout",
+              "stripe.getStats",
+              "client.createUser",
+              "client.updateUser",
+              "client.getUsers",
+              "transactional-email.send",
+              "transactional-email.getStats",
+              "app.resolveProduct",
+              "app.resolveDiscount",
+              "twilio-sms",
+              "order-service",
+              "product-service",
+              "stripe-service",
+              "linkedin-dm",
+              "linkedin-connect",
+              "linkedin-post",
+              "google-ads",
+              "meta-ads",
+              "http.call",
+              "wait",
+              "condition",
+              "for-each",
+              "script"
+            ],
+            "description": "Node type. Must be one of the registered types — unknown strings are rejected (no silent fallback). Preferred: \"http.call\" — call any microservice. config requires { service, method, path }. Inline JS: \"script\" — runs node.config.code (string) inline as a Windmill rawscript. config = { code: string, language?: \"bun\" | \"deno\" }. Inputs via inputMapping, outputs via `return { … }`. Native flow control: \"condition\" — if/then/else branching (uses Windmill branchone). Outgoing edges with 'condition' define branches; nodes downstream of a conditional edge are nested inside that branch. Outgoing edges without 'condition' define after-branch steps that always execute. \"wait\" — sleep/delay. \"for-each\" — loop over items (body nodes are nested inside the loop). Legacy named types: stripe.createProduct, client.createUser, transactional-email.send."
           },
           "config": {
             "type": "object",
             "additionalProperties": {
               "nullable": true
             },
-            "description": "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. Each key becomes a direct parameter of the underlying script. Special config keys (stripped before passing to script): retries (number) — override default retry count; validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; stopAfterIf (string) — native Windmill stop_after_if. JS expression evaluated after step completes using 'result' variable, stops the entire flow gracefully (no onError, no subsequent steps) when true. Example: \"result.found == false\". For conditional branching (run some steps but not others), use a \"condition\" node instead; skipIf (string) — native Windmill skip_if. JS expression evaluated before this step runs, skips only this step when true. Can reference previous results via results.<module_id>. Example: \"results.fetch_lead.found == false\". For multi-step skipping, prefer a \"condition\" node."
+            "description": "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. For script: { code (string, required, inline JS), language? (\"bun\" | \"deno\", default \"bun\") }. For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. Each key becomes a direct parameter of the underlying script. Special config keys (stripped before passing to script): retries (number) — override default retry count; validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; stopAfterIf (string) — native Windmill stop_after_if. JS expression evaluated after step completes using 'result' variable, stops the entire flow gracefully (no onError, no subsequent steps) when true. Example: \"result.found == false\". For conditional branching (run some steps but not others), use a \"condition\" node instead; skipIf (string) — native Windmill skip_if. JS expression evaluated before this step runs, skips only this step when true. Can reference previous results via results.<module_id>. Example: \"results.fetch_lead.found == false\". For multi-step skipping, prefer a \"condition\" node."
           },
           "inputMapping": {
             "type": "object",

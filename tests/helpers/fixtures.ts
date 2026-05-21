@@ -312,6 +312,80 @@ export const DAG_WITH_HTTP_CALL_MISSING_PATH: DAG = {
   edges: [],
 };
 
+export const DAG_WITH_SCRIPT_NODE: DAG = {
+  nodes: [
+    {
+      id: "get-date",
+      type: "script",
+      config: {
+        code: "return { currentDate: new Date().toISOString().split('T')[0] };",
+      },
+    },
+    {
+      id: "use-date",
+      type: "http.call",
+      config: { service: "content-generation", method: "POST", path: "/generate" },
+      inputMapping: {
+        "body.variables.currentDate": "$ref:get-date.output.currentDate",
+      },
+    },
+  ],
+  edges: [{ from: "get-date", to: "use-date" }],
+};
+
+export const DAG_WITH_SCRIPT_NODE_INPUTS: DAG = {
+  nodes: [
+    {
+      id: "format-name",
+      type: "script",
+      config: {
+        code: "return { full: `${first} ${last}` };",
+      },
+      inputMapping: {
+        first: "$ref:flow_input.firstName",
+        last: "$ref:flow_input.lastName",
+      },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_SCRIPT_NODE_DENO: DAG = {
+  nodes: [
+    {
+      id: "deno-script",
+      type: "script",
+      config: {
+        code: "export async function main() { return { ok: true }; }",
+        language: "deno",
+      },
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_SCRIPT_NODE_MISSING_CODE: DAG = {
+  nodes: [
+    {
+      id: "bad-script",
+      type: "script",
+      config: {},
+    },
+  ],
+  edges: [],
+};
+
+export const DAG_WITH_SCRIPT_NODE_EMPTY_CODE: DAG = {
+  nodes: [
+    {
+      id: "empty-script",
+      type: "script",
+      config: { code: "   " },
+    },
+  ],
+  edges: [],
+};
+
 export const DAG_WITH_CUSTOM_RETRIES: DAG = {
   nodes: [
     {

@@ -46,4 +46,10 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("NEVER include cost-tracking nodes");
     expect(prompt).toContain("handled internally by each downstream service");
   });
+
+  it("documents the script node type with a code example", () => {
+    expect(prompt).toContain('"script"');
+    expect(prompt).toContain("config.code");
+    expect(prompt).toContain("rawscript");
+  });
 });

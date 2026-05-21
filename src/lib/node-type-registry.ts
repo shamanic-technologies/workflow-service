@@ -52,6 +52,7 @@ export const NODE_TYPE_REGISTRY: Record<string, string | null> = {
   wait: null,
   condition: null,
   "for-each": null,
+  script: null,
 };
 
 export function getScriptPath(nodeType: string): string | null {
