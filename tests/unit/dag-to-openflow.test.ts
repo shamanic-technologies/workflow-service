@@ -693,7 +693,7 @@ describe("dagToOpenFlow", () => {
 
     if (scriptModule!.value.type === "rawscript") {
       expect(scriptModule!.value.content).toBe(
-        "return { currentDate: new Date().toISOString().split('T')[0] };"
+        "export async function main() { return { currentDate: new Date().toISOString().split('T')[0] }; }"
       );
       expect(scriptModule!.value.language).toBe("bun");
     }

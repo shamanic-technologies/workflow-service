@@ -82,9 +82,9 @@ Example:
 
 Use "script" for small inline transforms (date stamping, normalisation, simple shape changes) when no microservice fits. Avoid for anything non-trivial — push real logic into a service instead.
 
-- config.code (REQUIRED, string): the JS body. \`return { … }\` to produce outputs. The returned object is the node's \`output\`, addressable via \`$ref:node-id.output.field\`.
+- config.code (REQUIRED, string): a Windmill rawscript. MUST export an \`async function main(...)\` whose return value becomes the node's \`output\`, addressable via \`$ref:node-id.output.field\`.
 - config.language (optional, default "bun"): "bun" | "deno". Windmill compiles to rawscript.
-- inputMapping: declares inputs. Each key becomes a top-level variable in the script body. Example: \`{ "first": "$ref:flow_input.firstName" }\` → \`first\` is in scope.
+- inputMapping: declares the args of \`main\`. Each key in inputMapping becomes a positional argument of \`main\` in declaration order. Example: \`{ "first": "$ref:flow_input.firstName", "last": "$ref:flow_input.lastName" }\` → signature \`export async function main(first: string, last: string)\`.
 
 Example — inject \`currentDate\` for a downstream LLM prompt:
 
@@ -93,7 +93,7 @@ Example — inject \`currentDate\` for a downstream LLM prompt:
   "id": "get-date",
   "type": "script",
   "config": {
-    "code": "return { currentDate: new Date().toISOString().split('T')[0] };"
+    "code": "export async function main() { return { currentDate: new Date().toISOString().split('T')[0] }; }"
   }
 }
 \`\`\`

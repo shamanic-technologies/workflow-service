@@ -15,7 +15,9 @@ describe("DAGNodeSchema.type enum", () => {
     const result = DAGNodeSchema.safeParse({
       id: "x",
       type: "script",
-      config: { code: "return { ok: true };" },
+      config: {
+        code: "export async function main() { return { ok: true }; }",
+      },
     });
     expect(result.success).toBe(true);
   });
