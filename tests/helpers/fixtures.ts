@@ -318,7 +318,7 @@ export const DAG_WITH_SCRIPT_NODE: DAG = {
       id: "get-date",
       type: "script",
       config: {
-        code: "return { currentDate: new Date().toISOString().split('T')[0] };",
+        code: "export async function main() { return { currentDate: new Date().toISOString().split('T')[0] }; }",
       },
     },
     {
@@ -339,7 +339,7 @@ export const DAG_WITH_SCRIPT_NODE_INPUTS: DAG = {
       id: "format-name",
       type: "script",
       config: {
-        code: "return { full: `${first} ${last}` };",
+        code: "export async function main(first: string, last: string) { return { full: `${first} ${last}` }; }",
       },
       inputMapping: {
         first: "$ref:flow_input.firstName",
