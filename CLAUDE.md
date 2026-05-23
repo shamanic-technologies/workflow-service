@@ -34,6 +34,7 @@ Workflow orchestration service powered by Windmill. Translates internal DAG form
 ## Rules
 - Never edit `openapi.json` manually — regenerate with `npm run generate:openapi`
 - Commit `openapi.json` alongside schema changes in `src/schemas.ts`
+- **`zod-to-openapi` does not support `z.lazy()`.** `npm run generate:openapi` throws `UnknownZodTypeError: ZodLazy` and aborts. Forward references between schemas inside `src/schemas.ts` must be resolved by **declaration order** — define the referenced schema (e.g. `ProviderInfoSchema`) ABOVE the schema that uses it (e.g. `WorkflowListItemSchema = WorkflowResponseSchema.extend({ requiredProviders: z.array(ProviderInfoSchema) })`). When you hit the error, move the dependent block lower in the file, not the dependency higher — the dependent is usually a small `.extend(...)`, while the dependency is referenced from many places.
 - When adding a node type: update `node-type-registry.ts` + create script in `scripts/nodes/`
 - Every bug fix must include a regression test
 - **Always forward ALL downstream headers.** Every service-to-service call MUST spread `DownstreamHeaders` (from `src/lib/downstream-headers.ts`) into the fetch headers. Never cherry-pick individual headers — use `extractDownstreamHeaders(req)` in routes and pass the full object through. Missing headers don't always crash, but they silently break tracing and logging in downstream services.
