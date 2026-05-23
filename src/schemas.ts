@@ -637,6 +637,15 @@ export const ProviderRequirementsResponseSchema = z
   })
   .openapi("ProviderRequirementsResponse");
 
+export const WorkflowListItemSchema = WorkflowResponseSchema.extend({
+  requiredProviders: z.array(ProviderInfoSchema).describe(
+    "Providers required by this workflow (with domain info for logo lookup). " +
+    "Empty array if the workflow has no http.call nodes. Computed via a single " +
+    "deduped key-service POST per list request, so callers no longer need to " +
+    "fan out N follow-up requests to /workflows/{id}/required-providers."
+  ),
+}).openapi("WorkflowListItem");
+
 // --- Workflow conflict response (409 on PUT /workflows/:id) ---
 
 export const WorkflowConflictResponseSchema = z
@@ -860,12 +869,16 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "List of workflows",
+      description: "List of workflows, each enriched with requiredProviders",
       content: {
         "application/json": {
-          schema: z.object({ workflows: z.array(WorkflowResponseSchema) }),
+          schema: z.object({ workflows: z.array(WorkflowListItemSchema) }),
         },
       },
+    },
+    502: {
+      description: "Key service unavailable or returned an error while computing requiredProviders",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });

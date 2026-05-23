@@ -535,6 +535,46 @@
           "dag"
         ]
       },
+      "ProviderInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Provider name (e.g. 'anthropic', 'apollo')."
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Provider's primary domain for logo lookup (e.g. 'anthropic.com'). Null if unknown."
+          }
+        },
+        "required": [
+          "name",
+          "domain"
+        ]
+      },
+      "WorkflowListItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WorkflowResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "requiredProviders": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProviderInfo"
+                },
+                "description": "Providers required by this workflow (with domain info for logo lookup). Empty array if the workflow has no http.call nodes. Computed via a single deduped key-service POST per list request, so callers no longer need to fan out N follow-up requests to /workflows/{id}/required-providers."
+              }
+            },
+            "required": [
+              "requiredProviders"
+            ]
+          }
+        ]
+      },
       "ServiceEndpoint": {
         "type": "object",
         "properties": {
@@ -555,24 +595,6 @@
           "service",
           "method",
           "path"
-        ]
-      },
-      "ProviderInfo": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Provider name (e.g. 'anthropic', 'apollo')."
-          },
-          "domain": {
-            "type": "string",
-            "nullable": true,
-            "description": "Provider's primary domain for logo lookup (e.g. 'anthropic.com'). Null if unknown."
-          }
-        },
-        "required": [
-          "name",
-          "domain"
         ]
       },
       "ProviderRequirementsResponse": {
@@ -1850,7 +1872,7 @@
         ],
         "responses": {
           "200": {
-            "description": "List of workflows",
+            "description": "List of workflows, each enriched with requiredProviders",
             "content": {
               "application/json": {
                 "schema": {
@@ -1859,13 +1881,23 @@
                     "workflows": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/WorkflowResponse"
+                        "$ref": "#/components/schemas/WorkflowListItem"
                       }
                     }
                   },
                   "required": [
                     "workflows"
                   ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Key service unavailable or returned an error while computing requiredProviders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
