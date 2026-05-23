@@ -668,6 +668,11 @@ router.get("/workflows/dynasty/stats", requireApiKey, async (req, res) => {
 });
 
 // GET /workflows — List workflows (defaults to active only; ?status=all for all)
+// Each item is enriched with `requiredProviders` so the caller does not need
+// to fan out N follow-up requests to /workflows/:id/required-providers.
+// Implementation: walk every returned workflow's DAG once, union all unique
+// (service, method, path) endpoints, make a SINGLE key-service POST, then
+// remap providers back per workflow.
 router.get("/workflows", requireApiKey, async (req, res) => {
   try {
     const { orgId, brandId, humanId, campaignId, featureSlug, workflowSlug, workflowDynastySlug, tag, status } = req.query;
@@ -708,7 +713,82 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       ? await db.select().from(workflows).where(and(...conditions))
       : await db.select().from(workflows);
 
-    res.json({ workflows: results.map(formatWorkflow) });
+    // Per-workflow endpoint lists + global deduped union
+    const endpointsPerWorkflow = results.map((w) =>
+      extractHttpEndpoints((w.dag as DAG) ?? { nodes: [], edges: [] }),
+    );
+    const unionMap = new Map<string, { service: string; method: string; path: string }>();
+    for (const list of endpointsPerWorkflow) {
+      for (const ep of list) {
+        const key = `${ep.service}|${ep.method}|${ep.path}`;
+        if (!unionMap.has(key)) unionMap.set(key, ep);
+      }
+    }
+
+    // Map endpointKey → set of providers (populated by single key-service call)
+    const endpointProviders = new Map<string, Set<string>>();
+
+    if (unionMap.size > 0) {
+      const dsHeaders = extractDownstreamHeaders(req);
+      try {
+        const result = await fetchProviderRequirements([...unionMap.values()], dsHeaders);
+        for (const r of result.requirements as Array<{
+          service?: unknown;
+          method?: unknown;
+          path?: unknown;
+          provider?: unknown;
+        }>) {
+          if (
+            typeof r.service !== "string" ||
+            typeof r.method !== "string" ||
+            typeof r.path !== "string" ||
+            typeof r.provider !== "string"
+          ) continue;
+          const key = `${r.service}|${r.method}|${r.path}`;
+          let set = endpointProviders.get(key);
+          if (!set) {
+            set = new Set();
+            endpointProviders.set(key, set);
+          }
+          set.add(r.provider);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("key-service error:")) {
+          console.error("[workflow-service] GET /workflows: key-service error:", err.message);
+          res.status(502).json({ error: err.message });
+          return;
+        }
+        if (err instanceof Error && err.message.includes("KEY_SERVICE_URL")) {
+          res.status(502).json({ error: err.message });
+          return;
+        }
+        if (err instanceof TypeError && err.message === "fetch failed") {
+          const cause = (err as unknown as { cause?: { code?: string } }).cause;
+          const detail = cause?.code ? ` (${cause.code})` : "";
+          console.error(`[workflow-service] GET /workflows: key-service unreachable${detail}`, err);
+          res.status(502).json({ error: `key-service unreachable${detail}` });
+          return;
+        }
+        throw err;
+      }
+    }
+
+    const enriched = results.map((w, i) => {
+      const providers = new Set<string>();
+      for (const ep of endpointsPerWorkflow[i]) {
+        const key = `${ep.service}|${ep.method}|${ep.path}`;
+        const set = endpointProviders.get(key);
+        if (set) {
+          for (const p of set) providers.add(p);
+        }
+      }
+      return {
+        ...formatWorkflow(w),
+        requiredProviders: enrichProvidersWithDomains([...providers].sort()),
+      };
+    });
+
+    res.json({ workflows: enriched });
   } catch (err) {
     console.error("[workflow-service] GET list error:", err);
     res.status(500).json({ error: "Internal server error" });

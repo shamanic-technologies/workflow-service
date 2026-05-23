@@ -255,6 +255,11 @@ describe("POST /workflows", () => {
 describe("GET /workflows", () => {
   beforeEach(() => {
     mockDbRows.length = 0;
+    mockFetchProviderRequirements.mockReset();
+    // Default key-service response so existing list tests (whose fixtures may
+    // contain http.call nodes like VALID_LINEAR_DAG) don't 500 on undefined.
+    // Cases that exercise the enrichment override this with mockResolvedValue.
+    mockFetchProviderRequirements.mockResolvedValue({ requirements: [], providers: [] });
   });
 
   it("returns all workflows when no filters provided", async () => {
@@ -402,6 +407,259 @@ describe("GET /workflows", () => {
     expect(res.body.workflows[0].category).toBe("sales");
     expect(res.body.workflows[0].channel).toBe("email");
     expect(res.body.workflows[0].audienceType).toBe("cold-outreach");
+  });
+
+  // --- requiredProviders enrichment (inlined to kill api-service N+1 fanout) ---
+
+  it("returns empty list with no key-service call", async () => {
+    const res = await request.get("/workflows").set(AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toEqual([]);
+    expect(mockFetchProviderRequirements).not.toHaveBeenCalled();
+  });
+
+  it("enriches each item with requiredProviders for workflows with http.call nodes", async () => {
+    mockDbRows.push({
+      id: WF_HTTP_ID,
+      orgId: "org-1",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      workflowDynastySlug: "http-flow",
+      workflowDynastyName: "HTTP Flow",
+      version: 1,
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    mockFetchProviderRequirements.mockResolvedValue({
+      requirements: [
+        { service: "stripe", method: "GET", path: "/products/prod_123", provider: "stripe" },
+      ],
+      providers: ["stripe"],
+    });
+
+    const res = await request.get("/workflows").set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toHaveLength(1);
+    expect(res.body.workflows[0].requiredProviders).toEqual([
+      { name: "stripe", domain: "stripe.com" },
+    ]);
+    expect(mockFetchProviderRequirements).toHaveBeenCalledTimes(1);
+    expect(mockFetchProviderRequirements).toHaveBeenCalledWith(
+      [{ service: "stripe", method: "GET", path: "/products/prod_123" }],
+      { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
+    );
+  });
+
+  it("dedupes endpoints across multiple workflows into a single key-service call", async () => {
+    mockDbRows.push(
+      {
+        id: WF_HTTP_ID,
+        orgId: "org-1",
+        workflowSlug: "wf-a",
+        workflowName: "WF A",
+        workflowDynastySlug: "wf-a",
+        workflowDynastyName: "WF A",
+        version: 1,
+        dag: DAG_WITH_HTTP_CALL_CHAIN, // client POST /users + transactional-email POST /send
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: WF_FEATURE_ID,
+        orgId: "org-1",
+        workflowSlug: "wf-b",
+        workflowName: "WF B",
+        workflowDynastySlug: "wf-b",
+        workflowDynastyName: "WF B",
+        version: 1,
+        dag: DAG_WITH_HTTP_CALL, // stripe GET /products/prod_123
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: WF_LEGACY_ID,
+        orgId: "org-1",
+        workflowSlug: "wf-c",
+        workflowName: "WF C",
+        workflowDynastySlug: "wf-c",
+        workflowDynastyName: "WF C",
+        version: 1,
+        dag: DAG_WITH_HTTP_CALL_CHAIN, // duplicate of wf-a's endpoints
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    );
+
+    mockFetchProviderRequirements.mockResolvedValue({
+      requirements: [
+        { service: "client", method: "POST", path: "/users", provider: "client" },
+        { service: "transactional-email", method: "POST", path: "/send", provider: "postmark" },
+        { service: "stripe", method: "GET", path: "/products/prod_123", provider: "stripe" },
+      ],
+      providers: ["client", "postmark", "stripe"],
+    });
+
+    const res = await request.get("/workflows").set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toHaveLength(3);
+
+    // Single key-service call, deduped to 3 unique endpoints (not 5)
+    expect(mockFetchProviderRequirements).toHaveBeenCalledTimes(1);
+    const [calledEndpoints] = mockFetchProviderRequirements.mock.calls[0];
+    expect(calledEndpoints).toHaveLength(3);
+    expect(calledEndpoints).toEqual(
+      expect.arrayContaining([
+        { service: "client", method: "POST", path: "/users" },
+        { service: "transactional-email", method: "POST", path: "/send" },
+        { service: "stripe", method: "GET", path: "/products/prod_123" },
+      ]),
+    );
+
+    // Per-workflow provider mapping
+    const byId = Object.fromEntries(res.body.workflows.map((w: any) => [w.id, w]));
+    expect(byId[WF_HTTP_ID].requiredProviders).toEqual(
+      expect.arrayContaining([
+        { name: "client", domain: null },
+        { name: "postmark", domain: "postmarkapp.com" },
+      ]),
+    );
+    expect(byId[WF_HTTP_ID].requiredProviders).toHaveLength(2);
+    expect(byId[WF_FEATURE_ID].requiredProviders).toEqual([
+      { name: "stripe", domain: "stripe.com" },
+    ]);
+    // wf-c has same endpoints as wf-a, gets same providers
+    expect(byId[WF_LEGACY_ID].requiredProviders).toEqual(
+      expect.arrayContaining([
+        { name: "client", domain: null },
+        { name: "postmark", domain: "postmarkapp.com" },
+      ]),
+    );
+  });
+
+  it("returns empty requiredProviders for workflows without http.call nodes and skips key-service when none exist", async () => {
+    mockDbRows.push({
+      id: WF_LEGACY_ID,
+      orgId: "org-1",
+      workflowSlug: "legacy-flow",
+      workflowName: "Legacy Flow",
+      workflowDynastySlug: "legacy-flow",
+      workflowDynastyName: "Legacy Flow",
+      version: 1,
+      dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request.get("/workflows").set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows).toHaveLength(1);
+    expect(res.body.workflows[0].requiredProviders).toEqual([]);
+    expect(mockFetchProviderRequirements).not.toHaveBeenCalled();
+  });
+
+  it("handles mix of workflows with and without http.call nodes in one call", async () => {
+    mockDbRows.push(
+      {
+        id: WF_HTTP_ID,
+        orgId: "org-1",
+        workflowSlug: "http-flow",
+        workflowName: "HTTP Flow",
+        workflowDynastySlug: "http-flow",
+        workflowDynastyName: "HTTP Flow",
+        version: 1,
+        dag: DAG_WITH_HTTP_CALL,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: WF_LEGACY_ID,
+        orgId: "org-1",
+        workflowSlug: "legacy-flow",
+        workflowName: "Legacy Flow",
+        workflowDynastySlug: "legacy-flow",
+        workflowDynastyName: "Legacy Flow",
+        version: 1,
+        dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    );
+
+    mockFetchProviderRequirements.mockResolvedValue({
+      requirements: [
+        { service: "stripe", method: "GET", path: "/products/prod_123", provider: "stripe" },
+      ],
+      providers: ["stripe"],
+    });
+
+    const res = await request.get("/workflows").set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(mockFetchProviderRequirements).toHaveBeenCalledTimes(1);
+    const byId = Object.fromEntries(res.body.workflows.map((w: any) => [w.id, w]));
+    expect(byId[WF_HTTP_ID].requiredProviders).toEqual([
+      { name: "stripe", domain: "stripe.com" },
+    ]);
+    expect(byId[WF_LEGACY_ID].requiredProviders).toEqual([]);
+  });
+
+  it("returns 502 when key-service fails", async () => {
+    mockDbRows.push({
+      id: WF_HTTP_ID,
+      orgId: "org-1",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      workflowDynastySlug: "http-flow",
+      workflowDynastyName: "HTTP Flow",
+      version: 1,
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    mockFetchProviderRequirements.mockRejectedValue(
+      new Error(
+        "key-service error: POST /provider-requirements -> 500 Internal Server Error: boom"
+      )
+    );
+
+    const res = await request.get("/workflows").set(AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("key-service error:");
+  });
+});
+
+describe("GET /workflows/:id (single)", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockFetchProviderRequirements.mockReset();
+  });
+
+  it("does not inject requiredProviders on the single-workflow detail endpoint", async () => {
+    mockDbRows.push({
+      id: WF_HTTP_ID,
+      orgId: "org-1",
+      workflowSlug: "http-flow",
+      workflowName: "HTTP Flow",
+      workflowDynastySlug: "http-flow",
+      workflowDynastyName: "HTTP Flow",
+      version: 1,
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request.get(`/workflows/${WF_HTTP_ID}`).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.requiredProviders).toBeUndefined();
+    expect(mockFetchProviderRequirements).not.toHaveBeenCalled();
   });
 });
 
