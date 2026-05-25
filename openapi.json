@@ -1350,15 +1350,31 @@
           "description": {
             "type": "string",
             "minLength": 10,
-            "description": "Natural-language description of the desired upgraded workflow."
+            "description": "Natural-language description of the desired upgraded workflow. Required when `dag` is not provided (LLM regenerates the DAG from this description). Optional when `dag` is provided; if present, replaces the stored description on the resulting row."
+          },
+          "dag": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DAG"
+              },
+              {
+                "description": "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, its signature computed, and the upgrade applies the same in-place / new-version branching as the LLM path. category/channel/audienceType are inherited from the existing row (no LLM to infer them). Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running generation. Either `dag` or `description` MUST be provided."
+              }
+            ]
           },
           "hints": {
-            "$ref": "#/components/schemas/GenerateWorkflowHints"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GenerateWorkflowHints"
+              },
+              {
+                "description": "Optional hints to guide generation. Ignored when `dag` is provided."
+              }
+            ]
           }
         },
         "required": [
-          "workflowSlug",
-          "description"
+          "workflowSlug"
         ]
       },
       "PublicWorkflowItem": {

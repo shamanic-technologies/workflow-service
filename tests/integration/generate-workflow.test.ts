@@ -5,8 +5,8 @@ import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 const mockDbRows: Record<string, unknown>[] = [];
 const mockSelectResponses: Record<string, unknown>[][] = [];
 
-vi.mock("../../src/db/index.js", () => ({
-  db: {
+vi.mock("../../src/db/index.js", () => {
+  const mockDb: Record<string, unknown> = {
     insert: () => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
@@ -35,19 +35,32 @@ vi.mock("../../src/db/index.js", () => ({
     update: () => ({
       set: (values: Record<string, unknown>) => ({
         where: () => {
-          const row = mockDbRows[mockDbRows.length - 1];
-          if (row) Object.assign(row, values);
+          // Apply update by matching on id from the where clause is not feasible without parsing,
+          // so we match against the row whose id was last queried — the upgrade flow updates the
+          // predecessor (existing) row, which is always the first matching active row in fixtures.
+          // For the deprecate step (status='deprecated'), find the row with status='active' from fixtures.
+          const target =
+            (values.status === "deprecated"
+              ? mockDbRows.find((r) => r.status === "active")
+              : undefined) ?? mockDbRows[mockDbRows.length - 1];
+          if (target) Object.assign(target, values);
           return {
-            returning: () => Promise.resolve([{ ...row, ...values }]),
+            returning: () => Promise.resolve([{ ...target, ...values }]),
           };
         },
       }),
     }),
-  },
-  sql: {
-    end: () => Promise.resolve(),
-  },
-}));
+  };
+  mockDb.transaction = async (
+    fn: (tx: Record<string, unknown>) => Promise<void>,
+  ): Promise<void> => fn(mockDb);
+  return {
+    db: mockDb,
+    sql: {
+      end: () => Promise.resolve(),
+    },
+  };
+});
 
 // Mock Windmill client
 vi.mock("../../src/lib/windmill-client.js", () => ({
@@ -619,5 +632,200 @@ describe("POST /workflows/upgrade", () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toContain("kaboom");
     expect(res.body.stage).toBe("unknown");
+  });
+
+  // --- Client-supplied DAG path ---
+
+  function pushUpgradeFixture(opts?: {
+    category?: string;
+    channel?: string;
+    audienceType?: string;
+  }): { id: string; signature: string } {
+    const sig = "sig-fixture-existing";
+    const row = {
+      id: "00000000-0000-4000-8000-000000000d46",
+      orgId: "org-1",
+      featureSlug: "client-dag-feature",
+      signature: sig,
+      workflowDynastySignatureName: "umber",
+      workflowSlug: "client-dag-feature-umber",
+      workflowName: "Client Dag Feature Umber",
+      workflowDynastySlug: "client-dag-feature-umber",
+      workflowDynastyName: "Client Dag Feature Umber",
+      version: 1,
+      tags: ["initial"],
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      description: "existing description",
+      category: opts?.category ?? "sales",
+      channel: opts?.channel ?? "email",
+      audienceType: opts?.audienceType ?? "cold-outreach",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+      windmillFlowPath: "f/workflows/org-1/client_dag_feature_umber",
+    };
+    mockDbRows.push(row);
+    return { id: row.id, signature: sig };
+  }
+
+  it("upgrades in-place when client-supplied dag has same signature (no LLM)", async () => {
+    const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
+    const sig = computeDAGSignature(VALID_LINEAR_DAG);
+
+    mockDbRows.push({
+      id: "00000000-0000-4000-8000-000000000a01",
+      orgId: "org-1",
+      featureSlug: "feat-a",
+      signature: sig,
+      workflowDynastySignatureName: "alabaster",
+      workflowSlug: "feat-a-alabaster",
+      workflowName: "Feat A Alabaster",
+      workflowDynastySlug: "feat-a-alabaster",
+      workflowDynastyName: "Feat A Alabaster",
+      version: 1,
+      tags: [],
+      status: "active",
+      dag: VALID_LINEAR_DAG,
+      description: "existing",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      creationType: "scratch",
+      createdFromWorkflow: null,
+      windmillFlowPath: "f/workflows/org-1/feat_a_alabaster",
+    });
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "feat-a-alabaster",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.action).toBe("updated");
+    expect(res.body.workflow.id).toBe("00000000-0000-4000-8000-000000000a01");
+    expect(res.body.workflow.version).toBe(1);
+    expect(mockGenerateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("creates a new version when client-supplied dag has a different signature (no LLM)", async () => {
+    pushUpgradeFixture();
+    const NEW_DAG = {
+      ...VALID_LINEAR_DAG,
+      nodes: [
+        { ...((VALID_LINEAR_DAG.nodes as Record<string, unknown>[])[0]), config: { source: "linkedin" } },
+        ...(VALID_LINEAR_DAG.nodes as unknown[]).slice(1),
+      ],
+    };
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "client-dag-feature-umber",
+        dag: NEW_DAG,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.workflow.action).toBe("upgraded");
+    expect(res.body.workflow.workflowDynastySignatureName).toBe("umber");
+    expect(res.body.workflow.workflowSlug).toBe("client-dag-feature-umber-v2");
+    expect(res.body.workflow.version).toBe(2);
+    expect(mockGenerateWorkflow).not.toHaveBeenCalled();
+
+    // Predecessor row must be flipped to status='deprecated' by the transaction.
+    const predecessor = mockDbRows.find(
+      (r) => r.id === "00000000-0000-4000-8000-000000000d46",
+    );
+    expect(predecessor?.status).toBe("deprecated");
+  });
+
+  it("inherits category/channel/audienceType from existing row when dag supplied", async () => {
+    pushUpgradeFixture({
+      category: "outlets",
+      channel: "database",
+      audienceType: "discovery",
+    });
+    const NEW_DAG = {
+      ...VALID_LINEAR_DAG,
+      nodes: [
+        { ...((VALID_LINEAR_DAG.nodes as Record<string, unknown>[])[0]), config: { source: "twitter" } },
+        ...(VALID_LINEAR_DAG.nodes as unknown[]).slice(1),
+      ],
+    };
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "client-dag-feature-umber",
+        dag: NEW_DAG,
+      });
+
+    expect(res.status).toBe(201);
+    const insertedRow = mockDbRows[mockDbRows.length - 1] as Record<string, unknown>;
+    expect(insertedRow.category).toBe("outlets");
+    expect(insertedRow.channel).toBe("database");
+    expect(insertedRow.audienceType).toBe("discovery");
+    expect(insertedRow.creationType).toBe("upgrade");
+  });
+
+  it("stores the optional description on the new row when client-supplied dag is provided", async () => {
+    pushUpgradeFixture();
+    const NEW_DAG = {
+      ...VALID_LINEAR_DAG,
+      nodes: [
+        { ...((VALID_LINEAR_DAG.nodes as Record<string, unknown>[])[0]), config: { source: "google" } },
+        ...(VALID_LINEAR_DAG.nodes as unknown[]).slice(1),
+      ],
+    };
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "client-dag-feature-umber",
+        dag: NEW_DAG,
+        description: "Surgical fix for the serialize_brand_fields script node",
+      });
+
+    expect(res.status).toBe(201);
+    const insertedRow = mockDbRows[mockDbRows.length - 1] as Record<string, unknown>;
+    expect(insertedRow.description).toBe(
+      "Surgical fix for the serialize_brand_fields script node",
+    );
+    expect(mockGenerateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("rejects the request when neither dag nor description is provided", async () => {
+    pushUpgradeFixture();
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "client-dag-feature-umber",
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockGenerateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("rejects a client-supplied dag that fails DAG validation", async () => {
+    pushUpgradeFixture();
+    const INVALID_DAG = { nodes: [], edges: [] };
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "client-dag-feature-umber",
+        dag: INVALID_DAG,
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockGenerateWorkflow).not.toHaveBeenCalled();
   });
 });
