@@ -52,4 +52,14 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("config.code");
     expect(prompt).toContain("rawscript");
   });
+
+  it("documents the $ref resolution rule (properties vs additionalProperties)", () => {
+    expect(prompt).toContain("$ref` resolution rule");
+    expect(prompt).toContain("Fixed-schema objects");
+    expect(prompt).toContain("properties");
+    expect(prompt).toContain("Dynamic-key maps");
+    expect(prompt).toContain("additionalProperties");
+    expect(prompt).toContain("caller-chosen");
+    expect(prompt).toContain("Inventing paths against fixed schemas is a hard failure");
+  });
 });

@@ -468,8 +468,8 @@ export const CreateWorkflowFromDescriptionSchema = z
 
 export const UpgradeWorkflowFromDescriptionSchema = z
   .object({
-    workflowSlug: z.string().min(1).describe(
-      "Slug of the active workflow to upgrade. Must reference an active row."
+    workflowDynastySlug: z.string().min(1).describe(
+      "Stable dynasty slug (constant across all versions of the dynasty). The route resolves it to the currently-active row, so callers do not need to track which version is active after prior upgrades."
     ),
     description: z.string().min(10).optional().describe(
       "Natural-language description of the desired upgraded workflow. " +
