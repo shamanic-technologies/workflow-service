@@ -462,7 +462,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "missing-slug",
+        workflowDynastySlug: "missing-slug",
         description: "Upgrade something that does not exist at all",
       });
 
@@ -505,7 +505,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "cold-email-outreach-obsidian",
+        workflowDynastySlug: "cold-email-outreach-obsidian",
         description: "Upgrade with same DAG produces same signature",
       });
 
@@ -548,7 +548,7 @@ describe("POST /workflows/upgrade", () => {
     const res = await request
       .post("/workflows/upgrade")
       .set(AUTH)
-      .send({ workflowSlug: "feature-obsidian", description: "Upgrade with a new signature for AC6" });
+      .send({ workflowDynastySlug: "feature-obsidian", description: "Upgrade with a new signature for AC6" });
 
     expect(res.status).toBe(201);
     expect(res.body.workflow.action).toBe("upgraded");
@@ -589,7 +589,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "stage-test-feature-umber",
+        workflowDynastySlug: "stage-test-feature-umber",
         description: "Upgrade that will fail at the LLM call",
       });
 
@@ -608,7 +608,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "stage-test-feature-umber",
+        workflowDynastySlug: "stage-test-feature-umber",
         description: "Upgrade that will fail at the registry call",
       });
 
@@ -625,7 +625,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "stage-test-feature-umber",
+        workflowDynastySlug: "stage-test-feature-umber",
         description: "Upgrade that will fail with an unrecognized error",
       });
 
@@ -699,7 +699,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "feat-a-alabaster",
+        workflowDynastySlug: "feat-a-alabaster",
         dag: VALID_LINEAR_DAG,
       });
 
@@ -724,7 +724,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "client-dag-feature-umber",
+        workflowDynastySlug: "client-dag-feature-umber",
         dag: NEW_DAG,
       });
 
@@ -760,7 +760,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "client-dag-feature-umber",
+        workflowDynastySlug: "client-dag-feature-umber",
         dag: NEW_DAG,
       });
 
@@ -786,7 +786,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "client-dag-feature-umber",
+        workflowDynastySlug: "client-dag-feature-umber",
         dag: NEW_DAG,
         description: "Surgical fix for the serialize_brand_fields script node",
       });
@@ -806,7 +806,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "client-dag-feature-umber",
+        workflowDynastySlug: "client-dag-feature-umber",
       });
 
     expect(res.status).toBe(400);
@@ -821,7 +821,7 @@ describe("POST /workflows/upgrade", () => {
       .post("/workflows/upgrade")
       .set(AUTH)
       .send({
-        workflowSlug: "client-dag-feature-umber",
+        workflowDynastySlug: "client-dag-feature-umber",
         dag: INVALID_DAG,
       });
 

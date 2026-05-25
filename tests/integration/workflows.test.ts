@@ -8,6 +8,7 @@ import {
   DAG_WITH_CONTENT_GEN_MISSING_VAR,
   DAG_WITH_CONTENT_GEN_ALL_VARS,
 } from "../helpers/fixtures.js";
+import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 
 // Mock DB
 const mockDbRows: Record<string, unknown>[] = [];
@@ -1199,5 +1200,78 @@ describe("UUID validation on :id routes", () => {
     const res = await request.post("/workflows/ranked/validate").set(AUTH);
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Invalid workflow ID format");
+  });
+});
+
+describe("POST /workflows/upgrade (workflowDynastySlug lookup)", () => {
+  beforeEach(() => {
+    mockDbRows.length = 0;
+  });
+
+  it("looks up the active row by dynastySlug regardless of which version is current", async () => {
+    // Simulate dynasty 'eden' where v1, v2 are deprecated and v3 is active.
+    // The route's WHERE filter is (workflowDynastySlug = ? AND status = 'active'),
+    // so seeding only the active row mirrors what the DB would return.
+    const signature = computeDAGSignature(VALID_LINEAR_DAG);
+    mockDbRows.push({
+      id: WF_HTTP_ID,
+      orgId: "org-1",
+      workflowSlug: "sales-cold-email-outreach-eden-v3",
+      workflowName: "Sales Cold Email Outreach Eden v3",
+      workflowDynastySlug: "sales-cold-email-outreach-eden",
+      workflowDynastyName: "Sales Cold Email Outreach Eden",
+      workflowDynastySignatureName: "eden",
+      featureSlug: "sales-cold-email-outreach",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      version: 3,
+      status: "active",
+      signature,
+      dag: VALID_LINEAR_DAG,
+      tags: [],
+      description: "v3 active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowDynastySlug: "sales-cold-email-outreach-eden",
+        dag: VALID_LINEAR_DAG, // same signature -> in-place update (200)
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.workflowDynastySlug).toBe("sales-cold-email-outreach-eden");
+    expect(res.body.workflow.version).toBe(3);
+    expect(res.body.workflow.action).toBe("updated");
+  });
+
+  it("returns 404 when no active row matches the dynastySlug", async () => {
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowDynastySlug: "no-such-dynasty",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain("dynasty");
+    expect(res.body.error).toContain("no-such-dynasty");
+  });
+
+  it("rejects legacy workflowSlug field with a Zod validation error (post-rename bigbang)", async () => {
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowSlug: "sales-cold-email-outreach-eden",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(400);
   });
 });

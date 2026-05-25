@@ -120,6 +120,16 @@ Examples below use natural-language placeholders like \`<path to X>\` for any va
 For path parameters (e.g. \`/internal/brands/{brandId}\`), use \`params.*\` in inputMapping:
 - "params.brandId": "$ref:start-run.output.<path to brandId in start-run response>" → replaces {brandId} in the path
 
+### \`$ref\` resolution rule (HARD)
+
+Every \`$ref\` path you emit MUST resolve against the OpenAPI specs injected below. Two distinct cases:
+
+1. **Fixed-schema objects** (declared via \`properties\`): use the property names verbatim from the spec. NEVER invent a key. If the upstream node response declares \`data.organization.name\`, you MUST emit \`$ref:node.output.data.organization.name\` — not \`data.organizationName\`, not \`data.org.name\`, not \`data.organization_name\`. Resolution failure = validation error.
+
+2. **Dynamic-key maps** (declared via \`additionalProperties\`): the keys are caller-chosen. Match the key you sent in the request body. Example: \`brand-extract-fields\` body sends \`fields: [{key: "companyOverview"}, ...]\` and the response is \`{fields: {<caller-key>: MultiBrandFieldValue}}\` — so \`$ref:brand-extract-fields.output.fields.companyOverview.value\` is valid (the key \`companyOverview\` was supplied in the body).
+
+If a needed field is absent from a fixed-schema response, do NOT invent a path. Either pick a different upstream node that legitimately exposes the value, or omit the field. Inventing paths against fixed schemas is a hard failure.
+
 ## Special Config Keys (stripped before passing to script)
 
 - retries (number): retry attempts on failure. Default 3. Set 0 for non-idempotent ops (email sends, SMS, queue consumes).

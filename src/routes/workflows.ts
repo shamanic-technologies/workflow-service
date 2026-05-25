@@ -272,13 +272,13 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       .from(workflows)
       .where(
         and(
-          eq(workflows.workflowSlug, body.workflowSlug),
+          eq(workflows.workflowDynastySlug, body.workflowDynastySlug),
           eq(workflows.status, "active"),
         )
       );
 
     if (!existing) {
-      res.status(404).json({ error: `Active workflow not found for slug "${body.workflowSlug}"` });
+      res.status(404).json({ error: `Active workflow not found for dynasty "${body.workflowDynastySlug}"` });
       return;
     }
 

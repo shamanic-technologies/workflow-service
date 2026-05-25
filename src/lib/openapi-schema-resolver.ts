@@ -188,7 +188,7 @@ export function walkSchemaPath(
       return {
         valid: false,
         resolvedPath,
-        availableAt: Object.keys(current.properties),
+        availableAt: formatAvailableKeys(current.properties, spec),
       };
     }
 
@@ -211,6 +211,31 @@ export function walkSchemaPath(
   }
 
   return { valid: true, resolvedPath };
+}
+
+/**
+ * Formats the keys available at a path-failure point. For object-typed values,
+ * inlines up to 5 sub-keys as `key{sub1,sub2,...}` so callers see one level
+ * deeper without a second round-trip. Scalars stay bare.
+ *
+ * Example: `lead.data.organizationName` fails at `lead.data` →
+ *   ["leadId", "firstName", "organization{name,industry,estimatedNumEmployees,...}"]
+ */
+function formatAvailableKeys(
+  properties: Record<string, unknown>,
+  spec: Record<string, unknown>,
+): string[] {
+  const MAX_SUB_KEYS = 5;
+  return Object.entries(properties).map(([key, value]) => {
+    if (typeof value !== "object" || value === null) return key;
+    const raw = resolveRawSchema(value as Record<string, unknown>, spec);
+    const resolved = resolveSchema(raw, spec);
+    if (!resolved || Object.keys(resolved.properties).length === 0) return key;
+    const subKeys = Object.keys(resolved.properties);
+    const shown = subKeys.slice(0, MAX_SUB_KEYS).join(",");
+    const suffix = subKeys.length > MAX_SUB_KEYS ? ",..." : "";
+    return `${key}{${shown}${suffix}}`;
+  });
 }
 
 /**
