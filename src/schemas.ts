@@ -471,12 +471,25 @@ export const UpgradeWorkflowFromDescriptionSchema = z
     workflowSlug: z.string().min(1).describe(
       "Slug of the active workflow to upgrade. Must reference an active row."
     ),
-    description: z.string().min(10).describe(
-      "Natural-language description of the desired upgraded workflow."
+    description: z.string().min(10).optional().describe(
+      "Natural-language description of the desired upgraded workflow. " +
+      "Required when `dag` is not provided (LLM regenerates the DAG from this description). " +
+      "Optional when `dag` is provided; if present, replaces the stored description on the resulting row."
+    ),
+    dag: DAGSchema.optional().describe(
+      "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, " +
+      "its signature computed, and the upgrade applies the same in-place / new-version branching as " +
+      "the LLM path. category/channel/audienceType are inherited from the existing row (no LLM to infer them). " +
+      "Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running " +
+      "generation. Either `dag` or `description` MUST be provided."
     ),
     hints: GenerateWorkflowHintsSchema.optional().describe(
-      "Optional hints to guide generation."
+      "Optional hints to guide generation. Ignored when `dag` is provided."
     ),
+  })
+  .refine((data) => data.dag !== undefined || data.description !== undefined, {
+    message: "Either 'dag' or 'description' is required",
+    path: ["dag"],
   })
   .openapi("UpgradeWorkflowFromDescriptionRequest");
 

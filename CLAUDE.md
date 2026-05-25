@@ -120,10 +120,14 @@ The legacy `upgraded_to` and `forked_from` columns are gone. The successor of a 
 - This endpoint never upgrades existing dynasties.
 
 **Upgrade — `POST /workflows/upgrade`:**
-- Body: `{ workflowSlug, description, hints? }`. LLM regenerates the DAG.
+- Body: `{ workflowSlug, description?, dag?, hints? }`. **Exactly one of `dag` or `description` MUST be provided** (Zod refine enforces it; missing both → 400).
+- Two DAG sources:
+  - `dag` supplied → client-supplied DAG path. The LLM is **not invoked**. The DAG is run through `validateDAG` (rejects with 400 on invalid topology), its signature computed, and the rest of the flow is identical to the LLM path. `category`/`channel`/`audienceType` are **inherited from the existing row** (no LLM to infer them). `description`, if also provided, replaces the stored description on the resulting row. Use this for surgical edits (e.g. patch a single script node) without burning an LLM round-trip — the LLM-regen path tends to drift on small fixes.
+  - `dag` absent → LLM path. `description` is required (min 10 chars) and `generateWorkflow()` regenerates the full DAG from it. `hints` is forwarded to the generator; ignored when `dag` is supplied.
 - 404 if no active workflow matches `workflowSlug`.
 - If the new signature equals the existing one → in-place update, returns 200.
-- Otherwise inserts a new row in the **same** dynasty (`workflow_dynasty_slug`, `workflow_dynasty_name`, `workflow_dynasty_signature_name` all unchanged — the dynasty signature name is immutable per dynasty) with `creation_type='upgrade'`, `created_from_workflow=existing.id`, `version=existing.version+1`, version suffix on `workflow_slug`/`workflow_name`. The predecessor is deprecated via `deprecateWorkflow()` (which also deletes its Windmill flow when no active campaign still references it). Returns 201.
+- Otherwise inserts a new row in the **same** dynasty (`workflow_dynasty_slug`, `workflow_dynasty_name`, `workflow_dynasty_signature_name` all unchanged — the dynasty signature name is immutable per dynasty) with `creation_type='upgrade'`, `created_from_workflow=existing.id`, `version=existing.version+1`, version suffix on `workflow_slug`/`workflow_name`. Returns 201.
+- **Predecessor deprecation order matters.** The partial unique index `idx_workflows_active_signame (feature_slug, signature_name) WHERE status='active'` rejects two `status='active'` rows sharing `(feature_slug, signature_name)`. The upgrade route therefore wraps the deprecate+insert in a `db.transaction(...)` block and flips the predecessor to `status='deprecated'` **before** inserting the new active row. Windmill cleanup (deleting the predecessor's flow) runs **after** the DB commit so a rolled-back transaction does not leave Windmill in an inconsistent state.
 
 **Fork — `PUT /workflows/{id}` with a DAG of new signature:**
 - Inserts a new dynasty (new `workflow_dynasty_signature_name`, new `workflow_dynasty_slug`, new `workflow_dynasty_name`) with `creation_type='fork'`, `created_from_workflow=existing.id`, `version=1`.

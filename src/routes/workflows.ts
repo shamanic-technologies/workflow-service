@@ -19,7 +19,6 @@ import {
   generateWorkflow,
   GenerationValidationError,
 } from "../lib/workflow-generator.js";
-import { deprecateWorkflow } from "../lib/workflow-deprecation.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import { pickWorkflowDynastySignatureName } from "../lib/workflow-dynasty-signature-name.js";
 import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
@@ -254,9 +253,12 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
   }
 });
 
-// POST /workflows/upgrade — Regenerate the DAG of an existing active workflow
-// using an LLM and either update it in-place (signature unchanged) or insert
-// a new version in the same dynasty (signature changed).
+// POST /workflows/upgrade — Apply a new DAG to an existing active workflow,
+// either in-place (signature unchanged) or as a new version in the same dynasty
+// (signature changed). The new DAG comes from one of two sources:
+//   - body.dag (client-supplied) — surgical edits, skips the LLM
+//   - body.description + LLM regeneration — caller asks the LLM to redesign
+// Exactly one source must be provided; the Zod refine enforces it.
 router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, res) => {
   try {
     const body = UpgradeWorkflowFromDescriptionSchema.parse(req.body);
@@ -283,17 +285,42 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     traceEvent(runId, {
       service: "workflow-service",
       event: "upgrade-start",
-      detail: `Upgrading workflow="${existing.workflowSlug}" featureSlug="${existing.featureSlug}"`,
-      data: { workflowSlug: existing.workflowSlug, featureSlug: existing.featureSlug },
+      detail: `Upgrading workflow="${existing.workflowSlug}" featureSlug="${existing.featureSlug}" source=${body.dag ? "client-dag" : "llm"}`,
+      data: { workflowSlug: existing.workflowSlug, featureSlug: existing.featureSlug, source: body.dag ? "client-dag" : "llm" },
     }, req.headers).catch(() => {});
 
-    const generated = await generateWorkflow(
-      { description: body.description, hints: body.hints },
-      dsHeaders,
-    );
+    let dag: DAG;
+    let resolvedDescription: string;
+    let resolvedCategory: typeof existing.category;
+    let resolvedChannel: typeof existing.channel;
+    let resolvedAudienceType: typeof existing.audienceType;
 
-    const dag = generated.dag as DAG;
-    const newSignature = computeDAGSignature(generated.dag);
+    if (body.dag) {
+      const validation = validateDAG(body.dag as DAG);
+      if (!validation.valid) {
+        res.status(400).json({ error: "Invalid DAG", details: validation.errors });
+        return;
+      }
+      dag = body.dag as DAG;
+      resolvedDescription = body.description ?? existing.description ?? "";
+      // category/channel/audienceType are LLM-inferred fields; with a client-supplied DAG
+      // there is nothing to infer from, so inherit the existing dynasty's values.
+      resolvedCategory = existing.category;
+      resolvedChannel = existing.channel;
+      resolvedAudienceType = existing.audienceType;
+    } else {
+      const generated = await generateWorkflow(
+        { description: body.description!, hints: body.hints },
+        dsHeaders,
+      );
+      dag = generated.dag as DAG;
+      resolvedDescription = generated.description;
+      resolvedCategory = generated.category;
+      resolvedChannel = generated.channel;
+      resolvedAudienceType = generated.audienceType;
+    }
+
+    const newSignature = computeDAGSignature(dag);
 
     // Same signature → in-place update.
     if (newSignature === existing.signature) {
@@ -303,7 +330,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         try {
           await client.updateFlow(existing.windmillFlowPath, {
             summary: existing.workflowSlug,
-            description: generated.description,
+            description: resolvedDescription,
             value: openFlow.value,
             schema: openFlow.schema,
           });
@@ -315,11 +342,11 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       const [updated] = await db
         .update(workflows)
         .set({
-          description: generated.description,
-          category: generated.category,
-          channel: generated.channel,
-          audienceType: generated.audienceType,
-          dag: generated.dag,
+          description: resolvedDescription,
+          category: resolvedCategory,
+          channel: resolvedChannel,
+          audienceType: resolvedAudienceType,
+          dag,
           updatedAt: new Date(),
         })
         .where(eq(workflows.id, existing.id))
@@ -338,8 +365,8 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
           version: updated.version,
           action: "updated" as const,
         },
-        dag: generated.dag,
-        generatedDescription: generated.description,
+        dag,
+        generatedDescription: resolvedDescription,
       });
       return;
     }
@@ -358,7 +385,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         await client.createFlow({
           path: flowPath,
           summary: newSlug,
-          description: generated.description,
+          description: resolvedDescription,
           value: openFlow.value,
           schema: openFlow.schema,
         });
@@ -367,58 +394,90 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       }
     }
 
-    const [created] = await db
-      .insert(workflows)
-      .values({
-        orgId,
-        createdForBrandId: existing.createdForBrandId,
-        humanId: existing.humanId,
-        workflowSlug: newSlug,
-        workflowName: newName,
-        workflowDynastySlug: existing.workflowDynastySlug,
-        workflowDynastyName: existing.workflowDynastyName,
-        description: generated.description,
-        featureSlug: existing.featureSlug,
-        category: generated.category,
-        channel: generated.channel,
-        audienceType: generated.audienceType,
-        tags: (existing.tags as string[]) ?? [],
-        signature: newSignature,
-        workflowDynastySignatureName: existing.workflowDynastySignatureName,
-        version: newVersion,
-        dag: generated.dag,
-        windmillFlowPath: flowPath,
-        creationType: "upgrade",
-        createdFromWorkflow: existing.id,
-        createdByUserId: userId,
-        createdByRunId: runId,
-      })
-      .returning();
+    // Atomic: deprecate predecessor (status='deprecated') BEFORE inserting the new
+    // active row. The partial unique index idx_workflows_active_signame
+    // (feature_slug, signature_name) WHERE status='active' would otherwise reject
+    // the insert because the predecessor still occupies the (feature_slug, signame)
+    // slot. Wrapping in a transaction guarantees both rows commit together.
+    let created: typeof workflows.$inferSelect;
+    await db.transaction(async (tx) => {
+      await tx
+        .update(workflows)
+        .set({ status: "deprecated", updatedAt: new Date() })
+        .where(eq(workflows.id, existing.id));
 
-    await deprecateWorkflow(db, existing.id, client);
+      const [row] = await tx
+        .insert(workflows)
+        .values({
+          orgId,
+          createdForBrandId: existing.createdForBrandId,
+          humanId: existing.humanId,
+          workflowSlug: newSlug,
+          workflowName: newName,
+          workflowDynastySlug: existing.workflowDynastySlug,
+          workflowDynastyName: existing.workflowDynastyName,
+          description: resolvedDescription,
+          featureSlug: existing.featureSlug,
+          category: resolvedCategory,
+          channel: resolvedChannel,
+          audienceType: resolvedAudienceType,
+          tags: (existing.tags as string[]) ?? [],
+          signature: newSignature,
+          workflowDynastySignatureName: existing.workflowDynastySignatureName,
+          version: newVersion,
+          dag,
+          windmillFlowPath: flowPath,
+          creationType: "upgrade",
+          createdFromWorkflow: existing.id,
+          createdByUserId: userId,
+          createdByRunId: runId,
+        })
+        .returning();
+      created = row;
+    });
+
+    // Windmill cleanup of the predecessor flow happens AFTER the DB commit so a
+    // rolled-back transaction does not leave Windmill in an inconsistent state.
+    // Failures here are logged but never re-thrown — the row is already deprecated.
+    if (client && existing.windmillFlowPath) {
+      try {
+        await client.deleteFlow(existing.windmillFlowPath);
+        console.log(
+          `[workflow-service] upgrade: deleted Windmill flow "${existing.windmillFlowPath}" for deprecated predecessor "${existing.workflowSlug}"`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("404")) {
+          console.warn(
+            `[workflow-service] upgrade: failed to delete Windmill flow "${existing.windmillFlowPath}" for "${existing.workflowSlug}":`,
+            msg,
+          );
+        }
+      }
+    }
 
     traceEvent(runId, {
       service: "workflow-service",
       event: "upgrade-complete",
-      detail: `Upgraded "${existing.workflowSlug}" -> "${created.workflowSlug}" (v${newVersion})`,
-      data: { from: existing.workflowSlug, to: created.workflowSlug, version: newVersion },
+      detail: `Upgraded "${existing.workflowSlug}" -> "${created!.workflowSlug}" (v${newVersion}) source=${body.dag ? "client-dag" : "llm"}`,
+      data: { from: existing.workflowSlug, to: created!.workflowSlug, version: newVersion, source: body.dag ? "client-dag" : "llm" },
     }, req.headers).catch(() => {});
 
     res.status(201).json({
       workflow: {
-        id: created.id,
-        workflowSlug: created.workflowSlug,
-        workflowName: created.workflowName,
-        workflowDynastySlug: created.workflowDynastySlug,
-        featureSlug: created.featureSlug,
-        tags: (created.tags as string[]) ?? [],
-        signature: created.signature,
-        workflowDynastySignatureName: created.workflowDynastySignatureName,
-        version: created.version,
+        id: created!.id,
+        workflowSlug: created!.workflowSlug,
+        workflowName: created!.workflowName,
+        workflowDynastySlug: created!.workflowDynastySlug,
+        featureSlug: created!.featureSlug,
+        tags: (created!.tags as string[]) ?? [],
+        signature: created!.signature,
+        workflowDynastySignatureName: created!.workflowDynastySignatureName,
+        version: created!.version,
         action: "upgraded" as const,
       },
-      dag: generated.dag,
-      generatedDescription: generated.description,
+      dag,
+      generatedDescription: resolvedDescription,
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
