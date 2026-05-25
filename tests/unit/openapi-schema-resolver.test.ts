@@ -361,6 +361,161 @@ describe("walkSchemaPath with additionalProperties (dynamic keys)", () => {
   });
 });
 
+describe("walkSchemaPath availableAt drill-down (1-level nested keys)", () => {
+  // Mirrors lead-service POST /orgs/buffer/next response shape: the `data` object
+  // has scalar keys (firstName, leadId) plus an `organization` sub-object. When a
+  // caller tries `lead.data.organizationName` (flat — does not exist), they should
+  // see "organization{name,industry,...}" in the failure listing so they know to
+  // descend without a second guess-and-check round-trip.
+  const leadResponseSchema = resolveSchema(
+    {
+      type: "object",
+      properties: {
+        lead: {
+          type: "object",
+          properties: {
+            data: {
+              type: "object",
+              properties: {
+                leadId: { type: "string" },
+                firstName: { type: "string" },
+                currentTitle: { type: "string" },
+                organization: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    industry: { type: "string" },
+                    estimatedNumEmployees: { type: "number" },
+                    annualRevenue: { type: "number" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {},
+  )!;
+
+  it("inlines object-typed sibling keys at the failure depth", () => {
+    const result = walkSchemaPath(
+      leadResponseSchema,
+      ["lead", "data", "organizationName"],
+      {},
+    );
+    expect(result.valid).toBe(false);
+    expect(result.availableAt).toContain("leadId");
+    expect(result.availableAt).toContain("firstName");
+    expect(result.availableAt).toContain("currentTitle");
+    expect(result.availableAt).toContain(
+      "organization{name,industry,estimatedNumEmployees,annualRevenue}",
+    );
+  });
+
+  it("keeps scalar siblings bare (no curly suffix)", () => {
+    const result = walkSchemaPath(
+      leadResponseSchema,
+      ["lead", "data", "bogus"],
+      {},
+    );
+    expect(result.availableAt).toContain("leadId");
+    expect(result.availableAt?.find((k) => k.startsWith("leadId"))).toBe("leadId");
+  });
+
+  it("truncates wide objects at 5 sub-keys with ellipsis", () => {
+    const wideSchema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          outer: {
+            type: "object",
+            properties: {
+              wide: {
+                type: "object",
+                properties: {
+                  a: { type: "string" },
+                  b: { type: "string" },
+                  c: { type: "string" },
+                  d: { type: "string" },
+                  e: { type: "string" },
+                  f: { type: "string" },
+                  g: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+      {},
+    )!;
+    const result = walkSchemaPath(wideSchema, ["outer", "missing"], {});
+    expect(result.availableAt).toContain("wide{a,b,c,d,e,...}");
+  });
+
+  it("resolves $ref when listing nested sub-keys", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Organization: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              industry: { type: "string" },
+            },
+          },
+        },
+      },
+    };
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          data: {
+            type: "object",
+            properties: {
+              organization: { $ref: "#/components/schemas/Organization" },
+              firstName: { type: "string" },
+            },
+          },
+        },
+      },
+      spec,
+    )!;
+
+    const result = walkSchemaPath(schema, ["data", "missing"], spec);
+    expect(result.availableAt).toContain("firstName");
+    expect(result.availableAt).toContain("organization{name,industry}");
+  });
+
+  it("falls back to bare key when sub-schema has no properties (e.g. additionalProperties-only)", () => {
+    // brand-service extract-fields shape: outer.fields is an object with only
+    // additionalProperties, no properties. Formatter must NOT crash and should
+    // keep the key bare.
+    const schema = resolveSchema(
+      {
+        type: "object",
+        properties: {
+          outer: {
+            type: "object",
+            properties: {
+              fields: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
+              scalar: { type: "string" },
+            },
+          },
+        },
+      },
+      {},
+    )!;
+    const result = walkSchemaPath(schema, ["outer", "missing"], {});
+    expect(result.availableAt).toContain("fields");
+    expect(result.availableAt).toContain("scalar");
+  });
+});
+
 describe("getRequestBodySchema", () => {
   const spec = {
     paths: {
