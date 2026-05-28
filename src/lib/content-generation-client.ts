@@ -37,6 +37,7 @@ export async function fetchPromptTemplate(
     {
       method: "GET",
       headers: { "x-api-key": apiKey, ...downstreamHeaders },
+      signal: AbortSignal.timeout(600_000),
     },
   );
 

@@ -26,6 +26,7 @@ export async function main(
     `${baseUrl}/anonymous-users?${params}`,
     {
       headers: reqHeaders,
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

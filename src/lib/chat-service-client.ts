@@ -48,6 +48,7 @@ export async function chatServiceComplete(
       ...downstreamHeaders,
     },
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -76,6 +77,7 @@ export async function chatServicePlatformComplete(
       "x-api-key": apiKey,
     },
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

@@ -46,6 +46,7 @@ export async function main(
         campaignId: context.campaignId,
         brandId: context.brandId,
       }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

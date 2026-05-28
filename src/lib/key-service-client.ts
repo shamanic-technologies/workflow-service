@@ -40,6 +40,7 @@ export async function fetchProviderRequirements(
       ...downstreamHeaders,
     },
     body: JSON.stringify({ endpoints }),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

@@ -48,6 +48,7 @@ export async function traceEvent(
       method: "POST",
       headers: outHeaders,
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(600_000),
     });
   } catch (err) {
     console.error("[workflow-service] Failed to trace event:", err);

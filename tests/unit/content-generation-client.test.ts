@@ -45,7 +45,10 @@ describe("content-generation-client", () => {
     expect(result!.type).toBe("cold-email");
     expect(mockFetch).toHaveBeenCalledWith(
       "https://cg.example.com/platform-prompts?type=cold-email",
-      { method: "GET", headers: { "x-api-key": "key-123" } },
+      expect.objectContaining({
+        method: "GET",
+        headers: { "x-api-key": "key-123" },
+      }),
     );
   });
 

@@ -40,6 +40,7 @@ export async function fetchFeatureOutputs(
     {
       method: "GET",
       headers: { "x-api-key": config.apiKey, ...downstreamHeaders },
+      signal: AbortSignal.timeout(600_000),
     },
   );
 
@@ -80,6 +81,7 @@ export async function fetchStatsRegistry(
   const res = await fetch(`${config.baseUrl}/stats/registry`, {
     method: "GET",
     headers: { "x-api-key": config.apiKey, ...downstreamHeaders },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

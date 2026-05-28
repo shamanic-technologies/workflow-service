@@ -63,6 +63,7 @@ export async function fetchRunCostsAuth(
       "x-api-key": apiKey,
       ...downstreamHeaders,
     },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -111,6 +112,7 @@ export async function fetchRunCostsPublic(filters?: {
   const res = await fetch(`${baseUrl}/v1/stats/public/costs?${params}`, {
     method: "GET",
     headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -190,6 +192,7 @@ export async function fetchEmailStatsAuth(
       "x-api-key": apiKey,
       ...downstreamHeaders,
     },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -216,6 +219,7 @@ export async function fetchEmailStatsPublic(
   const res = await fetch(`${baseUrl}/public/stats?${params}`, {
     method: "GET",
     headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

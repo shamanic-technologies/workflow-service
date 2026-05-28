@@ -29,6 +29,7 @@ export async function main(
       method: "PATCH",
       headers: reqHeaders,
       body: JSON.stringify({ firstName, lastName, phone, userId: linkedUserId, orgId, metadata }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

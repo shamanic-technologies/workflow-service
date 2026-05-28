@@ -29,6 +29,7 @@ export async function main(
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({ orgId, productId, unitAmountInCents, currency, recurring, metadata }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

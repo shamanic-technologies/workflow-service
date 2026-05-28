@@ -24,6 +24,7 @@ export async function main(
     url.toString(),
     {
       headers: reqHeaders,
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

@@ -21,6 +21,7 @@ export async function main(
     `${baseUrl}/coupons/${couponId}`,
     {
       headers: reqHeaders,
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

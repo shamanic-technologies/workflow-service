@@ -21,6 +21,7 @@ export async function main(
     `${baseUrl}/products/${productId}`,
     {
       headers: reqHeaders,
+      signal: AbortSignal.timeout(600_000),
     }
   );
 
