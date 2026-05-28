@@ -30,6 +30,7 @@ export async function main(
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({ eventType, recipientEmail, brandId, campaignId, productId, userId, orgId, metadata }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

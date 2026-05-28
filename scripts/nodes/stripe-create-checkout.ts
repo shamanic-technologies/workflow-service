@@ -37,6 +37,7 @@ export async function main(
         lineItems, successUrl, cancelUrl, mode, customerId, customerEmail,
         metadata, discounts, orgId, brandId, campaignId, runId,
       }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

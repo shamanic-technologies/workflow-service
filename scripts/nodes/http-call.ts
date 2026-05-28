@@ -80,7 +80,13 @@ export async function main(
   // Resolved x-api-key always takes precedence
   if (apiKey) reqHeaders["x-api-key"] = apiKey;
 
-  const options: RequestInit = { method, headers: reqHeaders };
+  const options: RequestInit = {
+    method,
+    headers: reqHeaders,
+    // 10-min deadline. Some downstream endpoints (RAG ranking, heavy enrichment)
+    // legitimately need 5-10 min to respond; Bun's default fetch timeout is shorter.
+    signal: AbortSignal.timeout(600_000),
+  };
 
   if (body && ["POST", "PUT", "PATCH"].includes(method.toUpperCase())) {
     options.body = JSON.stringify(body);

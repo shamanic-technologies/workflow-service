@@ -28,6 +28,7 @@ export async function main(
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({ orgId, name, description, id, metadata }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

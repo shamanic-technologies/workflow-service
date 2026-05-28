@@ -42,6 +42,7 @@ export async function fetchLeadStats(
       "x-api-key": apiKey,
       ...downstreamHeaders,
     },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -81,6 +82,7 @@ export async function fetchJournalistStats(
       "x-api-key": apiKey,
       ...downstreamHeaders,
     },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -122,6 +124,7 @@ export async function fetchOutletStats(
       "x-api-key": apiKey,
       ...downstreamHeaders,
     },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

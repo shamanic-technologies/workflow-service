@@ -27,6 +27,7 @@ export async function main(
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({ runIds, orgId, brandId, campaignId }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

@@ -49,6 +49,7 @@ export async function fetchLlmContext(downstreamHeaders?: DownstreamHeaders): Pr
   const res = await fetch(`${baseUrl}/llm-context`, {
     method: "GET",
     headers: buildHeaders(apiKey, downstreamHeaders),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -73,6 +74,7 @@ export async function fetchServiceEndpoints(
     {
       method: "GET",
       headers: buildHeaders(apiKey, downstreamHeaders),
+      signal: AbortSignal.timeout(600_000),
     },
   );
 
@@ -95,6 +97,7 @@ export async function fetchServiceList(
   const res = await fetch(`${baseUrl}/services`, {
     method: "GET",
     headers: buildHeaders(apiKey, downstreamHeaders),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -146,6 +149,7 @@ export async function fetchServiceSpec(
     {
       method: "GET",
       headers: buildHeaders(apiKey, downstreamHeaders),
+      signal: AbortSignal.timeout(600_000),
     },
   );
 
