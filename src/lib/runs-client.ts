@@ -59,6 +59,7 @@ export async function createRun(opts: {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -96,6 +97,7 @@ export async function createPlatformRun(opts: {
       "x-service-name": "workflow-service",
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -125,6 +127,7 @@ export async function closeRun(
       "x-org-id": orgId,
     },
     body: JSON.stringify({ status }),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {
@@ -150,6 +153,7 @@ export async function closePlatformRun(
       "x-service-name": "workflow-service",
     },
     body: JSON.stringify({ status }),
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

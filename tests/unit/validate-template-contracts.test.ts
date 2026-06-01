@@ -11,13 +11,13 @@ const COLD_EMAIL_TEMPLATE: PromptTemplate = {
   type: "cold-email",
   prompt: "Write a cold email for {{leadFirstName}} at {{leadCompanyName}}...",
   variables: [
-    "leadFirstName",
-    "leadLastName",
-    "leadTitle",
-    "leadCompanyName",
-    "leadCompanyIndustry",
-    "clientCompanyName",
-    "brandProfile",
+    { name: "leadFirstName", description: "Lead's first name" },
+    { name: "leadLastName", description: "Lead's last name" },
+    { name: "leadTitle", description: "Lead's job title" },
+    { name: "leadCompanyName", description: "Lead's company name" },
+    { name: "leadCompanyIndustry", description: "Lead's company industry" },
+    { name: "clientCompanyName", description: "Our client's company name" },
+    { name: "brandProfile", description: "Brand profile — array/object/scalar" },
   ],
   createdAt: "2026-03-12T15:06:04.002Z",
   updatedAt: "2026-03-17T08:02:50.277Z",
@@ -204,6 +204,59 @@ describe("validateTemplateContracts", () => {
     expect(result.valid).toBe(true);
     expect(result.issues).toHaveLength(0);
     expect(result.templateRefs).toHaveLength(1);
+  });
+
+  it("regression: object-shaped declared variables ({name,description}) validate green when node provides exactly the declared names", () => {
+    // Repro of the blind-discovery-email-v15 false-INVALID bug: content-generation
+    // declares variables as { name, description } objects. The validator must
+    // compare provided names against `.name`, not the raw objects (which stringify
+    // to "[object Object]" → never match → 11 false errors + 11 false warnings).
+    const declaredNames = [
+      "currentDate",
+      "leadHeadline",
+      "leadLastName",
+      "leadFirstName",
+      "leadCompanyName",
+      "leadCompanySize",
+      "leadCompanyIndustry",
+      "leadCompanyKeywords",
+      "brandExtractedFields",
+      "leadCompanyTechStack",
+      "leadCompanyDescription",
+    ];
+    const template: PromptTemplate = {
+      id: "tmpl-blind-discovery",
+      type: "blind-discovery-email-v15",
+      prompt: "Write a blind discovery email...",
+      variables: declaredNames.map((name) => ({ name, description: `desc for ${name}` })),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    };
+
+    const inputMapping: Record<string, string> = { "body.type": "blind-discovery-email-v15" };
+    for (const name of declaredNames) {
+      inputMapping[`body.variables.${name}`] = `$ref:some-node.output.${name}`;
+    }
+
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping,
+        },
+      ],
+      edges: [],
+    };
+
+    const result = validateTemplateContracts(
+      dag,
+      new Map([["blind-discovery-email-v15", template]]),
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
   });
 
   it("detects missing required variable (error)", () => {

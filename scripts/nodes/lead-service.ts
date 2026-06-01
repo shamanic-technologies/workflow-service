@@ -40,6 +40,7 @@ export async function main(
         parentRunId: resolvedRunId,
         searchParams: searchParams ?? {},
       }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

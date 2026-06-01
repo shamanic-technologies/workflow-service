@@ -45,6 +45,7 @@ export class WindmillClient {
         "Content-Type": "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(600_000),
     });
 
     if (!res.ok) {
@@ -151,6 +152,7 @@ export class WindmillClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ value }),
+      signal: AbortSignal.timeout(600_000),
     });
 
     if (!res.ok) {
@@ -166,6 +168,7 @@ export class WindmillClient {
   async healthCheck(): Promise<boolean> {
     const res = await fetch(`${this.baseUrl}/api/version`, {
       headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(600_000),
     });
     return res.ok;
   }

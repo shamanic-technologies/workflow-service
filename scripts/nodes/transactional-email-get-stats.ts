@@ -25,6 +25,7 @@ export async function main(
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({ orgId, userId, eventType }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 

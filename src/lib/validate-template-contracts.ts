@@ -101,7 +101,12 @@ export function validateTemplateContracts(
       continue;
     }
 
-    const declaredVars = new Set(template.variables);
+    // Template variables are declared as { name, description } objects — compare
+    // against the node-provided variable names by extracting `.name`. Comparing the
+    // raw objects against provided name strings never matches (objects stringify to
+    // "[object Object]"), producing false errors + warnings on a valid workflow.
+    const declaredVarNames = template.variables.map((v) => v.name);
+    const declaredVars = new Set(declaredVarNames);
     const providedVars = new Set(ref.variablesProvided);
 
     // Missing variables (declared in template but not provided by workflow) → error
@@ -125,7 +130,7 @@ export function validateTemplateContracts(
           templateType: ref.templateType,
           field: provided,
           severity: "warning",
-          reason: `Node "${ref.nodeId}" provides variable "${provided}" but template "${ref.templateType}" does not declare it — this variable will be ignored. Declared variables: ${template.variables.join(", ")}`,
+          reason: `Node "${ref.nodeId}" provides variable "${provided}" but template "${ref.templateType}" does not declare it — this variable will be ignored. Declared variables: ${declaredVarNames.join(", ")}`,
         });
       }
     }

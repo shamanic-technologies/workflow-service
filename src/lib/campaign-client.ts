@@ -36,6 +36,7 @@ export async function fetchAllCampaigns(
       "x-service-name": "workflow-service",
       ...downstreamHeaders,
     },
+    signal: AbortSignal.timeout(600_000),
   });
 
   if (!res.ok) {

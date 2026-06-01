@@ -32,6 +32,7 @@ export async function main(
         appId,
         ...contactData,
       }),
+      signal: AbortSignal.timeout(600_000),
     });
     return response.json();
   }
@@ -39,7 +40,7 @@ export async function main(
   if (action === "list") {
     const response = await fetch(
       `${baseUrl}/anonymous-users?appId=${appId}`,
-      { headers }
+      { headers, signal: AbortSignal.timeout(600_000) }
     );
     return response.json();
   }
@@ -47,7 +48,7 @@ export async function main(
   if (action === "get" && contactData?.id) {
     const response = await fetch(
       `${baseUrl}/anonymous-users/${contactData.id}`,
-      { headers }
+      { headers, signal: AbortSignal.timeout(600_000) }
     );
     return response.json();
   }

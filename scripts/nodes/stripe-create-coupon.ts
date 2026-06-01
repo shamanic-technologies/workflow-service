@@ -34,6 +34,7 @@ export async function main(
       method: "POST",
       headers: reqHeaders,
       body: JSON.stringify({ orgId, id, name, percentOff, amountOffInCents, currency, duration, durationInMonths, maxRedemptions, redeemBy, metadata }),
+      signal: AbortSignal.timeout(600_000),
     }
   );
 
