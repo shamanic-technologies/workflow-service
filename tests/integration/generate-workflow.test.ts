@@ -536,6 +536,8 @@ describe("POST /workflows/upgrade", () => {
       createdFromWorkflow: null,
       windmillFlowPath: "f/workflows/org-1/feature_obsidian",
     });
+    // SELECT #1 dynasty lookup → active row; SELECT #2 signature-conflict → none.
+    mockSelectResponses.push([...mockDbRows], []);
 
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: { ...VALID_LINEAR_DAG, edges: [{ from: "x1", to: "y1" }] },
@@ -665,6 +667,11 @@ describe("POST /workflows/upgrade", () => {
       windmillFlowPath: "f/workflows/org-1/client_dag_feature_umber",
     };
     mockDbRows.push(row);
+    // Drive the two SELECTs the new-signature upgrade path performs:
+    //   #1 dynasty lookup → the active row; #2 signature-conflict check → none.
+    // (The mock .where() ignores predicates, so the conflict check must be fed []
+    // explicitly or it would echo the active row and false-409.)
+    mockSelectResponses.push([row], []);
     return { id: row.id, signature: sig };
   }
 

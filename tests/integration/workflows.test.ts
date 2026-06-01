@@ -1263,6 +1263,66 @@ describe("POST /workflows/upgrade (workflowDynastySlug lookup)", () => {
     expect(res.body.error).toContain("no-such-dynasty");
   });
 
+  it("returns 409 (not a raw 500) when the new signature collides with another active workflow in the same feature_slug", async () => {
+    // Bug 2 repro: upgrading dynasty A to a DAG whose signature already belongs to
+    // an active sibling B (same feature_slug) used to leak the raw Postgres
+    // idx_workflows_active_sig unique-constraint violation as a 500. The route must
+    // detect the collision first and return a clean 409 naming the existing workflow.
+    const newSignature = computeDAGSignature(VALID_LINEAR_DAG);
+
+    // select #1 — dynasty lookup returns A (active, DIFFERENT signature → new-sig branch).
+    // select #2 — conflict check returns B (active sibling already holding newSignature).
+    mockSelectResponses.length = 0;
+    mockSelectResponses.push([
+      {
+        id: WF_ID,
+        orgId: "org-1",
+        workflowSlug: "sales-cold-email-outreach-alcor-v2",
+        workflowName: "Sales Cold Email Outreach Alcor v2",
+        workflowDynastySlug: "sales-cold-email-outreach-alcor",
+        workflowDynastyName: "Sales Cold Email Outreach Alcor",
+        workflowDynastySignatureName: "alcor",
+        featureSlug: "sales-cold-email-outreach",
+        category: "sales",
+        channel: "email",
+        audienceType: "cold-outreach",
+        version: 2,
+        status: "active",
+        signature: "signature-of-A-different-from-new",
+        dag: VALID_LINEAR_DAG,
+        tags: [],
+        description: "A active",
+        windmillFlowPath: "f/workflows/test/alcor",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+    mockSelectResponses.push([
+      {
+        id: WF_EXISTING_ID,
+        workflowSlug: "sales-cold-email-outreach-bellatrix",
+        workflowName: "Sales Cold Email Outreach Bellatrix",
+        signature: newSignature,
+        status: "active",
+        featureSlug: "sales-cold-email-outreach",
+      },
+    ]);
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({
+        workflowDynastySlug: "sales-cold-email-outreach-alcor",
+        dag: VALID_LINEAR_DAG,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("already exists");
+    expect(res.body.existingWorkflowId).toBe(WF_EXISTING_ID);
+    expect(res.body.existingWorkflowSlug).toBe("sales-cold-email-outreach-bellatrix");
+    expect(res.body.existingWorkflowName).toBe("Sales Cold Email Outreach Bellatrix");
+  });
+
   it("rejects legacy workflowSlug field with a Zod validation error (post-rename bigbang)", async () => {
     const res = await request
       .post("/workflows/upgrade")
