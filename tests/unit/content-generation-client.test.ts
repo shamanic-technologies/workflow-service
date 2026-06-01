@@ -29,7 +29,7 @@ describe("content-generation-client", () => {
           id: "1",
           type: "cold-email",
           prompt: "test",
-          variables: ["leadFirstName"],
+          variables: [{ name: "leadFirstName", description: "Lead's first name" }],
           createdAt: "2026-01-01",
           updatedAt: "2026-01-01",
         }),

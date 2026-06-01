@@ -1,10 +1,20 @@
 import type { DownstreamHeaders } from "./downstream-headers.js";
 
+/**
+ * A declared template variable. content-generation-service migrated variables
+ * from bare `string[]` to self-describing `{ name, description }` objects
+ * (DIS-52) — each variable documents the JSON shape the caller should provide.
+ */
+export interface PromptVariable {
+  name: string;
+  description: string;
+}
+
 export interface PromptTemplate {
   id: string;
   type: string;
   prompt: string;
-  variables: string[];
+  variables: PromptVariable[];
   createdAt: string;
   updatedAt: string;
 }

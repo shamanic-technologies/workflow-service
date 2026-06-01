@@ -371,6 +371,38 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       return;
     }
 
+    // Conflict guard: a different active workflow in the same feature_slug may
+    // already hold this signature (partial unique index idx_workflows_active_sig
+    // = (feature_slug, signature) WHERE status='active'). Inserting would violate
+    // the constraint and leak a raw Postgres 500. Detect it first and return a
+    // clean 409 so the caller knows it can use the existing workflow instead.
+    // Mirrors the fork path (PUT /workflows/{id}). Runs BEFORE creating the
+    // Windmill flow to avoid leaving an orphan flow behind on conflict.
+    const [conflicting] = await db
+      .select({
+        id: workflows.id,
+        workflowSlug: workflows.workflowSlug,
+        workflowName: workflows.workflowName,
+      })
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.featureSlug, existing.featureSlug),
+          eq(workflows.signature, newSignature),
+          eq(workflows.status, "active"),
+        )
+      );
+
+    if (conflicting) {
+      res.status(409).json({
+        error: "A workflow with this DAG signature already exists",
+        existingWorkflowId: conflicting.id,
+        existingWorkflowSlug: conflicting.workflowSlug,
+        existingWorkflowName: conflicting.workflowName,
+      });
+      return;
+    }
+
     // New signature → upgrade in same dynasty: bump version, deprecate predecessor.
     // The dynasty signature name is immutable per dynasty — reuse the existing one.
     const newVersion = existing.version + 1;
@@ -1019,7 +1051,11 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
 
     // Check for existing active workflow with same signature (conflict)
     const [conflicting] = await db
-      .select({ id: workflows.id, workflowSlug: workflows.workflowSlug })
+      .select({
+        id: workflows.id,
+        workflowSlug: workflows.workflowSlug,
+        workflowName: workflows.workflowName,
+      })
       .from(workflows)
       .where(
         and(
@@ -1034,6 +1070,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
         error: "A workflow with this DAG signature already exists",
         existingWorkflowId: conflicting.id,
         existingWorkflowSlug: conflicting.workflowSlug,
+        existingWorkflowName: conflicting.workflowName,
       });
       return;
     }
