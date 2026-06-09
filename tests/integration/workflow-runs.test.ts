@@ -17,9 +17,61 @@ function mockQueryResult(data: Record<string, unknown>[]) {
   return obj;
 }
 
-vi.mock("../../src/db/index.js", () => ({
-  db: {
-    insert: () => ({
+function isWorkflowRunsTable(table: unknown): boolean {
+  return !!table && typeof table === "object" && "windmillJobId" in table;
+}
+
+const ACTIVE_RUN_STATUSES = new Set(["dispatching", "queued", "running"]);
+
+function extractParamForColumn(condition: unknown, columnName: string): unknown {
+  if (!condition || typeof condition !== "object") return undefined;
+  const chunks = (condition as { queryChunks?: unknown[] }).queryChunks;
+  if (Array.isArray(chunks)) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunk && typeof chunk === "object") {
+        const name = (chunk as { name?: unknown }).name;
+        if (name === columnName) {
+          const next = chunks[i + 2];
+          if (next && typeof next === "object" && "value" in next) {
+            return (next as { value: unknown }).value;
+          }
+        }
+        const nested = extractParamForColumn(chunk, columnName);
+        if (nested !== undefined) return nested;
+      }
+    }
+  }
+  return undefined;
+}
+
+vi.mock("../../src/db/index.js", () => {
+  type MockDb = {
+    execute: ReturnType<typeof vi.fn>;
+    transaction: (fn: (tx: MockDb) => Promise<void>) => Promise<void>;
+    insert: (table: unknown) => {
+      values: (row: Record<string, unknown>) => {
+        returning: () => Promise<Record<string, unknown>[]>;
+      };
+    };
+    select: () => {
+      from: (table: unknown) => {
+        where: () => ReturnType<typeof mockQueryResult>;
+      };
+    };
+    update: (table: unknown) => {
+      set: (values: Record<string, unknown>) => {
+        where: () => {
+          returning: () => Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+  };
+
+  const mockDb: MockDb = {
+    execute: vi.fn().mockResolvedValue(undefined),
+    transaction: async (fn: (tx: typeof mockDb) => Promise<void>) => fn(mockDb),
+    insert: (table: unknown) => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
           id: crypto.randomUUID(),
@@ -29,7 +81,11 @@ vi.mock("../../src/db/index.js", () => ({
           startedAt: null,
           completedAt: null,
         };
-        mockRuns.push(newRow);
+        if (isWorkflowRunsTable(table)) {
+          mockRuns.push(newRow);
+        } else {
+          mockWorkflows.push(newRow);
+        }
         return {
           returning: () => Promise.resolve([newRow]),
         };
@@ -37,21 +93,37 @@ vi.mock("../../src/db/index.js", () => ({
     }),
     select: () => ({
       from: (table: unknown) => ({
-        where: () => {
+        where: (condition?: unknown) => {
           if (mockSelectResponses.length > 0) {
             return mockQueryResult(mockSelectResponses.shift()!);
           }
-          // Simple mock: return first matching item
+          if (isWorkflowRunsTable(table)) {
+            const executionKey = extractParamForColumn(condition, "execution_key");
+            if (typeof executionKey === "string") {
+              return mockQueryResult(
+                mockRuns.filter((run) =>
+                  run.executionKey === executionKey &&
+                  ACTIVE_RUN_STATUSES.has(String(run.status))
+                ),
+              );
+            }
+            return mockQueryResult(mockRuns.length > 0 ? [mockRuns[0]] : []);
+          }
           if (mockWorkflows.length > 0) return mockQueryResult([mockWorkflows[0]]);
-          if (mockRuns.length > 0) return mockQueryResult([mockRuns[0]]);
           return mockQueryResult([]);
         },
       }),
     }),
-    update: () => ({
+    update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({
         where: () => {
-          const run = mockRuns[mockRuns.length - 1];
+          if (values.error === "Dispatch reservation expired before Windmill job id was recorded") {
+            return {
+              returning: () => Promise.resolve([]),
+            };
+          }
+          const rows = isWorkflowRunsTable(table) ? mockRuns : mockWorkflows;
+          const run = rows[rows.length - 1];
           if (run) Object.assign(run, values);
           return {
             returning: () => Promise.resolve([{ ...run, ...values }]),
@@ -59,11 +131,15 @@ vi.mock("../../src/db/index.js", () => ({
         },
       }),
     }),
-  },
-  sql: {
-    end: () => Promise.resolve(),
-  },
-}));
+  };
+
+  return {
+    db: mockDb,
+    sql: {
+      end: () => Promise.resolve(),
+    },
+  };
+});
 
 // Mock Windmill client
 const mockRunFlow = vi.fn().mockResolvedValue("job-uuid-123");
@@ -76,6 +152,7 @@ const mockGetJob = vi.fn().mockResolvedValue({
 const mockCancelJob = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../../src/lib/windmill-client.js", () => ({
+  isAmbiguousWindmillDispatchError: () => false,
   getWindmillClient: () => ({
     createFlow: vi.fn().mockResolvedValue("f/workflows/test/flow"),
     updateFlow: vi.fn().mockResolvedValue(undefined),
@@ -91,9 +168,11 @@ vi.mock("../../src/lib/windmill-client.js", () => ({
 
 // Mock runs-service client
 const mockCreateRun = vi.fn().mockResolvedValue({ runId: "run-own-123" });
+const mockCloseRun = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
+  closeRun: (...args: unknown[]) => mockCloseRun(...args),
 }));
 
 // Mock features-client
@@ -130,14 +209,29 @@ const RUN_DEBUG_ID = "00000000-0000-4000-8000-000000000011";
 const RUN_NO_JOB_ID = "00000000-0000-4000-8000-000000000012";
 const RUN_SIMPLE_ID = "00000000-0000-4000-8000-000000000013";
 
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (predicate()) return;
+    await tick();
+  }
+  throw new Error("Timed out waiting for test condition");
+}
+
 describe("POST /workflows/:id/execute", () => {
   beforeEach(() => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
     mockSelectResponses.length = 0;
-    mockRunFlow.mockClear();
+    mockRunFlow.mockReset();
+    mockRunFlow.mockResolvedValue("job-uuid-123");
     mockCreateRun.mockClear();
     mockCreateRun.mockResolvedValue({ runId: "run-own-123" });
+    mockCloseRun.mockClear();
+    mockCloseRun.mockResolvedValue(undefined);
   });
 
   it("executes a workflow and returns a run", async () => {
@@ -354,9 +448,12 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
     mockSelectResponses.length = 0;
-    mockRunFlow.mockClear();
+    mockRunFlow.mockReset();
+    mockRunFlow.mockResolvedValue("job-uuid-123");
     mockCreateRun.mockClear();
     mockCreateRun.mockResolvedValue({ runId: "run-own-456" });
+    mockCloseRun.mockClear();
+    mockCloseRun.mockResolvedValue(undefined);
   });
 
   it("executes a workflow by slug (slug-only lookup, no org filter)", async () => {
@@ -383,6 +480,212 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     expect(res.body.windmillJobId).toBe("job-uuid-123");
     expect(res.body.runId).toBe("run-own-456");
     expect(mockRunFlow).toHaveBeenCalled();
+  });
+
+  it("returns the existing active campaign execution for concurrent same org + campaign calls", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "campaign-lock-flow",
+      workflowName: "Campaign Lock Flow",
+      workflowDynastySlug: "campaign-lock-flow",
+      workflowDynastyName: "Campaign Lock Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/campaign_lock_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    let resolveRunFlow: (jobId: string) => void = () => {};
+    mockRunFlow.mockImplementationOnce(
+      () => new Promise<string>((resolve) => {
+        resolveRunFlow = resolve;
+      }),
+    );
+
+    const first = request
+      .post("/workflows/by-slug/campaign-lock-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} })
+      .then((res) => res);
+
+    await waitUntil(() => mockRunFlow.mock.calls.length === 1);
+
+    const second = await request
+      .post("/workflows/by-slug/campaign-lock-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(mockRuns[0].id);
+    expect(second.body.status).toBe("dispatching");
+    expect(mockRunFlow).toHaveBeenCalledTimes(1);
+
+    resolveRunFlow("job-uuid-locked");
+    const firstRes = await first;
+    expect(firstRes.status).toBe(201);
+    expect(firstRes.body.windmillJobId).toBe("job-uuid-locked");
+    expect(mockRunFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 409 for concurrent same org + campaign calls when conflictPolicy is reject", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "campaign-reject-flow",
+      workflowName: "Campaign Reject Flow",
+      workflowDynastySlug: "campaign-reject-flow",
+      workflowDynastyName: "Campaign Reject Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/campaign_reject_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    let resolveRunFlow: (jobId: string) => void = () => {};
+    mockRunFlow.mockImplementationOnce(
+      () => new Promise<string>((resolve) => {
+        resolveRunFlow = resolve;
+      }),
+    );
+
+    const first = request
+      .post("/workflows/by-slug/campaign-reject-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} })
+      .then((res) => res);
+
+    await waitUntil(() => mockRunFlow.mock.calls.length === 1);
+
+    const second = await request
+      .post("/workflows/by-slug/campaign-reject-flow/execute")
+      .set(AUTH)
+      .send({ conflictPolicy: "reject", inputs: {} });
+
+    expect(second.status).toBe(409);
+    expect(second.body.error).toContain("Active workflow execution");
+    expect(second.body.workflowRun.id).toBe(mockRuns[0].id);
+    expect(mockRunFlow).toHaveBeenCalledTimes(1);
+
+    resolveRunFlow("job-uuid-reject");
+    await first;
+  });
+
+  it("allows concurrent executions for different campaigns in the same org", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "multi-campaign-flow",
+      workflowName: "Multi Campaign Flow",
+      workflowDynastySlug: "multi-campaign-flow",
+      workflowDynastyName: "Multi Campaign Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/multi_campaign_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    const first = await request
+      .post("/workflows/by-slug/multi-campaign-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+    const second = await request
+      .post("/workflows/by-slug/multi-campaign-flow/execute")
+      .set({ ...AUTH, "x-campaign-id": "camp-2" })
+      .send({ inputs: {} });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(mockRunFlow).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows concurrent executions for the same campaign in different orgs", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "multi-org-flow",
+      workflowName: "Multi Org Flow",
+      workflowDynastySlug: "multi-org-flow",
+      workflowDynastyName: "Multi Org Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/multi_org_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    const first = await request
+      .post("/workflows/by-slug/multi-org-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+    const second = await request
+      .post("/workflows/by-slug/multi-org-flow/execute")
+      .set({ ...AUTH, "x-org-id": "org-2" })
+      .send({ inputs: {} });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(mockRunFlow).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a new execution after the previous campaign execution completed", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "completed-campaign-flow",
+      workflowName: "Completed Campaign Flow",
+      workflowDynastySlug: "completed-campaign-flow",
+      workflowDynastyName: "Completed Campaign Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/completed_campaign_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+    mockRuns.push({
+      id: RUN_SIMPLE_ID,
+      workflowId: WF_ID,
+      orgId: "org-1",
+      campaignId: "camp-1",
+      workflowSlug: "completed-campaign-flow",
+      status: "completed",
+      executionScope: "campaign",
+      executionKey: "campaign:org-1:camp-1",
+      createdAt: new Date(),
+    });
+
+    const res = await request
+      .post("/workflows/by-slug/completed-campaign-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(201);
+    expect(mockRunFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks non-ambiguous Windmill dispatch failures failed so the reservation is released", async () => {
+    mockRunFlow.mockRejectedValueOnce(new Error("Windmill API error: 500"));
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "dispatch-fails-flow",
+      workflowName: "Dispatch Fails Flow",
+      workflowDynastySlug: "dispatch-fails-flow",
+      workflowDynastyName: "Dispatch Fails Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/dispatch_fails_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    const res = await request
+      .post("/workflows/by-slug/dispatch-fails-flow/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(502);
+    expect(res.body.dispatchState).toBe("not_dispatched");
+    expect(mockRuns[0].status).toBe("failed");
+    expect(mockRuns[0].completedAt).toBeInstanceOf(Date);
+    expect(mockCloseRun).toHaveBeenCalledWith("run-own-456", "failed", "org-1");
   });
 
   it("uses x-org-id header (not body orgId) for run attribution", async () => {
@@ -941,9 +1244,12 @@ describe("x-feature-slug tracking", () => {
     mockWorkflows.length = 0;
     mockRuns.length = 0;
     mockSelectResponses.length = 0;
-    mockRunFlow.mockClear();
+    mockRunFlow.mockReset();
+    mockRunFlow.mockResolvedValue("job-uuid-123");
     mockCreateRun.mockClear();
     mockCreateRun.mockResolvedValue({ runId: "run-feat-1" });
+    mockCloseRun.mockClear();
+    mockCloseRun.mockResolvedValue(undefined);
   });
 
   const WORKFLOW_FIXTURE = {
