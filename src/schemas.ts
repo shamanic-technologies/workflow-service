@@ -356,6 +356,10 @@ export const ValidationResultSchema = z
 
 export const ExecuteWorkflowSchema = z
   .object({
+    conflictPolicy: z.enum(["use_existing", "reject"]).optional().describe(
+      "How to handle an already-active campaign-scoped execution for the same org + campaign. " +
+      "When omitted, workflow-service returns the existing active execution."
+    ),
     inputs: z.record(z.unknown()).optional().describe(
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
@@ -386,7 +390,10 @@ export const WorkflowRunResponseSchema = z
     runId: z.string().nullable().describe("Runs-service run ID for this execution (auto-created)."),
     windmillJobId: z.string().nullable().describe("Internal Windmill job ID (managed automatically)."),
     windmillWorkspace: z.string(),
-    status: z.string().describe("Run status: queued, running, completed, failed, or cancelled."),
+    status: z.string().describe("Run status: dispatching, queued, running, completed, failed, or cancelled."),
+    executionScope: z.string().nullable().describe("Business execution scope, e.g. campaign."),
+    executionKey: z.string().nullable().describe("Deterministic key used to prevent duplicate active executions."),
+    conflictPolicy: z.string().nullable().describe("Conflict policy used when this run was reserved."),
     inputs: z.unknown().nullable().describe("The inputs that were passed at execution time."),
     result: z.unknown().nullable().describe("Workflow result (available when status is completed). Contains the output of the last node."),
     error: z.string().nullable().describe("Error message (available when status is failed). Raw Windmill error — use errorSummary for a clean version."),
@@ -395,11 +402,20 @@ export const WorkflowRunResponseSchema = z
       message: z.string().describe("Clean error message with stack traces stripped."),
       rootCause: z.string().describe("Innermost root cause extracted from nested service error chains."),
     }).optional().describe("Parsed error summary (present only when status is 'failed'). Use rootCause for user-facing messages."),
+    reservedAt: z.string().nullable(),
+    dispatchStartedAt: z.string().nullable(),
     startedAt: z.string().nullable(),
     completedAt: z.string().nullable(),
     createdAt: z.string(),
   })
   .openapi("WorkflowRunResponse");
+
+export const ExecutionConflictResponseSchema = z
+  .object({
+    error: z.string(),
+    workflowRun: WorkflowRunResponseSchema.describe("The active workflow execution that already owns this execution key."),
+  })
+  .openapi("ExecutionConflictResponse");
 
 // --- Deprecated workflow response ---
 
@@ -419,6 +435,10 @@ export const WorkflowDeprecatedResponseSchema = z
 
 export const ExecuteByNameSchema = z
   .object({
+    conflictPolicy: z.enum(["use_existing", "reject"]).optional().describe(
+      "How to handle an already-active campaign-scoped execution for the same org + campaign. " +
+      "When omitted, workflow-service returns the existing active execution."
+    ),
     inputs: z.record(z.unknown()).optional().describe(
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
@@ -1054,10 +1074,22 @@ registry.registerPath({
     },
   },
   responses: {
+    200: {
+      description: "Existing active campaign-scoped execution returned because conflictPolicy is use_existing",
+      content: {
+        "application/json": { schema: WorkflowRunResponseSchema },
+      },
+    },
     201: {
       description: "Execution started",
       content: {
         "application/json": { schema: WorkflowRunResponseSchema },
+      },
+    },
+    409: {
+      description: "Active campaign-scoped execution already exists and conflictPolicy is reject",
+      content: {
+        "application/json": { schema: ExecutionConflictResponseSchema },
       },
     },
   },
@@ -1304,10 +1336,22 @@ registry.registerPath({
     },
   },
   responses: {
+    200: {
+      description: "Existing active campaign-scoped execution returned because conflictPolicy is use_existing",
+      content: {
+        "application/json": { schema: WorkflowRunResponseSchema },
+      },
+    },
     201: {
       description: "Execution started",
       content: {
         "application/json": { schema: WorkflowRunResponseSchema },
+      },
+    },
+    409: {
+      description: "Active campaign-scoped execution already exists and conflictPolicy is reject",
+      content: {
+        "application/json": { schema: ExecutionConflictResponseSchema },
       },
     },
     404: {

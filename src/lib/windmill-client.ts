@@ -17,6 +17,72 @@ export interface WindmillClientConfig {
   workspace?: string;
 }
 
+export type WindmillTransportKind = "connect_timeout" | "socket_closed" | "network";
+
+export class WindmillTransportError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: WindmillTransportKind,
+    public readonly dispatchAmbiguous: boolean,
+    options?: { cause?: unknown },
+  ) {
+    super(message);
+    this.name = "WindmillTransportError";
+    if (options?.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const direct = (err as { code?: unknown }).code;
+  if (typeof direct === "string") return direct;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    const causeCode = (cause as { code?: unknown }).code;
+    if (typeof causeCode === "string") return causeCode;
+  }
+  return undefined;
+}
+
+function classifyTransportError(
+  err: unknown,
+  method: string,
+): WindmillTransportError {
+  const code = getErrorCode(err);
+  const message = err instanceof Error ? err.message : String(err);
+
+  if (code === "UND_ERR_CONNECT_TIMEOUT") {
+    return new WindmillTransportError(
+      `Windmill transport connect_timeout: ${message}`,
+      "connect_timeout",
+      false,
+      { cause: err },
+    );
+  }
+
+  if (code === "UND_ERR_SOCKET" || code === "ECONNRESET") {
+    return new WindmillTransportError(
+      `Windmill transport socket_closed: ${message}`,
+      "socket_closed",
+      method !== "GET",
+      { cause: err },
+    );
+  }
+
+  return new WindmillTransportError(
+    `Windmill transport network: ${message}`,
+    "network",
+    method !== "GET",
+    { cause: err },
+  );
+}
+
+export function isAmbiguousWindmillDispatchError(err: unknown): boolean {
+  return err instanceof WindmillTransportError && err.dispatchAmbiguous;
+}
+
 export class WindmillClient {
   private baseUrl: string;
   private token: string;
@@ -38,30 +104,44 @@ export class WindmillClient {
     body?: unknown
   ): Promise<T> {
     const url = `${this.apiBase}${path}`;
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(600_000),
-    });
+    const maxAttempts = method === "GET" ? 2 : 1;
+    let lastTransportError: WindmillTransportError | null = null;
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(
-        `Windmill API error: ${method} ${path} → ${res.status} ${res.statusText}: ${text}`
-      );
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            "Content-Type": "application/json",
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(600_000),
+        });
+      } catch (err) {
+        lastTransportError = classifyTransportError(err, method);
+        if (attempt < maxAttempts) continue;
+        throw lastTransportError;
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(
+          `Windmill API error: ${method} ${path} → ${res.status} ${res.statusText}: ${text}`
+        );
+      }
+
+      const contentType = res.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        return res.json() as Promise<T>;
+      }
+
+      const text = await res.text();
+      return text as unknown as T;
     }
 
-    const contentType = res.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      return res.json() as Promise<T>;
-    }
-
-    const text = await res.text();
-    return text as unknown as T;
+    throw lastTransportError ?? new Error(`Windmill request failed: ${method} ${path}`);
   }
 
   // === FLOWS ===

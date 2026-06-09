@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { eq, and } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -7,16 +7,27 @@ import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey, requireExecutionHeaders } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
+import { isAmbiguousWindmillDispatchError } from "../lib/windmill-client.js";
 import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun, closeRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
 import { parseWindmillError } from "../lib/error-parser.js";
 import { traceEvent } from "../lib/trace-event.js";
+import {
+  attachRunsServiceRun,
+  markExecutionDispatchFailed,
+  markExecutionDispatched,
+  reserveCampaignExecution,
+  resolveExecutionConflictPolicy,
+  type ExecutionConflictPolicy,
+} from "../lib/execution-admission.js";
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
   const base = {
     ...r,
+    reservedAt: r.reservedAt?.toISOString() ?? null,
+    dispatchStartedAt: r.dispatchStartedAt?.toISOString() ?? null,
     startedAt: r.startedAt?.toISOString() ?? null,
     completedAt: r.completedAt?.toISOString() ?? null,
     createdAt: r.createdAt?.toISOString() ?? null,
@@ -35,6 +46,163 @@ function formatRun(r: typeof workflowRuns.$inferSelect) {
   }
 
   return base;
+}
+
+type WorkflowRow = typeof workflows.$inferSelect;
+type ExecuteBody = {
+  inputs?: Record<string, unknown>;
+  conflictPolicy?: ExecutionConflictPolicy;
+};
+
+async function startWorkflowExecution(params: {
+  req: Request;
+  res: Response;
+  workflow: WorkflowRow;
+  body: ExecuteBody;
+  traceEventName: "execute-by-id" | "execute-by-slug";
+}): Promise<void> {
+  const { req, res, workflow, body, traceEventName } = params;
+  const orgId = res.locals.orgId as string;
+  const userId = res.locals.userId as string;
+  const callerRunId = res.locals.runId as string;
+  const brandIds = (res.locals.brandIds as string[] | undefined) ?? [];
+  const brandIdHeader = req.headers["x-brand-id"] as string | undefined;
+  const campaignId = res.locals.campaignId as string;
+  const featureSlug = res.locals.featureSlug as string;
+  const conflictPolicy = resolveExecutionConflictPolicy(body.conflictPolicy);
+
+  const reservation = await reserveCampaignExecution({
+    database: db,
+    workflow,
+    orgId,
+    userId,
+    campaignId,
+    brandIds,
+    featureSlug,
+    inputs: body.inputs,
+    conflictPolicy,
+  });
+
+  if (reservation.kind === "conflict") {
+    traceEvent(callerRunId, {
+      service: "workflow-service",
+      event: "execution-conflict",
+      detail: `Active workflow execution already exists for executionKey="${reservation.executionKey}" dbRunId=${reservation.run.id}`,
+      data: { executionKey: reservation.executionKey, dbRunId: reservation.run.id, conflictPolicy },
+    }, req.headers).catch(() => {});
+
+    if (conflictPolicy === "reject") {
+      res.status(409).json({
+        error: "Active workflow execution already exists for this campaign",
+        workflowRun: formatRun(reservation.run),
+      });
+      return;
+    }
+
+    res.status(200).json(formatRun(reservation.run));
+    return;
+  }
+
+  let ownRunId: string | null = null;
+  try {
+    const { runId: newRunId } = await createRun({
+      parentRunId: callerRunId,
+      orgId,
+      userId,
+      taskName: "execute-workflow",
+      workflowSlug: workflow.workflowSlug,
+      campaignId,
+      brandIdHeader,
+    });
+    ownRunId = newRunId;
+    await attachRunsServiceRun(db, reservation.run.id, ownRunId);
+  } catch (err) {
+    console.error("[workflow-service] Failed to create run in runs-service:", err);
+    await markExecutionDispatchFailed(
+      db,
+      reservation.run.id,
+      err instanceof Error ? err.message : String(err),
+      false,
+    );
+    res.status(502).json({ error: "Failed to create run in runs-service" });
+    return;
+  }
+
+  traceEvent(ownRunId, {
+    service: "workflow-service",
+    event: traceEventName,
+    detail: `Executing workflow slug="${workflow.workflowSlug}" (id=${workflow.id}) for org=${orgId} campaign=${campaignId}`,
+    data: { workflowSlug: workflow.workflowSlug, workflowId: workflow.id, orgId, campaignId, featureSlug },
+  }, req.headers).catch(() => {});
+
+  let windmillJobId: string | null = null;
+  const client = getWindmillClient();
+  if (client) {
+    try {
+      const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowSlug: workflow.workflowSlug, campaignId, brandId: brandIdHeader, featureSlug, serviceEnvs: collectServiceEnvs() };
+      windmillJobId = await client.runFlow(
+        workflow.windmillFlowPath as string,
+        flowInputs
+      );
+
+      traceEvent(ownRunId, {
+        service: "workflow-service",
+        event: "windmill-dispatch",
+        detail: `Dispatched to Windmill: jobId=${windmillJobId} flowPath="${workflow.windmillFlowPath}" inputKeys=${Object.keys(flowInputs).join(",")}`,
+        data: { windmillJobId, flowPath: workflow.windmillFlowPath, inputKeys: Object.keys(flowInputs) },
+      }, req.headers).catch(() => {});
+    } catch (err) {
+      const keepReservationActive = isAmbiguousWindmillDispatchError(err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[workflow-service] Failed to run flow in Windmill (${keepReservationActive ? "ambiguous" : "not-dispatched"}):`,
+        err
+      );
+      const updated = await markExecutionDispatchFailed(
+        db,
+        reservation.run.id,
+        errorMessage,
+        keepReservationActive,
+      );
+      if (!keepReservationActive && ownRunId) {
+        try {
+          await closeRun(ownRunId, "failed", orgId);
+        } catch (closeErr) {
+          console.error(`[workflow-service] Failed to close dispatch-failed run ${ownRunId} in runs-service:`, closeErr);
+        }
+      }
+      traceEvent(ownRunId, {
+        service: "workflow-service",
+        event: "windmill-dispatch",
+        level: "error",
+        detail: `Windmill dispatch failed (${keepReservationActive ? "ambiguous" : "not-dispatched"}): ${errorMessage}`,
+        data: { flowPath: workflow.windmillFlowPath, error: errorMessage, ambiguous: keepReservationActive },
+      }, req.headers).catch(() => {});
+      res
+        .status(502)
+        .json({
+          error: "Failed to start workflow in Windmill",
+          dispatchState: keepReservationActive ? "ambiguous" : "not_dispatched",
+          workflowRun: formatRun(updated),
+        });
+      return;
+    }
+  }
+
+  const run = await markExecutionDispatched(db, reservation.run.id, windmillJobId);
+
+  console.log(
+    `[workflow-service] Workflow "${workflow.workflowSlug}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
+  );
+
+  traceEvent(ownRunId, {
+    service: "workflow-service",
+    event: "execute-queued",
+    detail: `Workflow run queued: dbRunId=${run.id} windmillJobId=${windmillJobId ?? "none"} workflowSlug="${workflow.workflowSlug}"`,
+    data: { dbRunId: run.id, windmillJobId, workflowSlug: workflow.workflowSlug },
+  }, req.headers).catch(() => {});
+
+  res.status(201).json(formatRun(run));
 }
 
 // POST /workflows/by-slug/:slug/execute — Execute a workflow by slug
@@ -128,108 +296,13 @@ router.post(
         return;
       }
 
-      const userId = res.locals.userId as string;
-      const callerRunId = res.locals.runId as string;
-      const brandIds = (res.locals.brandIds as string[] | undefined) ?? [];
-      const brandIdHeader = req.headers["x-brand-id"] as string | undefined;
-      const campaignId = res.locals.campaignId as string;
-      const featureSlug = res.locals.featureSlug as string;
-
-      // Create a child run in runs-service (links to caller's run via parentRunId)
-      let ownRunId: string | null = null;
-      try {
-        const { runId: newRunId } = await createRun({
-          parentRunId: callerRunId,
-          orgId,
-          userId,
-          taskName: "execute-workflow",
-          workflowSlug: workflow.workflowSlug,
-          campaignId,
-          brandIdHeader,
-        });
-        ownRunId = newRunId;
-      } catch (err) {
-        console.error("[workflow-service] Failed to create run in runs-service:", err);
-        res.status(502).json({ error: "Failed to create run in runs-service" });
-        return;
-      }
-
-      traceEvent(ownRunId, {
-        service: "workflow-service",
-        event: "execute-by-slug",
-        detail: `Executing workflow slug="${workflow.workflowSlug}" (id=${workflow.id}) for org=${orgId} campaign=${campaignId ?? "none"} featureSlug=${featureSlug ?? "none"}`,
-        data: { workflowSlug: workflow.workflowSlug, workflowId: workflow.id, orgId, campaignId, featureSlug },
-      }, req.headers).catch(() => {});
-
-      // Run in Windmill — inject identity + tracking headers so every node receives them
-      // Pass brandId as CSV string so downstream nodes receive it in the same format as the header
-      let windmillJobId: string | null = null;
-      const client = getWindmillClient();
-      if (client) {
-        try {
-          const flowInputs = { ...body.inputs, orgId, userId, runId: ownRunId, workflowSlug: workflow.workflowSlug, campaignId, brandId: brandIdHeader, featureSlug, serviceEnvs: collectServiceEnvs() };
-          windmillJobId = await client.runFlow(
-            workflow.windmillFlowPath,
-            flowInputs
-          );
-
-          traceEvent(ownRunId, {
-            service: "workflow-service",
-            event: "windmill-dispatch",
-            detail: `Dispatched to Windmill: jobId=${windmillJobId} flowPath="${workflow.windmillFlowPath}" inputKeys=${Object.keys(flowInputs).join(",")}`,
-            data: { windmillJobId, flowPath: workflow.windmillFlowPath, inputKeys: Object.keys(flowInputs) },
-          }, req.headers).catch(() => {});
-        } catch (err) {
-          console.error(
-            "[workflow-service] Failed to run flow in Windmill:",
-            err
-          );
-          traceEvent(ownRunId, {
-            service: "workflow-service",
-            event: "windmill-dispatch",
-            level: "error",
-            detail: `Windmill dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
-            data: { flowPath: workflow.windmillFlowPath, error: err instanceof Error ? err.message : String(err) },
-          }, req.headers).catch(() => {});
-          res
-            .status(502)
-            .json({ error: "Failed to start workflow in Windmill" });
-          return;
-        }
-      }
-
-      // Create workflow run in DB
-      const [run] = await db
-        .insert(workflowRuns)
-        .values({
-          workflowId: workflow.id,
-          orgId,
-          userId,
-          campaignId,
-          brandIds: brandIds.length > 0 ? brandIds : null,
-          featureSlug,
-          workflowSlug: workflow.workflowSlug,
-          subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
-          runId: ownRunId,
-          windmillJobId,
-          windmillWorkspace: workflow.windmillWorkspace,
-          status: "queued",
-          inputs: body.inputs,
-        })
-        .returning();
-
-      console.log(
-        `[workflow-service] Workflow "${workflow.workflowSlug}" execution started: runId=${ownRunId}, windmillJobId=${windmillJobId ?? "none"}`,
-      );
-
-      traceEvent(ownRunId, {
-        service: "workflow-service",
-        event: "execute-queued",
-        detail: `Workflow run queued: dbRunId=${run.id} windmillJobId=${windmillJobId ?? "none"} workflowSlug="${workflow.workflowSlug}"`,
-        data: { dbRunId: run.id, windmillJobId, workflowSlug: workflow.workflowSlug },
-      }, req.headers).catch(() => {});
-
-      res.status(201).json(formatRun(run));
+      await startWorkflowExecution({
+        req,
+        res,
+        workflow,
+        body,
+        traceEventName: "execute-by-slug",
+      });
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "ZodError") {
         res.status(400).json({ error: "Validation error", details: err });
@@ -298,100 +371,13 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
       return;
     }
 
-    const executeUserId = res.locals.userId as string;
-    const callerRunId = res.locals.runId as string;
-    const execBrandIds = (res.locals.brandIds as string[] | undefined) ?? [];
-    const execBrandIdHeader = req.headers["x-brand-id"] as string | undefined;
-    const execCampaignId = res.locals.campaignId as string;
-    const execFeatureSlug = res.locals.featureSlug as string;
-
-    // Create a child run in runs-service (links to caller's run via parentRunId)
-    let ownRunId: string | null = null;
-    try {
-      const { runId: newRunId } = await createRun({
-        parentRunId: callerRunId,
-        orgId,
-        userId: executeUserId,
-        taskName: "execute-workflow",
-        workflowSlug: workflow.workflowSlug,
-        campaignId: execCampaignId,
-        brandIdHeader: execBrandIdHeader,
-      });
-      ownRunId = newRunId;
-    } catch (err) {
-      console.error("[workflow-service] Failed to create run in runs-service:", err);
-      res.status(502).json({ error: "Failed to create run in runs-service" });
-      return;
-    }
-
-    traceEvent(ownRunId, {
-      service: "workflow-service",
-      event: "execute-by-id",
-      detail: `Executing workflow id=${workflow.id} slug="${workflow.workflowSlug}" for org=${orgId} campaign=${execCampaignId ?? "none"}`,
-      data: { workflowId: workflow.id, workflowSlug: workflow.workflowSlug, orgId, campaignId: execCampaignId },
-    }, req.headers).catch(() => {});
-
-    // Run in Windmill — inject identity + tracking headers so every node receives them
-    let windmillJobId: string | null = null;
-    const client = getWindmillClient();
-    if (client) {
-      try {
-        const flowInputs = { ...body.inputs, orgId, userId: executeUserId, runId: ownRunId, workflowSlug: workflow.workflowSlug, campaignId: execCampaignId, brandId: execBrandIdHeader, featureSlug: execFeatureSlug, serviceEnvs: collectServiceEnvs() };
-        windmillJobId = await client.runFlow(
-          workflow.windmillFlowPath,
-          flowInputs
-        );
-
-        traceEvent(ownRunId, {
-          service: "workflow-service",
-          event: "windmill-dispatch",
-          detail: `Dispatched to Windmill: jobId=${windmillJobId} flowPath="${workflow.windmillFlowPath}"`,
-          data: { windmillJobId, flowPath: workflow.windmillFlowPath },
-        }, req.headers).catch(() => {});
-      } catch (err) {
-        console.error("[workflow-service] Failed to run flow in Windmill:", err);
-        traceEvent(ownRunId, {
-          service: "workflow-service",
-          event: "windmill-dispatch",
-          level: "error",
-          detail: `Windmill dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
-          data: { flowPath: workflow.windmillFlowPath, error: err instanceof Error ? err.message : String(err) },
-        }, req.headers).catch(() => {});
-        res
-          .status(502)
-          .json({ error: "Failed to start workflow in Windmill" });
-        return;
-      }
-    }
-
-    // Create workflow run in DB
-    const [run] = await db
-      .insert(workflowRuns)
-      .values({
-        workflowId: workflow.id,
-        orgId,
-        userId: executeUserId,
-        campaignId: execCampaignId,
-        brandIds: execBrandIds.length > 0 ? execBrandIds : null,
-        featureSlug: execFeatureSlug,
-        workflowSlug: workflow.workflowSlug,
-        subrequestId: (body.inputs?.subrequestId as string | undefined) ?? workflow.subrequestId,
-        runId: ownRunId,
-        windmillJobId,
-        windmillWorkspace: workflow.windmillWorkspace,
-        status: "queued",
-        inputs: body.inputs,
-      })
-      .returning();
-
-    traceEvent(ownRunId, {
-      service: "workflow-service",
-      event: "execute-queued",
-      detail: `Workflow run queued: dbRunId=${run.id} windmillJobId=${windmillJobId ?? "none"}`,
-      data: { dbRunId: run.id, windmillJobId },
-    }, req.headers).catch(() => {});
-
-    res.status(201).json(formatRun(run));
+    await startWorkflowExecution({
+      req,
+      res,
+      workflow,
+      body,
+      traceEventName: "execute-by-id",
+    });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
       res.status(400).json({ error: "Validation error", details: err });
