@@ -225,6 +225,13 @@
       "when": 1778284800000,
       "tag": "0031_rename_workflow_dynasty_columns_drop_style",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780963200000,
+      "tag": "0032_campaign_execution_admission",
+      "breakpoints": true
     }
   ]
 }

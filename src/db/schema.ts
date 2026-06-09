@@ -67,9 +67,14 @@ export const workflowRuns = pgTable(
     windmillJobId: text("windmill_job_id"),
     windmillWorkspace: text("windmill_workspace").notNull().default("prod"),
     status: text("status").notNull().default("queued"),
+    executionScope: text("execution_scope"),
+    executionKey: text("execution_key"),
+    conflictPolicy: text("conflict_policy"),
     inputs: jsonb("inputs"),
     result: jsonb("result"),
     error: text("error"),
+    reservedAt: timestamp("reserved_at", { withTimezone: true }),
+    dispatchStartedAt: timestamp("dispatch_started_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -77,6 +82,10 @@ export const workflowRuns = pgTable(
   (table) => [
     index("idx_workflow_runs_workflow").on(table.workflowId),
     index("idx_workflow_runs_status").on(table.status),
+    index("idx_workflow_runs_execution_key").on(table.executionKey),
+    uniqueIndex("idx_workflow_runs_active_execution_key_unique")
+      .on(table.executionKey)
+      .where(sql`execution_key IS NOT NULL AND status IN ('dispatching', 'queued', 'running')`),
   ]
 );
 

@@ -30,6 +30,10 @@ vi.mock("../../src/middleware/rate-limit.js", async () => {
 const mockWorkflows: Record<string, unknown>[] = [];
 const mockRuns: Record<string, unknown>[] = [];
 
+function isWorkflowRunsTable(table: unknown): boolean {
+  return !!table && typeof table === "object" && "windmillJobId" in table;
+}
+
 function mockQueryResult(data: Record<string, unknown>[]) {
   const obj = {
     then: (resolve: (v: unknown) => void, reject?: (e: unknown) => void) =>
@@ -39,9 +43,11 @@ function mockQueryResult(data: Record<string, unknown>[]) {
   return obj;
 }
 
-vi.mock("../../src/db/index.js", () => ({
-  db: {
-    insert: () => ({
+vi.mock("../../src/db/index.js", () => {
+  const mockDb = {
+    execute: vi.fn().mockResolvedValue(undefined),
+    transaction: async (fn: (tx: typeof mockDb) => Promise<void>) => fn(mockDb),
+    insert: (table?: unknown) => ({
       values: (row: Record<string, unknown>) => {
         const newRow = {
           id: "wf-" + Math.random().toString(36).slice(2, 10),
@@ -53,31 +59,40 @@ vi.mock("../../src/db/index.js", () => ({
           startedAt: null,
           completedAt: null,
         };
-        mockRuns.push(newRow);
+        if (isWorkflowRunsTable(table)) {
+          mockRuns.push(newRow);
+        } else {
+          mockWorkflows.push(newRow);
+        }
         return { returning: () => Promise.resolve([newRow]) };
       },
     }),
     select: (cols?: Record<string, unknown>) => ({
-      from: () => ({
+      from: (table?: unknown) => ({
         where: () => {
           if (cols) return mockQueryResult([]);
+          if (isWorkflowRunsTable(table)) return mockQueryResult([]);
           if (mockWorkflows.length > 0) return mockQueryResult([mockWorkflows[0]]);
           return mockQueryResult([]);
         },
       }),
     }),
-    update: () => ({
+    update: (table?: unknown) => ({
       set: (values: Record<string, unknown>) => ({
         where: () => ({
-          returning: () => Promise.resolve([{ ...mockRuns[0], ...values }]),
+          returning: () => Promise.resolve([{ ...(isWorkflowRunsTable(table) ? mockRuns[0] : mockWorkflows[0]), ...values }]),
         }),
       }),
     }),
-  },
-  sql: { end: () => Promise.resolve() },
-}));
+  };
+  return {
+    db: mockDb,
+    sql: { end: () => Promise.resolve() },
+  };
+});
 
 vi.mock("../../src/lib/windmill-client.js", () => ({
+  isAmbiguousWindmillDispatchError: () => false,
   getWindmillClient: () => ({
     createFlow: vi.fn().mockResolvedValue("f/workflows/test/flow"),
     updateFlow: vi.fn(),
@@ -93,6 +108,7 @@ vi.mock("../../src/lib/windmill-client.js", () => ({
 
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: vi.fn().mockResolvedValue({ runId: "run-own-123" }),
+  closeRun: vi.fn().mockResolvedValue(undefined),
 }));
 
 import supertest from "supertest";
@@ -117,6 +133,7 @@ describe("Execute endpoint rate limiting", () => {
     mockWorkflows.push({
       id: "00000000-0000-4000-8000-000000000001",
       name: "Rate Test Flow",
+      workflowSlug: "rate-test-flow",
       status: "active",
       windmillFlowPath: "f/workflows/test/flow",
       windmillWorkspace: "prod",
@@ -139,8 +156,8 @@ describe("Execute endpoint rate limiting", () => {
     const statuses = results.map((r) => r.status);
 
     expect(statuses).toContain(429);
-    const successCount = statuses.filter((s) => s === 201).length;
-    expect(successCount).toBe(60);
+    const allowedCount = statuses.filter((s) => s !== 429).length;
+    expect(allowedCount).toBe(60);
   });
 
   it("does not rate limit a different org", async () => {
