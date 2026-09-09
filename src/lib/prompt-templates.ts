@@ -131,6 +131,8 @@ Every \`$ref\` path you emit MUST resolve against the OpenAPI specs injected bel
 
 If a needed field is absent from a fixed-schema response, do NOT invent a path. Either pick a different upstream node that legitimately exposes the value, or omit the field. Inventing paths against fixed schemas is a hard failure.
 
+The flattening in case 1 is not hypothetical — it is the mistake that has actually been made, on lead-service, seven times. lead-service \`POST /orgs/buffer/next\` serves the canonical lead under \`lead.data\` and the lead's employer under \`lead.data.organization\`, a NESTED object. So the person's job title is \`lead.data.currentTitle\` (there is no \`lead.data.title\`), and every company field hangs off the organization: \`lead.data.organization.name\`, \`.industry\`, \`.keywords\`, \`.technologyNames\`, \`.shortDescription\`, \`.latestFundingStage\`, \`.websiteUrl\`, and the head count is \`.estimatedNumEmployees\` (there is no \`.size\`). Never write \`lead.data.organizationName\` or any other flattened \`organization<Field>\` form: it renders as an empty string with no error and no log line, so the prompt silently reads \`Company: \` on every run. Read the spec below for the full set rather than working from this list.
+
 ## Special Config Keys (stripped before passing to script)
 
 - retries (number): retry attempts on failure. Default 3. Set 0 for non-idempotent ops (email sends, SMS, queue consumes).
