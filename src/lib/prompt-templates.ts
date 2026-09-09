@@ -1,4 +1,14 @@
 import { NODE_TYPE_REGISTRY } from "./node-type-registry.js";
+import { LEAD_CONTEXT_PATHS } from "./lead-context-variables.js";
+
+/**
+ * The recipient-context variables a generated workflow should map. The
+ * authoritative list is `contextVariables` on content-generation's prompt reads;
+ * this is the subset this repo knows a lead-service path for, which is also
+ * exactly what `scripts/backfill-lead-context-variables.mjs` writes onto the
+ * workflows already stored.
+ */
+const LEAD_CONTEXT_VARIABLE_NAMES = Object.keys(LEAD_CONTEXT_PATHS).join(", ");
 
 export interface ServiceContext {
   services: Array<{ name: string; description: string; endpointCount: number }>;
@@ -180,6 +190,8 @@ When using content-generation service (\`POST /generate\`):
   - \`"body.variables.clientCompanyOverview": "$ref:brand-extract.output.fields.companyOverview.value"\`
   - \`"body.variables.clientValueProposition": "$ref:brand-extract.output.fields.valueProposition.value"\`
   - \`"body.variables.clientTargetAudience": "$ref:brand-extract.output.fields.targetAudience.value"\`
+- **Map EVERY recipient-context variable the fetch node can satisfy, not only the ones the template body names.** content-generation publishes two separate lists on \`GET /platform-prompts\`: \`variables\` (tokens the stored body declares — each is required) and \`contextVariables\` (optional lead + organization facts every template accepts and renders into a "Recipient context" block ahead of the body). Providing a context variable is never over-providing. The full accepted set is: ${LEAD_CONTEXT_VARIABLE_NAMES}
+  Map each one to the path the lead fetch node's response actually serves — the person's fields sit on the canonical lead, the employer's under its nested organization object. Omit any name that node's response declares no field for; never invent a path, and never substitute a default.
 - Include tracking fields: \`body.brandId\`, \`body.campaignId\`, \`body.leadId\`, \`body.workflowSlug\`, \`body.apolloEnrichmentId\`
 - Response contains \`subject\` (string) and \`sequence\` (array of { step, bodyHtml, bodyText, daysSinceLastStep })
 

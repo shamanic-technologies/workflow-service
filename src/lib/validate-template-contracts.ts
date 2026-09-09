@@ -109,6 +109,14 @@ export function validateTemplateContracts(
     const declaredVars = new Set(declaredVarNames);
     const providedVars = new Set(ref.variablesProvided);
 
+    // content-generation publishes TWO lists, and only the first is a contract.
+    // `variables` are the tokens the stored body declares — a missing one is an
+    // error. `contextVariables` are optional lead + organization facts every
+    // template accepts and renders into a "Recipient context" block; a workflow
+    // that maps them is complete, not over-providing, so they are accepted
+    // silently and are never required.
+    const contextVars = new Set((template.contextVariables ?? []).map((v) => v.name));
+
     // Missing variables (declared in template but not provided by workflow) → error
     for (const declared of declaredVars) {
       if (!providedVars.has(declared)) {
@@ -124,7 +132,7 @@ export function validateTemplateContracts(
 
     // Extra variables (provided by workflow but not declared in template) → warning
     for (const provided of providedVars) {
-      if (!declaredVars.has(provided)) {
+      if (!declaredVars.has(provided) && !contextVars.has(provided)) {
         issues.push({
           nodeId: ref.nodeId,
           templateType: ref.templateType,
