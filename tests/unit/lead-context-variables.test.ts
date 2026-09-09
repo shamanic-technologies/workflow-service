@@ -55,6 +55,7 @@ const LEAD_SPEC: Record<string, unknown> = {
           currentTitle: { type: "string" },
           headline: { type: "string" },
           timezone: { type: "string" },
+          subdepartments: { type: "array", nullable: true, items: { type: "string" } },
           employmentHistory: { type: "array", items: { type: "object" } },
           organization: { $ref: "#/components/schemas/OrganizationView" },
         },
@@ -66,6 +67,7 @@ const LEAD_SPEC: Record<string, unknown> = {
           industry: { type: "string" },
           keywords: { type: "array", items: { type: "string" } },
           estimatedNumEmployees: { type: "number" },
+          latestFundingRoundDate: { type: "string", nullable: true },
         },
       },
     },
@@ -146,6 +148,21 @@ describe("planLeadContextVariables", () => {
         "$ref:fetch-lead.output.lead.data.organization.keywords",
       "body.variables.leadCompanySize":
         "$ref:fetch-lead.output.lead.data.organization.estimatedNumEmployees",
+    });
+  });
+
+  it("maps the two names content-generation v0.34.0 added to its context list", () => {
+    const plan = planLeadContextVariables(dagWith({ ...EXISTING }), specs, [
+      "leadSubdepartments",
+      "leadCompanyLatestFundingRoundDate",
+    ]);
+
+    expect(plan.skipped).toEqual([]);
+    expect(Object.fromEntries(plan.additions.map((a) => [a.key, a.ref]))).toEqual({
+      "body.variables.leadSubdepartments":
+        "$ref:fetch-lead.output.lead.data.subdepartments",
+      "body.variables.leadCompanyLatestFundingRoundDate":
+        "$ref:fetch-lead.output.lead.data.organization.latestFundingRoundDate",
     });
   });
 
