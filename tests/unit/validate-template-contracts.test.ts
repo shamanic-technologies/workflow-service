@@ -206,6 +206,83 @@ describe("validateTemplateContracts", () => {
     expect(result.templateRefs).toHaveLength(1);
   });
 
+  it("accepts a published contextVariable silently — it is optional, not undeclared", () => {
+    // content-generation publishes two lists: `variables` (tokens the body
+    // declares, each required) and `contextVariables` (optional lead facts every
+    // template accepts and renders into a "Recipient context" block). A workflow
+    // that maps the second list is complete, so it must produce no warning — and
+    // a context variable is never required, so omitting one is not an error.
+    const template: PromptTemplate = {
+      ...COLD_EMAIL_TEMPLATE,
+      contextVariables: [
+        { name: "leadSeniority", description: "Seniority level" },
+        { name: "leadCompanyTechStack", description: "Technologies used" },
+      ],
+    };
+
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            ...Object.fromEntries(
+              COLD_EMAIL_TEMPLATE.variables.map((v) => [
+                `body.variables.${v.name}`,
+                `$ref:lead.output.${v.name}`,
+              ]),
+            ),
+            "body.variables.leadSeniority": "$ref:fetch-lead.output.lead.data.seniority",
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const result = validateTemplateContracts(dag, new Map([["cold-email", template]]));
+
+    expect(result.issues).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("still warns on a variable neither list declares", () => {
+    const template: PromptTemplate = {
+      ...COLD_EMAIL_TEMPLATE,
+      contextVariables: [{ name: "leadSeniority", description: "Seniority level" }],
+    };
+
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: { service: "content-generation", method: "POST", path: "/generate" },
+          inputMapping: {
+            "body.type": "cold-email",
+            ...Object.fromEntries(
+              COLD_EMAIL_TEMPLATE.variables.map((v) => [
+                `body.variables.${v.name}`,
+                `$ref:lead.output.${v.name}`,
+              ]),
+            ),
+            "body.variables.leadFavouriteColour": "$ref:lead.output.colour",
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const result = validateTemplateContracts(dag, new Map([["cold-email", template]]));
+
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]).toMatchObject({
+      field: "leadFavouriteColour",
+      severity: "warning",
+    });
+  });
+
   it("regression: object-shaped declared variables ({name,description}) validate green when node provides exactly the declared names", () => {
     // Repro of the blind-discovery-email-v15 false-INVALID bug: content-generation
     // declares variables as { name, description } objects. The validator must

@@ -14,7 +14,16 @@ export interface PromptTemplate {
   id: string;
   type: string;
   prompt: string;
+  /** Tokens the stored template body declares — a caller MUST provide each one. */
   variables: PromptVariable[];
+  /**
+   * Optional lead + organization facts every template accepts, rendered into a
+   * "Recipient context" block ahead of the body. A separate list from
+   * `variables` on purpose: these are never declared by a template, so a
+   * workflow that provides one is complete, not over-providing. Absent on a
+   * content-generation deploy that predates the catalog.
+   */
+  contextVariables?: PromptVariable[];
   createdAt: string;
   updatedAt: string;
 }
