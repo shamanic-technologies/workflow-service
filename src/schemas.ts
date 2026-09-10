@@ -230,6 +230,18 @@ export const WorkflowResponseSchema = z
     workflowDynastySignatureName: z.string().describe("Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."),
     version: z.number().int().describe("Version number within the lineage. Starts at 1."),
     dag: z.unknown().describe("The DAG definition as submitted."),
+    contentModel: z.string().nullable().describe(
+      "The chat-service model alias this workflow writes its content with (e.g. 'flash', 'deepseek-pro', 'fable'), " +
+      "read from the `model` field of the DAG's content-generation POST /generate request body. " +
+      "Derived at read from the DAG, so a consumer can label a workflow row without downloading and parsing the DAG. " +
+      "Null when the workflow makes no content-generation call, when the call does not state a model " +
+      "(content-generation then applies its own default), when the value is produced at run time by another node, " +
+      "or when several content-generation calls state different models — never a guess."
+    ),
+    contentPromptType: z.string().nullable().describe(
+      "The content-generation prompt template this workflow renders (e.g. 'cold-email'), read from the `type` field " +
+      "of the DAG's content-generation POST /generate request body. Same derivation and same null cases as `contentModel`."
+    ),
     status: z.enum(["active", "deprecated"]).describe("Per-version lifecycle status. Only active workflows can be executed. Within a dynasty the latest version is 'active' and predecessors are 'deprecated'. Set on demand via PUT /workflows/{id}/status. Distinct from `workflowDynastyStatus`."),
     workflowDynastyStatus: z.enum(["active", "deprecated"]).describe("Dynasty-level status. 'deprecated' means the entire lineage is retired: no version of it can be executed (execute returns 410) and it is not listed as an active candidate. Constant across all versions of a dynasty. Set via PUT /workflows/dynasty/{workflowDynastySlug}/status."),
     creationType: z.enum(["scratch", "upgrade", "fork"]).describe(

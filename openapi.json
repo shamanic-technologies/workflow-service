@@ -158,6 +158,16 @@
             "nullable": true,
             "description": "The DAG definition as submitted."
           },
+          "contentModel": {
+            "type": "string",
+            "nullable": true,
+            "description": "The chat-service model alias this workflow writes its content with (e.g. 'flash', 'deepseek-pro', 'fable'), read from the `model` field of the DAG's content-generation POST /generate request body. Derived at read from the DAG, so a consumer can label a workflow row without downloading and parsing the DAG. Null when the workflow makes no content-generation call, when the call does not state a model (content-generation then applies its own default), when the value is produced at run time by another node, or when several content-generation calls state different models — never a guess."
+          },
+          "contentPromptType": {
+            "type": "string",
+            "nullable": true,
+            "description": "The content-generation prompt template this workflow renders (e.g. 'cold-email'), read from the `type` field of the DAG's content-generation POST /generate request body. Same derivation and same null cases as `contentModel`."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -235,6 +245,8 @@
           "signature",
           "workflowDynastySignatureName",
           "version",
+          "contentModel",
+          "contentPromptType",
           "status",
           "workflowDynastyStatus",
           "creationType",

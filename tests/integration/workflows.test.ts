@@ -808,6 +808,101 @@ describe("GET /workflows/:id (single)", () => {
 });
 
 
+describe("content model + prompt template on the workflow reads", () => {
+  const WF_CONTENT_ID = "00000000-0000-4000-8000-000000000008";
+
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockFetchProviderRequirements.mockReset();
+    mockFetchProviderRequirements.mockResolvedValue({ requirements: [], providers: [] });
+  });
+
+  it("states the model and prompt template of the content-generation call on every list row", async () => {
+    mockDbRows.push({
+      id: WF_CONTENT_ID,
+      orgId: "org-1",
+      featureSlug: "sales-cold-email-outreach",
+      workflowSlug: "content-flow",
+      workflowName: "Content Flow",
+      workflowDynastySlug: "content-flow",
+      workflowDynastyName: "Content Flow",
+      version: 1,
+      dag: {
+        nodes: [
+          {
+            id: "email-generate",
+            type: "http.call",
+            config: {
+              service: "content-generation",
+              method: "POST",
+              path: "/generate",
+              body: { type: "cold-email", model: "deepseek-pro" },
+            },
+          },
+        ],
+        edges: [],
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ featureSlug: "sales-cold-email-outreach" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].contentModel).toBe("deepseek-pro");
+    expect(res.body.workflows[0].contentPromptType).toBe("cold-email");
+  });
+
+  it("states null on a list row whose workflow makes no content-generation call", async () => {
+    mockDbRows.push({
+      id: WF_CONTENT_ID,
+      orgId: "org-1",
+      featureSlug: "sales-cold-email-outreach",
+      workflowSlug: "no-content-flow",
+      workflowName: "No Content Flow",
+      workflowDynastySlug: "no-content-flow",
+      workflowDynastyName: "No Content Flow",
+      version: 1,
+      dag: DAG_WITH_HTTP_CALL,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request
+      .get("/workflows")
+      .query({ featureSlug: "sales-cold-email-outreach" })
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0].contentModel).toBeNull();
+    expect(res.body.workflows[0].contentPromptType).toBeNull();
+  });
+
+  it("states them on the single-workflow read too, null for a model the DAG omits", async () => {
+    mockDbRows.push({
+      id: WF_CONTENT_ID,
+      orgId: "org-1",
+      workflowSlug: "content-flow",
+      workflowName: "Content Flow",
+      workflowDynastySlug: "content-flow",
+      workflowDynastyName: "Content Flow",
+      version: 1,
+      dag: DAG_WITH_CONTENT_GEN_ALL_VARS,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request.get(`/workflows/${WF_CONTENT_ID}`).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.contentPromptType).toBe("cold-email");
+    expect(res.body.contentModel).toBeNull();
+  });
+});
+
 describe("GET /workflows/:id/required-providers", () => {
   beforeEach(() => {
     mockDbRows.length = 0;

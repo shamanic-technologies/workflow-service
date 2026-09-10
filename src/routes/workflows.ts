@@ -40,6 +40,7 @@ import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
+import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
 
 const router = Router();
 
@@ -73,6 +74,11 @@ router.use((req, res, next) => {
 function formatWorkflow(w: typeof workflows.$inferSelect) {
   return {
     ...w,
+    // Derived, never stored: the content model + prompt template a consumer
+    // wants to display per row live inside the DAG, and resolving them here
+    // saves every reader from downloading N DAGs and reimplementing "which node
+    // is the content call". Null whenever the DAG does not state them.
+    ...summarizeContentGeneration(w.dag as DAG | null),
     createdAt: w.createdAt?.toISOString() ?? null,
     updatedAt: w.updatedAt?.toISOString() ?? null,
   };
