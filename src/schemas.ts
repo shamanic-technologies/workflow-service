@@ -947,6 +947,10 @@ registry.registerPath({
       featureSlug: z.string().optional().describe(
         "Restrict to the dynasties of this feature. Omitted, the listing is fleet-wide."
       ),
+      workflowSlug: z.string().optional().describe(
+        "Restrict to the single dynasty this versioned workflow slug belongs to — including when " +
+        "the slug names a superseded or deprecated version. An unknown slug answers an empty list."
+      ),
     }),
   },
   responses: {
