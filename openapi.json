@@ -2228,13 +2228,26 @@
     },
     "/workflows/dynasties": {
       "get": {
-        "summary": "List all dynasties with their versioned workflow slugs",
+        "summary": "List dynasties with every one of their versioned workflow slugs",
+        "description": "Lists each dynasty with ALL of its versioned workflow slugs, deprecated versions included — the only read that names a superseded version, so a consumer holding the versioned slug a campaign was pinned to can resolve which dynasty it belongs to. Pass featureSlug to scope the answer to one channel; a customer-facing consumer should always pass it, since the unscoped listing is the whole internal codename catalogue.",
         "tags": [
           "Dynasties"
         ],
         "security": [
           {
             "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Restrict to the dynasties of this feature. Omitted, the listing is fleet-wide."
+            },
+            "required": false,
+            "description": "Restrict to the dynasties of this feature. Omitted, the listing is fleet-wide.",
+            "name": "featureSlug",
+            "in": "query"
           }
         ],
         "responses": {
@@ -2258,17 +2271,22 @@
                             "type": "string",
                             "description": "Stable dynasty display name."
                           },
+                          "featureSlug": {
+                            "type": "string",
+                            "description": "The feature this dynasty belongs to."
+                          },
                           "workflowSlugs": {
                             "type": "array",
                             "items": {
                               "type": "string"
                             },
-                            "description": "All versioned workflow slugs belonging to this dynasty."
+                            "description": "EVERY versioned workflow slug of this lineage, active and deprecated alike — so a consumer holding a superseded slug can resolve it back to its dynasty."
                           }
                         },
                         "required": [
                           "workflowDynastySlug",
                           "workflowDynastyName",
+                          "featureSlug",
                           "workflowSlugs"
                         ]
                       }
@@ -2323,17 +2341,22 @@
                       "type": "string",
                       "description": "Stable dynasty display name."
                     },
+                    "featureSlug": {
+                      "type": "string",
+                      "description": "The feature this dynasty belongs to."
+                    },
                     "workflowSlugs": {
                       "type": "array",
                       "items": {
                         "type": "string"
                       },
-                      "description": "All versioned workflow slugs belonging to this dynasty."
+                      "description": "EVERY versioned workflow slug of this lineage, active and deprecated alike — so a consumer holding a superseded slug can resolve it back to its dynasty."
                     }
                   },
                   "required": [
                     "workflowDynastySlug",
                     "workflowDynastyName",
+                    "featureSlug",
                     "workflowSlugs"
                   ]
                 }

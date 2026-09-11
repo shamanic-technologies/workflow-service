@@ -748,18 +748,39 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
 });
 
 
-// GET /workflows/dynasties — List all dynasties with their versioned workflow slugs
+// GET /workflows/dynasties — List dynasties with their versioned workflow slugs.
+//
+// This is the ONLY read in the fleet that names a SUPERSEDED version: both
+// listings (`GET /workflows`, `GET /public/workflows`) default to the runnable
+// set, so a consumer holding the versioned slug a campaign was pinned to
+// (`…-rudder-v3`, long since upgraded past) cannot resolve it there. Here every
+// version of every lineage is listed, deprecated ones included, which is what
+// lets a consumer turn that slug back into its dynasty.
+//
+// Unscoped, that answer is the whole internal codename catalogue (hundreds of
+// dynasties, >100KB), and a workflow reads as "Pro workflow 3" on a customer
+// surface — never its codename. So `?featureSlug=` narrows it to the one
+// channel the caller is looking at, and a customer-facing consumer is expected
+// to pass it. The parameter is optional purely so the pre-existing fleet-wide
+// callers keep the answer they have always had.
 router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
   try {
-    const allWorkflows = await db
+    const { featureSlug } = req.query;
+
+    const baseQuery = db
       .select({
         workflowSlug: workflows.workflowSlug,
         workflowDynastySlug: workflows.workflowDynastySlug,
         workflowDynastyName: workflows.workflowDynastyName,
+        featureSlug: workflows.featureSlug,
       })
       .from(workflows);
 
-    const dynastyMap = new Map<string, { workflowDynastyName: string; workflowSlugs: string[] }>();
+    const allWorkflows = featureSlug && typeof featureSlug === "string"
+      ? await baseQuery.where(eq(workflows.featureSlug, featureSlug))
+      : await baseQuery;
+
+    const dynastyMap = new Map<string, { workflowDynastyName: string; featureSlug: string; workflowSlugs: string[] }>();
     for (const w of allWorkflows) {
       const entry = dynastyMap.get(w.workflowDynastySlug);
       if (entry) {
@@ -767,14 +788,16 @@ router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
       } else {
         dynastyMap.set(w.workflowDynastySlug, {
           workflowDynastyName: w.workflowDynastyName,
+          featureSlug: w.featureSlug,
           workflowSlugs: [w.workflowSlug],
         });
       }
     }
 
-    const dynasties = [...dynastyMap.entries()].map(([workflowDynastySlug, { workflowDynastyName, workflowSlugs }]) => ({
+    const dynasties = [...dynastyMap.entries()].map(([workflowDynastySlug, { workflowDynastyName, featureSlug: slug, workflowSlugs }]) => ({
       workflowDynastySlug,
       workflowDynastyName,
+      featureSlug: slug,
       workflowSlugs,
     }));
 
