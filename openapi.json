@@ -2248,6 +2248,16 @@
             "description": "Restrict to the dynasties of this feature. Omitted, the listing is fleet-wide.",
             "name": "featureSlug",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Restrict to the single dynasty this versioned workflow slug belongs to — including when the slug names a superseded or deprecated version. An unknown slug answers an empty list."
+            },
+            "required": false,
+            "description": "Restrict to the single dynasty this versioned workflow slug belongs to — including when the slug names a superseded or deprecated version. An unknown slug answers an empty list.",
+            "name": "workflowSlug",
+            "in": "query"
           }
         ],
         "responses": {

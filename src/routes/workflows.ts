@@ -763,11 +763,17 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
 // channel the caller is looking at, and a customer-facing consumer is expected
 // to pass it. The parameter is optional purely so the pre-existing fleet-wide
 // callers keep the answer they have always had.
+//
+// One channel is still 382 dynasties in production, so a consumer that holds a
+// single pinned slug and only wants ITS lineage passes `?workflowSlug=` and
+// gets that one dynasty — the whole payload, rather than a needle it has to
+// find in 90KB of other codenames. An unknown slug is an empty list, not a 404:
+// this is a listing, and every filter on it narrows rather than addresses.
 router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
   try {
-    const { featureSlug } = req.query;
+    const { featureSlug, workflowSlug } = req.query;
 
-    const baseQuery = db
+    const select = () => db
       .select({
         workflowSlug: workflows.workflowSlug,
         workflowDynastySlug: workflows.workflowDynastySlug,
@@ -776,9 +782,27 @@ router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
       })
       .from(workflows);
 
-    const allWorkflows = featureSlug && typeof featureSlug === "string"
-      ? await baseQuery.where(eq(workflows.featureSlug, featureSlug))
-      : await baseQuery;
+    // Resolving one slug is two reads: which lineage it belongs to, then that
+    // lineage in full — the versions either side of it are exactly what the
+    // caller cannot see anywhere else.
+    let dynastySlugForSlug: string | null = null;
+    if (workflowSlug && typeof workflowSlug === "string") {
+      const [owner] = await select().where(eq(workflows.workflowSlug, workflowSlug));
+      if (!owner) {
+        res.json({ dynasties: [] });
+        return;
+      }
+      dynastySlugForSlug = owner.workflowDynastySlug;
+    }
+
+    const filters = [
+      dynastySlugForSlug ? eq(workflows.workflowDynastySlug, dynastySlugForSlug) : null,
+      featureSlug && typeof featureSlug === "string" ? eq(workflows.featureSlug, featureSlug) : null,
+    ].filter((c): c is NonNullable<typeof c> => c !== null);
+
+    const allWorkflows = filters.length > 0
+      ? await select().where(and(...filters))
+      : await select();
 
     const dynastyMap = new Map<string, { workflowDynastyName: string; featureSlug: string; workflowSlugs: string[] }>();
     for (const w of allWorkflows) {

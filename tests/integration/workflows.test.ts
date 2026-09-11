@@ -2021,6 +2021,38 @@ describe("GET /workflows/dynasties — resolving a superseded slug to its dynast
     expect(unscoped.body.dynasties).toHaveLength(2);
   });
 
+  it("resolves one pinned slug to its lineage alone, superseded version included", async () => {
+    const lineage = [
+      row(DYNASTY_SLUG, "deprecated"),
+      row(`${DYNASTY_SLUG}-v2`, "deprecated"),
+      row(`${DYNASTY_SLUG}-v3`, "deprecated"),
+      row(`${DYNASTY_SLUG}-v4`, "deprecated"),
+      row(`${DYNASTY_SLUG}-v5`, "active"),
+    ];
+    // First read finds which lineage the slug belongs to, second reads it whole.
+    mockSelectResponses.push([lineage[2]], lineage);
+
+    const res = await request
+      .get(`/workflows/dynasties?workflowSlug=${DYNASTY_SLUG}-v3`)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.dynasties).toHaveLength(1);
+    expect(res.body.dynasties[0].workflowDynastySlug).toBe(DYNASTY_SLUG);
+    expect(res.body.dynasties[0].workflowSlugs).toHaveLength(5);
+  });
+
+  it("answers an empty list for a slug nothing owns", async () => {
+    mockSelectResponses.push([]);
+
+    const res = await request
+      .get("/workflows/dynasties?workflowSlug=never-existed-v9")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.dynasties).toEqual([]);
+  });
+
   it("requires authentication", async () => {
     const res = await request.get(`/workflows/dynasties?featureSlug=${FEATURE}`).set(IDENTITY);
     expect(res.status).toBe(401);
