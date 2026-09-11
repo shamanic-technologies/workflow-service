@@ -1962,3 +1962,67 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("GET /workflows/dynasties — resolving a superseded slug to its dynasty", () => {
+  const FEATURE = "sales-cold-email-outreach";
+  const DYNASTY_SLUG = `${FEATURE}-rudder`;
+
+  const row = (workflowSlug: string, status: string, featureSlug = FEATURE, dynastySlug = DYNASTY_SLUG) => ({
+    id: crypto.randomUUID(),
+    workflowSlug,
+    workflowName: workflowSlug,
+    workflowDynastySlug: dynastySlug,
+    workflowDynastyName: "Sales Cold Email Outreach Rudder",
+    featureSlug,
+    status,
+    workflowDynastyStatus: "active",
+  });
+
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
+  });
+
+  it("names every version of a lineage, deprecated ones included", async () => {
+    // What the campaign is actually pinned to is v3, three upgrades ago.
+    mockSelectResponses.push([
+      row(DYNASTY_SLUG, "deprecated"),
+      row(`${DYNASTY_SLUG}-v2`, "deprecated"),
+      row(`${DYNASTY_SLUG}-v3`, "deprecated"),
+      row(`${DYNASTY_SLUG}-v4`, "deprecated"),
+      row(`${DYNASTY_SLUG}-v5`, "active"),
+    ]);
+
+    const res = await request.get(`/workflows/dynasties?featureSlug=${FEATURE}`).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.dynasties).toHaveLength(1);
+    const dynasty = res.body.dynasties[0];
+    expect(dynasty.workflowDynastySlug).toBe(DYNASTY_SLUG);
+    expect(dynasty.featureSlug).toBe(FEATURE);
+    // The whole point: the pinned, superseded slug resolves.
+    expect(dynasty.workflowSlugs).toContain(`${DYNASTY_SLUG}-v3`);
+    expect(dynasty.workflowSlugs).toHaveLength(5);
+  });
+
+  it("scopes the answer to one feature, so no other channel's codenames travel", async () => {
+    // The dumb mock ignores the predicate, so the scoped query is fed only the
+    // rows the real WHERE would have matched; the unscoped call gets all of them.
+    mockSelectResponses.push([row(`${DYNASTY_SLUG}-v3`, "deprecated")]);
+
+    const scoped = await request.get(`/workflows/dynasties?featureSlug=${FEATURE}`).set(AUTH);
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.dynasties.map((d: { featureSlug: string }) => d.featureSlug)).toEqual([FEATURE]);
+
+    mockDbRows.push(row(`${DYNASTY_SLUG}-v3`, "deprecated"), row("pr-outreach-iris", "active", "pr-outreach", "pr-outreach-iris"));
+
+    const unscoped = await request.get("/workflows/dynasties").set(AUTH);
+    expect(unscoped.status).toBe(200);
+    expect(unscoped.body.dynasties).toHaveLength(2);
+  });
+
+  it("requires authentication", async () => {
+    const res = await request.get(`/workflows/dynasties?featureSlug=${FEATURE}`).set(IDENTITY);
+    expect(res.status).toBe(401);
+  });
+});
