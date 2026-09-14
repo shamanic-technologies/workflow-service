@@ -17,6 +17,11 @@ import {
   MAX_CONTENT_CHARS,
   RESOLVE_URL_CODE,
   LANDING_CONTENT_CODE,
+  TEMPLATE_ANCHOR,
+  TEMPLATE_BLOCK,
+  LANDING_VARIABLE_DESCRIPTION,
+  buildForkedTemplate,
+  hasLandingBlock,
 } from "../../scripts/fork-dynasty-with-landing-page.mjs";
 
 /**
@@ -303,6 +308,102 @@ describe("fork-dynasty-with-landing-page", () => {
       expect(
         result.issues.some((i) => i.field === LANDING_VARIABLE && i.severity === "warning"),
       ).toBe(true);
+    });
+  });
+
+  describe("the forked prompt template", () => {
+    /** Shaped after the three live sources: a `## Prospect` list ending in the tech stack. */
+    function sourceTemplate(type: string) {
+      return {
+        type,
+        prompt:
+          "Write a cold email.\n\n## Prospect\n" +
+          "- Name: {{leadFirstName}} {{leadLastName}}\n" +
+          "- Company: {{leadCompanyName}}\n" +
+          TEMPLATE_ANCHOR +
+          "\n## Brand Intelligence\n{{brandExtractedFields}}\n",
+        variables: [
+          { name: "leadFirstName", description: "" },
+          { name: "leadLastName", description: "" },
+          { name: "leadCompanyName", description: "" },
+          { name: "leadCompanyTechStack", description: "" },
+          { name: "brandExtractedFields", description: "" },
+        ],
+      };
+    }
+
+    it("is the source plus the block, and nothing else", () => {
+      const source = sourceTemplate("cold-email-v39");
+      const fork = buildForkedTemplate(source);
+
+      expect(fork.type).toBe(`cold-email-v39${TEMPLATE_SUFFIX}`);
+      expect(fork.prompt).toBe(source.prompt.replace(TEMPLATE_ANCHOR, TEMPLATE_ANCHOR + TEMPLATE_BLOCK));
+      // Removing the block must give the source back byte for byte — anything
+      // else means the splice rewrote part of the prompt it was only meant to
+      // extend, which would change the control arm as well as the treatment.
+      expect(fork.prompt.replace(TEMPLATE_BLOCK, "")).toBe(source.prompt);
+    });
+
+    it("splices the block into the prospect section, ahead of the brand section", () => {
+      const fork = buildForkedTemplate(sourceTemplate("cold-email-v39"));
+      expect(fork.prompt.indexOf("{{leadCompanyTechStack}}")).toBeLessThan(
+        fork.prompt.indexOf(`{{${LANDING_VARIABLE}}}`),
+      );
+      expect(fork.prompt.indexOf(`{{${LANDING_VARIABLE}}}`)).toBeLessThan(
+        fork.prompt.indexOf("{{brandExtractedFields}}"),
+      );
+    });
+
+    it("declares the new variable and keeps the ones the source declared", () => {
+      const source = sourceTemplate("cold-email-v39");
+      const fork = buildForkedTemplate(source);
+      const names = fork.variables.map((v: { name: string }) => v.name);
+
+      expect(names).toEqual([...source.variables.map((v) => v.name), LANDING_VARIABLE]);
+      expect(
+        fork.variables.find((v: { name: string }) => v.name === LANDING_VARIABLE).description,
+      ).toBe(LANDING_VARIABLE_DESCRIPTION);
+    });
+
+    it("keeps the declared set equal to the tokens the body states", () => {
+      const fork = buildForkedTemplate(sourceTemplate("cold-email-v39"));
+      const tokens = new Set([...fork.prompt.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]));
+      const declared = new Set(fork.variables.map((v: { name: string }) => v.name));
+      expect([...tokens].sort()).toEqual([...declared].sort());
+    });
+
+    it("refuses a source that does not state the anchor exactly once", () => {
+      const none = sourceTemplate("cold-email-v39");
+      none.prompt = none.prompt.replace(TEMPLATE_ANCHOR, "");
+      expect(() => buildForkedTemplate(none)).toThrow(/anchor 0 times/);
+
+      const twice = sourceTemplate("cold-email-v39");
+      twice.prompt = twice.prompt.replace(TEMPLATE_ANCHOR, TEMPLATE_ANCHOR + TEMPLATE_ANCHOR);
+      expect(() => buildForkedTemplate(twice)).toThrow(/anchor 2 times/);
+    });
+
+    it("refuses to fork a template that already carries the block", () => {
+      const fork = buildForkedTemplate(sourceTemplate("cold-email-v39"));
+      expect(hasLandingBlock(fork.prompt)).toBe(true);
+      expect(() => buildForkedTemplate(fork)).toThrow(/already carries/);
+    });
+
+    it("refuses a source whose declared set does not match its own body", () => {
+      const source = sourceTemplate("cold-email-v39");
+      source.variables = source.variables.filter((v) => v.name !== "leadCompanyName");
+      expect(() => buildForkedTemplate(source)).toThrow(/variable contract/);
+    });
+
+    it("does not tell the model to hide that it read the page", () => {
+      // An earlier draft did, which works against the only reason to pay for the
+      // scrape. Pinned so a later edit cannot quietly put it back.
+      expect(TEMPLATE_BLOCK).not.toMatch(/do not mention/i);
+      expect(TEMPLATE_BLOCK).not.toMatch(/do not quote/i);
+      expect(TEMPLATE_BLOCK).toContain(`{{${LANDING_VARIABLE}}}`);
+    });
+
+    it("carries no em dash, which is the copywriting tell this fleet bans", () => {
+      expect(TEMPLATE_BLOCK).not.toContain("\u2014");
     });
   });
 });
