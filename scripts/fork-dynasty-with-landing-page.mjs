@@ -50,11 +50,18 @@
  * neither), and only their content-generation node's own `$ref`s say where this
  * DAG keeps its lead.
  *
- * The forked template must EXIST in content-generation before a fork runs: the
- * new `body.type` is `<current>-landing`, and content-generation 404s a type it
- * has never stored. Create the three forked prompts first (POST
- * /platform-prompts, copy of the current body plus the landing-page block ending
- * in `{{landingPageContent}}`), then run this.
+ * The script forks the PROMPT TEMPLATE as well as the DAG, in that order. A DAG
+ * whose `body.type` is `<current>-landing` is a workflow that 404s on its first
+ * run until content-generation has stored that type, so the template is created
+ * first and a failure there stops the dynasty before anything is written. The
+ * block it appends is `TEMPLATE_BLOCK` below — in this file rather than in
+ * whoever ran the script, because a prompt that exists only in another service's
+ * database cannot be reviewed, diffed or re-derived.
+ *
+ * An already-stored template is COMPARED rather than trusted: `POST
+ * /platform-prompts` no-ops on an existing type, so the only way to notice that
+ * the stored copy has drifted from what this repo builds is to diff it, and the
+ * run says so when they differ.
  *
  * Idempotent: a DAG that already exists as an active workflow collides on
  * signature and `PUT /workflows/:id` answers 409, recorded as already covered.
@@ -73,7 +80,10 @@
  * do not all belong to the same org, so a single org for the writes would land
  * one of the variants under the wrong scope.
  *
- * Env: WORKFLOW_SERVICE_API_KEY (required), BASE_URL (default localhost:8080).
+ * Env: WORKFLOW_SERVICE_API_KEY, CONTENT_GENERATION_SERVICE_URL and
+ *      CONTENT_GENERATION_SERVICE_API_KEY (all required), BASE_URL (default
+ *      localhost:8080). The content-generation pair is already in the
+ *      workflow-service container's environment.
  */
 
 import { randomUUID } from "node:crypto";
@@ -175,6 +185,88 @@ export const LANDING_CONTENT_CODE = `export async function main(rawMarkdown) {
 
   return { value: text };
 }`;
+
+/**
+ * Where the block is spliced into the source template. Every cold-email prompt
+ * this targets ends with a `## Prospect` bullet list whose last line is the tech
+ * stack, and the block belongs with the rest of what is known about the lead,
+ * ahead of the brand section. The splice asserts this appears EXACTLY once.
+ */
+export const TEMPLATE_ANCHOR = "- Tech Stack: {{leadCompanyTechStack}}\n";
+
+/**
+ * The block appended to the source template. This is the whole treatment: the
+ * fork is its source prompt, byte for byte, plus these five lines.
+ *
+ * It has to live here rather than in whoever ran the ops script, because a
+ * prompt stored only in content-generation's database is a prompt nobody can
+ * review, diff or re-derive — the first three `-landing` templates were built by
+ * an ad-hoc script and then hand-corrected in the database, which is exactly the
+ * situation this constant exists to prevent.
+ *
+ * Note it does NOT tell the model to hide that it read the page. An earlier
+ * draft did ("do not quote it back at them, and do not mention that you read
+ * it") and that works against the only reason to pay for the scrape: the email
+ * should read as though a person actually looked at their site.
+ */
+export const TEMPLATE_BLOCK = `
+## Prospect's landing page
+This is the page their own website serves right now. Use it to provide the most premium, sincere, manual, non-AI personalization experience in the email.
+
+{{landingPageContent}}
+`;
+
+/** What the fork declares about the variable it adds. */
+export const LANDING_VARIABLE_DESCRIPTION =
+  "The text of the lead's own landing page, or a sentence stating that none " +
+  "could be retrieved. The caller scrapes the lead's website and passes the page " +
+  "body; when the site is unreachable, parked or empty it passes a sentence " +
+  "saying so, so this variable is always present and always readable.";
+
+/** True when a template body already carries the block. */
+export function hasLandingBlock(prompt) {
+  return prompt.includes(`{{${LANDING_VARIABLE}}}`);
+}
+
+/**
+ * Builds the forked template from the source one content-generation serves.
+ *
+ * `variables` is a CONTRACT: content-generation requires the declared set to
+ * equal the `{{tokens}}` the body states, so the block and the declaration move
+ * together or the fork is rejected. Throws rather than guessing whenever the
+ * source does not state what the splice needs.
+ */
+export function buildForkedTemplate(source) {
+  if (hasLandingBlock(source.prompt)) {
+    throw new Error(`template "${source.type}" already carries the landing block`);
+  }
+
+  const occurrences = source.prompt.split(TEMPLATE_ANCHOR).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      `template "${source.type}" states the splice anchor ${occurrences} times, expected exactly 1`,
+    );
+  }
+
+  const prompt = source.prompt.replace(TEMPLATE_ANCHOR, TEMPLATE_ANCHOR + TEMPLATE_BLOCK);
+  const variables = [
+    ...source.variables,
+    { name: LANDING_VARIABLE, description: LANDING_VARIABLE_DESCRIPTION },
+  ];
+
+  const declared = new Set(variables.map((v) => v.name));
+  const tokens = new Set([...prompt.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]));
+  const missing = [...tokens].filter((t) => !declared.has(t));
+  const extra = [...declared].filter((d) => !tokens.has(d));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `template "${source.type}" fork breaks the variable contract — ` +
+      `body states ${JSON.stringify(missing)} undeclared, declares ${JSON.stringify(extra)} the body never uses`,
+    );
+  }
+
+  return { type: `${source.type}${TEMPLATE_SUFFIX}`, prompt, variables };
+}
 
 /**
  * The content-generation call is the only node in these DAGs that posts to
@@ -334,6 +426,76 @@ async function call(orgId, method, path, body) {
   return { status: res.status, payload };
 }
 
+const CG_URL = process.env.CONTENT_GENERATION_SERVICE_URL;
+const CG_KEY = process.env.CONTENT_GENERATION_SERVICE_API_KEY;
+
+/** `/platform-prompts` takes the service key and no identity headers. */
+async function cgCall(method, path, body) {
+  const res = await fetch(`${CG_URL}${path}`, {
+    method,
+    headers: { "content-type": "application/json", "x-api-key": CG_KEY },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let payload = null;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = null;
+  }
+  return { status: res.status, payload };
+}
+
+/**
+ * Makes sure the forked template exists in content-generation, and reports what
+ * it found. This runs BEFORE the workflow fork because a DAG naming a `type`
+ * that service has never stored is a workflow that 404s on its first run.
+ *
+ * `POST /platform-prompts` is a no-op on an existing type, so a re-run never
+ * overwrites. That is also why an existing template is COMPARED rather than
+ * trusted: the only way to learn that the stored copy has drifted from what
+ * this repo would build is to diff it, and drift is not hypothetical — the
+ * first three were hand-corrected in the database after being created.
+ */
+async function ensureForkedTemplate(sourceType, apply) {
+  const forkType = `${sourceType}${TEMPLATE_SUFFIX}`;
+
+  const source = await cgCall("GET", `/platform-prompts?type=${encodeURIComponent(sourceType)}`);
+  if (source.status !== 200) {
+    return { ok: false, note: `source template ${sourceType} unreadable (${source.status})` };
+  }
+
+  let fork;
+  try {
+    fork = buildForkedTemplate(source.payload);
+  } catch (err) {
+    return { ok: false, note: err.message };
+  }
+
+  const existing = await cgCall("GET", `/platform-prompts?type=${encodeURIComponent(forkType)}`);
+  if (existing.status === 200) {
+    const same = existing.payload.prompt === fork.prompt;
+    return {
+      ok: true,
+      note: same
+        ? `template ${forkType} already stored, matches this repo`
+        : `template ${forkType} already stored but DIFFERS from what this repo builds`,
+    };
+  }
+
+  if (!apply) {
+    return { ok: true, note: `would create template ${forkType} (${fork.prompt.length} chars)` };
+  }
+
+  const created = await cgCall("POST", "/platform-prompts", fork);
+  if (created.status === 201 || created.status === 200) {
+    return { ok: true, note: `created template ${forkType}` };
+  }
+  return {
+    ok: false,
+    note: `creating ${forkType} failed ${created.status} ${JSON.stringify(created.payload)}`,
+  };
+}
+
 /** Resolve each dynasty's currently-active version. Exactly one exists, or none. */
 async function resolveHeads(readOrg, dynasties) {
   const listed = await call(
@@ -360,6 +522,13 @@ async function resolveHeads(readOrg, dynasties) {
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
+    process.exit(1);
+  }
+  if (!CG_URL || !CG_KEY) {
+    console.error(
+      "CONTENT_GENERATION_SERVICE_URL and CONTENT_GENERATION_SERVICE_API_KEY are required — " +
+      "this script forks the prompt template as well as the DAG",
+    );
     process.exit(1);
   }
   const readOrg = arg("org");
@@ -402,11 +571,19 @@ async function main() {
       continue;
     }
 
+    const sourceTemplate = findGenerateNode(source.dag).config.body.type;
     const template = findGenerateNode(forked).config.body.type;
+
+    const tpl = await ensureForkedTemplate(sourceTemplate, APPLY);
+    if (!tpl.ok) {
+      results.push({ slug: entry.slug, outcome: `FAILED ${tpl.note}` });
+      continue;
+    }
+
     if (!APPLY) {
       results.push({
         slug: entry.slug,
-        outcome: `would fork ${source.workflowSlug} (org ${source.orgId}) onto template ${template}`,
+        outcome: `would fork ${source.workflowSlug} (org ${source.orgId}) onto ${template} | ${tpl.note}`,
       });
       continue;
     }
@@ -414,9 +591,9 @@ async function main() {
     // The fork is written under the SOURCE workflow's org, not the read org.
     const put = await call(source.orgId, "PUT", `/workflows/${entry.head.id}`, { dag: forked });
     if (put.status === 201) {
-      results.push({ slug: entry.slug, outcome: `created ${put.payload.workflowSlug} (template ${template})` });
+      results.push({ slug: entry.slug, outcome: `created ${put.payload.workflowSlug} | ${tpl.note}` });
     } else if (put.status === 409) {
-      results.push({ slug: entry.slug, outcome: `already covered by ${put.payload.existingWorkflowSlug}` });
+      results.push({ slug: entry.slug, outcome: `already covered by ${put.payload.existingWorkflowSlug} | ${tpl.note}` });
     } else {
       results.push({ slug: entry.slug, outcome: `FAILED ${put.status} ${JSON.stringify(put.payload)}` });
     }
