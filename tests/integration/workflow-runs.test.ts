@@ -354,6 +354,67 @@ describe("POST /workflows/:id/execute", () => {
     expect(mockRunFlow.mock.calls[0][1].currentDate).toBe("2020-01-01");
   });
 
+  // campaign-service decides which audience a run serves BEFORE it calls
+  // execute — the audience is what determines which workflow is worth running —
+  // and supplies it on the execute call. It has to reach the flow, or a
+  // decision taken before execute cannot reach the /start-run callback of that
+  // same run (the DAG's start-run node reads `flow_input.audienceId`).
+  it("supplies an audience named on the execute header to Windmill", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "test-flow",
+      windmillFlowPath: "f/workflows/org_1/test_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    await request
+      .post(`/workflows/${WF_ID}/execute`)
+      .set(AUTH)
+      .set("x-audience-id", "aud-chosen-before-execute")
+      .send({ inputs: {} });
+
+    expect(mockRunFlow.mock.calls[0][1].audienceId).toBe("aud-chosen-before-execute");
+  });
+
+  it("lets an explicit inputs.audienceId win over the header", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "test-flow",
+      windmillFlowPath: "f/workflows/org_1/test_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    await request
+      .post(`/workflows/${WF_ID}/execute`)
+      .set(AUTH)
+      .set("x-audience-id", "aud-from-header")
+      .send({ inputs: { audienceId: "aud-from-inputs" } });
+
+    expect(mockRunFlow.mock.calls[0][1].audienceId).toBe("aud-from-inputs");
+  });
+
+  // A campaign that names no audience must dispatch what it dispatches today:
+  // no audienceId key at all, so start-run reads undefined and the node omits
+  // the header exactly as before.
+  it("names no audience in the flow inputs when the caller named none", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "test-flow",
+      windmillFlowPath: "f/workflows/org_1/test_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    await request.post(`/workflows/${WF_ID}/execute`).set(AUTH).send({ inputs: {} });
+
+    expect(mockRunFlow.mock.calls[0][1]).not.toHaveProperty("audienceId");
+  });
+
   it("preserves tagged campaign attribution through run creation and Windmill inputs", async () => {
     mockWorkflows.push({
       id: WF_ID,

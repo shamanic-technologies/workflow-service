@@ -917,7 +917,11 @@ registry.registerPath({
 const DynastyItemSchema = z.object({
   workflowDynastySlug: z.string().describe("Stable dynasty slug (constant across versions)."),
   workflowDynastyName: z.string().describe("Stable dynasty display name."),
-  workflowSlugs: z.array(z.string()).describe("All versioned workflow slugs belonging to this dynasty."),
+  featureSlug: z.string().describe("The feature this dynasty belongs to."),
+  workflowSlugs: z.array(z.string()).describe(
+    "EVERY versioned workflow slug of this lineage, active and deprecated alike — " +
+    "so a consumer holding a superseded slug can resolve it back to its dynasty."
+  ),
 });
 
 const DynastyStatsSchema = z.object({
@@ -929,9 +933,26 @@ const DynastyStatsSchema = z.object({
 registry.registerPath({
   method: "get",
   path: "/workflows/dynasties",
-  summary: "List all dynasties with their versioned workflow slugs",
+  summary: "List dynasties with every one of their versioned workflow slugs",
+  description:
+    "Lists each dynasty with ALL of its versioned workflow slugs, deprecated versions included — " +
+    "the only read that names a superseded version, so a consumer holding the versioned slug a " +
+    "campaign was pinned to can resolve which dynasty it belongs to. Pass featureSlug to scope the " +
+    "answer to one channel; a customer-facing consumer should always pass it, since the unscoped " +
+    "listing is the whole internal codename catalogue.",
   tags: ["Dynasties"],
   security: [{ apiKey: [] }],
+  request: {
+    query: z.object({
+      featureSlug: z.string().optional().describe(
+        "Restrict to the dynasties of this feature. Omitted, the listing is fleet-wide."
+      ),
+      workflowSlug: z.string().optional().describe(
+        "Restrict to the single dynasty this versioned workflow slug belongs to — including when " +
+        "the slug names a superseded or deprecated version. An unknown slug answers an empty list."
+      ),
+    }),
+  },
   responses: {
     200: {
       description: "List of dynasties",

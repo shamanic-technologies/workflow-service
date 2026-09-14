@@ -300,13 +300,43 @@ describe("dagToOpenFlow", () => {
     }
   });
 
-  it("does not inject audienceId into the start-run node itself (no self-reference)", () => {
+  it("gives the start-run node the audience the caller supplied on execute", () => {
+    // campaign-service decides the audience BEFORE calling execute (the
+    // audience determines which workflow is worth running) and supplies it on
+    // the execute call, which reaches the flow as flow_input.audienceId. The
+    // start-run node must read it so campaign-service's own /start-run callback
+    // receives it. A flow_input, never a result reference: it resolves at
+    // dispatch and cannot 404 a result-by-id lookup, and it is undefined —
+    // header omitted — when no audience was supplied.
     const result = dagToOpenFlow(DAG_WITH_CAMPAIGN_START_RUN, "Audience Flow");
     const startRun = result.value.modules.find((m) => m.id === "start_run");
     expect(startRun).toBeDefined();
     if (startRun!.value.type === "script") {
-      const transforms = startRun!.value.input_transforms as Record<string, unknown>;
-      expect(transforms.audienceId).toBeUndefined();
+      const transforms = startRun!.value.input_transforms as Record<
+        string,
+        { type: string; expr?: string }
+      >;
+      expect(transforms.audienceId).toEqual({
+        type: "javascript",
+        expr: "flow_input.audienceId",
+      });
+      // Never a self-reference to its own result.
+      expect(transforms.audienceId.expr).not.toContain("results.start_run");
+    }
+  });
+
+  it("leaves nodes at-or-before start-run — other than start-run itself — without any audienceId", () => {
+    // Regression for the two things the supplied-audience read must not move:
+    // the pre-start-run nodes stay untouched, and nothing there gains a result
+    // lookup that cannot resolve at dispatch.
+    const result = dagToOpenFlow(DAG_WITH_CAMPAIGN_START_RUN, "Audience Flow");
+    for (const mod of result.value.modules) {
+      if (mod.id === "start_run") continue;
+      if (mod.id !== "gate_check") continue;
+      if (mod.value.type === "script") {
+        const transforms = mod.value.input_transforms as Record<string, unknown>;
+        expect(transforms.audienceId).toBeUndefined();
+      }
     }
   });
 
