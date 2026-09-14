@@ -106,6 +106,17 @@ async function startWorkflowExecution(params: {
   const brandIdHeader = req.headers["x-brand-id"] as string | undefined;
   const campaignId = res.locals.campaignId as string;
   const featureSlug = res.locals.featureSlug as string;
+  // The audience the caller already decided for this run, when it decided one
+  // before calling execute. campaign-service supplies it on the header;
+  // `inputs.audienceId` is the other spelling and wins over it (it is the more
+  // explicit of the two, and it already reached the flow through the spread).
+  // Declared only when actually supplied: a campaign that names no audience
+  // must dispatch exactly the flow inputs it dispatches today.
+  const audienceIdHeader = req.headers["x-audience-id"];
+  const suppliedAudienceId =
+    typeof audienceIdHeader === "string" && audienceIdHeader.length > 0
+      ? audienceIdHeader
+      : undefined;
   const conflictPolicy = resolveExecutionConflictPolicy(body.conflictPolicy);
   const attributionContext = buildCampaignAttributionContext({
     headers: req.headers,
@@ -217,6 +228,8 @@ async function startWorkflowExecution(params: {
         // input still wins (replays, tests); everything below the spread is
         // platform-owned and deliberately overrides the caller.
         currentDate: new Date().toISOString().split("T")[0],
+        // Above the spread: an explicit inputs.audienceId still wins.
+        ...(suppliedAudienceId ? { audienceId: suppliedAudienceId } : {}),
         ...body.inputs,
         orgId,
         userId,
