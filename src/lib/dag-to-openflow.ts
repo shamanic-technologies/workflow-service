@@ -24,6 +24,28 @@ const AUDIENCE_ITER_KEY = "__wf_audience_id";
 /** The reference every loop-body node uses to read the threaded audienceId. */
 const LOOP_BODY_AUDIENCE_REF = `flow_input.iter.value?.${AUDIENCE_ITER_KEY}`;
 
+/**
+ * The reference the campaign `/start-run` node itself uses to read an audience
+ * the CALLER already decided, before execute.
+ *
+ * campaign-service is moving the audience decision ahead of the execute call:
+ * the audience is what determines which workflow is worth running, so it is
+ * chosen first and supplied on execute (as the `x-audience-id` header and as
+ * `inputs.audienceId`). Both reach the flow as `flow_input.audienceId`
+ * (`startWorkflowExecution` in `src/routes/workflow-runs.ts`).
+ *
+ * Only the start-run node reads it. Nodes DOWNSTREAM of start-run keep reading
+ * the audience start-run reports (`results.start_run?.audienceId` inline, the
+ * iter-threaded key inside a loop body), which is the same value whichever way
+ * it was decided — so their propagation is untouched. Nodes at-or-before
+ * start-run that are not start-run itself stay unaffected.
+ *
+ * This is a flow_input, not a result reference, so it resolves at dispatch and
+ * cannot 404 a result-by-id lookup. When no audience was supplied it is simply
+ * undefined and the node omits the header, exactly as before.
+ */
+const SUPPLIED_AUDIENCE_REF = "flow_input.audienceId";
+
 export interface FlowModule {
   id: string;
   summary?: string;
@@ -655,6 +677,17 @@ function nodeToModule(
     inputTransforms.audienceId = {
       type: "javascript",
       expr: audienceRef,
+    };
+  } else if (
+    startRunModuleId === moduleId &&
+    !inputTransforms.audienceId
+  ) {
+    // The start-run node reads the audience the caller decided BEFORE execute,
+    // so campaign-service's own /start-run callback can act on it. See
+    // SUPPLIED_AUDIENCE_REF.
+    inputTransforms.audienceId = {
+      type: "javascript",
+      expr: SUPPLIED_AUDIENCE_REF,
     };
   }
 
