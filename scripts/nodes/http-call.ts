@@ -30,6 +30,18 @@ export async function main(
   goalSlug?: string,
   optimizationGoal?: string,
   audienceId?: string,
+  // When true, a call that does not return 2xx — including one that never
+  // completes — is RETURNED rather than thrown, as { ok: false, status, error },
+  // and the flow carries on with the node downstream deciding what a missing
+  // result means. Off by default, so every existing node keeps failing loud.
+  // Windmill maps input_transforms to parameters BY NAME, so this sitting last
+  // costs nothing at dispatch; it is last so that adding it did not renumber the
+  // positional arguments every existing caller and test passes.
+  //
+  // Set it only where the call is genuinely optional to the outcome. A node that
+  // never throws is also a node Windmill never retries, so the only retry left is
+  // whatever the called service does internally.
+  tolerateFailure?: boolean,
 ) {
   if (!service) {
     throw new Error(
@@ -110,10 +122,31 @@ export async function main(
     options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, options);
+  let response: Response;
+  try {
+    response = await fetch(url, options);
+  } catch (err) {
+    // Transport failure (DNS, refused, timeout) — the request never got an
+    // answer. Under tolerateFailure that is the same outcome as a 5xx from the
+    // caller's point of view, so report it in the same shape.
+    if (tolerateFailure) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `${method} ${service}${path} did not complete: ${message} — tolerated, flow continues`
+      );
+      return { ok: false, status: 0, error: message };
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     const err = await response.text();
+    if (tolerateFailure) {
+      console.error(
+        `${method} ${service}${path} failed (${response.status}): ${err} — tolerated, flow continues`
+      );
+      return { ok: false, status: response.status, error: err };
+    }
     throw new Error(
       `${method} ${service}${path} failed (${response.status}): ${err}`
     );

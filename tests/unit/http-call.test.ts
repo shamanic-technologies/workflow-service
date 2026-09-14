@@ -395,4 +395,94 @@ describe("http-call script", () => {
       expect(result).toEqual({ found: false });
     });
   });
+
+  describe("tolerateFailure", () => {
+    // Windmill passes a DAG's `config.tolerateFailure` by NAME; this suite calls
+    // main() positionally, so the flag goes in its declared slot — last, after
+    // audienceId. Adding it there is what kept every other positional caller
+    // in this file working unchanged.
+    const TOLERATE_POSITION = 24;
+
+    function argsWithTolerate(
+      leading: unknown[],
+      tolerateFailure: boolean,
+    ): unknown[] {
+      const args = new Array(TOLERATE_POSITION).fill(undefined);
+      leading.forEach((v, i) => { args[i] = v; });
+      args[TOLERATE_POSITION] = tolerateFailure;
+      return args;
+    }
+
+    it("returns the failure instead of throwing when a call answers non-2xx", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('{"error":"Scrape failed"}', { status: 500 }),
+      );
+
+      const result = await (main as (...a: unknown[]) => Promise<unknown>)(
+        ...argsWithTolerate(
+          ["scraping", "POST", "/scrape", { url: "https://x.example" }, undefined, {
+            SCRAPING_SERVICE_URL: "https://scraping.example.com",
+            SCRAPING_SERVICE_API_KEY: "scraping-key",
+          }],
+          true,
+        ),
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        status: 500,
+        error: '{"error":"Scrape failed"}',
+      });
+    });
+
+    it("returns the failure instead of throwing when the request never completes", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("connect ETIMEDOUT"));
+
+      const result = await (main as (...a: unknown[]) => Promise<unknown>)(
+        ...argsWithTolerate(
+          ["scraping", "POST", "/scrape", { url: "https://x.example" }, undefined, {
+            SCRAPING_SERVICE_URL: "https://scraping.example.com",
+            SCRAPING_SERVICE_API_KEY: "scraping-key",
+          }],
+          true,
+        ),
+      );
+
+      expect(result).toEqual({ ok: false, status: 0, error: "connect ETIMEDOUT" });
+    });
+
+    it("still throws on non-2xx when the flag is off, so every other node fails loud", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('{"error":"Scrape failed"}', { status: 500 }),
+      );
+
+      await expect(
+        (main as (...a: unknown[]) => Promise<unknown>)(
+          ...argsWithTolerate(
+            ["scraping", "POST", "/scrape", { url: "https://x.example" }, undefined, {
+              SCRAPING_SERVICE_URL: "https://scraping.example.com",
+              SCRAPING_SERVICE_API_KEY: "scraping-key",
+            }],
+            false,
+          ),
+        ),
+      ).rejects.toThrow("failed (500)");
+    });
+
+    it("leaves a successful response untouched", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ cached: false, result: { rawMarkdown: "hi" } }));
+
+      const result = await (main as (...a: unknown[]) => Promise<unknown>)(
+        ...argsWithTolerate(
+          ["scraping", "POST", "/scrape", { url: "https://x.example" }, undefined, {
+            SCRAPING_SERVICE_URL: "https://scraping.example.com",
+            SCRAPING_SERVICE_API_KEY: "scraping-key",
+          }],
+          true,
+        ),
+      );
+
+      expect(result).toEqual({ cached: false, result: { rawMarkdown: "hi" } });
+    });
+  });
 });
