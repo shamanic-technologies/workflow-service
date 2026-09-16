@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
 import {
   VALID_LINEAR_DAG,
   DAG_WITH_WAIT,
@@ -183,6 +184,53 @@ describe("dagToOpenFlow", () => {
       expect(transforms.path).toEqual({ type: "static", value: "/send" });
       expect(transforms.body).toEqual({ type: "javascript", expr: "results.create_user" });
     }
+  });
+
+  it("regression: an explicit body.offerId mapping preserves the node's static body fields", () => {
+    // Regression guard for the #431 hotfix: the conversion must collapse a
+    // dot-notation mapping exactly ONCE. When body.offerId arrives as an
+    // explicit inputMapping entry (as the offer-scope repair wrote it into
+    // stored DAGs), the static config.body fields must survive into the
+    // compiled expression instead of the whole body being replaced by
+    // ({offerId: ...}) — which is what a second collapse pass produced and
+    // which broke every campaign run on 2026-09-15.
+    const dag: DAG = {
+      nodes: [
+        {
+          id: "start-run",
+          type: "http.call",
+          config: { service: "campaign", method: "POST", path: "/start-run" },
+          retries: 0,
+        },
+        {
+          id: "email-generate",
+          type: "http.call",
+          config: {
+            service: "content-generation",
+            method: "POST",
+            path: "/generate",
+            retries: 0,
+            body: { tag: "cold-email", type: "email", recipient: "lead@example.com" },
+          },
+          inputMapping: { "body.offerId": "$ref:start-run.output.offerId" },
+          retries: 0,
+        },
+      ],
+      edges: [{ from: "start-run", to: "email-generate" }],
+    };
+
+    const result = dagToOpenFlow(dag, "offer body regression");
+
+    const mod = result.value.modules.find((m) => m.id === "email_generate");
+    expect(mod).toBeDefined();
+    if (mod?.value.type !== "script") throw new Error("expected script module");
+
+    const body = (mod.value.input_transforms as Record<string, { type: string; expr?: string }>).body;
+    expect(body?.type).toBe("javascript");
+    expect(body!.expr).toContain("cold-email");
+    expect(body!.expr).toContain("recipient");
+    expect(body!.expr).toContain("results.start_run?.offerId");
+    expect(body!.expr).not.toBe("({offerId: results.start_run?.offerId})");
   });
 
   it("auto-injects orgId, userId, runId, serviceEnvs, and tracking context into script modules", () => {

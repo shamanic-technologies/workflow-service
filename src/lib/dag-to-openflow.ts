@@ -1,6 +1,6 @@
 import type { DAG, DAGNode, DAGEdge } from "./dag-validator.js";
 import { getScriptPath, isNativeNode } from "./node-type-registry.js";
-import { buildInputTransforms, collapseDotNotation } from "./input-mapping.js";
+import { buildInputTransforms } from "./input-mapping.js";
 
 /** Global timeout applied to every script module (in seconds). 1 hour. */
 const NODE_TIMEOUT_SECONDS = 3600;
@@ -23,21 +23,6 @@ const AUDIENCE_ITER_KEY = "__wf_audience_id";
 
 /** The reference every loop-body node uses to read the threaded audienceId. */
 const LOOP_BODY_AUDIENCE_REF = `flow_input.iter.value?.${AUDIENCE_ITER_KEY}`;
-
-/**
- * Reserved key under which the campaign's offerId rides the SAME iter fold as
- * the audienceId, so it survives into a for-each body the same way.
- *
- * brand-service refuses every brand-scoped read (409 SEVERAL_OFFERS) once a
- * brand sells several offers, so the workflow's brand-data reads must name the
- * campaign's offer. The offer is decided by the campaign row and reported by
- * `/start-run` (`offerId` on its response) — the same mid-flow, results-only
- * value the audienceId is — so it threads through the identical machinery.
- */
-const OFFER_ITER_KEY = "__wf_offer_id";
-
-/** The reference every loop-body node uses to read the threaded offerId. */
-const LOOP_BODY_OFFER_REF = `flow_input.iter.value?.${OFFER_ITER_KEY}`;
 
 /**
  * The reference the campaign `/start-run` node itself uses to read an audience
@@ -223,9 +208,6 @@ function buildModules(orderedNodes: DAGNode[], dag: DAG): FlowModule[] {
   const audienceRef = startRunModuleId
     ? `results.${startRunModuleId}?.audienceId`
     : null;
-  const offerRef = startRunModuleId
-    ? `results.${startRunModuleId}?.offerId`
-    : null;
 
   // Build pass: iterate ordered nodes, skip consumed, build containers with nested modules
   const modules: FlowModule[] = [];
@@ -234,13 +216,13 @@ function buildModules(orderedNodes: DAGNode[], dag: DAG): FlowModule[] {
     if (consumed.has(node.id)) continue;
 
     if (node.type === "condition") {
-      const mod = buildConditionModule(node, dag, orderedNodes, conditionInfo.get(node.id)!, audienceRef, offerRef);
+      const mod = buildConditionModule(node, dag, orderedNodes, conditionInfo.get(node.id)!, audienceRef);
       modules.push(mod);
     } else if (node.type === "for-each") {
-      const mod = buildForEachModule(node, orderedNodes, loopBodyInfo.get(node.id)!, dag, audienceRef, offerRef);
+      const mod = buildForEachModule(node, orderedNodes, loopBodyInfo.get(node.id)!, dag, audienceRef);
       modules.push(mod);
     } else {
-      const mod = nodeToModule(node, dag, audienceRef, offerRef);
+      const mod = nodeToModule(node, dag, audienceRef);
       if (mod) modules.push(mod);
     }
   }
@@ -353,7 +335,6 @@ function buildConditionModule(
   orderedNodes: DAGNode[],
   info: { branchNodeSets: Map<string, Set<string>>; afterNodes: Set<string> },
   audienceRef: string | null,
-  offerRef: string | null,
 ): FlowModule {
   const moduleId = node.id.replace(/-/g, "_");
   const outEdges = dag.edges.filter((e) => e.from === node.id && e.condition);
@@ -393,7 +374,7 @@ function buildConditionModule(
     for (const bn of branchNodes) {
       // branchone runs inline in the parent flow scope, so `results.start_run`
       // still resolves inside a branch body — forward the inline audienceRef.
-      const mod = nodeToModule(bn, dag, audienceRef, offerRef);
+      const mod = nodeToModule(bn, dag, audienceRef);
       if (mod) branchModules.push(mod);
     }
 
@@ -413,7 +394,6 @@ function buildForEachModule(
   bodyNodeIds: Set<string>,
   dag: DAG,
   audienceRef: string | null,
-  offerRef: string | null,
 ): FlowModule {
   const moduleId = node.id.replace(/-/g, "_");
   let iteratorExpr = (node.config?.iterator as string) ?? "flow_input.items";
@@ -430,25 +410,21 @@ function buildForEachModule(
 
   if (carriesAudience) {
     // (origIter ?? []).map(el => el && typeof el === "object"
-    //   ? { ...el, __wf_audience_id: <audienceRef>, __wf_offer_id: <offerRef> } : el)
-    // The campaign's offerId rides the same fold — constant per run, but only
-    // resolvable in the parent scope, and needed inside the body by the same
-    // brand-data reads that need the audience.
+    //   ? { ...el, __wf_audience_id: <audienceRef> } : el)
     iteratorExpr =
       `(${iteratorExpr} ?? []).map((__wf_el) => ` +
       `(__wf_el && typeof __wf_el === "object") ? ` +
-      `{ ...__wf_el, ${AUDIENCE_ITER_KEY}: ${audienceRef}, ${OFFER_ITER_KEY}: ${offerRef} } : __wf_el)`;
+      `{ ...__wf_el, ${AUDIENCE_ITER_KEY}: ${audienceRef} } : __wf_el)`;
   }
 
   // Inside the loop body, audienceId is read from the (possibly wrapped)
   // iteration element, not from the out-of-scope start-run result.
   const bodyAudienceRef = carriesAudience ? LOOP_BODY_AUDIENCE_REF : null;
-  const bodyOfferRef = carriesAudience ? LOOP_BODY_OFFER_REF : null;
 
   const bodyNodes = orderedNodes.filter((n) => bodyNodeIds.has(n.id));
   const bodyModules: FlowModule[] = [];
   for (const bn of bodyNodes) {
-    const mod = nodeToModule(bn, dag, bodyAudienceRef, bodyOfferRef);
+    const mod = nodeToModule(bn, dag, bodyAudienceRef);
     if (mod) bodyModules.push(mod);
   }
 
@@ -568,7 +544,6 @@ function nodeToModule(
   node: DAGNode,
   dag: DAG,
   audienceRef: string | null,
-  offerRef: string | null,
 ): FlowModule | null {
   const moduleId = node.id.replace(/-/g, "_");
 
@@ -651,7 +626,7 @@ function nodeToModule(
     resolvedInputMapping = rewritten;
   }
 
-  let inputTransforms = buildInputTransforms(
+  const inputTransforms = buildInputTransforms(
     Object.keys(scriptConfig).length > 0 ? scriptConfig : undefined,
     resolvedInputMapping,
   );
@@ -693,41 +668,6 @@ function nodeToModule(
   // ref into a node that runs at-or-before start-run (e.g. gate-check) 404s the
   // lookup at dispatch.
   const { startRunModuleId, descendants } = getAudiencePropagationScope(dag);
-
-  // Propagate the campaign's offerId the same way, into the REQUEST BODY of the
-  // two steps whose callee reads it there: brand-service extract-fields and
-  // content-generation /generate. brand-service refuses every brand-scoped read
-  // (409 SEVERAL_OFFERS) once a brand sells several offers — naming the offer
-  // on the extract-fields body is what lets a multi-offer brand's campaign run.
-  // Body (not a header) because that is the contract those callees serve; no
-  // other node's body is touched, so every other downstream request is
-  // byte-identical. An offer that start-run does not report (a pre-offer
-  // campaign) resolves to undefined and the key drops out of the JSON body —
-  // byte-identical to today. A node whose DAG mapping already states
-  // body.offerId is left alone.
-  if (
-    offerRef &&
-    node.type === "http.call" &&
-    startRunModuleId &&
-    descendants.has(moduleId) &&
-    !inputTransforms["body.offerId"]
-  ) {
-    const service = node.config?.service;
-    const path = node.config?.path;
-    const isBrandExtractFields =
-      service === "brand" &&
-      typeof path === "string" &&
-      path.includes("/orgs/brands/extract-fields");
-    const isContentGeneration =
-      (service === "content-generation" || service === "content_generation") &&
-      typeof path === "string" &&
-      /\/generate$/.test(path);
-    if (isBrandExtractFields || isContentGeneration) {
-      inputTransforms["body.offerId"] = { type: "javascript", expr: offerRef };
-      inputTransforms = collapseDotNotation(inputTransforms);
-    }
-  }
-
   if (
     audienceRef &&
     startRunModuleId &&
