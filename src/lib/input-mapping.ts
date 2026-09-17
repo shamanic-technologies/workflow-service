@@ -16,7 +16,8 @@ export interface InputTransform {
  */
 export function buildInputTransforms(
   config?: Record<string, unknown>,
-  inputMapping?: Record<string, string>
+  inputMapping?: Record<string, string>,
+  extraTransforms?: Record<string, InputTransform>
 ): Record<string, InputTransform> {
   const transforms: Record<string, InputTransform> = {};
 
@@ -73,11 +74,31 @@ export function buildInputTransforms(
     }
   }
 
+  // Transforms the CONVERSION adds (not the DAG): they must be merged here, while
+  // the map still carries its dot-notation keys, so the single collapse below sees
+  // them alongside the static base and spreads it. Adding a "body.x" key AFTER the
+  // collapse and re-collapsing is what destroyed every request body in #431: on the
+  // second pass the root is already a javascript transform, so there is no static
+  // base left to spread and the whole body is replaced by the one added key.
+  // A key the DAG already states wins — an explicit mapping is never overridden.
+  if (extraTransforms) {
+    for (const [key, transform] of Object.entries(extraTransforms)) {
+      if (!(key in transforms)) transforms[key] = transform;
+    }
+  }
+
   return collapseDotNotation(transforms);
 }
 
 function toExpr(t: InputTransform): string {
   return t.type === "javascript" ? t.expr! : JSON.stringify(t.value);
+}
+
+/** Optional-chained property access, bracketed when the key is not an identifier. */
+function accessKey(key: string): string {
+  return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)
+    ? `?.${key}`
+    : `?.[${JSON.stringify(key)}]`;
 }
 
 function safeKey(key: string): string {
@@ -121,6 +142,14 @@ export function collapseDotNotation(
     // If there's a static base for this root key, we spread it first
     const staticBase = result[root]?.type === "static" ? result[root].value : undefined;
 
+    // A root that is ALREADY a javascript transform is an object expression a
+    // previous collapse produced (or a whole-object $ref). Spread it rather than
+    // drop it, so collapsing an already-collapsed map is idempotent instead of
+    // silently discarding the base. Without this, re-collapsing a map carrying
+    // `body` + a newly added `body.x` yields `({x: ...})` and loses everything
+    // else (the #431 outage).
+    const jsBaseExpr = result[root]?.type === "javascript" ? result[root].expr! : undefined;
+
     // If the static base is a scalar (string, number, etc.), don't replace it
     // with a collapsed object — keep both the scalar and the dot-notation keys.
     if (staticBase !== undefined && (typeof staticBase !== "object" || staticBase === null)) {
@@ -150,9 +179,11 @@ export function collapseDotNotation(
 
     const parts: string[] = [];
 
-    // Spread static base
+    // Spread the base (static object, or an already-collapsed js expression)
     if (baseObj) {
       parts.push(`...${JSON.stringify(baseObj)}`);
+    } else if (jsBaseExpr) {
+      parts.push(`...(${jsBaseExpr})`);
     }
 
     // Direct field overrides: body.campaignId → campaignId: expr
@@ -166,6 +197,10 @@ export function collapseDotNotation(
       const nestedParts: string[] = [];
       if (parentStatic && typeof parentStatic === "object" && parentStatic !== null) {
         nestedParts.push(`...${JSON.stringify(parentStatic)}`);
+      } else if (jsBaseExpr) {
+        // Same reason as the root spread: keep whatever the base expression
+        // already holds under this parent instead of replacing the object.
+        nestedParts.push(`...(${jsBaseExpr})${accessKey(parent)}`);
       }
       for (const { subPath, expr } of subs) {
         nestedParts.push(`${safeKey(subPath)}: ${expr}`);
