@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildInputTransforms } from "../../src/lib/input-mapping.js";
+import { buildInputTransforms, collapseDotNotation } from "../../src/lib/input-mapping.js";
 
 describe("buildInputTransforms", () => {
   it("translates $ref:node.output.field to javascript transform", () => {
@@ -254,5 +254,76 @@ describe("buildInputTransforms", () => {
     // Dot key should be collapsed
     expect(result.body).toBeDefined();
     expect(result.body.type).toBe("javascript");
+  });
+});
+
+describe("collapseDotNotation is idempotent", () => {
+  it("spreads an already-collapsed root instead of discarding it", () => {
+    const once = collapseDotNotation({
+      body: { type: "static", value: { tag: "cold-email", type: "v27" } },
+      "body.recipient": { type: "javascript", expr: "results.fetch_lead?.email" },
+      "body.variables.leadFirstName": {
+        type: "javascript",
+        expr: "results.fetch_lead?.firstName",
+      },
+    });
+    expect(once.body.type).toBe("javascript");
+
+    // A second pass that adds a field to the collapsed map must keep the base.
+    // Dropping it here is exactly what blanked every campaign request body in
+    // #431 — a body of ({offerId: ...}) and nothing else.
+    const twice = collapseDotNotation({
+      ...once,
+      "body.offerId": { type: "javascript", expr: "results.start_run?.offerId" },
+    });
+
+    const evaluate = (expr: string) =>
+      new Function(
+        "results",
+        `return ${expr};`,
+      )({
+        fetch_lead: { email: "a@b.co", firstName: "Ada" },
+        start_run: { offerId: "offer-1" },
+      }) as Record<string, unknown>;
+
+    expect(evaluate(twice.body.expr!)).toEqual({
+      tag: "cold-email",
+      type: "v27",
+      recipient: "a@b.co",
+      offerId: "offer-1",
+      variables: { leadFirstName: "Ada" },
+    });
+  });
+
+  it("re-collapsing with no new key changes nothing observable", () => {
+    const once = collapseDotNotation({
+      body: { type: "static", value: { a: 1 } },
+      "body.b": { type: "javascript", expr: "results.x?.b" },
+    });
+    const twice = collapseDotNotation(once);
+    expect(twice).toEqual(once);
+  });
+});
+
+describe("buildInputTransforms extraTransforms", () => {
+  it("merges a conversion-added dot key before the single collapse", () => {
+    const t = buildInputTransforms(
+      { body: { tag: "cold-email" } },
+      { "body.recipient": "$ref:fetch-lead.output.email" },
+      { "body.offerId": { type: "javascript", expr: "results.start_run?.offerId" } },
+    );
+    expect(t.body.expr).toContain('"tag":"cold-email"');
+    expect(t.body.expr).toContain("recipient: results.fetch_lead?.email");
+    expect(t.body.expr).toContain("offerId: results.start_run?.offerId");
+  });
+
+  it("never overrides a key the DAG already states", () => {
+    const t = buildInputTransforms(
+      { body: { tag: "x" } },
+      { "body.offerId": "$ref:start-run.output.offerId" },
+      { "body.offerId": { type: "javascript", expr: "SHOULD_NOT_APPEAR" } },
+    );
+    expect(t.body.expr).not.toContain("SHOULD_NOT_APPEAR");
+    expect(t.body.expr).toContain("offerId: results.start_run?.offerId");
   });
 });
