@@ -12,7 +12,7 @@
  * already owns them:
  *
  *  - It does not decide WHO to answer, in what order, or when to stop. That is
- *    lead-service's follow-up queue: `POST /orgs/campaigns/{campaignId}/followups/claim-next`
+ *    lead-service's follow-up queue: `POST /orgs/campaigns/{predecessorCampaignId}/followups/claim-next`
  *    hands out at most one person, exactly once, oldest-due-first, with an
  *    atomic claim — so two concurrent runs can never answer the same person.
  *  - It does not resolve WHICH MAILBOX answers. instantly-service reads that
@@ -21,6 +21,29 @@
  *  - It does not compute the next due date by a fixed ladder. The date is
  *    chosen per lead, because a prospect who writes "recontact me in January"
  *    must be honoured; lead-service stores it rather than deriving it.
+ *
+ * ONE MORE THING IT DOES NOT OWN, and it is the reason this workflow answered
+ * nobody for its first two weeks: WHICH CAMPAIGN holds the person. A funnel is
+ * several LEGS and campaign-service mints one campaign per leg, so the prospect
+ * this run must answer replied to the PREVIOUS leg — the cold email — and the
+ * person, the thread and the record of what we owe them are all filed under
+ * THAT campaign. Asking this workflow's own campaign for them finds nobody,
+ * every run, forever, and "nobody due" is indistinguishable from there being
+ * nothing to do, which is why it went unnoticed.
+ *
+ * So the flow RESOLVES the preceding leg's campaign itself, before it claims
+ * anyone: `GET /internal/campaigns/{campaignId}/predecessor` states it, or
+ * NAMES why there is none. It is resolved by the flow rather than handed to it
+ * because most runs are scheduled and have no trigger to hand anything over.
+ * Every lead-facing hop — the claim, the lead read, the conversation read, the
+ * reply — then names the PREDECESSOR's campaign. The gate, the run accounting
+ * and the offer/funnel read keep naming the campaign this run was DISPATCHED
+ * for: money belongs to the leg that spends it.
+ *
+ * There is deliberately NO fallback to this run's own campaign when there is no
+ * predecessor. That is precisely the behaviour that claimed nobody and 404'd,
+ * and making it the fallback would hide the failure a second time. A run with
+ * no predecessor ends on its own named branch, having sent nothing.
  *
  * The single stated degradation: if the booking page cannot be read, the reply
  * still goes out with the plain booking link and no slots, logged loudly.
@@ -42,6 +65,51 @@ export const CONVERSATION_READ = {
   method: "GET",
   path: "/orgs/conversations",
 } as const;
+
+/**
+ * The campaign-service read that states which campaign ran the PRECEDING leg of
+ * this funnel — the one that actually holds the prospect, the thread and the
+ * debt.
+ *
+ * Service api-key, no org headers. `predecessor` is null exactly when `absence`
+ * is non-null, and `absence` names the reason (`entry_leg`,
+ * `no_campaign_for_preceding_leg`, `campaign_states_no_*`). "There is none" and
+ * "it could not be worked out" are deliberately different answers on that
+ * endpoint: the second is a 409 or a 502, which fails this node loud and lands
+ * on the error branch rather than being mistaken for an empty queue.
+ */
+export const PREDECESSOR_READ = {
+  service: "campaign",
+  method: "GET",
+  path: "/internal/campaigns/{campaignId}/predecessor",
+} as const;
+
+/**
+ * The campaign every LEAD-FACING hop names. Not `flow_input.campaignId` — that
+ * is the campaign this run was dispatched for, which is the leg that PAYS, not
+ * the leg that holds the person.
+ */
+export const PREDECESSOR_CAMPAIGN_REF =
+  "$ref:predecessor-campaign.output.predecessor.campaignId";
+
+/**
+ * States, in the log, that this campaign has no preceding leg to answer on.
+ *
+ * `/end-run` carries no reason field, so this is where the reason is said. The
+ * run then ends as a FAILURE (`success: false`) rather than as "nobody due":
+ * a campaign that cannot resolve its predecessor is misconfigured, not idle,
+ * and reporting it as idle is exactly how this went unnoticed for two weeks.
+ * It never stops the campaign — that is the customer's statement, not ours.
+ */
+export const NAME_MISSING_PREDECESSOR_CODE = `
+export async function main(predecessorRead, campaignId) {
+  const absence = predecessorRead?.absence ?? "unknown";
+  console.error("[ai-meeting-booking] campaign " + String(campaignId) +
+    " has no preceding leg to answer on (absence=" + absence +
+    "); nobody was claimed and nothing was sent");
+  return { absence, campaignId: campaignId ?? null };
+}
+`.trim();
 
 /** How far ahead of today the booking page is read for availability. */
 export const SLOT_LOOKAHEAD_DAYS = 14;
@@ -332,8 +400,35 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "campaign", method: "POST", path: "/start-run" },
       },
+      // Which campaign ran the PRECEDING leg of this funnel — the one holding
+      // the person, the thread and the debt. Resolved here, by the flow, because
+      // most runs are scheduled and have nobody to hand it over.
+      {
+        id: "predecessor-campaign",
+        type: "http.call",
+        config: {
+          service: PREDECESSOR_READ.service,
+          method: PREDECESSOR_READ.method,
+          path: PREDECESSOR_READ.path,
+        },
+        retries: 0,
+        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
+      },
+      { id: "check-predecessor", type: "condition" },
+      {
+        id: "name-missing-predecessor",
+        type: "script",
+        config: { code: NAME_MISSING_PREDECESSOR_CODE },
+        retries: 0,
+        inputMapping: {
+          predecessorRead: "$ref:predecessor-campaign.output",
+          campaignId: "$ref:flow_input.campaignId",
+        },
+      },
       // At most one person, exactly once, oldest-due-first. The claim is atomic
-      // and lives in lead-service; nothing here re-implements it.
+      // and lives in lead-service; nothing here re-implements it. It names the
+      // PREDECESSOR's campaign — the queue is filled, and claimed, per campaign,
+      // and the debt was written against the leg that spoke to them.
       {
         id: "claim-followup",
         type: "http.call",
@@ -343,7 +438,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           path: "/orgs/campaigns/{campaignId}/followups/claim-next",
         },
         retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
+        inputMapping: { "params.campaignId": PREDECESSOR_CAMPAIGN_REF },
       },
       { id: "check-claim", type: "condition" },
       // Which offer and funnel this campaign sells — the campaign row states both.
@@ -374,7 +469,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { service: "lead", method: "GET", path: "/orgs/leads/{id}" },
         inputMapping: {
           "params.id": "$ref:claim-followup.output.followup.id",
-          "query.campaignId": "$ref:flow_input.campaignId",
+          "query.campaignId": PREDECESSOR_CAMPAIGN_REF,
         },
       },
       // What they wrote, and what we sent them.
@@ -387,7 +482,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           path: CONVERSATION_READ.path,
         },
         inputMapping: {
-          "query.campaign_id": "$ref:flow_input.campaignId",
+          "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
           "query.email": "$ref:claim-followup.output.followup.email",
         },
       },
@@ -493,7 +588,7 @@ export async function main(offerFunnels, funnelKey) {
         },
         retries: 0,
         inputMapping: {
-          "body.campaign_id": "$ref:flow_input.campaignId",
+          "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
           "body.email": "$ref:claim-followup.output.followup.email",
           "body.body_html": "$ref:draft-reply.output.json.replyHtml",
         },
@@ -540,6 +635,19 @@ export async function main(offerFunnels, funnelKey) {
           body: { success: true, stopCampaign: false, noWorkAvailable: true },
         },
       },
+      // This campaign has no preceding leg, so there is nobody it CAN answer and
+      // no thread it could answer into. A failure, not an idle tick: it will not
+      // resolve itself by waiting, and calling it idle is what hid it before.
+      {
+        id: "end-run-no-predecessor",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: false, stopCampaign: false },
+        },
+      },
       {
         id: "end-run-error",
         type: "http.call",
@@ -553,10 +661,29 @@ export async function main(offerFunnels, funnelKey) {
     ],
     edges: [
       { from: "gate-check", to: "start-run" },
-      { from: "start-run", to: "claim-followup" },
+      { from: "start-run", to: "predecessor-campaign" },
+      { from: "predecessor-campaign", to: "check-predecessor" },
+      {
+        from: "check-predecessor",
+        to: "claim-followup",
+        condition: "results['predecessor-campaign'].predecessor != null",
+      },
+      {
+        from: "check-predecessor",
+        to: "name-missing-predecessor",
+        condition: "results['predecessor-campaign'].predecessor == null",
+      },
+      { from: "name-missing-predecessor", to: "end-run-no-predecessor" },
       { from: "claim-followup", to: "check-claim" },
-      { from: "check-claim", to: "campaign-detail", condition: "results['claim-followup'].found == true" },
-      { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup'].found == false" },
+      // `check-claim` also takes an edge from BEFORE the predecessor branch, so
+      // it converges rather than nesting inside it: a condition node is only
+      // translated at the level it is emitted, and a condition inside a branch
+      // body would be built as an ordinary module and silently do nothing.
+      // The `?.` matters for the same reason — on the no-predecessor path the
+      // claim never ran, so both arms must read false rather than throw.
+      { from: "predecessor-campaign", to: "check-claim" },
+      { from: "check-claim", to: "campaign-detail", condition: "results['claim-followup']?.found == true" },
+      { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup']?.found == false" },
       { from: "campaign-detail", to: "offer-funnels" },
       { from: "offer-funnels", to: "pick-booking-url" },
       { from: "pick-booking-url", to: "brand-profile" },

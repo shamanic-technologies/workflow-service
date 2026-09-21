@@ -8,6 +8,9 @@ import {
   RESOLVE_NEXT_DUE_CODE,
   SLOT_CANDIDATES,
   FEATURE_SLUG,
+  PREDECESSOR_READ,
+  PREDECESSOR_CAMPAIGN_REF,
+  NAME_MISSING_PREDECESSOR_CODE,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -141,7 +144,7 @@ describe("ai-meeting-booking DAG", () => {
       path: "/orgs/conversations",
     });
     expect(byId.get("conversation")?.inputMapping).toEqual({
-      "query.campaign_id": "$ref:flow_input.campaignId",
+      "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
       "query.email": "$ref:claim-followup.output.followup.email",
     });
     expect(byId.get("prior-generation")?.config).toMatchObject({
@@ -151,6 +154,104 @@ describe("ai-meeting-booking DAG", () => {
     const compose = byId.get("compose-prompt")?.inputMapping ?? {};
     expect(compose.conversation).toBe("$ref:conversation.output");
     expect(compose.priorGeneration).toBe("$ref:prior-generation.output");
+  });
+
+  it("resolves the preceding leg's campaign itself, before it claims anyone", () => {
+    // Scheduled runs have no trigger to hand the predecessor over, and most runs
+    // are scheduled — so the flow asks campaign-service for it.
+    const pred = byId.get("predecessor-campaign");
+    expect(pred?.config).toMatchObject({
+      service: PREDECESSOR_READ.service,
+      method: PREDECESSOR_READ.method,
+      path: PREDECESSOR_READ.path,
+    });
+    expect(pred?.inputMapping).toEqual({ "params.campaignId": "$ref:flow_input.campaignId" });
+    // and it runs before the claim can
+    expect(descendants(dag, "predecessor-campaign").has("claim-followup")).toBe(true);
+    expect(descendants(dag, "claim-followup").has("predecessor-campaign")).toBe(false);
+  });
+
+  it("every lead-facing hop names the PREDECESSOR's campaign, never this run's", () => {
+    // The person, their thread and the debt are all filed under the leg that
+    // cold-emailed them. Asking this workflow's own campaign finds nobody.
+    expect(byId.get("claim-followup")?.inputMapping?.["params.campaignId"]).toBe(
+      PREDECESSOR_CAMPAIGN_REF,
+    );
+    expect(byId.get("lead-detail")?.inputMapping?.["query.campaignId"]).toBe(
+      PREDECESSOR_CAMPAIGN_REF,
+    );
+    expect(byId.get("conversation")?.inputMapping?.["query.campaign_id"]).toBe(
+      PREDECESSOR_CAMPAIGN_REF,
+    );
+    expect(byId.get("send-reply")?.inputMapping?.["body.campaign_id"]).toBe(
+      PREDECESSOR_CAMPAIGN_REF,
+    );
+  });
+
+  it("keeps the gate and the run accounting on the campaign that was dispatched", () => {
+    // Money belongs to the leg that spends it: nothing about funding, gating or
+    // scheduling moves onto the predecessor.
+    for (const id of ["gate-check", "start-run", "end-run", "end-run-nobody-due", "end-run-error", "end-run-no-predecessor"]) {
+      const node = byId.get(id);
+      expect(node?.config?.service).toBe("campaign");
+      // No lead-facing hop's campaign leaks into the accounting calls.
+      const refs = Object.values(node?.inputMapping ?? {});
+      expect(refs.some((r) => String(r).includes("predecessor-campaign"))).toBe(false);
+    }
+    // The offer and funnel being SOLD are this campaign's, not the predecessor's.
+    expect(byId.get("campaign-detail")?.inputMapping?.["params.id"]).toBe(
+      "$ref:flow_input.campaignId",
+    );
+  });
+
+  it("a run with no predecessor names why, sends nothing, and never falls back to its own campaign", () => {
+    const none = dag.edges.find(
+      (e) => e.from === "check-predecessor" && e.condition?.includes("== null"),
+    );
+    expect(none?.to).toBe("name-missing-predecessor");
+    const reached = descendants(dag, none?.to as string);
+    expect(reached.has("claim-followup")).toBe(false);
+    expect(reached.has("send-reply")).toBe(false);
+    expect(reached.has("record-followup")).toBe(false);
+    // It ends as a failure, not as an idle tick — a campaign that cannot resolve
+    // its predecessor is misconfigured, and calling it idle is what hid this.
+    expect(reached.has("end-run-no-predecessor")).toBe(true);
+    expect(byId.get("end-run-no-predecessor")?.config?.body).toEqual({
+      success: false,
+      stopCampaign: false,
+    });
+    // and it never stops the campaign — that is the customer's statement.
+    expect(byId.get("end-run-no-predecessor")?.config?.path).toBe("/end-run");
+
+    // No node anywhere substitutes this run's own campaign for the predecessor.
+    const leadFacing = ["claim-followup", "lead-detail", "conversation", "send-reply"];
+    for (const id of leadFacing) {
+      const refs = Object.values(byId.get(id)?.inputMapping ?? {});
+      expect(refs.some((r) => String(r) === "$ref:flow_input.campaignId")).toBe(false);
+    }
+  });
+
+  it("names the absence reason in the log rather than swallowing it", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const main = loadMain(NAME_MISSING_PREDECESSOR_CODE);
+    const out = await main({ predecessor: null, absence: "no_campaign_for_preceding_leg" }, "camp-1");
+    expect(out).toEqual({ absence: "no_campaign_for_preceding_leg", campaignId: "camp-1" });
+    expect(spy.mock.calls[0]?.[0]).toContain("no_campaign_for_preceding_leg");
+    expect(spy.mock.calls[0]?.[0]).toContain("camp-1");
+  });
+
+  it("the nothing-to-do branch cannot throw on a run that never claimed", () => {
+    // On the no-predecessor path `results.claim_followup` does not exist, so both
+    // arms of check-claim must read false rather than raise.
+    for (const e of dag.edges.filter((x) => x.from === "check-claim")) {
+      expect(e.condition).toContain("results['claim-followup']?.");
+    }
+    // check-claim converges rather than nesting inside the predecessor branch —
+    // a condition node inside a branch body is built as an ordinary module and
+    // silently does nothing.
+    const incoming = dag.edges.filter((e) => e.to === "check-claim").map((e) => e.from);
+    expect(incoming).toContain("predecessor-campaign");
+    expect(incoming).toContain("claim-followup");
   });
 
   it("goes through chat-service for the LLM call, which declares the spend", () => {
