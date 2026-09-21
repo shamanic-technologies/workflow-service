@@ -97,6 +97,20 @@ export function needsNoWorkAvailable(dag) {
   return node.config?.body?.noWorkAvailable !== true;
 }
 
+/**
+ * True when a stored DAG still asks its OWN campaign for the prospect.
+ *
+ * A funnel is several legs and campaign-service mints one campaign per leg, so
+ * the person who replied to the cold email, their thread, and the record of
+ * what we owe them are all filed under the PRECEDING leg's campaign. A DAG
+ * without the `predecessor-campaign` read claims nobody, every run, forever —
+ * which reads as "nobody is due" and is how this went unnoticed for two weeks.
+ * The repair is an upgrade carrying the current DAG.
+ */
+export function needsPredecessorResolution(dag) {
+  return !(dag?.nodes ?? []).some((n) => n?.id === "predecessor-campaign");
+}
+
 /** The (provider, model) a stored DAG drafts with, or null if it has no drafting step. */
 export function cellOf(dag) {
   const node = (dag?.nodes ?? []).find((n) => n?.config?.service === "chat");
@@ -122,7 +136,12 @@ async function main() {
   for (const w of existing.payload?.workflows ?? []) {
     const cell = cellOf(w.dag);
     if (cell) covered.set(cell, w.workflowDynastySlug ?? w.workflowSlug);
-    if (w.workflowDynastySlug && needsNoWorkAvailable(w.dag)) stale.push(w.workflowDynastySlug);
+    if (
+      w.workflowDynastySlug &&
+      (needsNoWorkAvailable(w.dag) || needsPredecessorResolution(w.dag))
+    ) {
+      stale.push(w.workflowDynastySlug);
+    }
   }
 
   const cell = `${CELL.provider}::${CELL.model}`;
@@ -131,7 +150,7 @@ async function main() {
 
   for (const slug of stale) {
     if (!APPLY) {
-      console.log(`  ${slug}: would upgrade (nothing-to-do branch does not report noWorkAvailable)`);
+      console.log(`  ${slug}: would upgrade (stored DAG is behind the current one)`);
       continue;
     }
     const res = await call("POST", "/workflows/upgrade", {
