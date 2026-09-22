@@ -45,9 +45,33 @@
  * and making it the fallback would hide the failure a second time. A run with
  * no predecessor ends on its own named branch, having sent nothing.
  *
+ * A RUN THAT SENDS NOTHING IS NOT A FAILED RUN. Two of the branches below end
+ * cleanly with the prospect never hearing from us, and in both cases that is
+ * the correct outcome rather than a degradation:
+ *
+ *  - The model says it CANNOT answer what they asked. Its schema used to
+ *    REQUIRE a reply body, so the only move left to it was a deflection back to
+ *    the call, and the follow-up ladder then did it again on the next rung —
+ *    the prospect gets pestered and a question a person could have answered in
+ *    one line never reaches one. `answerable: false` is now a first-class
+ *    answer: the flow sends the prospect nothing and calls
+ *    `POST /orgs/replies/escalate`, which forwards the exchange to the agency
+ *    inbox NAMING THE QUESTION IN THE PROSPECT'S OWN WORDS and stops the ladder
+ *    itself. No follow-up is recorded: nothing was sent, and the schedule is
+ *    being emptied rather than advanced. Whether a question is answerable is a
+ *    judgement about what the brand facts contain, so it is the model's and
+ *    there is deliberately no keyword or regex pre-filter anywhere here.
+ *  - instantly-service refuses the send with `409 human_took_over`, because a
+ *    PERSON has answered the thread since the prospect last wrote. We stood
+ *    down; the run ends clean, again recording no follow-up. Every reply this
+ *    flow sends declares `sent_by: "automation"` so that gate can see it.
+ *
  * The single stated degradation: if the booking page cannot be read, the reply
  * still goes out with the plain booking link and no slots, logged loudly.
- * Everything else fails loud and lands on the error branch.
+ * Everything else fails loud and lands on the error branch — including every
+ * OTHER 409 from the send (`no_reply_to_thread`, `sending_account_unresolved`,
+ * `mailbox_credential_unavailable`), which is why the takeover is told apart by
+ * its CODE and never by its status.
  */
 
 import type { DAG } from "./dag-validator.js";
@@ -515,6 +539,12 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "1. ANSWER THE QUESTION THEY ASKED. Read their last message and reply to what is in it. A reply that ignores what they wrote is worse than no reply at all.",
     "2. Then propose the meeting.",
     "",
+    "WHEN YOU CANNOT ANSWER",
+    "Everything you may state is above. If answering what they asked would mean inventing something that is not there — a price, a number of seats, a spec, a reference, a commitment to a date nobody here has made — then you cannot answer it.",
+    "In that case set answerable to false and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
+    "Set answerable to true only when you can actually answer what they asked from what is in front of you.",
+    "Either way, return question: what they asked, in their own words. It is what the person taking over reads.",
+    "",
     "BOOKING",
     bookingSection,
     "",
@@ -534,6 +564,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
     "You answer what they asked before you ask for anything.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
+    "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
   ].join(" ");
 
   return { message, systemPrompt, ladderNextDueAt, timezone };
@@ -553,6 +584,15 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
  */
 export const RESOLVE_NEXT_DUE_CODE = `
 export async function main(draft, ladderNextDueAt) {
+  // This node only runs on the answer path, so a model that said it could
+  // answer and then returned nothing to send is a broken contract, not a
+  // degradation. It fails here — strictly BEFORE the send — rather than
+  // letting an empty body reach the prospect.
+  const replyHtml = draft?.json?.replyHtml;
+  if (typeof replyHtml !== "string" || replyHtml.trim() === "") {
+    throw new Error("[ai-meeting-booking] the model said the question was answerable but returned no reply body; refusing to send an empty answer");
+  }
+
   const proposed = draft?.json?.nextDueAt;
   const now = Date.now();
   const ceiling = now + 365 * 86400000;
@@ -565,6 +605,49 @@ export async function main(draft, ladderNextDueAt) {
   console.error("[ai-meeting-booking] the model's next-due date is unusable (" + JSON.stringify(proposed) +
     "); falling back to the growing interval " + ladderNextDueAt);
   return { nextDueAt: ladderNextDueAt, source: "interval_ladder" };
+}
+`.trim();
+
+/**
+ * Reads what `POST /orgs/replies` actually did, and separates the ONE refusal
+ * that is a normal outcome from every other way a send can fail.
+ *
+ * `409 human_took_over` means a person has answered this thread since the
+ * prospect last wrote, so instantly-service refused to let automation speak
+ * over them. Nothing was prepared and nothing was sent; retrying would be
+ * refused identically. The run ends clean and records NO follow-up — the ladder
+ * belongs to whoever took the thread over now.
+ *
+ * Every other refusal fails LOUD, and that is why this cannot be a condition on
+ * the raw status code: a 409 also carries `no_reply_to_thread`,
+ * `sending_account_unresolved` and `mailbox_credential_unavailable`, which mean
+ * we could not send and the run genuinely failed. Keying the clean end on the
+ * status alone would swallow all three.
+ *
+ * A 202 is a success: the prospect's sending window is shut, so the answer is
+ * queued for its next opening. It is sent as far as this run is concerned, and
+ * the follow-up is recorded.
+ */
+export const CLASSIFY_SEND_CODE = `
+export async function main(send) {
+  if (send?.success === true) {
+    return { outcome: "sent", status: send?.status ?? null };
+  }
+
+  let code = null;
+  try {
+    code = JSON.parse(String(send?.error ?? "{}"))?.code ?? null;
+  } catch (err) {
+    code = null;
+  }
+
+  if (send?.status === 409 && code === "human_took_over") {
+    console.error("[ai-meeting-booking] a person has already answered this thread since the prospect last wrote; the automated reply was refused and no follow-up is recorded");
+    return { outcome: "human_took_over", status: 409 };
+  }
+
+  throw new Error("[ai-meeting-booking] the reply could not be sent (" + String(send?.status) +
+    " " + String(code) + "): " + String(send?.error));
 }
 `.trim();
 
@@ -581,25 +664,49 @@ export interface AiMeetingBookingDagOptions {
  * The answer the model must return. Strict, because Anthropic rejects a
  * permissive schema and because a missing `nextDueAt` would otherwise only
  * surface after the reply has gone out.
+ *
+ * `answerable` is the whole point of the shape. Until it existed, `replyHtml`
+ * was REQUIRED, so a prospect who asked something the brand facts do not
+ * contain — a price, a spec, a reference, a date nobody has committed to — got
+ * the only thing a required reply body leaves the model: a deflection back to
+ * the call. The follow-up ladder then did it again on the next rung. So the two
+ * writing fields are deliberately NOT required: the model may decline, and
+ * declining is a first-class answer rather than a failure to produce one.
+ *
+ * `question` is required on BOTH paths, because it is what a human picking the
+ * thread up actually needs, and `POST /orgs/replies/escalate` refuses an empty
+ * one. A bare "gave up" is not actionable.
  */
 export const REPLY_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
+    answerable: {
+      type: "boolean",
+      description:
+        "True only if you can answer what they asked from the facts in front of you. " +
+        "False if answering would mean inventing something — a price, a spec, a reference, " +
+        "a commitment nobody here has made. A person takes the thread over from there.",
+    },
+    question: {
+      type: "string",
+      description:
+        "What they asked, in their own words — the question you answered, or the one you could not.",
+    },
     replyHtml: {
       type: "string",
-      description: "The answer the prospect reads, as HTML. No signature, no subject.",
+      description:
+        "The answer the prospect reads, as HTML. No signature, no subject. " +
+        "Omit it entirely when answerable is false: the prospect hears nothing until a human writes.",
     },
     nextDueAt: {
       type: "string",
-      description: "ISO-8601 timestamp of when the next follow-up is owed.",
-    },
-    answeredQuestion: {
-      type: "string",
-      description: "The question this reply answers, in the prospect's own words.",
+      description:
+        "ISO-8601 timestamp of when the next follow-up is owed. Omit it when answerable is false — " +
+        "nothing was sent and the schedule is being emptied, not advanced.",
     },
   },
-  required: ["replyHtml", "nextDueAt", "answeredQuestion"],
+  required: ["answerable", "question"],
 } as const;
 
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
@@ -785,6 +892,32 @@ export async function main(offerFunnels, funnelKey) {
           "body.systemPrompt": "$ref:compose-prompt.output.systemPrompt",
         },
       },
+      // Can the model answer what they asked, or does a person have to? It
+      // converges rather than nesting inside `check-claim` (see the edge from
+      // `claim-followup` below), because a condition node emitted inside a
+      // branch body is built as an ordinary module and silently does nothing.
+      { id: "check-answerable", type: "condition" },
+      // Nothing is sent. instantly-service forwards the exchange to the agency
+      // inbox naming the question, and empties the lead's follow-up schedule
+      // itself — so this DAG never touches lead-service on this path, and no
+      // follow-up is recorded as acted: nothing was sent, and the schedule is
+      // being emptied rather than advanced.
+      {
+        id: "escalate-unanswerable",
+        type: "http.call",
+        config: {
+          service: "instantly",
+          method: "POST",
+          path: "/orgs/replies/escalate",
+          validateResponse: { field: "success", equals: true },
+        },
+        retries: 0,
+        inputMapping: {
+          "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
+          "body.email": "$ref:claim-followup.output.followup.email",
+          "body.question": "$ref:draft-reply.output.json.question",
+        },
+      },
       {
         id: "resolve-next-due",
         type: "script",
@@ -804,7 +937,17 @@ export async function main(offerFunnels, funnelKey) {
           service: "instantly",
           method: "POST",
           path: "/orgs/replies",
+          // Declared, not left to default. instantly-service refuses an
+          // `automation` reply once a person has answered the thread since the
+          // prospect last wrote; an undeclared caller already resolves to
+          // automation, and saying so is what keeps this true the day a
+          // human-facing surface starts calling the same route.
+          body: { sent_by: "automation" },
           validateResponse: { field: "success", equals: true },
+          // The takeover refusal is an OUTCOME, not an error: `classify-send`
+          // reads it and ends the run clean. Every other refusal is re-thrown
+          // there, so nothing is quietened.
+          tolerateFailure: true,
         },
         retries: 0,
         inputMapping: {
@@ -813,6 +956,16 @@ export async function main(offerFunnels, funnelKey) {
           "body.body_html": "$ref:draft-reply.output.json.replyHtml",
         },
       },
+      {
+        id: "classify-send",
+        type: "script",
+        config: { code: CLASSIFY_SEND_CODE },
+        retries: 0,
+        inputMapping: { send: "$ref:send-reply.output" },
+      },
+      // Same convergence trick as `check-answerable`: an edge from `draft-reply`
+      // keeps this at the top level instead of nesting it inside that branch.
+      { id: "check-sent", type: "condition" },
       // Recorded AFTER the send, never before: the count moves and the next due
       // date is written only once the prospect has actually been answered.
       {
@@ -845,6 +998,32 @@ export async function main(offerFunnels, funnelKey) {
       // also not an ordinary run: `noWorkAvailable` tells campaign-service the
       // run had nothing to do, so it waits ~10 minutes instead of re-firing on
       // the run cadence. It never stops the campaign and nothing else reads it.
+      // The prospect was not answered by us, and that is the right outcome: a
+      // human was handed the thread with the question they asked. Nothing was
+      // sent and the ladder was stopped by instantly-service, so this is a
+      // successful run with no follow-up recorded.
+      {
+        id: "end-run-escalated",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+      },
+      // A person is already answering this thread. We stood down; nothing was
+      // sent, nothing is recorded, and the run is not a failure.
+      {
+        id: "end-run-human-took-over",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+      },
       {
         id: "end-run-nobody-due",
         type: "http.call",
@@ -913,9 +1092,42 @@ export async function main(offerFunnels, funnelKey) {
       { from: "conversation", to: "prior-generation" },
       { from: "prior-generation", to: "compose-prompt" },
       { from: "compose-prompt", to: "draft-reply" },
-      { from: "draft-reply", to: "resolve-next-due" },
+      { from: "draft-reply", to: "check-answerable" },
+      // The convergence edge. `claim-followup` sits OUTSIDE `check-claim`'s
+      // branch body, so `check-answerable` is not absorbed into it and is
+      // emitted as a top-level sibling branchone — which is the only place a
+      // condition node actually does anything.
+      { from: "claim-followup", to: "check-answerable" },
+      {
+        from: "check-answerable",
+        to: "resolve-next-due",
+        condition: "results['draft-reply']?.json?.answerable == true",
+      },
+      {
+        from: "check-answerable",
+        to: "escalate-unanswerable",
+        condition: "results['draft-reply']?.json?.answerable == false",
+      },
+      { from: "escalate-unanswerable", to: "end-run-escalated" },
       { from: "resolve-next-due", to: "send-reply" },
-      { from: "send-reply", to: "record-followup" },
+      { from: "send-reply", to: "classify-send" },
+      { from: "classify-send", to: "check-sent" },
+      // Same convergence edge, one level down: `draft-reply` is outside
+      // `check-answerable`'s branch body.
+      { from: "draft-reply", to: "check-sent" },
+      // Both arms read positive evidence, never the absence of a refusal: on
+      // the escalation path `classify-send` never ran, so an "anything but a
+      // 409" arm would record a follow-up for a reply that was never sent.
+      {
+        from: "check-sent",
+        to: "record-followup",
+        condition: "results['classify-send']?.outcome == 'sent'",
+      },
+      {
+        from: "check-sent",
+        to: "end-run-human-took-over",
+        condition: "results['classify-send']?.outcome == 'human_took_over'",
+      },
       { from: "record-followup", to: "end-run" },
     ],
     onError: "end-run-error",
