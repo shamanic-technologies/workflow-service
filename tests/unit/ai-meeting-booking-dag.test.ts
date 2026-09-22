@@ -304,15 +304,42 @@ describe("reading the booking page", () => {
     ],
   };
 
-  function stubFetch(handler: (url: string) => { ok: boolean; body?: unknown }) {
+  function stubFetch(handler: (url: string) => { ok: boolean; status?: number; body?: unknown; text?: string }) {
     const calls: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
-      calls.push(url);
-      const r = handler(url);
-      return { ok: r.ok, status: r.ok ? 200 : 500, json: async () => r.body } as unknown as Response;
+      calls.push(String(url));
+      const r = handler(String(url));
+      return {
+        ok: r.ok,
+        status: r.status ?? (r.ok ? 200 : 500),
+        json: async () => r.body,
+        text: async () => r.text ?? JSON.stringify(r.body ?? ""),
+      } as unknown as Response;
     });
     return calls;
   }
+
+  /** A GoHighLevel booking page, as it is actually served: the calendar id is
+   *  NOT adjacent to its own key, it sits further along the flattened payload. */
+  const ghlPage =
+    '<html><script src="https://stcdn.leadconnectorhq.com/x.js"></script>' +
+    '<script>{"nodeId":181,"calendarId":184},{"value":185},' +
+    '"zJEXTXZCVIai1P1Dai3c","Free Event Marketing Consultation"</script></html>';
+
+  const ghlSlots = {
+    "2026-09-22": { slots: ["2026-09-22T09:30:00-05:00", "2026-09-22T10:00:00-05:00"] },
+    "2026-09-23": { slots: ["2026-09-23T09:30:00-05:00"] },
+    traceId: "not-a-day",
+  };
+
+  const googlePage =
+    '<html>...<a href="/calendar/appointments/AcZssZ0Rp1Bj5qjc3SgNQS5xkjJbfoCOQIL_zdCI2SA=">book</a>...</html>';
+
+  /** The service definition is positional protobuf-JSON; the id is field 7. */
+  const googleDefs = [[[null, "15min", "", "Kevin Lourd", [], [[15]], "SVC-123"]], null, 0];
+
+  /** 2026-09-22T10:30:00Z and the two quarter-hours after it. */
+  const googleSlots = [[[[["1790073000"], 15]], [[["1790073900"], 15]], [[["1790074800"], 15]]]];
 
   it("resolves calendly.com/<user>/<event> and returns slots in the prospect's timezone", async () => {
     const calls = stubFetch((url) => ({ ok: true, body: url.includes("lookup") ? okLookup : okRange }));
@@ -373,10 +400,183 @@ describe("reading the booking page", () => {
     vi.restoreAllMocks();
   });
 
+  it("reads a GoHighLevel page on the client's own domain, in the prospect's timezone", async () => {
+    const calls = stubFetch((url) =>
+      url.includes("leadconnectorhq.com/calendars")
+        ? { ok: true, body: ghlSlots }
+        : { ok: true, text: ghlPage },
+    );
+
+    const out = await loadMain(readBookingSlotsCode())(
+      "https://web.docdinners.com/appointment-booking-page",
+      "America/Chicago",
+    );
+
+    expect(out.degraded).toBe(false);
+    // traceId is a sibling of the day keys and must not be walked as one.
+    expect(out.slots).toEqual([
+      "2026-09-22T09:30:00-05:00",
+      "2026-09-22T10:00:00-05:00",
+      "2026-09-23T09:30:00-05:00",
+    ]);
+    expect(calls[0]).toBe("https://web.docdinners.com/appointment-booking-page");
+    expect(calls[1]).toContain("/calendars/zJEXTXZCVIai1P1Dai3c/free-slots");
+    expect(calls[1]).toContain("timezone=America%2FChicago");
+    // The vendor applies the calendar's own duration; sending one would guess.
+    expect(calls[1]).not.toContain("duration=");
+  });
+
+  it("degrades when a GoHighLevel page carries no calendar id", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch(() => ({ ok: true, text: "<html>leadconnectorhq but nothing else</html>" }));
+    const out = await loadMain(readBookingSlotsCode())("https://web.docdinners.com/x", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "gohighlevel_calendar_id_not_found" });
+    vi.restoreAllMocks();
+  });
+
+  it("degrades when the GoHighLevel slots call fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch((url) =>
+      url.includes("leadconnectorhq.com/calendars")
+        ? { ok: false, status: 404 }
+        : { ok: true, text: ghlPage },
+    );
+    const out = await loadMain(readBookingSlotsCode())("https://web.docdinners.com/x", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "gohighlevel_free_slots_http_404" });
+    vi.restoreAllMocks();
+  });
+
+  it("degrades when a GoHighLevel calendar has nothing free in the range", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch((url) =>
+      url.includes("leadconnectorhq.com/calendars")
+        ? { ok: true, body: { traceId: "t" } }
+        : { ok: true, text: ghlPage },
+    );
+    const out = await loadMain(readBookingSlotsCode())("https://web.docdinners.com/x", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "gohighlevel_no_slots_in_range" });
+    vi.restoreAllMocks();
+  });
+
+  it("reads a Google appointment schedule and converts epoch seconds into the prospect's timezone", async () => {
+    const calls = stubFetch((url) => {
+      if (url.includes("ListAppointmentServiceDefinitions")) return { ok: true, body: googleDefs };
+      if (url.includes("ListAvailableSlots")) return { ok: true, body: googleSlots };
+      return { ok: true, text: googlePage };
+    });
+
+    const out = await loadMain(readBookingSlotsCode())(
+      "https://calendar.app.google/BkmyoA7ujMFFDg1s9",
+      "Europe/Paris",
+    );
+
+    expect(out.degraded).toBe(false);
+    // Google is the ONLY provider that answers raw epoch seconds with no
+    // timezone, so this offset is arithmetic we did, not a value it returned.
+    expect(out.slots).toEqual([
+      "2026-09-22T12:30:00+02:00",
+      "2026-09-22T12:45:00+02:00",
+      "2026-09-22T13:00:00+02:00",
+    ]);
+    expect(calls[0]).toBe("https://calendar.app.google/BkmyoA7ujMFFDg1s9");
+    expect(calls[1]).toContain("ListAppointmentServiceDefinitions");
+  });
+
+  it("converts the same Google instant differently for a different prospect timezone", async () => {
+    stubFetch((url) => {
+      if (url.includes("ListAppointmentServiceDefinitions")) return { ok: true, body: googleDefs };
+      if (url.includes("ListAvailableSlots")) return { ok: true, body: googleSlots };
+      return { ok: true, text: googlePage };
+    });
+    const tokyo = await loadMain(readBookingSlotsCode())(
+      "https://calendar.app.google/BkmyoA7ujMFFDg1s9",
+      "Asia/Tokyo",
+    );
+    expect((tokyo.slots as string[])[0]).toBe("2026-09-22T19:30:00+09:00");
+
+    const utc = await loadMain(readBookingSlotsCode())(
+      "https://calendar.google.com/calendar/appointments/AcZssZ0=",
+      "UTC",
+    );
+    expect((utc.slots as string[])[0]).toBe("2026-09-22T10:30:00+00:00");
+  });
+
+  it("reads calendar.google.com/calendar/appointments/<id> without fetching the page", async () => {
+    const calls = stubFetch((url) =>
+      url.includes("ListAppointmentServiceDefinitions")
+        ? { ok: true, body: googleDefs }
+        : { ok: true, body: googleSlots },
+    );
+    const out = await loadMain(readBookingSlotsCode())(
+      "https://calendar.google.com/calendar/appointments/AcZssZ0Rp1Bj5qjc3SgNQS5xkjJbfoCOQIL_zdCI2SA=",
+      "UTC",
+    );
+    expect(out.degraded).toBe(false);
+    expect(calls[0]).toContain("ListAppointmentServiceDefinitions");
+  });
+
+  it("degrades when a Google short link does not resolve to a schedule", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch(() => ({ ok: true, text: "<html>nothing here</html>" }));
+    const out = await loadMain(readBookingSlotsCode())("https://calendar.app.google/zzz", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "google_schedule_id_not_found" });
+    vi.restoreAllMocks();
+  });
+
+  it("degrades when the Google slots call fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch((url) => {
+      if (url.includes("ListAppointmentServiceDefinitions")) return { ok: true, body: googleDefs };
+      if (url.includes("ListAvailableSlots")) return { ok: false, status: 403 };
+      return { ok: true, text: googlePage };
+    });
+    const out = await loadMain(readBookingSlotsCode())("https://calendar.app.google/zzz", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "google_slots_http_403" });
+    vi.restoreAllMocks();
+  });
+
+  it("degrades when a Google schedule has no service definition", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch((url) =>
+      url.includes("ListAppointmentServiceDefinitions")
+        ? { ok: true, body: [[], null, 0] }
+        : { ok: true, text: googlePage },
+    );
+    const out = await loadMain(readBookingSlotsCode())("https://calendar.app.google/zzz", "UTC");
+    expect(out).toMatchObject({
+      degraded: true,
+      degradedReason: "google_service_definitions_returned_no_service",
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("degrades when a Google schedule has nothing free in the range", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch((url) => {
+      if (url.includes("ListAppointmentServiceDefinitions")) return { ok: true, body: googleDefs };
+      if (url.includes("ListAvailableSlots")) return { ok: true, body: [[]] };
+      return { ok: true, text: googlePage };
+    });
+    const out = await loadMain(readBookingSlotsCode())("https://calendar.app.google/zzz", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "google_no_slots_in_range" });
+    vi.restoreAllMocks();
+  });
+
   it("degrades on a provider we do not read yet, rather than guessing", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    // A GoHighLevel page is only identifiable from the page itself, so an
+    // unknown host is fetched — and a page that is not one degrades.
+    stubFetch(() => ({ ok: true, text: "<html>Cal.com booking page</html>" }));
     const out = await loadMain(readBookingSlotsCode())("https://cal.com/acme/30min", "UTC");
     expect(out).toMatchObject({ degraded: true, degradedReason: "unsupported_provider" });
+    vi.restoreAllMocks();
+  });
+
+  it("tells an unreadable page apart from a host we do not read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch(() => ({ ok: false, status: 500 }));
+    const out = await loadMain(readBookingSlotsCode())("https://example.com/book", "UTC");
+    expect(out).toMatchObject({ degraded: true, degradedReason: "booking_page_fetch_http_500" });
     vi.restoreAllMocks();
   });
 
