@@ -11,6 +11,8 @@ import {
   PREDECESSOR_READ,
   PREDECESSOR_CAMPAIGN_REF,
   NAME_MISSING_PREDECESSOR_CODE,
+  CLASSIFY_SEND_CODE,
+  REPLY_RESPONSE_SCHEMA,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -191,7 +193,7 @@ describe("ai-meeting-booking DAG", () => {
   it("keeps the gate and the run accounting on the campaign that was dispatched", () => {
     // Money belongs to the leg that spends it: nothing about funding, gating or
     // scheduling moves onto the predecessor.
-    for (const id of ["gate-check", "start-run", "end-run", "end-run-nobody-due", "end-run-error", "end-run-no-predecessor"]) {
+    for (const id of ["gate-check", "start-run", "end-run", "end-run-nobody-due", "end-run-error", "end-run-no-predecessor", "end-run-escalated", "end-run-human-took-over"]) {
       const node = byId.get(id);
       expect(node?.config?.service).toBe("campaign");
       // No lead-facing hop's campaign leaks into the accounting calls.
@@ -689,8 +691,19 @@ describe("bounding the next due date", () => {
 
   it("honours the date the prospect asked for", async () => {
     const asked = new Date(Date.now() + 120 * 86400000).toISOString();
-    const out = await main({ json: { nextDueAt: asked } }, ladder);
+    const out = await main({ json: { replyHtml: "<p>hi</p>", nextDueAt: asked } }, ladder);
     expect(out).toEqual({ nextDueAt: asked, source: "prospect_stated" });
+  });
+
+  it("refuses to let an empty answer reach the prospect, BEFORE the send", async () => {
+    // The model said it could answer and returned nothing to send. That is a
+    // broken contract rather than a degradation, and this node is the last
+    // thing that runs before the irreversible step.
+    for (const bad of [undefined, "", "   ", 42]) {
+      await expect(
+        main({ json: { replyHtml: bad, nextDueAt: new Date(Date.now() + 86400000).toISOString() } }, ladder),
+      ).rejects.toThrow(/no reply body/);
+    }
   });
 
   it("falls back loudly rather than letting the record fail after the reply is sent", async () => {
@@ -701,10 +714,156 @@ describe("bounding the next due date", () => {
       new Date(Date.now() - 86400000).toISOString(), // lead-service 400s on the past
       new Date(Date.now() + 400 * 86400000).toISOString(), // and on further than a year
     ]) {
-      const out = await main({ json: { nextDueAt: bad } }, ladder);
+      const out = await main({ json: { replyHtml: "<p>hi</p>", nextDueAt: bad } }, ladder);
       expect(out).toEqual({ nextDueAt: ladder, source: "interval_ladder" });
     }
     expect(err).toHaveBeenCalledTimes(4);
     err.mockRestore();
+  });
+});
+
+describe("declaring the caller, and standing down when a human has taken over", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+
+  it("declares every reply as automation on the wire", () => {
+    // instantly-service refuses an `automation` reply once a person has
+    // answered the thread. Absent resolves to automation today, so declaring it
+    // is what keeps the gate true the day a human-facing surface calls the same
+    // route.
+    expect((byId.get("send-reply")?.config?.body as Record<string, unknown>).sent_by).toBe("automation");
+  });
+
+  it("reads the takeover as an outcome and every other refusal as a failure", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const main = loadMain(CLASSIFY_SEND_CODE);
+
+    expect(await main({ success: true, status: "sent" })).toEqual({ outcome: "sent", status: "sent" });
+    // Out of the prospect's sending window: queued, still sent as far as this
+    // run is concerned, so the follow-up is recorded.
+    expect(await main({ success: true, status: "scheduled" })).toEqual({ outcome: "sent", status: "scheduled" });
+
+    expect(
+      await main({ ok: false, status: 409, error: JSON.stringify({ error: "x", code: "human_took_over" }) }),
+    ).toEqual({ outcome: "human_took_over", status: 409 });
+
+    // A 409 is NOT enough on its own — three other codes share it and all mean
+    // the reply could not be sent.
+    for (const code of ["no_reply_to_thread", "sending_account_unresolved", "mailbox_credential_unavailable"]) {
+      await expect(main({ ok: false, status: 409, error: JSON.stringify({ code }) })).rejects.toThrow(code);
+    }
+    await expect(main({ ok: false, status: 502, error: "boom" })).rejects.toThrow("502");
+    await expect(main({ ok: false, status: 0, error: "timeout" })).rejects.toThrow("timeout");
+    err.mockRestore();
+  });
+
+  it("records no follow-up when a human took the thread over", () => {
+    const takenOver = dag.edges.find(
+      (e) => e.from === "check-sent" && e.condition?.includes("human_took_over"),
+    );
+    expect(takenOver?.to).toBe("end-run-human-took-over");
+    const reached = descendants(dag, takenOver?.to as string);
+    expect(reached.has("record-followup")).toBe(false);
+    // Standing down is not a failed run.
+    expect(byId.get("end-run-human-took-over")?.config?.body).toEqual({ success: true, stopCampaign: false });
+
+    const sent = dag.edges.find((e) => e.from === "check-sent" && e.condition?.includes("'sent'"));
+    expect(sent?.to).toBe("record-followup");
+  });
+
+  it("both arms of the send outcome read POSITIVE evidence, never the absence of a refusal", () => {
+    // On the escalation path `classify-send` never ran. An "anything but a 409"
+    // arm would then record a follow-up for a reply that was never sent.
+    for (const e of dag.edges.filter((x) => x.from === "check-sent")) {
+      expect(e.condition).toContain("results['classify-send']?.outcome ==");
+    }
+    // and it converges rather than nesting inside check-answerable's branch.
+    expect(dag.edges.filter((e) => e.to === "check-sent").map((e) => e.from)).toContain("draft-reply");
+  });
+});
+
+describe("handing an unanswerable question to a human", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+
+  it("lets the model decline — the reply body is no longer required", () => {
+    expect(REPLY_RESPONSE_SCHEMA.required).toContain("answerable");
+    expect(REPLY_RESPONSE_SCHEMA.required).toContain("question");
+    // Requiring a reply body is what left the model no move but a deflection.
+    expect(REPLY_RESPONSE_SCHEMA.required).not.toContain("replyHtml");
+    expect(REPLY_RESPONSE_SCHEMA.required).not.toContain("nextDueAt");
+  });
+
+  it("decides answerability in the model, with no keyword or regex pre-filter", () => {
+    const answerable = dag.edges.find(
+      (e) => e.from === "check-answerable" && e.condition?.includes("== true"),
+    );
+    const cannot = dag.edges.find(
+      (e) => e.from === "check-answerable" && e.condition?.includes("== false"),
+    );
+    expect(answerable?.to).toBe("resolve-next-due");
+    expect(cannot?.to).toBe("escalate-unanswerable");
+    for (const e of dag.edges.filter((x) => x.from === "check-answerable")) {
+      expect(e.condition).toContain("results['draft-reply']?.json?.answerable");
+    }
+    // Nothing anywhere inspects the prospect's own text to decide.
+    const scripts = dag.nodes.filter((n) => n.type === "script").map((n) => String(n.config?.code));
+    expect(scripts.some((c) => /answerable\s*=\s*\/|test\(.*price|includes\("price/i.test(c))).toBe(false);
+
+    // It converges rather than nesting inside check-claim's branch body.
+    expect(dag.edges.filter((e) => e.to === "check-answerable").map((e) => e.from)).toContain("claim-followup");
+  });
+
+  it("sends the prospect nothing and escalates with the question in their own words", () => {
+    const esc = byId.get("escalate-unanswerable");
+    expect(esc?.config).toMatchObject({
+      service: "instantly",
+      method: "POST",
+      path: "/orgs/replies/escalate",
+      validateResponse: { field: "success", equals: true },
+    });
+    expect(esc?.inputMapping).toEqual({
+      "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
+      "body.email": "$ref:claim-followup.output.followup.email",
+      "body.question": "$ref:draft-reply.output.json.question",
+    });
+
+    const reached = descendants(dag, "escalate-unanswerable");
+    // No reply, no holding message, no placeholder.
+    expect(reached.has("send-reply")).toBe(false);
+    // and nothing is recorded as acted: the schedule is emptied, not advanced.
+    expect(reached.has("record-followup")).toBe(false);
+    expect(reached.has("end-run-escalated")).toBe(true);
+    expect(byId.get("end-run-escalated")?.config?.body).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("does not stop the ladder itself — the escalate route already did", () => {
+    // Two lead-service calls only: the claim and the follow-up record.
+    const leadCalls = dag.nodes.filter((n) => n.config?.service === "lead").map((n) => n.config?.path);
+    expect(leadCalls.sort()).toEqual([
+      "/orgs/campaigns/{campaignId}/followups/claim-next",
+      "/orgs/leads/{id}",
+      "/orgs/leads/{id}/followups",
+    ].sort());
+  });
+
+  it("tells the model to hand over rather than deflect back to the call", async () => {
+    const out = await loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+      { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
+      { leadDetail: { lead: { firstName: "Ada", timezone: "UTC" } } },
+      { conversation: { messages: [{ direction: "inbound", text: "What does it cost for 5 seats?" }] } },
+      null,
+      { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
+      { funnels: [] },
+      "sales_meetings_from_conversation",
+      { brand: { name: "Acme" } },
+      "2026-09-02",
+    );
+    const message = out.message as string;
+    expect(message).toContain("WHEN YOU CANNOT ANSWER");
+    expect(message).toContain("set answerable to false");
+    expect(message).toContain("no deflection back to the call");
+    expect(message).toContain("question: what they asked, in their own words");
+    expect(out.systemPrompt as string).toContain("hand over");
   });
 });

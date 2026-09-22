@@ -127,6 +127,25 @@ export function needsMultiProviderBookingRead(dag) {
   return !String(node.config?.code ?? "").includes("leadconnectorhq");
 }
 
+/**
+ * True when a stored DAG still has no way to decline, and does not say who is
+ * asking.
+ *
+ * Two things a DAG from before the human-handover change cannot do. Its reply
+ * body carries no `sent_by`, so instantly-service's takeover gate sees an
+ * undeclared caller (it resolves to `automation` today, so the gate holds — but
+ * nothing states it). And its model schema REQUIRES a reply body, so a prospect
+ * who asks something the brand facts do not contain gets a deflection back to
+ * the call, and the follow-up ladder does it again on the next rung. The repair
+ * is an upgrade carrying the current DAG.
+ */
+export function needsHumanHandover(dag) {
+  const nodes = dag?.nodes ?? [];
+  if (!nodes.some((n) => n?.id === "escalate-unanswerable")) return true;
+  const send = nodes.find((n) => n?.id === "send-reply");
+  return send ? send.config?.body?.sent_by !== "automation" : false;
+}
+
 /** The (provider, model) a stored DAG drafts with, or null if it has no drafting step. */
 export function cellOf(dag) {
   const node = (dag?.nodes ?? []).find((n) => n?.config?.service === "chat");
@@ -156,7 +175,8 @@ async function main() {
       w.workflowDynastySlug &&
       (needsNoWorkAvailable(w.dag) ||
         needsPredecessorResolution(w.dag) ||
-        needsMultiProviderBookingRead(w.dag))
+        needsMultiProviderBookingRead(w.dag) ||
+        needsHumanHandover(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
