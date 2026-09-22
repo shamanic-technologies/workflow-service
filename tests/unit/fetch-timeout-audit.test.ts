@@ -25,7 +25,7 @@ const TIMEOUT_LITERAL = "AbortSignal.timeout(600_000)";
 const SHORT_DEADLINE_FILES = new Map([
   [
     "src/lib/ai-meeting-booking-dag.ts",
-    "Calendly's public booking API — unreadable availability degrades to the plain booking link, so a long hang would only delay the prospect's answer.",
+    "the three public booking APIs this node reads (Calendly, GoHighLevel, Google appointment schedules) — unreadable availability degrades to the plain booking link, so a long hang would only delay the prospect's answer.",
   ],
 ]);
 

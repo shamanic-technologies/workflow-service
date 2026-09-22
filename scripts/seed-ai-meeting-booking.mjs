@@ -111,6 +111,22 @@ export function needsPredecessorResolution(dag) {
   return !(dag?.nodes ?? []).some((n) => n?.id === "predecessor-campaign");
 }
 
+/**
+ * True when a stored DAG still reads Calendly and nothing else.
+ *
+ * Both campaigns running on this channel book on a provider the Calendly-only
+ * node degrades on — GoHighLevel on the client's own domain for one, a Google
+ * appointment schedule for the other — so every run proposed the plain link
+ * and no slots, which is the one thing this workflow exists to avoid. A DAG
+ * whose booking-slots script never mentions `leadconnectorhq` predates the
+ * three-provider read. The repair is an upgrade carrying the current DAG.
+ */
+export function needsMultiProviderBookingRead(dag) {
+  const node = (dag?.nodes ?? []).find((n) => n?.id === "booking-slots");
+  if (!node) return false;
+  return !String(node.config?.code ?? "").includes("leadconnectorhq");
+}
+
 /** The (provider, model) a stored DAG drafts with, or null if it has no drafting step. */
 export function cellOf(dag) {
   const node = (dag?.nodes ?? []).find((n) => n?.config?.service === "chat");
@@ -138,7 +154,9 @@ async function main() {
     if (cell) covered.set(cell, w.workflowDynastySlug ?? w.workflowSlug);
     if (
       w.workflowDynastySlug &&
-      (needsNoWorkAvailable(w.dag) || needsPredecessorResolution(w.dag))
+      (needsNoWorkAvailable(w.dag) ||
+        needsPredecessorResolution(w.dag) ||
+        needsMultiProviderBookingRead(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
