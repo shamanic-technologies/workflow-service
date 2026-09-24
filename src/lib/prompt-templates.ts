@@ -210,7 +210,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
 - The gate-check step validates that budget remains before each run — if budget is exhausted, it returns allowed=false and the flow stops gracefully via stopAfterIf
 - The end-run step reports success/failure AND whether to stop the campaign:
   - stopCampaign: false → campaign-service automatically re-triggers the workflow
-  - stopCampaign: true → campaign-service auto-stops the campaign (use when no more leads are available)
+  - stopCampaign: true → this run's audience had nobody to serve (fetch-lead found == false). It stops NOTHING: campaign-service marks that one audience exhausted for a while and picks another on the next run
 - Both "success" and "stopCampaign" are required fields in the /end-run body
 - campaign-service reads orgId and campaignId from headers (x-org-id, x-campaign-id) — do NOT pass them in the body
 - This is why campaign workflows MUST use the chassis pattern: gate-check → start-run → [business logic] → end-run, with onError → end-run-error
@@ -228,6 +228,7 @@ Campaign service orchestrates workflow execution with budget constraints. Key co
    - end-run (after successful business logic): { "success": true, "stopCampaign": false }
    - end-run-no-lead (when fetch-lead finds nothing): { "success": true, "stopCampaign": true }
    - end-run-error (onError handler): { "success": false, "stopCampaign": false }
+   The success path and the no-lead path MUST end on DIFFERENT end-run nodes — one node shared by both can only say one thing, and an empty serve reported as stopCampaign: false keeps asking the same empty audience forever
    Do NOT pass orgId or campaignId in end-run body — campaign-service reads them from headers
 9. NEVER include cost-tracking nodes in workflows. Cost tracking (run costs, usage metering) is handled internally by each downstream service — do NOT add steps that POST to runs-service /costs or any similar cost endpoint
 
