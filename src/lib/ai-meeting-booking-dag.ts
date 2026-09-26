@@ -23,8 +23,8 @@
  *    must be honoured; lead-service stores it rather than deriving it.
  *
  * ONE MORE THING IT DOES NOT OWN, and it is the reason this workflow answered
- * nobody for its first two weeks: WHICH CAMPAIGN holds the person. A funnel is
- * several LEGS and campaign-service mints one campaign per leg, so the prospect
+ * nobody for its first two weeks: WHICH CAMPAIGN holds the person. An offer is
+ * sold over several LEGS and campaign-service mints one campaign per leg, so the prospect
  * this run must answer replied to the PREVIOUS leg — the cold email — and the
  * person, the thread and the record of what we owe them are all filed under
  * THAT campaign. Asking this workflow's own campaign for them finds nobody,
@@ -37,7 +37,7 @@
  * because most runs are scheduled and have no trigger to hand anything over.
  * Every lead-facing hop — the claim, the lead read, the conversation read, the
  * reply — then names the PREDECESSOR's campaign. The gate, the run accounting
- * and the offer/funnel read keep naming the campaign this run was DISPATCHED
+ * and the offer read keep naming the campaign this run was DISPATCHED
  * for: money belongs to the leg that spends it.
  *
  * There is deliberately NO fallback to this run's own campaign when there is no
@@ -92,7 +92,7 @@ export const CONVERSATION_READ = {
 
 /**
  * The campaign-service read that states which campaign ran the PRECEDING leg of
- * this funnel — the one that actually holds the prospect, the thread and the
+ * this offer — the one that actually holds the prospect, the thread and the
  * debt.
  *
  * Service api-key, no org headers. `predecessor` is null exactly when `absence`
@@ -142,7 +142,7 @@ export const SLOT_LOOKAHEAD_DAYS = 14;
 export const SLOT_CANDIDATES = 6;
 
 /**
- * Reads the brand's booking page for this funnel and returns slots ALREADY
+ * Reads the offer's booking page and returns slots ALREADY
  * CONVERTED to the prospect's own timezone.
  *
  * Three providers are read, because those are the three the fleet's brands
@@ -489,7 +489,7 @@ export function readBookingSlotsCode(): string {
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offerFunnels, funnelKey, brand, currentDate) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, brandOffers, offerId, brand, currentDate) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   const timezone = booking?.timezone ?? "UTC";
 
@@ -500,7 +500,14 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     return who + when + ":\\n" + String(m?.text ?? "").trim();
   }).join("\\n\\n---\\n\\n");
 
-  const funnel = (offerFunnels?.funnels ?? []).find((f) => f?.funnelKey === funnelKey) ?? null;
+  // What we sell them is the OFFER this campaign was dispatched for. A campaign
+  // naming an offer its own brand does not list is a broken row, not a prompt
+  // with a blank in it.
+  const offer = (brandOffers?.offers ?? []).find((o) => o?.offerId === offerId) ?? null;
+  if (!offer) {
+    throw new Error("[ai-meeting-booking] the campaign's offer (" + String(offerId) +
+      ") is not among its brand's offers; refusing to answer a prospect without knowing what we sell them");
+  }
 
   const priorSubject = priorGeneration?.generation?.subject ?? null;
   const followupCount = Number(followup?.followup?.followupCount ?? 0);
@@ -515,7 +522,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const bookingSection = booking?.degraded
     ? (booking?.bookingUrl
         ? "The booking page could not be read (" + booking.degradedReason + "). Do NOT invent times. Give them the booking link and let them pick: " + booking.bookingUrl
-        : "This brand has no booking link for this funnel (" + booking.degradedReason + "). Do NOT invent times and do NOT invent a link. Ask them which times suit them and say you will send an invite.")
+        : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent times and do NOT invent a link. Ask them which times suit them and say you will send an invite.")
     : "Availability, already converted to the prospect's own timezone (" + timezone + "). Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + "\\n" + slotLines;
 
   const message = [
@@ -530,7 +537,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Timezone: " + timezone,
     "",
     "WHAT WE SELL THEM",
-    "Funnel: " + (funnel?.name ?? funnelKey ?? ""),
+    "Offer: " + offer.name,
     "",
     "THE CONVERSATION SO FAR, oldest first" + (priorSubject ? " (thread subject: " + priorSubject + ")" : ""),
     transcript || "(no messages on record)",
@@ -727,7 +734,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "campaign", method: "POST", path: "/start-run" },
       },
-      // Which campaign ran the PRECEDING leg of this funnel — the one holding
+      // Which campaign ran the PRECEDING leg of this offer — the one holding
       // the person, the thread and the debt. Resolved here, by the flow, because
       // most runs are scheduled and have nobody to hand it over.
       {
@@ -768,15 +775,24 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: { "params.campaignId": PREDECESSOR_CAMPAIGN_REF },
       },
       { id: "check-claim", type: "condition" },
-      // Which offer and funnel this campaign sells — the campaign row states both.
+      // Which offer this campaign sells — the campaign row states it.
       {
         id: "campaign-detail",
         type: "http.call",
         config: { service: "campaign", method: "GET", path: "/campaigns/{id}" },
         inputMapping: { "params.id": "$ref:flow_input.campaignId" },
       },
-      // The booking link is per FUNNEL, not per brand: a brand selling several
-      // funnels has a different one for each.
+      // The booking link is per OFFER, not per brand: a brand selling several
+      // offers has a different one for each.
+      //
+      // ⚠️ KNOWN GAP (distribute.you#4413, wave C3). The frozen table behind
+      // this read is the ONLY place any service holds a booking link today:
+      // brand-service retired the sales funnel without giving the link a new
+      // home, and both live meeting-booking campaigns book through one. The
+      // read is keyed on the offer alone (the campaign's legacy funnel key is
+      // no longer consulted); it moves to brand-service's successor read the
+      // moment one serves the link, and not before — dropping it now would
+      // silently strip the slots from every answer.
       {
         id: "offer-funnels",
         type: "http.call",
@@ -788,6 +804,13 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "brand", method: "GET", path: "/internal/brands/{id}" },
         inputMapping: { "params.id": "$ref:claim-followup.output.followup.brandId" },
+      },
+      // The offers the brand sells, for the NAME of the one this campaign sells.
+      {
+        id: "brand-offers",
+        type: "http.call",
+        config: { service: "brand", method: "GET", path: "/internal/brands/{brandId}/offers" },
+        inputMapping: { "params.brandId": "$ref:claim-followup.output.followup.brandId" },
       },
       // The person, for their name and their own timezone.
       {
@@ -835,20 +858,21 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "script",
         config: {
           code: `
-export async function main(offerFunnels, funnelKey) {
-  const funnels = offerFunnels?.funnels ?? [];
-  const funnel = funnels.find((f) => f?.funnelKey === funnelKey) ?? null;
-  if (!funnel) {
-    console.error("[ai-meeting-booking] this campaign's funnel (" + String(funnelKey) +
-      ") is not among the offer's active funnels; the prospect still gets an answer, without slots");
+export async function main(offerRead) {
+  const links = [...new Set((offerRead?.funnels ?? []).map((f) => f?.bookingUrl).filter(Boolean))];
+  if (links.length > 1) {
+    throw new Error("[ai-meeting-booking] this offer states " + links.length +
+      " different booking links; refusing to pick one: " + links.join(", "));
   }
-  return { bookingUrl: funnel?.bookingUrl ?? null, funnelName: funnel?.name ?? null };
+  if (links.length === 0) {
+    console.error("[ai-meeting-booking] this offer states no booking link; the prospect still gets an answer, without slots");
+  }
+  return { bookingUrl: links[0] ?? null };
 }
 `.trim(),
         },
         inputMapping: {
-          offerFunnels: "$ref:offer-funnels.output",
-          funnelKey: "$ref:campaign-detail.output.campaign.funnelKey",
+          offerRead: "$ref:offer-funnels.output",
         },
       },
       {
@@ -862,8 +886,8 @@ export async function main(offerFunnels, funnelKey) {
           conversation: "$ref:conversation.output",
           priorGeneration: "$ref:prior-generation.output",
           booking: "$ref:booking-slots.output",
-          offerFunnels: "$ref:offer-funnels.output",
-          funnelKey: "$ref:campaign-detail.output.campaign.funnelKey",
+          brandOffers: "$ref:brand-offers.output",
+          offerId: "$ref:campaign-detail.output.campaign.offerId",
           brand: "$ref:brand-profile.output",
           currentDate: "$ref:flow_input.currentDate",
         },
@@ -1086,7 +1110,8 @@ export async function main(offerFunnels, funnelKey) {
       { from: "campaign-detail", to: "offer-funnels" },
       { from: "offer-funnels", to: "pick-booking-url" },
       { from: "pick-booking-url", to: "brand-profile" },
-      { from: "brand-profile", to: "lead-detail" },
+      { from: "brand-profile", to: "brand-offers" },
+      { from: "brand-offers", to: "lead-detail" },
       { from: "lead-detail", to: "booking-slots" },
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "prior-generation" },
