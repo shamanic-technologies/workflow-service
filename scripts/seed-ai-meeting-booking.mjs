@@ -158,6 +158,17 @@ export function needsFunnelKeyRetired(dag) {
   return JSON.stringify(dag?.nodes ?? []).includes("campaign.funnel" + "Key");
 }
 
+/**
+ * True when a stored DAG still reads the booking link off brand-service's
+ * frozen per-funnel read. The link now lives on the OFFER
+ * (`GET /internal/offers/{offerId}/economics`), and brand-service drops the
+ * frozen read and its tables once no caller remains. The repair is an upgrade
+ * carrying the current DAG.
+ */
+export function needsOfferEconomicsRead(dag) {
+  return JSON.stringify(dag?.nodes ?? []).includes("/sales-" + "funnels");
+}
+
 /** The (provider, model) a stored DAG drafts with, or null if it has no drafting step. */
 export function cellOf(dag) {
   const node = (dag?.nodes ?? []).find((n) => n?.config?.service === "chat");
@@ -189,7 +200,8 @@ async function main() {
         needsPredecessorResolution(w.dag) ||
         needsMultiProviderBookingRead(w.dag) ||
         needsHumanHandover(w.dag) ||
-        needsFunnelKeyRetired(w.dag))
+        needsFunnelKeyRetired(w.dag) ||
+        needsOfferEconomicsRead(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }

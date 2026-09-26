@@ -489,7 +489,7 @@ export function readBookingSlotsCode(): string {
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, brandOffers, offerId, brand, currentDate) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   const timezone = booking?.timezone ?? "UTC";
 
@@ -500,13 +500,11 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     return who + when + ":\\n" + String(m?.text ?? "").trim();
   }).join("\\n\\n---\\n\\n");
 
-  // What we sell them is the OFFER this campaign was dispatched for. A campaign
-  // naming an offer its own brand does not list is a broken row, not a prompt
-  // with a blank in it.
-  const offer = (brandOffers?.offers ?? []).find((o) => o?.offerId === offerId) ?? null;
-  if (!offer) {
-    throw new Error("[ai-meeting-booking] the campaign's offer (" + String(offerId) +
-      ") is not among its brand's offers; refusing to answer a prospect without knowing what we sell them");
+  // What we sell them is the OFFER this campaign was dispatched for. An offer
+  // read with no name is a broken row, not a prompt with a blank in it.
+  if (!offer?.name) {
+    throw new Error("[ai-meeting-booking] the campaign's offer (" + String(offer?.offerId) +
+      ") has no name; refusing to answer a prospect without knowing what we sell them");
   }
 
   const priorSubject = priorGeneration?.generation?.subject ?? null;
@@ -782,21 +780,14 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { service: "campaign", method: "GET", path: "/campaigns/{id}" },
         inputMapping: { "params.id": "$ref:flow_input.campaignId" },
       },
-      // The booking link is per OFFER, not per brand: a brand selling several
-      // offers has a different one for each.
-      //
-      // ⚠️ KNOWN GAP (distribute.you#4413, wave C3). The frozen table behind
-      // this read is the ONLY place any service holds a booking link today:
-      // brand-service retired the sales funnel without giving the link a new
-      // home, and both live meeting-booking campaigns book through one. The
-      // read is keyed on the offer alone (the campaign's legacy funnel key is
-      // no longer consulted); it moves to brand-service's successor read the
-      // moment one serves the link, and not before — dropping it now would
-      // silently strip the slots from every answer.
+      // The offer this campaign sells: its NAME for the prompt and its BOOKING
+      // LINK. The link is per offer, not per brand — a brand selling several
+      // offers has a different one for each — and brand-service states it on
+      // the offer itself.
       {
-        id: "offer-funnels",
+        id: "offer-economics",
         type: "http.call",
-        config: { service: "brand", method: "GET", path: "/internal/offers/{offerId}/sales-funnels" },
+        config: { service: "brand", method: "GET", path: "/internal/offers/{offerId}/economics" },
         inputMapping: { "params.offerId": "$ref:campaign-detail.output.campaign.offerId" },
       },
       {
@@ -804,13 +795,6 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "brand", method: "GET", path: "/internal/brands/{id}" },
         inputMapping: { "params.id": "$ref:claim-followup.output.followup.brandId" },
-      },
-      // The offers the brand sells, for the NAME of the one this campaign sells.
-      {
-        id: "brand-offers",
-        type: "http.call",
-        config: { service: "brand", method: "GET", path: "/internal/brands/{brandId}/offers" },
-        inputMapping: { "params.brandId": "$ref:claim-followup.output.followup.brandId" },
       },
       // The person, for their name and their own timezone.
       {
@@ -849,30 +833,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { code: readBookingSlotsCode() },
         retries: 0,
         inputMapping: {
-          bookingUrl: "$ref:pick-booking-url.output.bookingUrl",
+          bookingUrl: "$ref:offer-economics.output.bookingUrl",
           timezone: "$ref:lead-detail.output.leadDetail.lead.timezone",
-        },
-      },
-      {
-        id: "pick-booking-url",
-        type: "script",
-        config: {
-          code: `
-export async function main(offerRead) {
-  const links = [...new Set((offerRead?.funnels ?? []).map((f) => f?.bookingUrl).filter(Boolean))];
-  if (links.length > 1) {
-    throw new Error("[ai-meeting-booking] this offer states " + links.length +
-      " different booking links; refusing to pick one: " + links.join(", "));
-  }
-  if (links.length === 0) {
-    console.error("[ai-meeting-booking] this offer states no booking link; the prospect still gets an answer, without slots");
-  }
-  return { bookingUrl: links[0] ?? null };
-}
-`.trim(),
-        },
-        inputMapping: {
-          offerRead: "$ref:offer-funnels.output",
         },
       },
       {
@@ -886,8 +848,7 @@ export async function main(offerRead) {
           conversation: "$ref:conversation.output",
           priorGeneration: "$ref:prior-generation.output",
           booking: "$ref:booking-slots.output",
-          brandOffers: "$ref:brand-offers.output",
-          offerId: "$ref:campaign-detail.output.campaign.offerId",
+          offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
           currentDate: "$ref:flow_input.currentDate",
         },
@@ -1107,11 +1068,9 @@ export async function main(offerRead) {
       { from: "predecessor-campaign", to: "check-claim" },
       { from: "check-claim", to: "campaign-detail", condition: "results['claim-followup']?.found == true" },
       { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup']?.found == false" },
-      { from: "campaign-detail", to: "offer-funnels" },
-      { from: "offer-funnels", to: "pick-booking-url" },
-      { from: "pick-booking-url", to: "brand-profile" },
-      { from: "brand-profile", to: "brand-offers" },
-      { from: "brand-offers", to: "lead-detail" },
+      { from: "campaign-detail", to: "offer-economics" },
+      { from: "offer-economics", to: "brand-profile" },
+      { from: "brand-profile", to: "lead-detail" },
       { from: "lead-detail", to: "booking-slots" },
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "prior-generation" },
