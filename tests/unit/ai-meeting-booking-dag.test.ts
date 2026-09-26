@@ -125,32 +125,24 @@ describe("ai-meeting-booking DAG", () => {
     expect(record?.inputMapping?.["body.nextDueAt"]).toBe("$ref:resolve-next-due.output.nextDueAt");
   });
 
-  it("resolves the booking link per OFFER, off the campaign's own offer", () => {
+  it("reads the booking link and the offer's name off the campaign's own OFFER", () => {
     expect(byId.get("campaign-detail")?.config).toMatchObject({ service: "campaign", path: "/campaigns/{id}" });
-    expect(byId.get("offer-funnels")?.inputMapping?.["params.offerId"]).toBe(
-      "$ref:campaign-detail.output.campaign.offerId",
-    );
-    expect(byId.get("pick-booking-url")?.inputMapping).toEqual({ offerRead: "$ref:offer-funnels.output" });
-  });
-
-  it("never reads the campaign's retired funnel key (wave C3)", () => {
-    // campaign-service drops Campaign.funnelKey once no caller reads it; this
-    // DAG is one of the callers it waits on.
-    expect(JSON.stringify(dag)).not.toMatch(/funnelKey|funnel_key/);
-  });
-
-  it("names the OFFER it sells, read off the brand's own offers", () => {
-    expect(byId.get("brand-offers")?.config).toMatchObject({
+    expect(byId.get("offer-economics")?.config).toMatchObject({
       service: "brand",
       method: "GET",
-      path: "/internal/brands/{brandId}/offers",
+      path: "/internal/offers/{offerId}/economics",
     });
-    expect(byId.get("brand-offers")?.inputMapping).toEqual({
-      "params.brandId": "$ref:claim-followup.output.followup.brandId",
+    expect(byId.get("offer-economics")?.inputMapping).toEqual({
+      "params.offerId": "$ref:campaign-detail.output.campaign.offerId",
     });
-    const compose = byId.get("compose-prompt")?.inputMapping ?? {};
-    expect(compose.brandOffers).toBe("$ref:brand-offers.output");
-    expect(compose.offerId).toBe("$ref:campaign-detail.output.campaign.offerId");
+    expect(byId.get("booking-slots")?.inputMapping?.bookingUrl).toBe("$ref:offer-economics.output.bookingUrl");
+    expect(byId.get("compose-prompt")?.inputMapping?.offer).toBe("$ref:offer-economics.output");
+  });
+
+  it("carries no sales-funnel vocabulary at all (wave C3)", () => {
+    // brand-service drops the frozen funnel read and campaign-service drops
+    // Campaign.funnelKey once no caller remains; this DAG was one of them.
+    expect(JSON.stringify(dag)).not.toMatch(/funnel/i);
   });
 
   it("reads what the prospect wrote and what we already sent", () => {
@@ -624,8 +616,7 @@ describe("composing the prompt", () => {
       },
     },
     priorGeneration: { generation: { subject: "Quick question" } },
-    brandOffers: { offers: [{ offerId: "offer-1", name: "SSO audit" }, { offerId: "offer-2", name: "Other" }] },
-    offerId: "offer-1",
+    offer: { offerId: "offer-1", name: "SSO audit", bookingUrl: "https://calendly.com/a/b" },
     brand: { brand: { name: "Acme" } },
     currentDate: "2026-09-02",
   };
@@ -637,8 +628,7 @@ describe("composing the prompt", () => {
       base.conversation,
       base.priorGeneration,
       booking,
-      base.brandOffers,
-      base.offerId,
+      base.offer,
       base.brand,
       base.currentDate,
     );
@@ -674,18 +664,17 @@ describe("composing the prompt", () => {
     const out = await call({ timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] });
     const message = out.message as string;
     expect(message).toContain("Offer: SSO audit");
-    expect(message).not.toContain("Other");
     expect(message).not.toMatch(/funnel/i);
   });
 
-  it("refuses to answer when the campaign's offer is not among its brand's offers", async () => {
+  it("refuses to answer when the campaign's offer read carries no name", async () => {
     await expect(
       loadMain(COMPOSE_REPLY_PROMPT_CODE)(
         base.followup, base.leadDetail, base.conversation, base.priorGeneration,
         { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
-        base.brandOffers, "offer-missing", base.brand, base.currentDate,
+        { offerId: "offer-nameless", name: null }, base.brand, base.currentDate,
       ),
-    ).rejects.toThrow(/offer-missing/);
+    ).rejects.toThrow(/offer-nameless/);
   });
 
   it("still answers a prospect whose offer has no booking link", async () => {
@@ -886,8 +875,7 @@ describe("handing an unanswerable question to a human", () => {
       { conversation: { messages: [{ direction: "inbound", text: "What does it cost for 5 seats?" }] } },
       null,
       { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
-      { offers: [{ offerId: "offer-1", name: "SSO audit" }] },
-      "offer-1",
+      { offerId: "offer-1", name: "SSO audit", bookingUrl: null },
       { brand: { name: "Acme" } },
       "2026-09-02",
     );
@@ -900,28 +888,3 @@ describe("handing an unanswerable question to a human", () => {
   });
 });
 
-describe("picking the offer's booking link", () => {
-  const pickCode = () =>
-    buildAiMeetingBookingDag(DAG_OPTS).nodes.find((n) => n.id === "pick-booking-url")?.config?.code as string;
-
-  it("takes the one link the offer states", async () => {
-    const out = await loadMain(pickCode())({
-      funnels: [{ bookingUrl: "https://calendly.com/a/b" }, { bookingUrl: null }, { bookingUrl: "https://calendly.com/a/b" }],
-    });
-    expect(out).toEqual({ bookingUrl: "https://calendly.com/a/b" });
-  });
-
-  it("answers null, loudly, when the offer states none", async () => {
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const out = await loadMain(pickCode())({ funnels: [] });
-    expect(out).toEqual({ bookingUrl: null });
-    expect(err).toHaveBeenCalled();
-    vi.restoreAllMocks();
-  });
-
-  it("refuses to guess between two different links", async () => {
-    await expect(
-      loadMain(pickCode())({ funnels: [{ bookingUrl: "https://a.example" }, { bookingUrl: "https://b.example" }] }),
-    ).rejects.toThrow(/2 different booking links/);
-  });
-});
