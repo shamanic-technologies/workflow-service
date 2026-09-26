@@ -3,9 +3,8 @@
  * Ops script: stand up the workflow behind the `ai-meeting-booking` channel.
  *
  * The channel answers the prospects who showed sales interest and books the
- * meeting: it performs the `conversation_to_meeting_booked` leg of the
- * `sales_meetings_from_conversation` funnel. Everything underneath it already
- * runs; this is the thing that runs.
+ * meeting: it performs the `conversation_to_meeting_booked` leg of an offer.
+ * Everything underneath it already runs; this is the thing that runs.
  *
  * ONE dynasty, not a matrix. The cold-email channels fan out across prompt
  * angles and models because they are looking for the one that converts; there
@@ -56,7 +55,7 @@ export const DESCRIPTION =
   "Answers one prospect who showed sales interest and is owed our next message. " +
   "Claims them from the campaign's follow-up queue, reads what they wrote and what we already sent, " +
   "answers the question they actually asked, proposes two concrete slots in their own timezone read " +
-  "from the brand's booking page for this funnel, sends it as a reply in their existing thread from " +
+  "from the offer's booking page, sends it as a reply in their existing thread from " +
   "the mailbox that contacted them, and then records the answer and when the next one is owed.";
 
 function headers() {
@@ -100,7 +99,7 @@ export function needsNoWorkAvailable(dag) {
 /**
  * True when a stored DAG still asks its OWN campaign for the prospect.
  *
- * A funnel is several legs and campaign-service mints one campaign per leg, so
+ * An offer is sold over several legs and campaign-service mints one campaign per leg, so
  * the person who replied to the cold email, their thread, and the record of
  * what we owe them are all filed under the PRECEDING leg's campaign. A DAG
  * without the `predecessor-campaign` read claims nobody, every run, forever —
@@ -146,6 +145,19 @@ export function needsHumanHandover(dag) {
   return send ? send.config?.body?.sent_by !== "automation" : false;
 }
 
+/**
+ * True when a stored DAG still reads the campaign's retired sales-funnel key.
+ *
+ * The sales funnel is gone (distribute.you#4413): campaign-service keeps
+ * `Campaign.funnelKey` read-only only until its last readers move, and this DAG
+ * was one of them — it picked the booking link and the prompt's "what we sell"
+ * line by it. The current DAG picks the link per offer and names the offer. The
+ * repair is an upgrade carrying the current DAG.
+ */
+export function needsFunnelKeyRetired(dag) {
+  return JSON.stringify(dag?.nodes ?? []).includes("campaign.funnel" + "Key");
+}
+
 /** The (provider, model) a stored DAG drafts with, or null if it has no drafting step. */
 export function cellOf(dag) {
   const node = (dag?.nodes ?? []).find((n) => n?.config?.service === "chat");
@@ -176,7 +188,8 @@ async function main() {
       (needsNoWorkAvailable(w.dag) ||
         needsPredecessorResolution(w.dag) ||
         needsMultiProviderBookingRead(w.dag) ||
-        needsHumanHandover(w.dag))
+        needsHumanHandover(w.dag) ||
+        needsFunnelKeyRetired(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
