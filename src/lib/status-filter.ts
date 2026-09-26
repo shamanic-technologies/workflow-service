@@ -5,7 +5,7 @@
  * A workflow is only runnable when BOTH status axes say so: its own per-version
  * `status` is 'active' AND its dynasty's `workflow_dynasty_status` is 'active'.
  * The listings are what rankers and pickers read to choose something to run
- * (campaign-service provisions a funnel campaign off `status=active`;
+ * (campaign-service provisions a campaign off `status=active`;
  * features-service builds its projection off `/public/workflows`), so "active"
  * on those surfaces has to mean *executable* rather than merely
  * "this version is the latest of its lineage". Otherwise a retired dynasty keeps
