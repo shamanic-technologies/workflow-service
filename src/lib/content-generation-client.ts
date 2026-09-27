@@ -105,3 +105,47 @@ export async function fetchPromptTemplates(
 
   return templates;
 }
+
+export interface PromptVersionResult {
+  template: PromptTemplate;
+  /** false when content-generation found the text identical and returned the source untouched. */
+  created: boolean;
+}
+
+/**
+ * Stores `prompt` as a NEW template derived from `sourceType`, via
+ * content-generation `PUT /prompts`, which never mutates the source: it inserts
+ * `<base>-vN` (the next free version of the type's base name) and answers 201,
+ * or answers 200 with the source row when the text and variables are identical.
+ *
+ * That route is identity-scoped, so the caller's `x-org-id` / `x-user-id` /
+ * `x-run-id` must be in `downstreamHeaders`.
+ */
+export async function createPromptVersion(
+  sourceType: string,
+  prompt: string,
+  variables: PromptVariable[],
+  downstreamHeaders: DownstreamHeaders,
+): Promise<PromptVersionResult> {
+  const { baseUrl, apiKey } = getConfig();
+
+  const res = await fetch(`${baseUrl}/prompts`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      ...downstreamHeaders,
+    },
+    body: JSON.stringify({ sourceType, prompt, variables }),
+    signal: AbortSignal.timeout(600_000),
+  });
+
+  if (res.status !== 200 && res.status !== 201) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `content-generation error: PUT /prompts (sourceType=${sourceType}) -> ${res.status}: ${text}`,
+    );
+  }
+
+  return { template: (await res.json()) as PromptTemplate, created: res.status === 201 };
+}

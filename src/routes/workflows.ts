@@ -40,7 +40,15 @@ import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
-import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
+import { formatWorkflow } from "../lib/format-workflow.js";
+import {
+  generateFlowPath,
+  featureSlugToName,
+  findSignatureConflict,
+  signatureConflictBody,
+  upgradeWorkflowRow,
+  forkWorkflowRow,
+} from "../lib/workflow-lineage.js";
 
 const router = Router();
 
@@ -71,19 +79,6 @@ router.use((req, res, next) => {
   next();
 });
 
-function formatWorkflow(w: typeof workflows.$inferSelect) {
-  return {
-    ...w,
-    // Derived, never stored: the content model + prompt template a consumer
-    // wants to display per row live inside the DAG, and resolving them here
-    // saves every reader from downloading N DAGs and reimplementing "which node
-    // is the content call". Null whenever the DAG does not state them.
-    ...summarizeContentGeneration(w.dag as DAG | null),
-    createdAt: w.createdAt?.toISOString() ?? null,
-    updatedAt: w.updatedAt?.toISOString() ?? null,
-  };
-}
-
 /**
  * Re-push a workflow's Windmill flow before it is made executable again.
  *
@@ -112,29 +107,6 @@ function toWorkflowDynastySlug(slug: string): string {
 /** Strip version suffix from name: "Cold Outreach Obsidian v3" → "Cold Outreach Obsidian" */
 function toWorkflowDynastyName(name: string): string {
   return name.replace(/ v\d+$/, "");
-}
-
-function generateFlowPath(scope: string, slug: string): string {
-  const sanitized = slug
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
-  return `f/workflows/${scope}/${sanitized}`;
-}
-
-/** Convert feature slug to display name: "pr-cold-email-outreach" → "PR Cold Email Outreach" */
-function featureSlugToName(slug: string): string {
-  return slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-}
-
-/** Compose slug with version suffix: no -v1 for v1, -v2 for v2+. */
-function composeSlug(base: string, version: number): string {
-  return version >= 2 ? `${base}-v${version}` : base;
-}
-
-/** Compose display name with version suffix: no v1 for v1, v2 for v2+. */
-function composeName(base: string, version: number): string {
-  return version >= 2 ? `${base} v${version}` : base;
 }
 
 // POST /workflows/create — Create a workflow from a natural-language description.
@@ -442,146 +414,48 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     }
 
     // Conflict guard: a different active workflow in the same feature_slug may
-    // already hold this signature (partial unique index idx_workflows_active_sig
-    // = (feature_slug, signature) WHERE status='active'). Inserting would violate
-    // the constraint and leak a raw Postgres 500. Detect it first and return a
-    // clean 409 so the caller knows it can use the existing workflow instead.
-    // Mirrors the fork path (PUT /workflows/{id}). Runs BEFORE creating the
-    // Windmill flow to avoid leaving an orphan flow behind on conflict.
-    const [conflicting] = await db
-      .select({
-        id: workflows.id,
-        workflowSlug: workflows.workflowSlug,
-        workflowName: workflows.workflowName,
-      })
-      .from(workflows)
-      .where(
-        and(
-          eq(workflows.featureSlug, existing.featureSlug),
-          eq(workflows.signature, newSignature),
-          eq(workflows.status, "active"),
-        )
-      );
-
+    // already hold this signature. Mirrors the fork path (PUT /workflows/{id}).
+    // Runs BEFORE creating the Windmill flow to avoid leaving an orphan flow.
+    const conflicting = await findSignatureConflict(existing.featureSlug, newSignature);
     if (conflicting) {
-      res.status(409).json({
-        error: "A workflow with this DAG signature already exists",
-        existingWorkflowId: conflicting.id,
-        existingWorkflowSlug: conflicting.workflowSlug,
-        existingWorkflowName: conflicting.workflowName,
-      });
+      res.status(409).json(signatureConflictBody(conflicting));
       return;
     }
 
     // New signature → upgrade in same dynasty: bump version, deprecate predecessor.
-    // The dynasty signature name is immutable per dynasty — reuse the existing one.
-    const newVersion = existing.version + 1;
-    const newSlug = composeSlug(existing.workflowDynastySlug, newVersion);
-    const newName = composeName(existing.workflowDynastyName, newVersion);
-
-    const openFlow = dagToOpenFlow(dag, newSlug);
-    const flowPath = generateFlowPath(orgId, newSlug);
-    const client = getWindmillClient();
-    if (client) {
-      try {
-        await client.createFlow({
-          path: flowPath,
-          summary: newSlug,
-          description: resolvedDescription,
-          value: openFlow.value,
-          schema: openFlow.schema,
-        });
-      } catch (err) {
-        console.error("[workflow-service] upgrade: failed to create Windmill flow:", err);
-      }
-    }
-
-    // Atomic: deprecate predecessor (status='deprecated') BEFORE inserting the new
-    // active row. The partial unique index idx_workflows_active_signame
-    // (feature_slug, signature_name) WHERE status='active' would otherwise reject
-    // the insert because the predecessor still occupies the (feature_slug, signame)
-    // slot. Wrapping in a transaction guarantees both rows commit together.
-    let created: typeof workflows.$inferSelect;
-    await db.transaction(async (tx) => {
-      await tx
-        .update(workflows)
-        .set({ status: "deprecated", updatedAt: new Date() })
-        .where(eq(workflows.id, existing.id));
-
-      const [row] = await tx
-        .insert(workflows)
-        .values({
-          orgId,
-          createdForBrandId: existing.createdForBrandId,
-          humanId: existing.humanId,
-          workflowSlug: newSlug,
-          workflowName: newName,
-          workflowDynastySlug: existing.workflowDynastySlug,
-          workflowDynastyName: existing.workflowDynastyName,
-          description: resolvedDescription,
-          featureSlug: existing.featureSlug,
-          category: resolvedCategory,
-          channel: resolvedChannel,
-          audienceType: resolvedAudienceType,
-          tags: (existing.tags as string[]) ?? [],
-          signature: newSignature,
-          workflowDynastySignatureName: existing.workflowDynastySignatureName,
-          version: newVersion,
-          dag,
-          windmillFlowPath: flowPath,
-          // A retired dynasty stays retired across an upgrade. Without this the
-          // column defaults to 'active' and upgrading a retired lineage silently
-          // un-retires it — the row would execute again while the operator who
-          // retired it is told nothing.
-          workflowDynastyStatus: existing.workflowDynastyStatus,
-          creationType: "upgrade",
-          createdFromWorkflow: existing.id,
-          createdByUserId: userId,
-          createdByRunId: runId,
-        })
-        .returning();
-      created = row;
+    const created = await upgradeWorkflowRow({
+      existing,
+      dag,
+      signature: newSignature,
+      orgId,
+      userId,
+      runId,
+      description: resolvedDescription,
+      category: resolvedCategory,
+      channel: resolvedChannel,
+      audienceType: resolvedAudienceType,
     });
-
-    // Windmill cleanup of the predecessor flow happens AFTER the DB commit so a
-    // rolled-back transaction does not leave Windmill in an inconsistent state.
-    // Failures here are logged but never re-thrown — the row is already deprecated.
-    if (client && existing.windmillFlowPath) {
-      try {
-        await client.deleteFlow(existing.windmillFlowPath);
-        console.log(
-          `[workflow-service] upgrade: deleted Windmill flow "${existing.windmillFlowPath}" for deprecated predecessor "${existing.workflowSlug}"`,
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("404")) {
-          console.warn(
-            `[workflow-service] upgrade: failed to delete Windmill flow "${existing.windmillFlowPath}" for "${existing.workflowSlug}":`,
-            msg,
-          );
-        }
-      }
-    }
+    const newVersion = created.version;
 
     traceEvent(runId, {
       service: "workflow-service",
       event: "upgrade-complete",
-      detail: `Upgraded "${existing.workflowSlug}" -> "${created!.workflowSlug}" (v${newVersion}) source=${body.dag ? "client-dag" : "llm"}`,
-      data: { from: existing.workflowSlug, to: created!.workflowSlug, version: newVersion, source: body.dag ? "client-dag" : "llm" },
+      detail: `Upgraded "${existing.workflowSlug}" -> "${created.workflowSlug}" (v${newVersion}) source=${body.dag ? "client-dag" : "llm"}`,
+      data: { from: existing.workflowSlug, to: created.workflowSlug, version: newVersion, source: body.dag ? "client-dag" : "llm" },
     }, req.headers).catch(() => {});
 
     res.status(201).json({
       workflow: {
-        id: created!.id,
-        workflowSlug: created!.workflowSlug,
-        workflowName: created!.workflowName,
-        workflowDynastySlug: created!.workflowDynastySlug,
-        featureSlug: created!.featureSlug,
-        tags: (created!.tags as string[]) ?? [],
-        signature: created!.signature,
-        workflowDynastySignatureName: created!.workflowDynastySignatureName,
-        version: created!.version,
-        workflowDynastyStatus: created!.workflowDynastyStatus as "active" | "deprecated",
+        id: created.id,
+        workflowSlug: created.workflowSlug,
+        workflowName: created.workflowName,
+        workflowDynastySlug: created.workflowDynastySlug,
+        featureSlug: created.featureSlug,
+        tags: (created.tags as string[]) ?? [],
+        signature: created.signature,
+        workflowDynastySignatureName: created.workflowDynastySignatureName,
+        version: created.version,
+        workflowDynastyStatus: created.workflowDynastyStatus as "active" | "deprecated",
         action: "upgraded" as const,
       },
       dag,
@@ -1404,130 +1278,27 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
 
     // --- Case 3: Different signature — FORK: create new workflow in new dynasty ---
 
-    // Check for existing active workflow with same signature (conflict)
-    const [conflicting] = await db
-      .select({
-        id: workflows.id,
-        workflowSlug: workflows.workflowSlug,
-        workflowName: workflows.workflowName,
-      })
-      .from(workflows)
-      .where(
-        and(
-          eq(workflows.featureSlug, existing.featureSlug),
-          eq(workflows.signature, newSignature),
-          eq(workflows.status, "active"),
-        )
-      );
-
+    const conflicting = await findSignatureConflict(existing.featureSlug, newSignature);
     if (conflicting) {
-      res.status(409).json({
-        error: "A workflow with this DAG signature already exists",
-        existingWorkflowId: conflicting.id,
-        existingWorkflowSlug: conflicting.workflowSlug,
-        existingWorkflowName: conflicting.workflowName,
-      });
+      res.status(409).json(signatureConflictBody(conflicting));
       return;
     }
 
-    // Generate new workflow_dynasty_signature_name. Names are burned for life
-    // within a feature_slug (any status, any org). No org filter, no status filter.
-    const existingFeatureRows = await db
-      .select({ workflowDynastySignatureName: workflows.workflowDynastySignatureName })
-      .from(workflows)
-      .where(eq(workflows.featureSlug, existing.featureSlug));
-    const existingWorkflowDynastySignatureNamesForFeature = new Set(
-      existingFeatureRows.map((w) => w.workflowDynastySignatureName),
-    );
-    const workflowDynastySignatureName = pickWorkflowDynastySignatureName(
-      newSignature,
-      existingWorkflowDynastySignatureNamesForFeature,
-    );
-
-    const featureName = featureSlugToName(existing.featureSlug);
-    const newWorkflowDynastySlug = `${existing.featureSlug}-${workflowDynastySignatureName}`;
-    const newWorkflowDynastyName = `${featureName} ${workflowDynastySignatureName.charAt(0).toUpperCase() + workflowDynastySignatureName.slice(1)}`;
-    const newWorkflowSlug = newWorkflowDynastySlug; // v1 has no version suffix
-    const newWorkflowName = newWorkflowDynastyName;
-
-    const openFlow = dagToOpenFlow(dag, newWorkflowSlug);
-    const flowPath = generateFlowPath(orgId, newWorkflowSlug);
-    const client = getWindmillClient();
-
-    if (client) {
-      try {
-        await client.createFlow({
-          path: flowPath,
-          summary: newWorkflowSlug,
-          description: body.description ?? existing.description ?? undefined,
-          value: openFlow.value,
-          schema: openFlow.schema,
-        });
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("already exists")) {
-          try {
-            await client.updateFlow(flowPath, {
-              summary: newWorkflowSlug,
-              description: body.description ?? existing.description ?? undefined,
-              value: openFlow.value,
-              schema: openFlow.schema,
-            });
-          } catch (updateErr) {
-            console.error("[workflow-service] Failed to update existing forked flow in Windmill:", updateErr);
-          }
-        } else {
-          console.error("[workflow-service] Failed to create forked flow in Windmill:", err);
-        }
-      }
+    const forkResult = await forkWorkflowRow({
+      existing,
+      dag,
+      signature: newSignature,
+      flowScopeOrgId: orgId,
+      userId: res.locals.userId as string,
+      runId: res.locals.runId as string,
+      description: body.description ?? existing.description,
+      tags: body.tags ?? (existing.tags as string[]) ?? [],
+    });
+    if ("nameConflict" in forkResult) {
+      res.status(409).json(forkResult.nameConflict);
+      return;
     }
-
-    let forked;
-    try {
-      const [row] = await db
-        .insert(workflows)
-        .values({
-          orgId: existing.orgId,
-          createdForBrandId: existing.createdForBrandId,
-          featureSlug: existing.featureSlug,
-          humanId: existing.humanId,
-          campaignId: existing.campaignId,
-          subrequestId: existing.subrequestId,
-          workflowSlug: newWorkflowSlug,
-          workflowName: newWorkflowName,
-          workflowDynastySlug: newWorkflowDynastySlug,
-          workflowDynastyName: newWorkflowDynastyName,
-          description: body.description ?? existing.description,
-          category: existing.category,
-          channel: existing.channel,
-          audienceType: existing.audienceType,
-          tags: body.tags ?? (existing.tags as string[]) ?? [],
-          signature: newSignature,
-          workflowDynastySignatureName,
-          version: 1,
-          dag: body.dag,
-          status: "active",
-          creationType: "fork",
-          createdFromWorkflow: existing.id,
-          windmillFlowPath: flowPath,
-          createdByUserId: res.locals.userId as string,
-          createdByRunId: res.locals.runId as string,
-        })
-        .returning();
-      forked = row;
-    } catch (dbErr: unknown) {
-      if (dbErr instanceof Error && "code" in dbErr && (dbErr as { code?: string }).code === "23505") {
-        res.status(409).json({
-          error: "A workflow with this name already exists",
-          detail: (dbErr as { detail?: string }).detail,
-        });
-        return;
-      }
-      throw dbErr;
-    }
-
-    console.log(
-      `[workflow-service] fork: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [source kept active]`,
-    );
+    const forked = forkResult.row;
 
     res.status(201).json({
       ...formatWorkflow(forked),
