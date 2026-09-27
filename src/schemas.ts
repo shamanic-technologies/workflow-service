@@ -804,6 +804,55 @@ export const WorkflowConflictResponseSchema = z
   })
   .openapi("WorkflowConflictResponse");
 
+// --- Prompt edit (POST /workflows/{id}/prompt-edit + dynasty twin) ---
+
+export const PromptEditRequestSchema = z
+  .object({
+    action: z.enum(["upgrade", "fork"]).describe(
+      "'upgrade' adds a new version to the SAME dynasty that writes with the edited prompt " +
+      "(the current active version is superseded, exactly like any upgrade — every campaign on the " +
+      "dynasty sends the new text from its next run). 'fork' creates a NEW dynasty identical to the " +
+      "source except that it writes with the edited prompt; the source is left untouched."
+    ),
+    prompt: z.string().min(1).describe(
+      "The full edited template text. It must state exactly the same {{variables}} as the template " +
+      "the workflow renders today (read it via content-generation's platform-prompts by the workflow's " +
+      "`contentPromptType`); anything else is refused with 422. It is stored as a NEW template type — " +
+      "the existing template, which other workflows may share, is never modified."
+    ),
+  })
+  .openapi("PromptEditRequest");
+
+export const PromptEditResponseSchema = z
+  .object({
+    action: z.enum(["upgraded", "forked"]).describe("What was created."),
+    workflow: WorkflowResponseSchema.describe(
+      "The NEW workflow row: the dynasty's new active version on upgrade, version 1 of the new dynasty on fork. " +
+      "Navigate with `workflowDynastySlug` (new on fork, unchanged on upgrade) or `id`. " +
+      "Its `contentPromptType` is the new template type."
+    ),
+    sourceWorkflow: z.object({
+      id: z.string().uuid(),
+      workflowSlug: z.string(),
+      workflowDynastySlug: z.string(),
+      version: z.number().int(),
+    }).describe("The version the edit was applied to. Deprecated after an upgrade; untouched after a fork."),
+    promptTemplate: z.object({
+      previousType: z.string().describe("The template type the source renders. Unchanged."),
+      type: z.string().describe("The new template type holding the edited text, rendered only by `workflow`."),
+    }),
+  })
+  .openapi("PromptEditResponse");
+
+export const PromptEditVariableErrorSchema = z
+  .object({
+    error: z.string().describe("Readable sentence naming what the edit broke. Safe to show as-is."),
+    droppedVariables: z.array(z.string()).describe("{{variables}} the current template states that the edit removed."),
+    addedVariables: z.array(z.string()).describe("{{variables}} the edit introduced that the workflow does not provide."),
+    requiredVariables: z.array(z.string()).describe("The exact set an edited prompt must state."),
+  })
+  .openapi("PromptEditVariableError");
+
 // --- Internal: Transfer Brand ---
 
 export const TransferBrandRequestSchema = z
@@ -1617,6 +1666,84 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
+});
+
+const promptEditResponses = {
+  201: {
+    description: "Created: the new version (upgrade) or the new dynasty (fork), with the new template",
+    content: { "application/json": { schema: PromptEditResponseSchema } },
+  },
+  400: {
+    description: "Invalid body, invalid id, the prompt is unchanged, or the rewritten DAG fails validation",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+  404: {
+    description: "Workflow not found (by id), or the dynasty has no active version (by dynasty slug)",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+  409: {
+    description:
+      "Upgrade requested on a version that is not the dynasty's active one; the workflow does not write " +
+      "with a single literal prompt template; or the resulting DAG already exists as an active workflow",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+  422: {
+    description: "The edited prompt adds or removes a {{variable}}",
+    content: { "application/json": { schema: PromptEditVariableErrorSchema } },
+  },
+  502: {
+    description: "content-generation could not read or store the template",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+};
+
+const promptEditDescription =
+  "Takes the prompt template the workflow's content-generation call renders, stores the edited text " +
+  "as a NEW template type (content-generation `PUT /prompts`, which never mutates the source), and " +
+  "repoints a copy of the DAG at it. `upgrade` inserts that DAG as the dynasty's next version and " +
+  "deprecates the current one; `fork` inserts it as version 1 of a new dynasty and leaves the source " +
+  "untouched. The edit must keep exactly the template's {{variables}} (422 otherwise). Staff-only at the " +
+  "gateway: an upgrade changes what every campaign on the dynasty sends.";
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/{id}/prompt-edit",
+  summary: "Upgrade or fork a workflow with an edited prompt",
+  description:
+    promptEditDescription +
+    " `id` may be any version: `fork` branches from exactly that version; `upgrade` requires it to be " +
+    "the dynasty's active version (409 otherwise, naming the active one).",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    params: z.object({ id: z.string().uuid() }),
+    body: {
+      required: true,
+      content: { "application/json": { schema: PromptEditRequestSchema } },
+    },
+  },
+  responses: promptEditResponses,
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/dynasty/{workflowDynastySlug}/prompt-edit",
+  summary: "Upgrade or fork a workflow dynasty with an edited prompt",
+  description:
+    promptEditDescription +
+    " The dynasty slug resolves to its currently-active version, which is what both actions build on.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    params: z.object({ workflowDynastySlug: z.string().min(1) }),
+    body: {
+      required: true,
+      content: { "application/json": { schema: PromptEditRequestSchema } },
+    },
+  },
+  responses: promptEditResponses,
 });
 
 registry.registerPath({
