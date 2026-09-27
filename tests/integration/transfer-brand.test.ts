@@ -44,6 +44,12 @@ vi.mock("../../src/db/index.js", () => ({
   },
 }));
 
+// --- Mock the transfer itself (its SQL is covered against real Postgres in tests/unit/transfer-brand.test.ts) ---
+const transferBrandMock = vi.fn();
+vi.mock("../../src/lib/transfer-brand.js", () => ({
+  transferBrand: (...args: unknown[]) => transferBrandMock(...args),
+}));
+
 // --- Mock Windmill ---
 vi.mock("../../src/lib/windmill-client.js", () => ({
   getWindmillClient: () => ({
@@ -84,8 +90,13 @@ const API_KEY = { "x-api-key": "test-api-key" };
 
 describe("POST /internal/transfer-brand", () => {
   beforeEach(() => {
-    updateCalls.length = 0;
-    executeCalls.length = 0;
+    transferBrandMock.mockReset();
+    transferBrandMock.mockResolvedValue({
+      updatedTables: [
+        { tableName: "workflows", count: 2 },
+        { tableName: "workflow_runs", count: 3 },
+      ],
+    });
   });
 
   it("returns 401 without x-api-key", async () => {
@@ -93,15 +104,14 @@ describe("POST /internal/transfer-brand", () => {
       .post("/internal/transfer-brand")
       .send({ sourceBrandId: "b1", sourceOrgId: "org1", targetOrgId: "org2" });
     expect(res.status).toBe(401);
+    expect(transferBrandMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 when body is missing required fields", async () => {
-    const res = await request
-      .post("/internal/transfer-brand")
-      .set(API_KEY)
-      .send({ sourceBrandId: "b1" });
+    const res = await request.post("/internal/transfer-brand").set(API_KEY).send({ sourceBrandId: "b1" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Validation error");
+    expect(transferBrandMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 when sourceBrandId is empty", async () => {
@@ -112,102 +122,22 @@ describe("POST /internal/transfer-brand", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns updated counts for both tables", async () => {
-    const res = await request
-      .post("/internal/transfer-brand")
-      .set(API_KEY)
-      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "workflows", count: 2 },
-      { tableName: "workflow_runs", count: 3 },
-    ]);
-  });
-
-  it("updates workflows table with targetOrgId", async () => {
-    await request
-      .post("/internal/transfer-brand")
-      .set(API_KEY)
-      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
-
-    const workflowUpdate = updateCalls.find((c) => c.table === "workflows");
-    expect(workflowUpdate).toBeDefined();
-    expect(workflowUpdate!.set.orgId).toBe("org-target");
-  });
-
-  it("executes raw SQL for workflow_runs with solo-brand array filter", async () => {
-    await request
-      .post("/internal/transfer-brand")
-      .set(API_KEY)
-      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
-
-    expect(executeCalls.length).toBe(1);
-  });
-
-  it("rewrites brand references when targetBrandId is present", async () => {
+  it("passes the body to the transfer and returns its per-table counts", async () => {
     const res = await request
       .post("/internal/transfer-brand")
       .set(API_KEY)
       .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target", targetBrandId: "brand-456" });
 
     expect(res.status).toBe(200);
+    expect(transferBrandMock).toHaveBeenCalledWith(expect.anything(), {
+      sourceBrandId: "brand-123",
+      sourceOrgId: "org-source",
+      targetOrgId: "org-target",
+      targetBrandId: "brand-456",
+    });
     expect(res.body.updatedTables).toEqual([
       { tableName: "workflows", count: 2 },
       { tableName: "workflow_runs", count: 3 },
     ]);
-
-    // Step 1: workflows table sets orgId only
-    const step1Update = updateCalls[0];
-    expect(step1Update).toBeDefined();
-    expect(step1Update!.set.orgId).toBe("org-target");
-    expect(step1Update!.set).not.toHaveProperty("createdForBrandId");
-
-    // Step 2: workflows table rewrites createdForBrandId only
-    const step2Update = updateCalls[1];
-    expect(step2Update).toBeDefined();
-    expect(step2Update!.set.createdForBrandId).toBe("brand-456");
-    expect(step2Update!.set).not.toHaveProperty("orgId");
-
-    // Two execute calls: step 1 (move org) + step 2 (rewrite brand)
-    expect(executeCalls.length).toBe(2);
-  });
-
-  it("does not rewrite brand references when targetBrandId is absent", async () => {
-    await request
-      .post("/internal/transfer-brand")
-      .set(API_KEY)
-      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
-
-    const workflowUpdate = updateCalls.find((c) => c.table === "workflows");
-    expect(workflowUpdate).toBeDefined();
-    expect(workflowUpdate!.set.orgId).toBe("org-target");
-    expect(workflowUpdate!.set).not.toHaveProperty("createdForBrandId");
-  });
-
-  it("is idempotent — returns zero counts when already transferred", async () => {
-    // Override mock to return 0 rows
-    const { db } = await import("../../src/db/index.js");
-    const originalUpdate = db.update;
-    db.update = ((table: unknown) => ({
-      set: (values: Record<string, unknown>) => ({
-        where: () => Promise.resolve({ rowCount: 0 }),
-      }),
-    })) as typeof db.update;
-    db.execute = (() => Promise.resolve({ rowCount: 0 })) as typeof db.execute;
-
-    const res = await request
-      .post("/internal/transfer-brand")
-      .set(API_KEY)
-      .send({ sourceBrandId: "brand-123", sourceOrgId: "org-source", targetOrgId: "org-target" });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "workflows", count: 0 },
-      { tableName: "workflow_runs", count: 0 },
-    ]);
-
-    // Restore
-    db.update = originalUpdate;
   });
 });
