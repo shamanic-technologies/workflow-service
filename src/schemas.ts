@@ -869,7 +869,7 @@ export const TransferBrandResponseSchema = z
     updatedTables: z.array(
       z.object({
         tableName: z.string().describe("Name of the database table."),
-        count: z.number().int().describe("Number of rows updated."),
+        count: z.number().int().describe("Number of distinct rows changed in this table by this call (0 on a re-run)."),
       })
     ).describe("Tables and counts of rows updated."),
   })
@@ -1646,8 +1646,11 @@ registry.registerPath({
   path: "/internal/transfer-brand",
   summary: "Transfer a brand from one org to another",
   description:
-    "Re-assigns all solo-brand rows from sourceOrgId to targetOrgId. " +
-    "Skips co-branding rows (multiple brand IDs). Idempotent.",
+    "Moves every row this service holds for the brand from sourceOrgId to targetOrgId, in one transaction: " +
+    "workflow_runs whose brand_ids is exactly [brand] or that carry no brand_ids but belong to one of the brand's campaigns, " +
+    "workflows created for the brand or for one of its campaigns, and the orgId/brandId recorded in each moved run's inputs. " +
+    "Co-branded runs (several brand IDs) stay in the source org; when targetBrandId is given the brand id is rewritten everywhere, co-branded arrays included. " +
+    "Catalog workflows (no brand, no campaign) never move. Idempotent: a second call reports zero rows.",
   tags: ["Internal"],
   security: [{ apiKey: [] }],
   request: {
