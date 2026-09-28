@@ -177,6 +177,19 @@ export function cellOf(dag) {
   return `${body.provider}::${body.model}`;
 }
 
+/**
+ * True when a stored DAG still has only two exits for the model: answer or
+ * escalate. A prospect who declines, asks us to stop, or says goodbye asked
+ * nothing, so with two exits the model escalated them — and the agency was
+ * told a prospect "asked something we cannot answer" about a message that
+ * asked nothing (run 84278834, 2026-09-28). The current DAG has a third exit,
+ * `no_reply_owed`, which sends nothing, escalates nothing, and stops the
+ * person's follow-ups. The repair is an upgrade carrying the current DAG.
+ */
+export function needsNoReplyOwed(dag) {
+  return !(dag?.nodes ?? []).some((n) => n?.id === "stop-followups");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -201,7 +214,8 @@ async function main() {
         needsMultiProviderBookingRead(w.dag) ||
         needsHumanHandover(w.dag) ||
         needsFunnelKeyRetired(w.dag) ||
-        needsOfferEconomicsRead(w.dag))
+        needsOfferEconomicsRead(w.dag) ||
+        needsNoReplyOwed(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }

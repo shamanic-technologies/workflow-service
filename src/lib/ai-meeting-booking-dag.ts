@@ -45,15 +45,26 @@
  * and making it the fallback would hide the failure a second time. A run with
  * no predecessor ends on its own named branch, having sent nothing.
  *
- * A RUN THAT SENDS NOTHING IS NOT A FAILED RUN. Two of the branches below end
- * cleanly with the prospect never hearing from us, and in both cases that is
+ * A RUN THAT SENDS NOTHING IS NOT A FAILED RUN. Three of the branches below end
+ * cleanly with the prospect never hearing from us, and in every case that is
  * the correct outcome rather than a degradation:
  *
+ *  - The model says NO REPLY IS OWED. Their last message declined, asked us to
+ *    stop, said it was sent in error, or closed the exchange (thanks, goodbye)
+ *    without asking anything. Until this outcome existed the model had two exits,
+ *    "answer" and "escalate", and a refusal is neither — so it escalated, and the
+ *    agency was told a prospect "asked something we cannot answer" about a
+ *    message that asked nothing (run 84278834, 2026-09-28). Now the flow sends
+ *    nothing, escalates nothing, and states `kind: "stopped"` on the person's
+ *    follow-up schedule in lead-service (reason `no_reply_owed`), so the ladder
+ *    does not claim them again. A stop is not a tombstone: if they write again,
+ *    whoever observes that reply re-schedules them. Which messages are owed a
+ *    reply is the model's judgement — no keyword list decides it.
  *  - The model says it CANNOT answer what they asked. Its schema used to
  *    REQUIRE a reply body, so the only move left to it was a deflection back to
  *    the call, and the follow-up ladder then did it again on the next rung —
  *    the prospect gets pestered and a question a person could have answered in
- *    one line never reaches one. `answerable: false` is now a first-class
+ *    one line never reaches one. `decision: "escalate"` is a first-class
  *    answer: the flow sends the prospect nothing and calls
  *    `POST /orgs/replies/escalate`, which forwards the exchange to the agency
  *    inbox NAMING THE QUESTION IN THE PROSPECT'S OWN WORDS and stops the ladder
@@ -540,15 +551,22 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "THE CONVERSATION SO FAR, oldest first" + (priorSubject ? " (thread subject: " + priorSubject + ")" : ""),
     transcript || "(no messages on record)",
     "",
-    "WHAT YOU MUST DO",
+    "FIRST: IS A REPLY OWED AT ALL",
+    "Read their LAST message. Some messages need no answer from us: they declined or said they are not interested, asked us to stop writing, said their earlier message was sent in error, or closed the exchange (thanks, goodbye) without asking or proposing anything.",
+    "Writing back to those, even to propose the meeting, is exactly what makes us look like a machine. Set decision to no_reply_owed and write nothing: nobody hears from us, nobody is alerted, and their follow-ups stop. If they write again later, they come back on their own.",
+    "A message that asks something, raises a concern we could address, or leaves the door open (\\"not now, maybe after the summer\\") IS owed a reply.",
+    "",
+    "WHAT YOU MUST DO WHEN A REPLY IS OWED",
     "1. ANSWER THE QUESTION THEY ASKED. Read their last message and reply to what is in it. A reply that ignores what they wrote is worse than no reply at all.",
     "2. Then propose the meeting.",
+    "Set decision to answer.",
     "",
     "WHEN YOU CANNOT ANSWER",
     "Everything you may state is above. If answering what they asked would mean inventing something that is not there — a price, a number of seats, a spec, a reference, a commitment to a date nobody here has made — then you cannot answer it.",
-    "In that case set answerable to false and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
-    "Set answerable to true only when you can actually answer what they asked from what is in front of you.",
-    "Either way, return question: what they asked, in their own words. It is what the person taking over reads.",
+    "In that case set decision to escalate and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
+    "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate.",
+    "",
+    "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
     "",
     "BOOKING",
     bookingSection,
@@ -570,6 +588,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You answer what they asked before you ask for anything.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
     "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
+    "When their last message needs no answer — a refusal, a request to stop, a goodbye — you send nothing and hand nothing over.",
   ].join(" ");
 
   return { message, systemPrompt, ladderNextDueAt, timezone };
@@ -670,7 +689,7 @@ export interface AiMeetingBookingDagOptions {
  * permissive schema and because a missing `nextDueAt` would otherwise only
  * surface after the reply has gone out.
  *
- * `answerable` is the whole point of the shape. Until it existed, `replyHtml`
+ * `decision` is the whole point of the shape. Until the model could decline, `replyHtml`
  * was REQUIRED, so a prospect who asked something the brand facts do not
  * contain — a price, a spec, a reference, a date nobody has committed to — got
  * the only thing a required reply body leaves the model: a deflection back to
@@ -678,41 +697,74 @@ export interface AiMeetingBookingDagOptions {
  * writing fields are deliberately NOT required: the model may decline, and
  * declining is a first-class answer rather than a failure to produce one.
  *
- * `question` is required on BOTH paths, because it is what a human picking the
+ * It has THREE exits, not two. A prospect who declines, asks us to stop, or says
+ * goodbye asked nothing, so neither "answer" nor "escalate" is true of them; with
+ * two exits the model escalated those, alerting the agency about a question that
+ * did not exist. `no_reply_owed` is that third exit.
+ *
+ * `question` is required on EVERY path, because it is what a human picking the
  * thread up actually needs, and `POST /orgs/replies/escalate` refuses an empty
- * one. A bare "gave up" is not actionable.
+ * one. A bare "gave up" is not actionable. `reason` is required so every run
+ * says why it did what it did.
  */
 export const REPLY_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    answerable: {
-      type: "boolean",
+    decision: {
+      type: "string",
+      enum: ["answer", "escalate", "no_reply_owed"],
       description:
-        "True only if you can answer what they asked from the facts in front of you. " +
-        "False if answering would mean inventing something — a price, a spec, a reference, " +
-        "a commitment nobody here has made. A person takes the thread over from there.",
+        "no_reply_owed: their last message needs no answer at all — they declined, asked us to stop, " +
+        "said it was sent in error, or closed the exchange without asking anything. Nothing is sent, " +
+        "nobody is alerted, their follow-ups stop. " +
+        "answer: you can answer what they wrote from the facts in front of you. " +
+        "escalate: they asked a real question you cannot answer without inventing something — a price, " +
+        "a spec, a reference, a commitment nobody here has made. A person takes the thread over.",
     },
     question: {
       type: "string",
       description:
-        "What they asked, in their own words — the question you answered, or the one you could not.",
+        "What they asked, in their own words — the question you answered, or the one you could not. " +
+        "When no reply is owed, what their last message said, in their own words.",
+    },
+    reason: {
+      type: "string",
+      description: "One short sentence: why you chose this decision.",
     },
     replyHtml: {
       type: "string",
       description:
         "The answer the prospect reads, as HTML. No signature, no subject. " +
-        "Omit it entirely when answerable is false: the prospect hears nothing until a human writes.",
+        "Only when decision is answer: otherwise omit it, the prospect hears nothing from us.",
     },
     nextDueAt: {
       type: "string",
       description:
-        "ISO-8601 timestamp of when the next follow-up is owed. Omit it when answerable is false — " +
-        "nothing was sent and the schedule is being emptied, not advanced.",
+        "ISO-8601 timestamp of when the next follow-up is owed. Only when decision is answer — " +
+        "otherwise nothing was sent and the schedule is being emptied, not advanced.",
     },
   },
-  required: ["answerable", "question"],
+  required: ["decision", "question", "reason"],
 } as const;
+
+/** The reason stored on the lead's follow-up schedule when no reply is owed. */
+export const NO_REPLY_OWED_REASON = "no_reply_owed";
+
+/**
+ * States, in the log, that this run sent nothing because no reply was owed, and
+ * why — `/end-run` carries no reason field, so this is where the reason is said.
+ */
+export const NAME_NO_REPLY_OWED_CODE = `
+export async function main(draft, email) {
+  const reason = draft?.json?.reason ?? null;
+  const said = draft?.json?.question ?? null;
+  console.log("[ai-meeting-booking] no reply owed to " + String(email) +
+    ": nothing sent, nothing escalated, follow-ups stopped. Their last message: " +
+    JSON.stringify(said) + ". Why: " + JSON.stringify(reason));
+  return { outcome: "no_reply_owed", reason, said };
+}
+`.trim();
 
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
   return {
@@ -903,6 +955,32 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           "body.question": "$ref:draft-reply.output.json.question",
         },
       },
+      // No reply is owed: nothing is sent and nothing is escalated. The run says
+      // why, then empties the person's follow-up schedule in lead-service so the
+      // ladder does not claim them again. A stop is not a tombstone — a fresh
+      // reply from them re-schedules them through whoever observes it.
+      {
+        id: "name-no-reply-owed",
+        type: "script",
+        config: { code: NAME_NO_REPLY_OWED_CODE },
+        retries: 0,
+        inputMapping: {
+          draft: "$ref:draft-reply.output",
+          email: "$ref:claim-followup.output.followup.email",
+        },
+      },
+      {
+        id: "stop-followups",
+        type: "http.call",
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/leads/{id}/followups",
+          body: { kind: "stopped", reason: NO_REPLY_OWED_REASON },
+        },
+        retries: 0,
+        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+      },
       {
         id: "resolve-next-due",
         type: "script",
@@ -989,6 +1067,18 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       // successful run with no follow-up recorded.
       {
         id: "end-run-escalated",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+      },
+      // Their last message needed no answer. Nothing was sent, nothing was
+      // escalated, and their follow-ups were stopped: a successful run.
+      {
+        id: "end-run-no-reply-owed",
         type: "http.call",
         config: {
           service: "campaign",
@@ -1085,14 +1175,21 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       {
         from: "check-answerable",
         to: "resolve-next-due",
-        condition: "results['draft-reply']?.json?.answerable == true",
+        condition: "results['draft-reply']?.json?.decision == 'answer'",
       },
       {
         from: "check-answerable",
         to: "escalate-unanswerable",
-        condition: "results['draft-reply']?.json?.answerable == false",
+        condition: "results['draft-reply']?.json?.decision == 'escalate'",
+      },
+      {
+        from: "check-answerable",
+        to: "name-no-reply-owed",
+        condition: "results['draft-reply']?.json?.decision == 'no_reply_owed'",
       },
       { from: "escalate-unanswerable", to: "end-run-escalated" },
+      { from: "name-no-reply-owed", to: "stop-followups" },
+      { from: "stop-followups", to: "end-run-no-reply-owed" },
       { from: "resolve-next-due", to: "send-reply" },
       { from: "send-reply", to: "classify-send" },
       { from: "classify-send", to: "check-sent" },
