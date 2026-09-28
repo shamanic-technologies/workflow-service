@@ -13,6 +13,8 @@ import {
   NAME_MISSING_PREDECESSOR_CODE,
   CLASSIFY_SEND_CODE,
   REPLY_RESPONSE_SCHEMA,
+  NAME_NO_REPLY_OWED_CODE,
+  NO_REPLY_OWED_REASON,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -808,7 +810,7 @@ describe("handing an unanswerable question to a human", () => {
   const byId = new Map(dag.nodes.map((n) => [n.id, n]));
 
   it("lets the model decline — the reply body is no longer required", () => {
-    expect(REPLY_RESPONSE_SCHEMA.required).toContain("answerable");
+    expect(REPLY_RESPONSE_SCHEMA.required).toContain("decision");
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("question");
     // Requiring a reply body is what left the model no move but a deflection.
     expect(REPLY_RESPONSE_SCHEMA.required).not.toContain("replyHtml");
@@ -817,15 +819,15 @@ describe("handing an unanswerable question to a human", () => {
 
   it("decides answerability in the model, with no keyword or regex pre-filter", () => {
     const answerable = dag.edges.find(
-      (e) => e.from === "check-answerable" && e.condition?.includes("== true"),
+      (e) => e.from === "check-answerable" && e.condition?.includes("== 'answer'"),
     );
     const cannot = dag.edges.find(
-      (e) => e.from === "check-answerable" && e.condition?.includes("== false"),
+      (e) => e.from === "check-answerable" && e.condition?.includes("== 'escalate'"),
     );
     expect(answerable?.to).toBe("resolve-next-due");
     expect(cannot?.to).toBe("escalate-unanswerable");
     for (const e of dag.edges.filter((x) => x.from === "check-answerable")) {
-      expect(e.condition).toContain("results['draft-reply']?.json?.answerable");
+      expect(e.condition).toContain("results['draft-reply']?.json?.decision ==");
     }
     // Nothing anywhere inspects the prospect's own text to decide.
     const scripts = dag.nodes.filter((n) => n.type === "script").map((n) => String(n.config?.code));
@@ -859,13 +861,13 @@ describe("handing an unanswerable question to a human", () => {
   });
 
   it("does not stop the ladder itself — the escalate route already did", () => {
-    // Two lead-service calls only: the claim and the follow-up record.
-    const leadCalls = dag.nodes.filter((n) => n.config?.service === "lead").map((n) => n.config?.path);
-    expect(leadCalls.sort()).toEqual([
-      "/orgs/campaigns/{campaignId}/followups/claim-next",
-      "/orgs/leads/{id}",
-      "/orgs/leads/{id}/followups",
-    ].sort());
+    // The escalation path touches no lead-service write: instantly-service's
+    // escalate route empties the schedule itself.
+    const reached = descendants(dag, "escalate-unanswerable");
+    const leadWrites = dag.nodes.filter(
+      (n) => reached.has(n.id) && n.config?.service === "lead",
+    );
+    expect(leadWrites).toEqual([]);
   });
 
   it("tells the model to hand over rather than deflect back to the call", async () => {
@@ -881,10 +883,99 @@ describe("handing an unanswerable question to a human", () => {
     );
     const message = out.message as string;
     expect(message).toContain("WHEN YOU CANNOT ANSWER");
-    expect(message).toContain("set answerable to false");
+    expect(message).toContain("set decision to escalate");
     expect(message).toContain("no deflection back to the call");
     expect(message).toContain("question: what they asked, in their own words");
     expect(out.systemPrompt as string).toContain("hand over");
   });
 });
 
+
+describe("a last message that needs no reply at all", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+
+  it("is a third exit the model chooses, beside answer and escalate", () => {
+    const decision = REPLY_RESPONSE_SCHEMA.properties.decision;
+    expect(decision.enum).toEqual(["answer", "escalate", "no_reply_owed"]);
+    expect(REPLY_RESPONSE_SCHEMA.required).toContain("reason");
+    const arm = dag.edges.find(
+      (e) => e.from === "check-answerable" && e.condition === "results['draft-reply']?.json?.decision == 'no_reply_owed'",
+    );
+    expect(arm?.to).toBe("name-no-reply-owed");
+    // Exactly one arm per decision.
+    expect(dag.edges.filter((e) => e.from === "check-answerable")).toHaveLength(3);
+  });
+
+  it("sends nothing, escalates nothing, stops the follow-ups, and ends clean", () => {
+    const reached = descendants(dag, "name-no-reply-owed");
+    expect(reached.has("send-reply")).toBe(false);
+    expect(reached.has("escalate-unanswerable")).toBe(false);
+    expect(reached.has("record-followup")).toBe(false);
+    expect(reached.has("stop-followups")).toBe(true);
+    expect(reached.has("end-run-no-reply-owed")).toBe(true);
+
+    const stop = byId.get("stop-followups");
+    expect(stop?.config).toMatchObject({
+      service: "lead",
+      method: "POST",
+      path: "/orgs/leads/{id}/followups",
+      body: { kind: "stopped", reason: NO_REPLY_OWED_REASON },
+    });
+    expect(stop?.inputMapping).toEqual({ "params.id": "$ref:claim-followup.output.followup.id" });
+    expect(byId.get("end-run-no-reply-owed")?.config?.body).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("emits the three arms in ONE top-level branchone, with the stop inside the no-reply arm", () => {
+    const flow = dagToOpenFlow(dag, `${FEATURE_SLUG}-test`);
+    type M = { id: string; value: { type: string; branches?: Array<{ expr: string; modules: M[] }> } };
+    const top = flow.value.modules as unknown as M[];
+    const check = top.find((m) => m.id === "check_answerable");
+    expect(check?.value.type).toBe("branchone");
+    const branches = check?.value.branches ?? [];
+    expect(branches).toHaveLength(3);
+    const noReply = branches.find((b) => b.expr.includes("no_reply_owed"));
+    expect(noReply?.modules.map((m) => m.id)).toEqual([
+      "name_no_reply_owed",
+      "stop_followups",
+      "end_run_no_reply_owed",
+    ]);
+    const escalate = branches.find((b) => b.expr.includes("'escalate'"));
+    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "end_run_escalated"]);
+  });
+
+  it("says why in the log", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const out = await loadMain(NAME_NO_REPLY_OWED_CODE)(
+      { json: { decision: "no_reply_owed", question: "not interested at this time", reason: "They declined." } },
+      "cynthia@example.com",
+    );
+    expect(out).toEqual({ outcome: "no_reply_owed", reason: "They declined.", said: "not interested at this time" });
+    expect(String(log.mock.calls[0]?.[0])).toContain("no reply owed to cynthia@example.com");
+    log.mockRestore();
+  });
+
+  it("tells the model a refusal or goodbye is not a question to escalate", async () => {
+    const out = await loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+      { followup: { id: "row-1", leadId: "lead-1", followupCount: 1 } },
+      { leadDetail: { lead: { firstName: "Cynthia", timezone: "UTC" } } },
+      { conversation: { messages: [{ direction: "inbound", text: "Apologies, my previous email was sent in error. We are not interested at this time. Thank you for your time." }] } },
+      null,
+      { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
+      { offerId: "offer-1", name: "SSO audit", bookingUrl: null },
+      { brand: { name: "Acme" } },
+      "2026-09-28",
+    );
+    const message = out.message as string;
+    expect(message).toContain("FIRST: IS A REPLY OWED AT ALL");
+    expect(message).toContain("Set decision to no_reply_owed");
+    expect(message).toContain("that is no_reply_owed, never escalate");
+    expect(out.systemPrompt as string).toContain("you send nothing and hand nothing over");
+    // The model decides; no keyword pre-filter exists anywhere in the flow.
+    const scripts = dag.nodes.filter((n) => n.type === "script").map((n) => String(n.config?.code));
+    // The prompt TEXT names these cases for the model; no script MATCHES on them.
+    expect(
+      scripts.some((c) => /(\.test\(|\.includes\(|\.match\()[^\n]*(interested|stop|error|thank|goodbye)/i.test(c)),
+    ).toBe(false);
+  });
+});
