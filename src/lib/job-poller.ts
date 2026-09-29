@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { isUnresolvableWindmillJobError, type WindmillClient } from "./windmill-client.js";
 import { closeRun } from "./runs-client.js";
+import { windmillJobState } from "./windmill-job-state.js";
 import { traceEvent } from "./trace-event.js";
 import { attributionContextToHeaders } from "./attribution-context.js";
 
@@ -171,8 +172,10 @@ export class JobPoller {
         try {
           const job = await this.windmillClient.getJob(run.windmillJobId);
 
-          if (!job.running) {
-            const success = job.success ?? false;
+          const jobState = windmillJobState(job);
+
+          if (jobState.state === "completed") {
+            const success = jobState.success;
             const newStatus = success ? "completed" : "failed";
 
             await this.db
@@ -213,7 +216,7 @@ export class JobPoller {
                 data: { windmillJobId: run.windmillJobId, workflowSlug: run.workflowSlug, status: newStatus },
               }, pollerHeaders).catch(() => {});
             }
-          } else if (run.status === "queued") {
+          } else if (jobState.state === "running" && run.status === "queued") {
             await this.db
               .update(table)
               .set({
