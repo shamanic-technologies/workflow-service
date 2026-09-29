@@ -145,7 +145,7 @@ vi.mock("../../src/db/index.js", () => {
 const mockRunFlow = vi.fn().mockResolvedValue("job-uuid-123");
 const mockGetJob = vi.fn().mockResolvedValue({
   id: "job-uuid-123",
-  running: false,
+  type: "CompletedJob",
   success: true,
   result: { output: "done" },
 });
@@ -1358,6 +1358,32 @@ describe("GET /workflow-runs/:id", () => {
     expect(res.body.result).toEqual({ output: "done" });
     expect(res.body.attributionContext).toEqual(attributionContext);
   });
+
+  it("keeps a run queued while its Windmill job is still waiting for a worker", async () => {
+    mockGetJob.mockResolvedValueOnce({ id: "job-uuid-waiting", type: "QueuedJob", running: false, canceled: false });
+    mockRuns.push({
+      id: RUN_1_ID,
+      workflowId: WF_ID,
+      orgId: "org-1",
+      userId: "user-1",
+      runId: "run-own-poll-q",
+      status: "queued",
+      windmillJobId: "job-uuid-waiting",
+      windmillWorkspace: "prod",
+      inputs: {},
+      result: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: new Date(),
+    });
+
+    const res = await request.get(`/workflow-runs/${RUN_1_ID}`).set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("queued");
+    expect(res.body.error).toBeNull();
+  });
 });
 
 describe("GET /workflow-runs/:id/debug", () => {
@@ -1378,7 +1404,7 @@ describe("GET /workflow-runs/:id/debug", () => {
     };
     mockGetJob.mockResolvedValueOnce({
       id: "job-uuid-789",
-      running: false,
+      type: "CompletedJob",
       success: true,
       result: { status: "completed" },
       flow_status: flowStatus,
@@ -1446,7 +1472,7 @@ describe("GET /workflow-runs/:id/debug", () => {
   it("returns null flowStatus when Windmill has no flow_status", async () => {
     mockGetJob.mockResolvedValueOnce({
       id: "job-uuid-simple",
-      running: false,
+      type: "CompletedJob",
       success: true,
       result: { output: "done" },
     });

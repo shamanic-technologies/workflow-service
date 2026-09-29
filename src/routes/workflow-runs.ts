@@ -8,6 +8,7 @@ import { requireApiKey, requireExecutionHeaders } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
 import { isAmbiguousWindmillDispatchError } from "../lib/windmill-client.js";
+import { windmillJobState } from "../lib/windmill-job-state.js";
 import { collectServiceEnvs } from "../lib/service-envs.js";
 import { createRun, closeRun } from "../lib/runs-client.js";
 import { ExecuteWorkflowSchema, ExecuteByNameSchema } from "../schemas.js";
@@ -517,8 +518,10 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
       try {
         const job = await pollClient.getJob(run.windmillJobId);
 
-        if (!job.running) {
-          const success = job.success ?? false;
+        const jobState = windmillJobState(job);
+
+        if (jobState.state === "completed") {
+          const success = jobState.success;
           const newStatus = success ? "completed" : "failed";
 
           const [updated] = await db
@@ -549,7 +552,7 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
 
           res.json(formatRun(updated));
           return;
-        } else if (run.status === "queued") {
+        } else if (jobState.state === "running" && run.status === "queued") {
           const [updated] = await db
             .update(workflowRuns)
             .set({ status: "running", startedAt: new Date() })
