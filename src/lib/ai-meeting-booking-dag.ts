@@ -50,8 +50,7 @@
  * the correct outcome rather than a degradation:
  *
  *  - The model says NO REPLY IS OWED. Their last message declined, asked us to
- *    stop, said it was sent in error, or closed the exchange (thanks, goodbye)
- *    without asking anything. Until this outcome existed the model had two exits,
+ *    stop, said it was sent in error, or said goodbye without asking anything. Until this outcome existed the model had two exits,
  *    "answer" and "escalate", and a refusal is neither — so it escalated, and the
  *    agency was told a prospect "asked something we cannot answer" about a
  *    message that asked nothing (run 84278834, 2026-09-28). Now the flow sends
@@ -76,6 +75,18 @@
  *    PERSON has answered the thread since the prospect last wrote. We stood
  *    down; the run ends clean, again recording no follow-up. Every reply this
  *    flow sends declares `sent_by: "automation"` so that gate can see it.
+ *
+ * ONE REPLY THAT ENDS THE CONVERSATION RATHER THAN MOVING IT. A prospect who
+ * writes that they booked, scheduled or moved the meeting is owed a short
+ * confirmation and nothing else: `decision: "confirm_booking"`. The model
+ * thanks them, confirms the time in their words if they gave one, and asks for
+ * nothing. It rides the SAME send as an answer (same takeover gate, same
+ * `sent_by`), and only after the send lands are their follow-ups STOPPED
+ * (reason `booking_confirmed`) instead of advanced — there is nothing left to
+ * follow up on. Before this outcome existed the prompt filed "thanks" under the
+ * goodbyes, so "Scheduled a call for Friday! Thank you" got silence
+ * (Doc Dinners, 2026-09-28). Whether a message confirms a booking is the
+ * model's judgement, like every other exit.
  *
  * The single stated degradation: if the booking page cannot be read, the reply
  * still goes out with the plain booking link and no slots, logged loudly.
@@ -552,9 +563,12 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     transcript || "(no messages on record)",
     "",
     "FIRST: IS A REPLY OWED AT ALL",
-    "Read their LAST message. Some messages need no answer from us: they declined or said they are not interested, asked us to stop writing, said their earlier message was sent in error, or closed the exchange (thanks, goodbye) without asking or proposing anything.",
+    "Read their LAST message. Some messages need no answer from us: they declined or said they are not interested, asked us to stop writing, said their earlier message was sent in error, or said goodbye without asking or proposing anything.",
     "Writing back to those, even to propose the meeting, is exactly what makes us look like a machine. Set decision to no_reply_owed and write nothing: nobody hears from us, nobody is alerted, and their follow-ups stop. If they write again later, they come back on their own.",
     "A message that asks something, raises a concern we could address, or leaves the door open (\\"not now, maybe after the summer\\") IS owed a reply.",
+    "",
+    "WHEN THEY TELL US THE MEETING IS BOOKED",
+    "If their last message says they booked, scheduled or moved the meeting, the conversation is done and they are owed one short confirmation. Set decision to confirm_booking and write one or two sentences: thank them, and confirm the day or time in their words if they gave one. Nothing else: no question, no pitch, no times, no link, no request for anything. Their follow-ups stop after it.",
     "",
     "WHAT YOU MUST DO WHEN A REPLY IS OWED",
     "1. ANSWER THE QUESTION THEY ASKED. Read their last message and reply to what is in it. A reply that ignores what they wrote is worse than no reply at all.",
@@ -589,6 +603,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You never invent availability, prices, names, or facts that are not in front of you.",
     "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
     "When their last message needs no answer — a refusal, a request to stop, a goodbye — you send nothing and hand nothing over.",
+    "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
   ].join(" ");
 
   return { message, systemPrompt, ladderNextDueAt, timezone };
@@ -614,7 +629,14 @@ export async function main(draft, ladderNextDueAt) {
   // letting an empty body reach the prospect.
   const replyHtml = draft?.json?.replyHtml;
   if (typeof replyHtml !== "string" || replyHtml.trim() === "") {
-    throw new Error("[ai-meeting-booking] the model said the question was answerable but returned no reply body; refusing to send an empty answer");
+    throw new Error("[ai-meeting-booking] the model chose to write (" + String(draft?.json?.decision) +
+      ") but returned no reply body; refusing to send an empty message");
+  }
+
+  // A booking confirmation ends the conversation: after it lands their
+  // follow-ups are stopped, not advanced, so there is no next date to resolve.
+  if (draft?.json?.decision === "confirm_booking") {
+    return { nextDueAt: null, source: "booking_confirmed" };
   }
 
   const proposed = draft?.json?.nextDueAt;
@@ -700,7 +722,9 @@ export interface AiMeetingBookingDagOptions {
  * It has THREE exits, not two. A prospect who declines, asks us to stop, or says
  * goodbye asked nothing, so neither "answer" nor "escalate" is true of them; with
  * two exits the model escalated those, alerting the agency about a question that
- * did not exist. `no_reply_owed` is that third exit.
+ * did not exist. `no_reply_owed` is that third exit. `confirm_booking` is the
+ * fourth: they told us the meeting is booked, so they get one short thank-you
+ * and their follow-ups stop.
  *
  * `question` is required on EVERY path, because it is what a human picking the
  * thread up actually needs, and `POST /orgs/replies/escalate` refuses an empty
@@ -713,11 +737,14 @@ export const REPLY_RESPONSE_SCHEMA = {
   properties: {
     decision: {
       type: "string",
-      enum: ["answer", "escalate", "no_reply_owed"],
+      enum: ["answer", "escalate", "no_reply_owed", "confirm_booking"],
       description:
         "no_reply_owed: their last message needs no answer at all — they declined, asked us to stop, " +
         "said it was sent in error, or closed the exchange without asking anything. Nothing is sent, " +
         "nobody is alerted, their follow-ups stop. " +
+        "confirm_booking: they told us they booked, scheduled or moved the meeting. Write one or two " +
+        "sentences thanking them and confirming the time if they gave one, asking for nothing; " +
+        "their follow-ups stop after it. " +
         "answer: you can answer what they wrote from the facts in front of you. " +
         "escalate: they asked a real question you cannot answer without inventing something — a price, " +
         "a spec, a reference, a commitment nobody here has made. A person takes the thread over.",
@@ -736,7 +763,7 @@ export const REPLY_RESPONSE_SCHEMA = {
       type: "string",
       description:
         "The answer the prospect reads, as HTML. No signature, no subject. " +
-        "Only when decision is answer: otherwise omit it, the prospect hears nothing from us.",
+        "Only when decision is answer or confirm_booking: otherwise omit it, the prospect hears nothing from us.",
     },
     nextDueAt: {
       type: "string",
@@ -750,6 +777,9 @@ export const REPLY_RESPONSE_SCHEMA = {
 
 /** The reason stored on the lead's follow-up schedule when no reply is owed. */
 export const NO_REPLY_OWED_REASON = "no_reply_owed";
+
+/** The reason stored on the lead's follow-up schedule once a booking is confirmed. */
+export const BOOKING_CONFIRMED_REASON = "booking_confirmed";
 
 /**
  * States, in the log, that this run sent nothing because no reply was owed, and
@@ -1046,6 +1076,31 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           "body.nextDueAt": "$ref:resolve-next-due.output.nextDueAt",
         },
       },
+      // They told us the meeting is booked and the confirmation has landed.
+      // Nothing is left to follow up on, so the schedule is stopped rather
+      // than advanced. Like every stop, not a tombstone.
+      {
+        id: "stop-followups-booked",
+        type: "http.call",
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/leads/{id}/followups",
+          body: { kind: "stopped", reason: BOOKING_CONFIRMED_REASON },
+        },
+        retries: 0,
+        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+      },
+      {
+        id: "end-run-booking-confirmed",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+      },
       {
         id: "end-run",
         type: "http.call",
@@ -1175,7 +1230,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       {
         from: "check-answerable",
         to: "resolve-next-due",
-        condition: "results['draft-reply']?.json?.decision == 'answer'",
+        condition:
+          "results['draft-reply']?.json?.decision == 'answer' || results['draft-reply']?.json?.decision == 'confirm_booking'",
       },
       {
         from: "check-answerable",
@@ -1202,7 +1258,14 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       {
         from: "check-sent",
         to: "record-followup",
-        condition: "results['classify-send']?.outcome == 'sent'",
+        condition:
+          "results['classify-send']?.outcome == 'sent' && results['draft-reply']?.json?.decision == 'answer'",
+      },
+      {
+        from: "check-sent",
+        to: "stop-followups-booked",
+        condition:
+          "results['classify-send']?.outcome == 'sent' && results['draft-reply']?.json?.decision == 'confirm_booking'",
       },
       {
         from: "check-sent",
@@ -1210,6 +1273,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         condition: "results['classify-send']?.outcome == 'human_took_over'",
       },
       { from: "record-followup", to: "end-run" },
+      { from: "stop-followups-booked", to: "end-run-booking-confirmed" },
     ],
     onError: "end-run-error",
   };

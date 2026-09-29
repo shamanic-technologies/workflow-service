@@ -190,6 +190,17 @@ export function needsNoReplyOwed(dag) {
   return !(dag?.nodes ?? []).some((n) => n?.id === "stop-followups");
 }
 
+/**
+ * True when a stored DAG cannot confirm a booking. A prospect who wrote
+ * "Scheduled a call for Friday! Thank you" was filed under the goodbyes and got
+ * silence (Doc Dinners, 2026-09-28). The current DAG has a fourth exit,
+ * `confirm_booking`, which sends one short thank-you and then stops the
+ * person's follow-ups. The repair is an upgrade carrying the current DAG.
+ */
+export function needsBookingConfirmation(dag) {
+  return !(dag?.nodes ?? []).some((n) => n?.id === "stop-followups-booked");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -215,7 +226,8 @@ async function main() {
         needsHumanHandover(w.dag) ||
         needsFunnelKeyRetired(w.dag) ||
         needsOfferEconomicsRead(w.dag) ||
-        needsNoReplyOwed(w.dag))
+        needsNoReplyOwed(w.dag) ||
+        needsBookingConfirmation(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
