@@ -15,6 +15,7 @@ import {
   REPLY_RESPONSE_SCHEMA,
   NAME_NO_REPLY_OWED_CODE,
   NO_REPLY_OWED_REASON,
+  BOOKING_CONFIRMED_REASON,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -790,7 +791,9 @@ describe("declaring the caller, and standing down when a human has taken over", 
     // Standing down is not a failed run.
     expect(byId.get("end-run-human-took-over")?.config?.body).toEqual({ success: true, stopCampaign: false });
 
-    const sent = dag.edges.find((e) => e.from === "check-sent" && e.condition?.includes("'sent'"));
+    const sent = dag.edges.find(
+      (e) => e.from === "check-sent" && e.condition?.includes("'sent'") && e.condition?.includes("== 'answer'"),
+    );
     expect(sent?.to).toBe("record-followup");
   });
 
@@ -897,7 +900,7 @@ describe("a last message that needs no reply at all", () => {
 
   it("is a third exit the model chooses, beside answer and escalate", () => {
     const decision = REPLY_RESPONSE_SCHEMA.properties.decision;
-    expect(decision.enum).toEqual(["answer", "escalate", "no_reply_owed"]);
+    expect(decision.enum).toEqual(["answer", "escalate", "no_reply_owed", "confirm_booking"]);
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("reason");
     const arm = dag.edges.find(
       (e) => e.from === "check-answerable" && e.condition === "results['draft-reply']?.json?.decision == 'no_reply_owed'",
@@ -977,5 +980,101 @@ describe("a last message that needs no reply at all", () => {
     expect(
       scripts.some((c) => /(\.test\(|\.includes\(|\.match\()[^\n]*(interested|stop|error|thank|goodbye)/i.test(c)),
     ).toBe(false);
+  });
+});
+
+
+describe("a prospect who tells us the meeting is booked", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const JOANIE = "Scheduled a call for Friday! Thank you";
+
+  async function composeFor(lastMessage: string) {
+    return loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+      { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
+      { leadDetail: { lead: { firstName: "Joanie", timezone: "America/New_York" } } },
+      {
+        conversation: {
+          messages: [
+            { direction: "outbound", text: "Would a short call help?" },
+            { direction: "inbound", text: lastMessage },
+          ],
+        },
+      },
+      null,
+      { timezone: "America/New_York", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
+      { offerId: "offer-1", name: "Doc Dinners", bookingUrl: null },
+      { brand: { name: "Doc Dinners" } },
+      "2026-09-28",
+    );
+  }
+
+  it("is a fourth exit the model chooses, with its own reply body", () => {
+    expect(REPLY_RESPONSE_SCHEMA.properties.decision.enum).toContain("confirm_booking");
+    expect(REPLY_RESPONSE_SCHEMA.properties.decision.description).toContain("confirm_booking:");
+    expect(REPLY_RESPONSE_SCHEMA.properties.replyHtml.description).toContain("confirm_booking");
+  });
+
+  it("puts a booking confirmation in front of the model, and no longer files a thank-you under goodbyes", async () => {
+    const out = await composeFor(JOANIE);
+    const message = out.message as string;
+    expect(message).toContain(JOANIE);
+    expect(message).toContain("WHEN THEY TELL US THE MEETING IS BOOKED");
+    expect(message).toContain("Set decision to confirm_booking");
+    expect(message).toContain("no question, no pitch");
+    // "thanks" was what filed "Scheduled a call! Thank you" under no_reply_owed.
+    expect(message).not.toContain("(thanks, goodbye)");
+    // Declines still get nothing.
+    expect(message).toContain("Set decision to no_reply_owed");
+    expect(out.systemPrompt as string).toContain("the meeting is booked");
+  });
+
+  it("rides the same send as an answer, then STOPS the follow-ups instead of advancing them", () => {
+    const toSend = dag.edges.find((e) => e.from === "check-answerable" && e.to === "resolve-next-due");
+    expect(toSend?.condition).toContain("decision == 'confirm_booking'");
+    expect(toSend?.condition).toContain("decision == 'answer'");
+    // Still exactly one arm per branch of the decision container.
+    expect(dag.edges.filter((e) => e.from === "check-answerable")).toHaveLength(3);
+
+    const booked = dag.edges.find((e) => e.from === "check-sent" && e.to === "stop-followups-booked");
+    expect(booked?.condition).toBe(
+      "results['classify-send']?.outcome == 'sent' && results['draft-reply']?.json?.decision == 'confirm_booking'",
+    );
+    const reached = descendants(dag, "stop-followups-booked");
+    expect(reached.has("record-followup")).toBe(false);
+    expect(reached.has("end-run-booking-confirmed")).toBe(true);
+    expect(byId.get("stop-followups-booked")?.config).toMatchObject({
+      service: "lead",
+      method: "POST",
+      path: "/orgs/leads/{id}/followups",
+      body: { kind: "stopped", reason: BOOKING_CONFIRMED_REASON },
+    });
+    expect(byId.get("end-run-booking-confirmed")?.config?.body).toEqual({ success: true, stopCampaign: false });
+    // A human takeover still records nothing on either path.
+    const takeover = dag.edges.find((e) => e.from === "check-sent" && e.condition?.includes("human_took_over"));
+    expect(takeover?.to).toBe("end-run-human-took-over");
+    expect(validateDAG(dag).valid).toBe(true);
+  });
+
+  it("emits the booked arm inside check-sent's top-level branchone", () => {
+    const flow = dagToOpenFlow(dag, `${FEATURE_SLUG}-test`);
+    type M = { id: string; value: { type: string; branches?: Array<{ expr: string; modules: M[] }> } };
+    const top = flow.value.modules as unknown as M[];
+    const check = top.find((m) => m.id === "check_sent");
+    expect(check?.value.type).toBe("branchone");
+    const booked = (check?.value.branches ?? []).find((b) => b.expr.includes("confirm_booking"));
+    expect(booked?.expr).toContain("results.draft_reply?.json?.decision");
+    expect(booked?.modules.map((m) => m.id)).toEqual(["stop_followups_booked", "end_run_booking_confirmed"]);
+  });
+
+  it("does not resolve a next due date for a confirmation, and still refuses an empty body", async () => {
+    const main = loadMain(RESOLVE_NEXT_DUE_CODE);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(
+      await main({ json: { decision: "confirm_booking", replyHtml: "<p>Thanks Joanie, see you Friday.</p>" } }, "2026-10-01T00:00:00.000Z"),
+    ).toEqual({ nextDueAt: null, source: "booking_confirmed" });
+    expect(err).not.toHaveBeenCalled();
+    await expect(main({ json: { decision: "confirm_booking" } }, "2026-10-01T00:00:00.000Z")).rejects.toThrow("no reply body");
+    err.mockRestore();
   });
 });
