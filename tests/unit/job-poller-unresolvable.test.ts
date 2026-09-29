@@ -142,7 +142,7 @@ describe("JobPoller: permanently unresolvable Windmill jobs", () => {
       .mockRejectedValueOnce(new Error("fetch failed"))
       .mockRejectedValueOnce(new WindmillApiError(503, "GET", "/jobs_u/get/job-3", "Service Unavailable", "503"))
       .mockRejectedValueOnce(new Error("fetch failed"))
-      .mockResolvedValue({ running: false, success: true, result: { ok: true } });
+      .mockResolvedValue({ type: "CompletedJob", success: true, result: { ok: true } });
     const poller = new JobPoller(mockDb, { getJob } as any, mockTable, 60_000);
     const poll = (poller as any).poll.bind(poller);
 
