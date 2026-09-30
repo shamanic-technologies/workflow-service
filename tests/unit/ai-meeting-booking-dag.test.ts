@@ -7,6 +7,8 @@ import {
   COMPOSE_REPLY_PROMPT_CODE,
   RESOLVE_NEXT_DUE_CODE,
   SLOT_CANDIDATES,
+  SLOTS_PER_DAY,
+  SLOT_LOOKAHEAD_DAYS,
   FEATURE_SLUG,
   PREDECESSOR_READ,
   PREDECESSOR_CAMPAIGN_REF,
@@ -379,18 +381,72 @@ describe("reading the booking page", () => {
 
   it("hands over at most the candidate count, so the model picks two from a real set", async () => {
     const many = {
-      days: [
-        {
-          spots: Array.from({ length: 40 }, (_, i) => ({
-            status: "available",
-            start_time: `2026-09-04T${String(8 + (i % 10)).padStart(2, "0")}:00:00Z`,
-          })),
-        },
-      ],
+      days: Array.from({ length: 40 }, (_, d) => ({
+        spots: Array.from({ length: 10 }, (_, i) => ({
+          status: "available",
+          start_time: new Date(Date.UTC(2026, 9, 1 + d, 8 + i)).toISOString().replace(".000Z", "Z"),
+        })),
+      })),
     };
     stubFetch((url) => ({ ok: true, body: url.includes("lookup") ? okLookup : many }));
     const out = await loadMain(readBookingSlotsCode())("https://calendly.com/a/b", "UTC");
     expect((out.slots as string[]).length).toBe(SLOT_CANDIDATES);
+  });
+
+  it("spreads the candidates across the days instead of clustering them on the first open day (Doc Dinners, 2026-09-28)", async () => {
+    // The shape that stranded a prospect who wrote "I can't till next week":
+    // a GoHighLevel calendar with a dozen open slots every weekday. Taken
+    // earliest-first, the first six were all tomorrow and next week was absent.
+    const days = ["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"];
+    const payload: Record<string, unknown> = { traceId: "t" };
+    for (const day of days) {
+      payload[day] = {
+        slots: Array.from({ length: 13 }, (_, i) => {
+          const minutes = 8 * 60 + i * 30;
+          return `${day}T${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}:00-05:00`;
+        }),
+      };
+    }
+    stubFetch((url) =>
+      url.includes("leadconnectorhq.com/calendars")
+        ? { ok: true, body: payload }
+        : { ok: true, text: ghlPage },
+    );
+    const out = await loadMain(readBookingSlotsCode())("https://book.acme.com/page", "America/Chicago");
+    const slots = out.slots as string[];
+
+    expect(out.degraded).toBe(false);
+    // Every open day is represented, next week included, a few times each.
+    const perDay = new Map<string, number>();
+    for (const s of slots) perDay.set(s.slice(0, 10), (perDay.get(s.slice(0, 10)) ?? 0) + 1);
+    expect([...perDay.keys()]).toEqual(days);
+    for (const n of perDay.values()) expect(n).toBe(SLOTS_PER_DAY);
+    // Spaced out over the day, not bunched at its start.
+    const oct6 = slots.filter((s) => s.startsWith("2026-10-06"));
+    expect(oct6[0]).toBe("2026-10-06T08:00:00-05:00");
+    expect(oct6[oct6.length - 1]).toBe("2026-10-06T14:00:00-05:00");
+  });
+
+  it("prefers working hours in the prospect's own timezone within a day", async () => {
+    const range = {
+      days: [
+        {
+          spots: ["01:00", "02:00", "03:00", "09:00", "13:00", "16:00", "22:00"].map((t) => ({
+            status: "available",
+            start_time: `2026-10-05T${t}:00-05:00`,
+          })),
+        },
+      ],
+    };
+    stubFetch((url) => ({ ok: true, body: url.includes("lookup") ? okLookup : range }));
+    const out = await loadMain(readBookingSlotsCode())("https://calendly.com/a/b", "America/Chicago");
+    expect(out.slots).toEqual(["2026-10-05T09:00:00-05:00", "2026-10-05T13:00:00-05:00", "2026-10-05T16:00:00-05:00"]);
+  });
+
+  it("reads far enough ahead that a later window can be served", () => {
+    expect(SLOT_LOOKAHEAD_DAYS).toBeGreaterThanOrEqual(21);
+    // GoHighLevel's free-slots call 404s on a range over ~31 days.
+    expect(SLOT_LOOKAHEAD_DAYS).toBeLessThanOrEqual(30);
   });
 
   it("degrades — never throws — when the brand has no booking link for this funnel", async () => {
@@ -1076,5 +1132,53 @@ describe("a prospect who tells us the meeting is booked", () => {
     expect(err).not.toHaveBeenCalled();
     await expect(main({ json: { decision: "confirm_booking" } }, "2026-10-01T00:00:00.000Z")).rejects.toThrow("no reply body");
     err.mockRestore();
+  });
+});
+
+describe("a prospect who tells us when they are free", () => {
+  const stellaThread = {
+    success: true,
+    conversation: {
+      transport: "instantly",
+      messageCount: 2,
+      messages: [
+        { direction: "outbound", at: "2026-09-28T13:00:00Z", text: "Would tomorrow at 8:00 or 8:30 AM work for a quick call?" },
+        { direction: "inbound", at: "2026-09-28T15:00:00Z", text: "Unfortunately I can't till next week" },
+      ],
+    },
+  };
+  const compose = (slots: string[]) =>
+    loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+      { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
+      { leadDetail: { lead: { firstName: "Stella", timezone: "America/Chicago" } } },
+      stellaThread,
+      null,
+      { timezone: "America/Chicago", degraded: false, bookingUrl: "https://web.docdinners.com/appointment-booking-page", slots },
+      { offerId: "offer-1", name: "Doc Dinners", bookingUrl: "https://web.docdinners.com/appointment-booking-page" },
+      { brand: { name: "Doc Dinners" } },
+      "2026-09-28",
+    );
+
+  it("labels every slot with its weekday so a stated window can be matched", async () => {
+    const out = await compose(["2026-10-05T08:00:00-05:00", "2026-10-08T15:30:00-05:00"]);
+    const message = out.message as string;
+    expect(message).toContain("- Monday 2026-10-05 08:00 (2026-10-05T08:00:00-05:00)");
+    expect(message).toContain("- Thursday 2026-10-08 15:30 (2026-10-08T15:30:00-05:00)");
+  });
+
+  it("tells the model a timing preference is answered with times inside it, never escalated", async () => {
+    const out = await compose(["2026-10-05T08:00:00-05:00"]);
+    const message = out.message as string;
+    expect(message).toContain("WHEN THEY SAY WHEN THEY ARE FREE");
+    expect(message).toContain("A timing preference is never a reason to escalate");
+    expect(message).toContain("both times MUST fall inside what they said");
+    // With nothing inside their window: the link, not an escalation.
+    expect(message).toContain("give them the link to pick one in their window");
+    expect(REPLY_RESPONSE_SCHEMA.properties.decision.description).toContain("When they can meet is never a reason to escalate");
+  });
+
+  it("no longer lists a date as something that cannot be answered", async () => {
+    const out = await compose([]);
+    expect(out.message as string).not.toContain("commitment to a date");
   });
 });
