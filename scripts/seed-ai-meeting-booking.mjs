@@ -201,6 +201,28 @@ export function needsBookingConfirmation(dag) {
   return !(dag?.nodes ?? []).some((n) => n?.id === "stop-followups-booked");
 }
 
+/**
+ * True when a stored DAG still hands the model only the EARLIEST slots, or has
+ * no rule for a prospect who says when they are free.
+ *
+ * The earliest six open slots of a busy calendar all sit on the next day, so a
+ * prospect who wrote "Unfortunately I can't till next week" was offered nothing
+ * next week, and the model escalated a scheduling preference as an unanswerable
+ * question (Doc Dinners, 2026-09-28). The current DAG spreads a few slots over
+ * every open day of a longer range and tells the model a timing preference is
+ * answered, never escalated. The repair is an upgrade carrying the current DAG.
+ */
+export function needsTimingPreference(dag) {
+  const nodes = dag?.nodes ?? [];
+  const slots = nodes.find((n) => n?.id === "booking-slots");
+  const compose = nodes.find((n) => n?.id === "compose-prompt");
+  if (!slots || !compose) return false;
+  return (
+    !String(slots.config?.code ?? "").includes("spreadAcrossDays") ||
+    !String(compose.config?.code ?? "").includes("WHEN THEY SAY WHEN THEY ARE FREE")
+  );
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -227,7 +249,8 @@ async function main() {
         needsFunnelKeyRetired(w.dag) ||
         needsOfferEconomicsRead(w.dag) ||
         needsNoReplyOwed(w.dag) ||
-        needsBookingConfirmation(w.dag))
+        needsBookingConfirmation(w.dag) ||
+        needsTimingPreference(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
