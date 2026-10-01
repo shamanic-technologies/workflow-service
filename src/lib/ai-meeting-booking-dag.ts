@@ -157,11 +157,30 @@ export async function main(predecessorRead, campaignId) {
 }
 `.trim();
 
-/** How far ahead of today the booking page is read for availability. */
-export const SLOT_LOOKAHEAD_DAYS = 14;
+/**
+ * How far ahead of today the booking page is read for availability.
+ *
+ * Measured 2026-09-30 against the four booking pages the fleet's offers carry
+ * (two Calendly, one Google appointment schedule, one GoHighLevel): all four
+ * answer a 28-day range, and GoHighLevel's free-slots call 404s at 35. A page
+ * whose own booking window is shorter simply returns fewer days.
+ */
+export const SLOT_LOOKAHEAD_DAYS = 28;
 
-/** How many candidate slots are handed to the model, which then picks two. */
-export const SLOT_CANDIDATES = 6;
+/**
+ * How many candidate slots are handed to the model per DAY, and in total. The
+ * model picks two.
+ *
+ * The candidates are SPREAD across the days of the range rather than taken
+ * earliest-first. Earliest-first is what stranded a prospect who wrote "I can't
+ * till next week": the first six open slots of that calendar were all on the
+ * next day, so the model had nothing next week to offer and escalated a
+ * scheduling preference as an unanswerable question (Doc Dinners, 2026-09-28).
+ * With a few slots on every open day, whatever window the prospect names can be
+ * served from the list.
+ */
+export const SLOTS_PER_DAY = 3;
+export const SLOT_CANDIDATES = 60;
 
 /**
  * Reads the offer's booking page and returns slots ALREADY
@@ -204,6 +223,7 @@ export const READ_BOOKING_SLOTS_TEMPLATE = `
 export async function main(bookingUrl, timezone) {
   const tz = typeof timezone === "string" && timezone.trim() ? timezone.trim() : "UTC";
   const days = LOOKAHEAD_DAYS;
+  const perDay = SLOTS_PER_DAY;
   const want = MAX_SLOTS;
 
   const degraded = (reason) => {
@@ -211,7 +231,43 @@ export async function main(bookingUrl, timezone) {
       " (bookingUrl=" + String(bookingUrl) + ", timezone=" + tz + ")");
     return { bookingUrl: bookingUrl ?? null, timezone: tz, slots: [], degraded: true, degradedReason: reason };
   };
-  const ok = (slots) => ({ bookingUrl, timezone: tz, slots, degraded: false, degradedReason: null });
+  /**
+   * Keeps a few slots on EVERY open day instead of the earliest ones overall,
+   * so a prospect who names a window ("next week", "after the 15th", "Thursday
+   * afternoon") finds times inside it. Every slot string is already in the
+   * prospect's own timezone with its offset, so its first ten characters are
+   * the prospect's local date and characters 11-12 their local hour. Within a
+   * day, slots in working hours (08:00-17:59 local) are preferred, and the kept
+   * ones are spaced out across the day rather than bunched at its start.
+   */
+  const spreadAcrossDays = (all) => {
+    const byDay = new Map();
+    for (const s of [...new Set(all)].sort()) {
+      const day = s.slice(0, 10);
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(s);
+    }
+    const kept = [];
+    for (const [, list] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+      const working = list.filter((s) => {
+        const hour = Number(s.slice(11, 13));
+        return hour >= 8 && hour < 18;
+      });
+      const pool = working.length > 0 ? working : list;
+      if (pool.length <= perDay) {
+        kept.push(...pool);
+      } else {
+        const picks = new Set();
+        for (let i = 0; i < perDay; i++) {
+          picks.add(Math.round((i * (pool.length - 1)) / (perDay - 1 || 1)));
+        }
+        for (const i of [...picks].sort((a, b) => a - b)) kept.push(pool[i]);
+      }
+      if (kept.length >= want) break;
+    }
+    return kept.slice(0, want);
+  };
+  const ok = (slots) => ({ bookingUrl, timezone: tz, slots: spreadAcrossDays(slots), degraded: false, degradedReason: null });
 
   const BROWSER_UA = "Mozilla/5.0 (compatible; distribute-ai-meeting-booking/1.0)";
   const GOOGLE_API_KEY = "AIzaSyA7GKm43l8WNxlLTjsldq9z9n80CL6KW4U";
@@ -294,9 +350,7 @@ export async function main(bookingUrl, timezone) {
       for (const spot of day?.spots ?? []) {
         if (spot?.status !== "available" || typeof spot?.start_time !== "string") continue;
         slots.push(spot.start_time);
-        if (slots.length >= want) break;
       }
-      if (slots.length >= want) break;
     }
 
     if (slots.length === 0) return degraded("no_available_spots_in_range");
@@ -382,7 +436,6 @@ export async function main(bookingUrl, timezone) {
         return degraded("google_timezone_conversion_failed: " + errText(err));
       }
       slots.push(iso);
-      if (slots.length >= want) break;
     }
 
     if (slots.length === 0) return degraded("google_no_slots_in_range");
@@ -452,9 +505,7 @@ export async function main(bookingUrl, timezone) {
       for (const slot of day.slots) {
         if (typeof slot !== "string" || !slot) continue;
         slots.push(slot);
-        if (slots.length >= want) break;
       }
-      if (slots.length >= want) break;
     }
 
     if (slots.length === 0) return degraded("gohighlevel_no_slots_in_range");
@@ -484,7 +535,7 @@ export async function main(bookingUrl, timezone) {
 `.trim();
 
 /**
- * The booking-slots script with its two bounds inlined.
+ * The booking-slots script with its three bounds inlined.
  *
  * They are inlined rather than passed through `inputMapping` because a Windmill
  * input transform carries the value it is given, and a DAG's inputMapping states
@@ -494,6 +545,7 @@ export async function main(bookingUrl, timezone) {
 export function readBookingSlotsCode(): string {
   return READ_BOOKING_SLOTS_TEMPLATE
     .replace("LOOKAHEAD_DAYS", String(SLOT_LOOKAHEAD_DAYS))
+    .replace("SLOTS_PER_DAY", String(SLOTS_PER_DAY))
     .replace("MAX_SLOTS", String(SLOT_CANDIDATES));
 }
 
@@ -537,13 +589,20 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const ladderDays = ladder[Math.min(followupCount, ladder.length - 1)];
   const ladderNextDueAt = new Date(Date.now() + ladderDays * 86400000).toISOString();
 
-  const slotLines = (booking?.slots ?? []).map((s) => "- " + s).join("\\n");
+  // Each slot is labelled with its weekday so the model can match what the
+  // prospect said ("next week", "Thursday afternoon") without doing calendar
+  // arithmetic. The date part is already the prospect's local date.
+  const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const slotLines = (booking?.slots ?? []).map((s) => {
+    const weekday = WEEKDAYS[new Date(String(s).slice(0, 10) + "T12:00:00Z").getUTCDay()];
+    return "- " + (weekday ? weekday + " " : "") + String(s).slice(0, 10) + " " + String(s).slice(11, 16) + " (" + s + ")";
+  }).join("\\n");
 
   const bookingSection = booking?.degraded
     ? (booking?.bookingUrl
         ? "The booking page could not be read (" + booking.degradedReason + "). Do NOT invent times. Give them the booking link and let them pick: " + booking.bookingUrl
         : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent times and do NOT invent a link. Ask them which times suit them and say you will send an invite.")
-    : "Availability, already converted to the prospect's own timezone (" + timezone + "). Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + "\\n" + slotLines;
+    : "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
 
   const message = [
     "Today is " + (currentDate ?? new Date().toISOString().split("T")[0]) + ".",
@@ -570,15 +629,18 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "WHEN THEY TELL US THE MEETING IS BOOKED",
     "If their last message says they booked, scheduled or moved the meeting, the conversation is done and they are owed one short confirmation. Set decision to confirm_booking and write one or two sentences: thank them, and confirm the day or time in their words if they gave one. Nothing else: no question, no pitch, no times, no link, no request for anything. Their follow-ups stop after it.",
     "",
+    "WHEN THEY SAY WHEN THEY ARE FREE",
+    "A message about WHEN they can meet (\\"I can't till next week\\", \\"after the 15th\\", \\"Thursday afternoon\\", \\"not until November\\") is a reply owed and one you can always answer: set decision to answer and offer times that fit what they said, from the availability below. If nothing there fits, give them the booking link and ask them to pick a time that suits them. A timing preference is never a reason to escalate.",
+    "",
     "WHAT YOU MUST DO WHEN A REPLY IS OWED",
     "1. ANSWER THE QUESTION THEY ASKED. Read their last message and reply to what is in it. A reply that ignores what they wrote is worse than no reply at all.",
     "2. Then propose the meeting.",
     "Set decision to answer.",
     "",
     "WHEN YOU CANNOT ANSWER",
-    "Everything you may state is above. If answering what they asked would mean inventing something that is not there — a price, a number of seats, a spec, a reference, a commitment to a date nobody here has made — then you cannot answer it.",
+    "Everything you may state is above. If answering what they asked would mean inventing something that is not there — a price, a number of seats, a spec, a reference, a commitment nobody here has made — then you cannot answer it.",
     "In that case set decision to escalate and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
-    "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate.",
+    "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate. When they can meet is not one either: that is answer.",
     "",
     "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
     "",
@@ -747,7 +809,8 @@ export const REPLY_RESPONSE_SCHEMA = {
         "their follow-ups stop after it. " +
         "answer: you can answer what they wrote from the facts in front of you. " +
         "escalate: they asked a real question you cannot answer without inventing something — a price, " +
-        "a spec, a reference, a commitment nobody here has made. A person takes the thread over.",
+        "a spec, a reference, a commitment nobody here has made. A person takes the thread over. " +
+        "When they can meet is never a reason to escalate: offer times that fit, or the booking link.",
     },
     question: {
       type: "string",
