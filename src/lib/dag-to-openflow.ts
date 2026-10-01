@@ -447,7 +447,10 @@ function buildForEachModule(
   const bodyNodes = orderedNodes.filter((n) => bodyNodeIds.has(n.id));
   const bodyModules: FlowModule[] = [];
   for (const bn of bodyNodes) {
-    const mod = nodeToModule(bn, dag, bodyAudienceRef, bodyOfferRef);
+    const mod = nodeToModule(
+      bn, dag, bodyAudienceRef, bodyOfferRef,
+      new Set([...bodyNodeIds].map((id) => id.replace(/-/g, "_"))),
+    );
     if (mod) bodyModules.push(mod);
   }
 
@@ -564,6 +567,107 @@ function getAudiencePropagationScope(dag: DAG): AudiencePropagationScope {
 }
 
 /**
+ * The content-generation variable a served lead's BUYING SIGNAL rides in.
+ *
+ * lead-service `POST /orgs/buffer/next` serves, beside `lead.data`, a nullable
+ * `lead.buyingSignal` ({ type, occurredOn, fact, source, sourceUrl }) when the
+ * lead came from a buying-signal audience (the company is hiring, the person
+ * just changed jobs, the company just raised). The email writer can only
+ * reference it if it reaches the `/generate` call, so every content-generation
+ * `/generate` DOWNSTREAM of that fetch receives it as
+ * `body.variables.leadBuyingSignal`, the whole object passed through.
+ *
+ * Added at CONVERSION time, like the campaign's offer, so every active flow
+ * carries it on the next boot sync with no DAG rewritten and no version cut. A
+ * lead with no signal resolves to `undefined` (never `""`, never a placeholder)
+ * and the key drops out of the JSON body: the request is byte-identical to
+ * before. Nothing here invents or defaults a signal.
+ */
+export const BUYING_SIGNAL_VARIABLE = "leadBuyingSignal";
+
+interface ServedLeadScope {
+  /** Module id of the single lead-service `/orgs/buffer/next` node, or null. */
+  leadModuleId: string | null;
+  /** Module ids that run strictly after it. */
+  descendants: Set<string>;
+}
+
+const servedLeadScopeCache = new WeakMap<DAG, ServedLeadScope>();
+
+function isServedLeadFetch(node: DAGNode): boolean {
+  return (
+    node.type === "http.call" &&
+    node.config?.service === "lead" &&
+    typeof node.config?.path === "string" &&
+    /\/orgs\/buffer\/next$/.test(node.config.path) &&
+    String(node.config?.method ?? "POST").toUpperCase() === "POST"
+  );
+}
+
+/**
+ * The served-lead fetch whose result a generation step may read. Exactly one is
+ * required — with several, which lead an email is about is not decidable here,
+ * so nothing is injected. A fetch that runs inside or after a for-each is left
+ * alone too: a loop body is an isolated subflow where outer `results.*` do not
+ * resolve (see AUDIENCE_ITER_KEY), and no active workflow has that shape.
+ */
+function getServedLeadScope(dag: DAG): ServedLeadScope {
+  const cached = servedLeadScopeCache.get(dag);
+  if (cached) return cached;
+
+  const fetches = dag.nodes.filter(isServedLeadFetch);
+  const loopReach = new Set<string>();
+  for (const n of dag.nodes) {
+    if (n.type !== "for-each") continue;
+    for (const id of descendantModuleIds(dag, n.id)) loopReach.add(id);
+  }
+
+  const lead = fetches.length === 1 ? fetches[0] : null;
+  const leadModuleId = lead ? lead.id.replace(/-/g, "_") : null;
+  const scope: ServedLeadScope =
+    lead && leadModuleId && !loopReach.has(leadModuleId)
+      ? { leadModuleId, descendants: descendantModuleIds(dag, lead.id) }
+      : { leadModuleId: null, descendants: new Set<string>() };
+
+  servedLeadScopeCache.set(dag, scope);
+  return scope;
+}
+
+/**
+ * True when the node's own DAG already decides what `body.variables` holds for
+ * the signal — an explicit mapping of it, a static value for it, or a mapping
+ * of the WHOLE body / variables object (which an added key would replace).
+ */
+function statesBuyingSignalAlready(
+  scriptConfig: Record<string, unknown>,
+  inputMapping?: Record<string, string>,
+): boolean {
+  if (inputMapping) {
+    if ("body" in inputMapping || "body.variables" in inputMapping) return true;
+    if (`body.variables.${BUYING_SIGNAL_VARIABLE}` in inputMapping) return true;
+  }
+  const body = scriptConfig.body;
+  if (!body || typeof body !== "object") return false;
+  const variables = (body as Record<string, unknown>).variables;
+  return (
+    !!variables &&
+    typeof variables === "object" &&
+    BUYING_SIGNAL_VARIABLE in (variables as Record<string, unknown>)
+  );
+}
+
+function callsContentGeneration(node: DAGNode): boolean {
+  const service = node.config?.service;
+  const path = node.config?.path;
+  return (
+    node.type === "http.call" &&
+    (service === "content-generation" || service === "content_generation") &&
+    typeof path === "string" &&
+    /\/generate$/.test(path)
+  );
+}
+
+/**
  * True when the node's own DAG already states the offer, by mapping or by a
  * static body field. An explicit statement always wins over the injection.
  */
@@ -602,6 +706,8 @@ function nodeToModule(
   dag: DAG,
   audienceRef: string | null,
   offerRef: string | null,
+  /** Module ids of the for-each body this node sits in; null outside a loop. */
+  loopBodyIds: Set<string> | null = null,
 ): FlowModule | null {
   const moduleId = node.id.replace(/-/g, "_");
 
@@ -710,6 +816,24 @@ function nodeToModule(
     callsOfferScopedEndpoint(node)
   ) {
     extraTransforms["body.offerId"] = { type: "javascript", expr: offerRef };
+  }
+
+  // Carry the served lead's buying signal to the email writer. See
+  // BUYING_SIGNAL_VARIABLE. `?? undefined` turns lead-service's `null` into an
+  // absent key, and this bypasses the `?? ""` that DAG-mapped variables get, so a
+  // lead with no signal sends exactly the body it sent before.
+  const servedLead = getServedLeadScope(dag);
+  if (
+    servedLead.leadModuleId &&
+    servedLead.descendants.has(moduleId) &&
+    (loopBodyIds === null || loopBodyIds.has(servedLead.leadModuleId)) &&
+    callsContentGeneration(node) &&
+    !statesBuyingSignalAlready(scriptConfig, resolvedInputMapping)
+  ) {
+    extraTransforms[`body.variables.${BUYING_SIGNAL_VARIABLE}`] = {
+      type: "javascript",
+      expr: `results.${servedLead.leadModuleId}?.lead?.buyingSignal ?? undefined`,
+    };
   }
 
   const inputTransforms = buildInputTransforms(
