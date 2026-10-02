@@ -275,6 +275,20 @@ export function needsDashBan(dag) {
   return !!ground && !String(ground.config?.code ?? "").includes("u2014");
 }
 
+/**
+ * True when a stored DAG cannot play the game of the outreach that opened a
+ * thread: it neither reads the playbook off the thread nor has the
+ * thank-and-stop exit an acquisition-questions prospect who already has the
+ * problem solved needs (owner, 2026-10-03). The repair is an upgrade carrying
+ * the current DAG.
+ */
+export function needsPlaybook(dag) {
+  const nodes = dag?.nodes ?? [];
+  const ground = nodes.find((n) => n?.id === "ground-draft");
+  if (!ground) return false;
+  return !String(ground.config?.code ?? "").includes("playbook") || !nodes.some((n) => n?.id === "stop-followups-closed");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -306,7 +320,8 @@ async function main() {
         needsAnswerFacts(w.dag) ||
         needsOwnedFacts(w.dag) ||
         needsIdentityStance(w.dag) ||
-        needsDashBan(w.dag))
+        needsDashBan(w.dag) ||
+        needsPlaybook(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
