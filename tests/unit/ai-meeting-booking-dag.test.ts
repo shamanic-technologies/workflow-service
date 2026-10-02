@@ -18,6 +18,12 @@ import {
   NAME_NO_REPLY_OWED_CODE,
   NO_REPLY_OWED_REASON,
   BOOKING_CONFIRMED_REASON,
+  COMPOSE_QUESTIONS_PROMPT_CODE,
+  QUESTIONS_RESPONSE_SCHEMA,
+  PLAN_LOOKUPS_CODE,
+  GATHER_FACTS_CODE,
+  GROUND_DRAFT_CODE,
+  OFFER_OVERVIEW_KEY,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -274,8 +280,14 @@ describe("ai-meeting-booking DAG", () => {
     expect(body.provider).toBe("google");
     expect(body.model).toBe("pro");
     expect(body.responseSchema).toBeTruthy();
-    // No provider SDK, no other LLM hop.
-    expect(dag.nodes.filter((n) => n.config?.service === "chat")).toHaveLength(1);
+    // No provider SDK. Exactly two LLM hops, both on chat-service /complete:
+    // listing the questions, then drafting. Never anthropic/haiku.
+    const chat = dag.nodes.filter((n) => n.config?.service === "chat");
+    expect(chat.map((n) => n.id).sort()).toEqual(["draft-reply", "list-questions"]);
+    for (const n of chat) {
+      expect(n.config).toMatchObject({ method: "POST", path: "/complete" });
+      expect((n.config?.body as Record<string, unknown>).model).not.toBe("haiku");
+    }
   });
 
   it("never calls the api gateway", () => {
@@ -886,7 +898,7 @@ describe("handing an unanswerable question to a human", () => {
     expect(answerable?.to).toBe("resolve-next-due");
     expect(cannot?.to).toBe("escalate-unanswerable");
     for (const e of dag.edges.filter((x) => x.from === "check-answerable")) {
-      expect(e.condition).toContain("results['draft-reply']?.json?.decision ==");
+      expect(e.condition).toContain("results['ground-draft']?.json?.decision ==");
     }
     // Nothing anywhere inspects the prospect's own text to decide.
     const scripts = dag.nodes.filter((n) => n.type === "script").map((n) => String(n.config?.code));
@@ -907,7 +919,7 @@ describe("handing an unanswerable question to a human", () => {
     expect(esc?.inputMapping).toEqual({
       "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
       "body.email": "$ref:claim-followup.output.followup.email",
-      "body.question": "$ref:draft-reply.output.json.question",
+      "body.question": "$ref:ground-draft.output.json.question",
     });
 
     const reached = descendants(dag, "escalate-unanswerable");
@@ -959,7 +971,7 @@ describe("a last message that needs no reply at all", () => {
     expect(decision.enum).toEqual(["answer", "escalate", "no_reply_owed", "confirm_booking"]);
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("reason");
     const arm = dag.edges.find(
-      (e) => e.from === "check-answerable" && e.condition === "results['draft-reply']?.json?.decision == 'no_reply_owed'",
+      (e) => e.from === "check-answerable" && e.condition === "results['ground-draft']?.json?.decision == 'no_reply_owed'",
     );
     expect(arm?.to).toBe("name-no-reply-owed");
     // Exactly one arm per decision.
@@ -1094,7 +1106,7 @@ describe("a prospect who tells us the meeting is booked", () => {
 
     const booked = dag.edges.find((e) => e.from === "check-sent" && e.to === "stop-followups-booked");
     expect(booked?.condition).toBe(
-      "results['classify-send']?.outcome == 'sent' && results['draft-reply']?.json?.decision == 'confirm_booking'",
+      "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'confirm_booking'",
     );
     const reached = descendants(dag, "stop-followups-booked");
     expect(reached.has("record-followup")).toBe(false);
@@ -1119,7 +1131,7 @@ describe("a prospect who tells us the meeting is booked", () => {
     const check = top.find((m) => m.id === "check_sent");
     expect(check?.value.type).toBe("branchone");
     const booked = (check?.value.branches ?? []).find((b) => b.expr.includes("confirm_booking"));
-    expect(booked?.expr).toContain("results.draft_reply?.json?.decision");
+    expect(booked?.expr).toContain("results.ground_draft?.json?.decision");
     expect(booked?.modules.map((m) => m.id)).toEqual(["stop_followups_booked", "end_run_booking_confirmed"]);
   });
 
@@ -1180,5 +1192,240 @@ describe("a prospect who tells us when they are free", () => {
   it("no longer lists a date as something that cannot be answered", async () => {
     const out = await compose([]);
     expect(out.message as string).not.toContain("commitment to a date");
+  });
+});
+
+
+describe("answering an information request from brand-service facts (Dr. Joe, Doc Dinners, 2026-10-01)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const quiet = () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  const conversation = {
+    conversation: {
+      messages: [
+        { direction: "outbound", text: "Would a hosted dinner for local chiropractors help you get referrals?" },
+        { direction: "inbound", text: "Send me more information on how it works." },
+      ],
+    },
+  };
+  const offer = { offerId: "offer-1", name: "Doctor referral dinners", bookingUrl: "https://calendly.com/a/b" };
+
+  it("runs the three fixed steps in order: list questions, read brand-service, draft, then the grounding guard", () => {
+    const order = [
+      "prior-generation", "compose-questions-prompt", "list-questions", "plan-lookups",
+      "offer-answers", "offer-user-fields", "brand-user-fields", "extract-answers", "gather-facts",
+      "compose-prompt", "draft-reply", "ground-draft", "check-answerable",
+    ];
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(dag.edges.some((e) => e.from === order[i] && e.to === order[i + 1])).toBe(true);
+    }
+    // No dynamic loop: no for-each, and nothing points back upstream.
+    expect(dag.nodes.some((n) => n.type === "for-each")).toBe(false);
+    expect(validateDAG(dag).valid).toBe(true);
+  });
+
+  it("lists the questions with the model on chat-service, never by a rule", async () => {
+    const node = byId.get("list-questions");
+    expect(node?.config).toMatchObject({ service: "chat", method: "POST", path: "/complete" });
+    expect((node?.config?.body as Record<string, unknown>).responseSchema).toBe(QUESTIONS_RESPONSE_SCHEMA);
+    const out = await loadMain(COMPOSE_QUESTIONS_PROMPT_CODE)(conversation, offer);
+    expect(out.message as string).toContain("Send me more information on how it works.");
+    expect(out.message as string).toContain("request for information");
+    expect(out.message as string).toContain("Do NOT list: when they can meet");
+  });
+
+  it("reads what the customer STATED, then extracts from the site in one call, naming brand and offer", () => {
+    expect(byId.get("offer-answers")?.config).toMatchObject({
+      service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers",
+    });
+    expect(byId.get("offer-user-fields")?.config?.path).toBe("/orgs/brands/{brandId}/offers/{offerId}/user-fields");
+    expect(byId.get("brand-user-fields")?.config?.path).toBe("/orgs/brands/{brandId}/user-fields");
+    const extract = byId.get("extract-answers");
+    expect(extract?.config).toMatchObject({
+      service: "brand", method: "POST", path: "/orgs/brands/extract-fields",
+      // extract returns "Unknown" when the site is silent; suggest would invent.
+      body: { mode: "extract" },
+    });
+    expect(extract?.inputMapping).toEqual({
+      "headers.x-brand-id": "$ref:claim-followup.output.followup.brandId",
+      "body.fields": "$ref:plan-lookups.output.fields",
+      "body.offerId": "$ref:campaign-detail.output.campaign.offerId",
+    });
+  });
+
+  it("asks the site one field per question, plus how the offer works", async () => {
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }] } }, offer);
+    expect(out.questions).toEqual([{ key: "q1", question: "How does it work?" }]);
+    const fields = out.fields as Array<{ key: string; description: string }>;
+    expect(fields.map((f) => f.key)).toEqual([OFFER_OVERVIEW_KEY, "q1"]);
+    expect(fields[1].description).toContain("How does it work?");
+    expect(fields[1].description).toContain("return Unknown");
+  });
+
+  it("refuses to draft when the question-listing step returned no list", async () => {
+    await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: {} }, offer)).rejects.toThrow(/no questions array/);
+  });
+
+  const plan = { questions: [{ key: "q1", question: "How does it work?" }, { key: "q2", question: "What does it cost?" }] };
+  const offerAnswers = {
+    stated: true,
+    answers: [{ question: "How does it work?", answer: "We host a dinner for 20 local doctors; you present for 15 minutes." }],
+  };
+  const offerFields = {
+    fields: {
+      services: { value: "Hosted referral dinners", provenance: "confirmed" },
+      dreamOutcome: { value: "A steady flow of referrals", provenance: "suggested" },
+      urgency: { value: null, provenance: "suggested" },
+    },
+  };
+  const brandFields = { fields: { services: { value: "Hosted referral dinners", provenance: "confirmed" } } };
+  const extracted = {
+    fields: {
+      [OFFER_OVERVIEW_KEY]: { value: "Doc Dinners organises dinners where doctors meet referral partners." },
+      q1: { value: "Dinners are held monthly in your city." },
+      q2: { value: "Unknown" },
+    },
+  };
+
+  it("tags every fact with its provenance, and drops what the site does not say", async () => {
+    quiet();
+    const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields, extracted);
+    expect(facts.exact).toEqual([
+      { source: "offer-answers", label: "How does it work?", value: "We host a dinner for 20 local doctors; you present for 15 minutes." },
+      { source: "offer-user-fields", label: "services", value: "Hosted referral dinners" },
+    ]);
+    const interpreted = facts.interpreted as Array<Record<string, unknown>>;
+    expect(interpreted).toContainEqual({ source: "site-prefill", label: "dreamOutcome", value: "A steady flow of referrals" });
+    expect(interpreted).toContainEqual({ source: "site-extraction", label: "how the offer works", value: "Doc Dinners organises dinners where doctors meet referral partners." });
+    expect(interpreted).toContainEqual({ source: "site-extraction", label: "How does it work?", value: "Dinners are held monthly in your city.", questionKey: "q1" });
+    // "Unknown" is a missing fact, never a fact.
+    expect(JSON.stringify(facts)).not.toContain("Unknown");
+    expect(facts.questions).toEqual([
+      { key: "q1", question: "How does it work?", siteAnswer: "Dinners are held monthly in your city." },
+      { key: "q2", question: "What does it cost?", siteAnswer: null },
+    ]);
+    // The provenance is in the run's logs, so a person can audit why a fact was said.
+    expect(String((console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0])).toContain("exact = stated by the customer");
+  });
+
+  const compose = (facts: unknown, lead: Record<string, unknown> = { firstName: "Joe", timezone: "America/Chicago" }) =>
+    loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+      { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
+      { leadDetail: { lead } },
+      conversation,
+      null,
+      { timezone: "America/Chicago", degraded: false, bookingUrl: "https://calendly.com/a/b", slots: ["2026-10-06T10:00:00-05:00"] },
+      offer,
+      { brand: { name: "Doc Dinners" } },
+      "2026-10-01",
+      facts,
+    );
+
+  it("puts the customer's stated facts in front of the model as EXACT, and site reads as INTERPRETED", async () => {
+    quiet();
+    const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields, extracted);
+    const message = (await compose(facts)).message as string;
+    expect(message).toContain("- q1: How does it work?");
+    expect(message).toContain("EXACT FACTS");
+    expect(message).toContain("[offer-answers] How does it work?: We host a dinner for 20 local doctors; you present for 15 minutes.");
+    expect(message).toContain("INTERPRETED FACTS");
+    expect(message).toContain("[site-extraction] how the offer works: Doc Dinners organises dinners");
+    expect(message).toContain("phrase them with care");
+    expect(message).toContain("set decision to escalate and put exactly the unanswered question(s)");
+    // Booking behaviour is untouched.
+    expect(message).toContain("EXACTLY TWO");
+  });
+
+  it("leaves the prompt without a facts section when they asked nothing", async () => {
+    const message = (await compose({ questions: [], exact: [], interpreted: [] })).message as string;
+    expect(message).not.toContain("WHAT THEY ASKED");
+    expect(message).not.toContain("EXACT FACTS");
+  });
+
+  it("hands the model the whole person and company record, omitting what is absent", async () => {
+    const message = (await compose({ questions: [], exact: [], interpreted: [] }, {
+      firstName: "Joe", lastName: "Smith", currentTitle: "Owner", headline: "Chiropractor, Chiro Health Spa",
+      seniority: "owner", departments: ["medical"], city: "Austin", state: "Texas", country: "United States",
+      timezone: "America/Chicago", linkedinUrl: null, functions: [],
+      employmentHistory: [{ title: "Associate", organizationName: "Spine Co", startDate: "2010-01-01", endDate: "2014-01-01", current: false }],
+      organization: { name: "Chiro Health Spa", industry: "health, wellness & fitness", estimatedNumEmployees: 8, city: "Austin", shortDescription: "Chiropractic clinic", foundedYear: null, keywords: [] },
+    })).message as string;
+    expect(message).toContain("Name: Joe Smith");
+    expect(message).toContain("Headline: Chiropractor, Chiro Health Spa");
+    expect(message).toContain("Based in: Austin, Texas, United States");
+    expect(message).toContain("Earlier roles: Associate at Spine Co (2010-01-01 to 2014-01-01)");
+    expect(message).toContain("THEIR COMPANY");
+    expect(message).toContain("Employees: 8");
+    expect(message).toContain("About: Chiropractic clinic");
+    // Absent fields are omitted, never blank labels.
+    expect(message).not.toMatch(/^(LinkedIn|Functions|Founded|Keywords|Funding):\s*$/m);
+    expect(message).not.toContain("LinkedIn:");
+    expect(message).not.toContain("Founded:");
+  });
+
+  it("requires the draft to say where each answer came from", () => {
+    expect(REPLY_RESPONSE_SCHEMA.required).toContain("answers");
+    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "interpreted", "booking", "none"]);
+  });
+
+  const factsWithBoth = {
+    questions: plan.questions.map((q) => ({ ...q, siteAnswer: null })),
+    exact: [{ source: "offer-answers", label: "How does it work?", value: "..." }],
+    interpreted: [],
+  };
+
+  it("lets an answer through when every question has a source that holds facts", async () => {
+    quiet();
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Hi</p>", answers: [{ key: "q1", source: "exact" }, { key: "q2", source: "exact" }] } };
+    const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
+    expect(out.overridden).toBe(false);
+    expect(out.json).toEqual(draft.json);
+  });
+
+  it("escalates with the precise unanswered question when no fact covers it — nothing is sent", async () => {
+    quiet();
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>It costs $99</p>", answers: [{ key: "q1", source: "exact" }, { key: "q2", source: "none" }] } };
+    const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
+    expect(out.overridden).toBe(true);
+    const json = out.json as Record<string, unknown>;
+    expect(json.decision).toBe("escalate");
+    expect(json.question).toBe("What does it cost?");
+    expect(json.replyHtml).toBeUndefined();
+  });
+
+  it("treats a question the draft did not account for, or a source that holds nothing, as unanswered", async () => {
+    quiet();
+    // q2 missing; q1 claims `interpreted` while no site fact exists.
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>x</p>", answers: [{ key: "q1", source: "interpreted" }] } };
+    const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
+    expect((out.json as Record<string, unknown>).decision).toBe("escalate");
+    expect((out.json as Record<string, unknown>).question).toBe("How does it work? / What does it cost?");
+  });
+
+  it("leaves every other decision untouched", async () => {
+    quiet();
+    for (const decision of ["escalate", "no_reply_owed", "confirm_booking"]) {
+      const draft = { json: { decision, question: "q", reason: "r", answers: [] } };
+      const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
+      expect(out.json).toEqual(draft.json);
+    }
+  });
+
+  it("routes the grounded decision, not the raw draft, to the send and the escalation", () => {
+    expect(byId.get("escalate-unanswerable")?.inputMapping?.["body.question"]).toBe("$ref:ground-draft.output.json.question");
+    expect(byId.get("send-reply")?.inputMapping?.["body.body_html"]).toBe("$ref:ground-draft.output.json.replyHtml");
+    expect(byId.get("resolve-next-due")?.inputMapping?.draft).toBe("$ref:ground-draft.output");
+    for (const e of dag.edges.filter((x) => x.condition)) {
+      expect(e.condition).not.toContain("draft-reply");
+    }
+    const flow = dagToOpenFlow(dag, `${FEATURE_SLUG}-test`);
+    const top = flow.value.modules.map((m) => m.id);
+    expect(top).toContain("check_answerable");
+    expect(top).toContain("check_sent");
   });
 });

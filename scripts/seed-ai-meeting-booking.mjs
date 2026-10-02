@@ -223,6 +223,19 @@ export function needsTimingPreference(dag) {
   );
 }
 
+/**
+ * True when a stored DAG still drafts from nothing but the brand and offer
+ * NAMES. A prospect who wrote "Send me more information on how it works"
+ * (Doc Dinners, 2026-10-01) could only be answered by paraphrasing our own
+ * emails, inventing, or escalating. The current DAG lists their questions,
+ * reads brand-service for what the customer stated and what the site says,
+ * drafts only from that, and escalates any question no fact covers. The repair
+ * is an upgrade carrying the current DAG.
+ */
+export function needsAnswerFacts(dag) {
+  return !(dag?.nodes ?? []).some((n) => n?.id === "ground-draft");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -250,7 +263,8 @@ async function main() {
         needsOfferEconomicsRead(w.dag) ||
         needsNoReplyOwed(w.dag) ||
         needsBookingConfirmation(w.dag) ||
-        needsTimingPreference(w.dag))
+        needsTimingPreference(w.dag) ||
+        needsAnswerFacts(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
