@@ -236,6 +236,19 @@ export function needsAnswerFacts(dag) {
   return !(dag?.nodes ?? []).some((n) => n?.id === "ground-draft");
 }
 
+/**
+ * True when a stored DAG still licenses hedged, source-attributed answers
+ * ("as far as I can see", "our site describes it as") and files an operator
+ * PLACEHOLDER as an exact fact (Dr. Joe, Doc Dinners, 2026-10-02). The current
+ * DAG speaks as the team that owns the offer, makes the draft cite fact ids,
+ * and withholds placeholders so their question escalates. The repair is an
+ * upgrade carrying the current DAG.
+ */
+export function needsOwnedFacts(dag) {
+  const gather = (dag?.nodes ?? []).find((n) => n?.id === "gather-facts");
+  return !!gather && !String(gather.config?.code ?? "").includes("withheld");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -264,7 +277,8 @@ async function main() {
         needsNoReplyOwed(w.dag) ||
         needsBookingConfirmation(w.dag) ||
         needsTimingPreference(w.dag) ||
-        needsAnswerFacts(w.dag))
+        needsAnswerFacts(w.dag) ||
+        needsOwnedFacts(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
