@@ -88,6 +88,18 @@
  * (Doc Dinners, 2026-09-28). Whether a message confirms a booking is the
  * model's judgement, like every other exit.
  *
+ * AN ANSWER IS BUILT FROM FACTS, IN THREE FIXED STEPS — never a tool loop.
+ * (1) The model lists what their last message asks (`list-questions`). (2)
+ * brand-service is read once for the answers: what the CUSTOMER stated (offer
+ * answers, confirmed offer and brand user-fields) is EXACT; what extract-fields
+ * reads off the brand's site (one field per question, plus how the offer works)
+ * is INTERPRETED. `gather-facts` tags and logs every fact with that provenance.
+ * (3) The draft answers only from those facts and names, per question, the
+ * source it used; `ground-draft` turns any answer that leans on no fact into an
+ * escalation naming exactly the unanswered question(s), so the client is asked
+ * rather than the prospect told something invented. Everything downstream reads
+ * `ground-draft`, never the raw draft.
+ *
  * The single stated degradation: if the booking page cannot be read, the reply
  * still goes out with the plain booking link and no slots, logged loudly.
  * Everything else fails loud and lands on the error branch — including every
@@ -550,6 +562,233 @@ export function readBookingSlotsCode(): string {
 }
 
 /**
+ * STEP 1 OF ANSWERING: list what the prospect asked, before anything is looked up.
+ *
+ * The owner's design is a FIXED three-step workflow, never a tool loop: (1) the
+ * model reads their last message and lists each question as a short item,
+ * (2) brand-service is read for the answers in one pass, (3) the reply is drafted
+ * with only what was found. This script builds the message for step 1. Which
+ * sentences are questions is the model's reading — no keyword list decides it.
+ *
+ * Timing ("can we talk Thursday?") is deliberately NOT listed: the booking
+ * section already answers it, and a scheduling preference must never become an
+ * "unanswered question" that escalates.
+ */
+export const COMPOSE_QUESTIONS_PROMPT_CODE = `
+export async function main(conversation, offer) {
+  const messages = conversation?.conversation?.messages ?? [];
+  const transcript = messages.map((m) => {
+    const who = m?.direction === "inbound" ? "PROSPECT" : "US";
+    return who + ":\\n" + String(m?.text ?? "").trim();
+  }).join("\\n\\n---\\n\\n");
+
+  const message = [
+    "Below is an email thread between us and a prospect" + (offer?.name ? " about \\"" + offer.name + "\\"" : "") + ".",
+    "",
+    transcript || "(no messages on record)",
+    "",
+    "Read the prospect's LAST message only. List every question they ask, and every request for information they make about what we sell",
+    "(\\"send me more information on how it works\\" is a request for information: list it as \\"How does it work?\\").",
+    "Write each as one short question, close to their own words. One item per distinct thing they want to know.",
+    "Do NOT list: when they can meet or any scheduling, a refusal, a request to stop, a thank-you, a goodbye, or a statement that asks nothing.",
+    "If they ask nothing, return an empty list.",
+  ].join("\\n");
+
+  const systemPrompt = "You read one email and list the questions in it. You never answer them and you never invent one.";
+  return { message, systemPrompt };
+}
+`.trim();
+
+/** What the step-1 model returns: the questions, nothing else. */
+export const QUESTIONS_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    questions: {
+      type: "array",
+      description: "Each question or request for information in their last message, as one short question. Empty when they ask nothing.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          question: { type: "string", description: "One short question, close to their own words." },
+        },
+        required: ["question"],
+      },
+    },
+  },
+  required: ["questions"],
+} as const;
+
+/**
+ * The brand-service extraction key for "how the offer works", read on every
+ * run. It is cached by brand-service for 30 days per brand, so it costs a
+ * scrape once a month, and it is what an "how does it work?" request needs.
+ * It also keeps `fields` non-empty when the prospect asked nothing, so the
+ * extraction call needs no conditional branch of its own.
+ */
+export const OFFER_OVERVIEW_KEY = "offerHowItWorks";
+
+/**
+ * Turns the listed questions into ONE extract-fields request: the overview,
+ * plus one field per question whose description IS the question. brand-service
+ * then reads the brand's own site for each. `mode: "extract"` is stated in the
+ * node config and must stay: it returns "Unknown" when the site is silent,
+ * where `suggest` would WRITE a plausible answer — an invented fact.
+ */
+export const PLAN_LOOKUPS_CODE = `
+export async function main(listed, offer) {
+  const raw = listed?.json?.questions;
+  if (!Array.isArray(raw)) {
+    throw new Error("[ai-meeting-booking] the question-listing step returned no questions array; refusing to draft without knowing what they asked");
+  }
+  const questions = raw
+    .map((q) => String(q?.question ?? "").trim())
+    .filter((q) => q.length > 0)
+    .slice(0, 10)
+    .map((question, i) => ({ key: "q" + (i + 1), question }));
+
+  const about = offer?.name ? "\\"" + offer.name + "\\"" : "what the brand sells";
+  const fields = [
+    {
+      key: "OVERVIEW_KEY",
+      description: "How " + about + " works, as the brand's own website describes it: what the customer gets, the steps, who it is for. " +
+        "Use only what the site says. If the site does not describe it, return Unknown.",
+    },
+    ...questions.map((q) => ({
+      key: q.key,
+      description: "The answer the brand's own website gives to this question a prospect asked about " + about + ": \\"" + q.question + "\\". " +
+        "Use only what the site says, as close to its wording as possible. If the site does not answer it, return Unknown.",
+    })),
+  ];
+  return { questions, fields };
+}
+`.trim().replace("OVERVIEW_KEY", OFFER_OVERVIEW_KEY);
+
+/**
+ * STEP 2's assembly: every fact brand-service holds that could answer them,
+ * each tagged with its PROVENANCE, so a person auditing the run can see why a
+ * fact was said.
+ *
+ *  - `exact` — what the CUSTOMER stated: the offer's answers (question/answer
+ *    pairs), and the offer's and brand's user-fields whose provenance is
+ *    `confirmed`. The model may state these as fact.
+ *  - `interpreted` — what was READ OFF the brand's site: the extraction for each
+ *    question and for the overview, and user-fields still `suggested` (an
+ *    auto-extract prefill nobody confirmed). The model must phrase these
+ *    cautiously.
+ *
+ * Empty values ("Unknown", "", [], null) are dropped, never shown as a blank:
+ * "the site says nothing" is a missing fact, not a fact.
+ */
+export const GATHER_FACTS_CODE = `
+export async function main(plan, offerAnswers, offerFields, brandFields, extracted) {
+  const isEmpty = (v) => {
+    if (v === null || v === undefined) return true;
+    if (typeof v === "string") return v.trim() === "" || /^unknown$/i.test(v.trim());
+    if (Array.isArray(v)) return v.length === 0 || v.every(isEmpty);
+    if (typeof v === "object") return Object.keys(v).length === 0;
+    return false;
+  };
+  const render = (v) => {
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return v.filter((x) => !isEmpty(x)).map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("; ");
+    return JSON.stringify(v);
+  };
+
+  const exact = [];
+  const interpreted = [];
+
+  for (const a of offerAnswers?.answers ?? []) {
+    if (isEmpty(a?.question) || isEmpty(a?.answer)) continue;
+    exact.push({ source: "offer-answers", label: String(a.question).trim(), value: String(a.answer).trim() });
+  }
+
+  const seenConfirmed = new Set();
+  for (const [scope, read] of [["offer-user-fields", offerFields], ["brand-user-fields", brandFields]]) {
+    for (const [key, field] of Object.entries(read?.fields ?? {})) {
+      if (isEmpty(field?.value)) continue;
+      const value = render(field.value);
+      if (field?.provenance === "confirmed") {
+        if (seenConfirmed.has(key + "::" + value)) continue;
+        seenConfirmed.add(key + "::" + value);
+        exact.push({ source: scope, label: key, value });
+      } else if (scope === "offer-user-fields") {
+        // The suggested prefill is brand-wide and identical on both reads;
+        // listing it once is enough.
+        interpreted.push({ source: "site-prefill", label: key, value });
+      }
+    }
+  }
+
+  const extractedFields = extracted?.fields ?? {};
+  const overview = extractedFields["OVERVIEW_KEY"]?.value;
+  if (!isEmpty(overview)) {
+    interpreted.push({ source: "site-extraction", label: "how the offer works", value: render(overview) });
+  }
+
+  const questions = (plan?.questions ?? []).map((q) => {
+    const v = extractedFields[q.key]?.value;
+    const siteAnswer = isEmpty(v) ? null : render(v);
+    if (siteAnswer) interpreted.push({ source: "site-extraction", label: q.question, value: siteAnswer, questionKey: q.key });
+    return { key: q.key, question: q.question, siteAnswer };
+  });
+
+  const facts = { questions, exact, interpreted };
+  console.log("[ai-meeting-booking] facts gathered for the reply (provenance: exact = stated by the customer, interpreted = read off the site): " + JSON.stringify(facts));
+  return facts;
+}
+`.trim().replace("OVERVIEW_KEY", OFFER_OVERVIEW_KEY);
+
+/**
+ * STEP 3's guard: a question the facts do not answer is NEVER answered.
+ *
+ * The draft states, per listed question, where its answer came from
+ * (`exact` | `interpreted` | `booking` | `none`). This script holds the model to
+ * it with no reading of anyone's text: a question marked `none`, a question the
+ * draft did not account for, or a claim of a source that holds nothing at all
+ * (`exact` with no stated facts, `interpreted` with no site facts) turns an
+ * `answer` into an `escalate` naming exactly those questions, so the client is
+ * asked rather than the prospect being told something invented. Every other
+ * decision passes through untouched. Its output keeps the draft's `{ json }`
+ * shape, so every node downstream reads it exactly as it read the draft.
+ */
+export const GROUND_DRAFT_CODE = `
+export async function main(draft, facts) {
+  const json = { ...(draft?.json ?? {}) };
+  const listed = facts?.questions ?? [];
+  const hasExact = (facts?.exact ?? []).length > 0;
+  const hasInterpreted = (facts?.interpreted ?? []).length > 0;
+  const declared = new Map((Array.isArray(json.answers) ? json.answers : []).map((a) => [String(a?.key), String(a?.source)]));
+
+  const audit = listed.map((q) => {
+    let source = declared.get(q.key) ?? "none";
+    if (source === "exact" && !hasExact) source = "none";
+    if (source === "interpreted" && !hasInterpreted) source = "none";
+    if (!["exact", "interpreted", "booking"].includes(source)) source = "none";
+    return { key: q.key, question: q.question, source };
+  });
+  const unanswered = audit.filter((a) => a.source === "none");
+
+  if (json.decision === "answer" && unanswered.length > 0) {
+    const asked = unanswered.map((a) => a.question).join(" / ");
+    console.error("[ai-meeting-booking] the draft would answer questions no fact covers (" + asked +
+      "); nothing is sent and the thread is escalated with those questions");
+    const grounded = {
+      decision: "escalate",
+      question: asked,
+      reason: "No fact in brand-service answers: " + asked,
+      answers: json.answers ?? [],
+    };
+    return { json: grounded, overridden: true, audit };
+  }
+
+  console.log("[ai-meeting-booking] grounding audit (decision=" + String(json.decision) + "): " + JSON.stringify(audit));
+  return { json, overridden: false, audit };
+}
+`.trim();
+
+/**
  * Builds the single string the model is asked to answer.
  *
  * chat-service `/complete` takes one flat `message`, so the interpolation has to
@@ -563,9 +802,78 @@ export function readBookingSlotsCode(): string {
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   const timezone = booking?.timezone ?? "UTC";
+
+  // The whole person and company record, one line per field that HOLDS
+  // something. An absent field is omitted, never printed as a blank label.
+  const present = (v) => {
+    if (v === null || v === undefined) return false;
+    if (typeof v === "string") return v.trim() !== "";
+    if (Array.isArray(v)) return v.some(present);
+    return true;
+  };
+  const show = (v) => (Array.isArray(v) ? v.filter(present).slice(0, 15).join(", ") : String(v).trim());
+  const line = (label, v) => (present(v) ? label + ": " + show(v) : null);
+  const place = (o) => [o?.city, o?.state, o?.country].filter(present).join(", ");
+  const org = person.organization ?? {};
+  const pastRoles = (person.employmentHistory ?? [])
+    .filter((e) => e && e.current !== true && present(e.title))
+    .slice(0, 5)
+    .map((e) => e.title + (present(e.organizationName) ? " at " + e.organizationName : "") +
+      (present(e.startDate) || present(e.endDate) ? " (" + (e.startDate ?? "?") + " to " + (e.endDate ?? "?") + ")" : ""));
+  const personLines = [
+    line("Name", [person.firstName, person.lastName].filter(present).join(" ")),
+    line("Title", person.currentTitle),
+    line("Headline", person.headline),
+    line("Seniority", person.seniority),
+    line("Departments", person.departments),
+    line("Functions", person.functions),
+    line("Based in", place(person)),
+    line("Timezone", timezone),
+    line("Languages", person.businessLanguages),
+    line("Earlier roles", pastRoles),
+    line("LinkedIn", person.linkedinUrl),
+  ].filter(Boolean);
+  const companyLines = [
+    line("Company", org.name),
+    line("Website", org.websiteUrl ?? org.primaryDomain),
+    line("Industry", org.industry),
+    line("Other industries", org.industries),
+    line("About", org.shortDescription ?? org.seoDescription),
+    line("Employees", org.estimatedNumEmployees),
+    line("Annual revenue (USD)", org.annualRevenue),
+    line("Founded", org.foundedYear),
+    line("Headquarters", place(org)),
+    line("Retail locations", org.retailLocationCount),
+    line("Funding", [org.latestFundingStage, org.totalFundingPrinted].filter(present).join(", ")),
+    line("Publicly traded", org.publiclyTradedSymbol),
+    line("Technologies", org.technologyNames),
+    line("Keywords", org.keywords),
+  ].filter(Boolean);
+
+  // What brand-service holds that could answer them, split by provenance.
+  const asked = facts?.questions ?? [];
+  const exactFacts = facts?.exact ?? [];
+  const interpretedFacts = facts?.interpreted ?? [];
+  const factLine = (f) => "- [" + f.source + "] " + f.label + ": " + f.value;
+  const factsSection = asked.length === 0 ? [] : [
+    "WHAT THEY ASKED (listed from their last message)",
+    ...asked.map((q) => "- " + q.key + ": " + q.question),
+    "",
+    "EXACT FACTS: what our client stated themselves. You may state these as fact.",
+    exactFacts.length ? exactFacts.map(factLine).join("\\n") : "(none stated)",
+    "",
+    "INTERPRETED FACTS: read off our client's website by a machine. Use them, but phrase them with care (\\"as far as I can see\\", \\"our site describes it as\\"), never as a promise, a price commitment or a guarantee.",
+    interpretedFacts.length ? interpretedFacts.map(factLine).join("\\n") : "(nothing found)",
+    "",
+    "HOW TO ANSWER WHAT THEY ASKED",
+    "Answer each listed question ONLY from the facts above (or, for when to meet, from the availability under BOOKING). Do not add anything they do not say.",
+    "For EVERY listed question, return it in answers with its key and the source you answered it from: exact, interpreted, booking, or none.",
+    "If even ONE listed question has no answer in the facts above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets a real answer instead of a guess.",
+    "",
+  ];
 
   const messages = conversation?.conversation?.messages ?? [];
   const transcript = messages.map((m) => {
@@ -610,17 +918,16 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You are answering one prospect who replied to " + (brand?.brand?.name ?? "our client") + "'s outreach and showed interest.",
     "",
     "WHO THEY ARE",
-    "Name: " + [person.firstName, person.lastName].filter(Boolean).join(" "),
-    "Title: " + (person.currentTitle ?? ""),
-    "Company: " + (person.organization?.name ?? ""),
-    "Timezone: " + timezone,
+    ...personLines,
     "",
+    ...(companyLines.length ? ["THEIR COMPANY", ...companyLines, ""] : []),
     "WHAT WE SELL THEM",
     "Offer: " + offer.name,
     "",
     "THE CONVERSATION SO FAR, oldest first" + (priorSubject ? " (thread subject: " + priorSubject + ")" : ""),
     transcript || "(no messages on record)",
     "",
+    ...factsSection,
     "FIRST: IS A REPLY OWED AT ALL",
     "Read their LAST message. Some messages need no answer from us: they declined or said they are not interested, asked us to stop writing, said their earlier message was sent in error, or said goodbye without asking or proposing anything.",
     "Writing back to those, even to propose the meeting, is exactly what makes us look like a machine. Set decision to no_reply_owed and write nothing: nobody hears from us, nobody is alerted, and their follow-ups stop. If they write again later, they come back on their own.",
@@ -642,7 +949,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "In that case set decision to escalate and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
     "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate. When they can meet is not one either: that is answer.",
     "",
-    "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
+    "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said; when you escalate, exactly the question(s) you could not answer). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
     "",
     "BOOKING",
     bookingSection,
@@ -834,8 +1141,24 @@ export const REPLY_RESPONSE_SCHEMA = {
         "ISO-8601 timestamp of when the next follow-up is owed. Only when decision is answer — " +
         "otherwise nothing was sent and the schedule is being emptied, not advanced.",
     },
+    answers: {
+      type: "array",
+      description:
+        "One entry per listed question (q1, q2, ...): where its answer came from. exact = a fact our client stated; " +
+        "interpreted = a fact read off their website; booking = the availability or booking link; " +
+        "none = nothing in front of you answers it. Empty when no question was listed.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          key: { type: "string", description: "The listed question's key, e.g. q1." },
+          source: { type: "string", enum: ["exact", "interpreted", "booking", "none"] },
+        },
+        required: ["key", "source"],
+      },
+    },
   },
-  required: ["decision", "question", "reason"],
+  required: ["decision", "question", "reason", "answers"],
 } as const;
 
 /** The reason stored on the lead's follow-up schedule when no reply is owed. */
@@ -982,6 +1305,107 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           timezone: "$ref:lead-detail.output.leadDetail.lead.timezone",
         },
       },
+      // STEP 1: what did they ask? The model lists it; nothing here reads
+      // their text with a rule.
+      {
+        id: "compose-questions-prompt",
+        type: "script",
+        config: { code: COMPOSE_QUESTIONS_PROMPT_CODE },
+        retries: 0,
+        inputMapping: {
+          conversation: "$ref:conversation.output",
+          offer: "$ref:offer-economics.output",
+        },
+      },
+      {
+        id: "list-questions",
+        type: "http.call",
+        config: {
+          service: "chat",
+          method: "POST",
+          path: "/complete",
+          body: {
+            provider: opts.provider,
+            model: opts.model,
+            responseFormat: "json",
+            responseSchema: QUESTIONS_RESPONSE_SCHEMA,
+            temperature: 0,
+            maxTokens: 800,
+          },
+        },
+        retries: 0,
+        inputMapping: {
+          "body.message": "$ref:compose-questions-prompt.output.message",
+          "body.systemPrompt": "$ref:compose-questions-prompt.output.systemPrompt",
+        },
+      },
+      {
+        id: "plan-lookups",
+        type: "script",
+        config: { code: PLAN_LOOKUPS_CODE },
+        retries: 0,
+        inputMapping: {
+          listed: "$ref:list-questions.output",
+          offer: "$ref:offer-economics.output",
+        },
+      },
+      // STEP 2: the answers, from brand-service, in one pass. What the
+      // customer STATED first (exact), then what the site says (interpreted).
+      {
+        id: "offer-answers",
+        type: "http.call",
+        config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers" },
+        inputMapping: {
+          "params.brandId": "$ref:claim-followup.output.followup.brandId",
+          "params.offerId": "$ref:campaign-detail.output.campaign.offerId",
+        },
+      },
+      {
+        id: "offer-user-fields",
+        type: "http.call",
+        config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/user-fields" },
+        inputMapping: {
+          "params.brandId": "$ref:claim-followup.output.followup.brandId",
+          "params.offerId": "$ref:campaign-detail.output.campaign.offerId",
+        },
+      },
+      {
+        id: "brand-user-fields",
+        type: "http.call",
+        config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields" },
+        inputMapping: { "params.brandId": "$ref:claim-followup.output.followup.brandId" },
+      },
+      // Org-billed extraction, billed by brand-service itself on this run's
+      // identity headers. `extract`, never `suggest`: suggest WRITES an answer
+      // where the site is silent, which is exactly an invented fact.
+      {
+        id: "extract-answers",
+        type: "http.call",
+        config: {
+          service: "brand",
+          method: "POST",
+          path: "/orgs/brands/extract-fields",
+          body: { mode: "extract" },
+        },
+        inputMapping: {
+          "headers.x-brand-id": "$ref:claim-followup.output.followup.brandId",
+          "body.fields": "$ref:plan-lookups.output.fields",
+          "body.offerId": "$ref:campaign-detail.output.campaign.offerId",
+        },
+      },
+      {
+        id: "gather-facts",
+        type: "script",
+        config: { code: GATHER_FACTS_CODE },
+        retries: 0,
+        inputMapping: {
+          plan: "$ref:plan-lookups.output",
+          offerAnswers: "$ref:offer-answers.output",
+          offerFields: "$ref:offer-user-fields.output",
+          brandFields: "$ref:brand-user-fields.output",
+          extracted: "$ref:extract-answers.output",
+        },
+      },
       {
         id: "compose-prompt",
         type: "script",
@@ -996,6 +1420,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
           currentDate: "$ref:flow_input.currentDate",
+          facts: "$ref:gather-facts.output",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -1022,6 +1447,18 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           "body.systemPrompt": "$ref:compose-prompt.output.systemPrompt",
         },
       },
+      // STEP 3's guard: a listed question no fact covers turns an answer into an
+      // escalation naming it. Everything downstream reads THIS, not the draft.
+      {
+        id: "ground-draft",
+        type: "script",
+        config: { code: GROUND_DRAFT_CODE },
+        retries: 0,
+        inputMapping: {
+          draft: "$ref:draft-reply.output",
+          facts: "$ref:gather-facts.output",
+        },
+      },
       // Can the model answer what they asked, or does a person have to? It
       // converges rather than nesting inside `check-claim` (see the edge from
       // `claim-followup` below), because a condition node emitted inside a
@@ -1045,7 +1482,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
           "body.email": "$ref:claim-followup.output.followup.email",
-          "body.question": "$ref:draft-reply.output.json.question",
+          "body.question": "$ref:ground-draft.output.json.question",
         },
       },
       // No reply is owed: nothing is sent and nothing is escalated. The run says
@@ -1058,7 +1495,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { code: NAME_NO_REPLY_OWED_CODE },
         retries: 0,
         inputMapping: {
-          draft: "$ref:draft-reply.output",
+          draft: "$ref:ground-draft.output",
           email: "$ref:claim-followup.output.followup.email",
         },
       },
@@ -1080,7 +1517,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { code: RESOLVE_NEXT_DUE_CODE },
         retries: 0,
         inputMapping: {
-          draft: "$ref:draft-reply.output",
+          draft: "$ref:ground-draft.output",
           ladderNextDueAt: "$ref:compose-prompt.output.ladderNextDueAt",
         },
       },
@@ -1109,7 +1546,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
           "body.email": "$ref:claim-followup.output.followup.email",
-          "body.body_html": "$ref:draft-reply.output.json.replyHtml",
+          "body.body_html": "$ref:ground-draft.output.json.replyHtml",
         },
       },
       {
@@ -1282,9 +1719,18 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "lead-detail", to: "booking-slots" },
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "prior-generation" },
-      { from: "prior-generation", to: "compose-prompt" },
+      { from: "prior-generation", to: "compose-questions-prompt" },
+      { from: "compose-questions-prompt", to: "list-questions" },
+      { from: "list-questions", to: "plan-lookups" },
+      { from: "plan-lookups", to: "offer-answers" },
+      { from: "offer-answers", to: "offer-user-fields" },
+      { from: "offer-user-fields", to: "brand-user-fields" },
+      { from: "brand-user-fields", to: "extract-answers" },
+      { from: "extract-answers", to: "gather-facts" },
+      { from: "gather-facts", to: "compose-prompt" },
       { from: "compose-prompt", to: "draft-reply" },
-      { from: "draft-reply", to: "check-answerable" },
+      { from: "draft-reply", to: "ground-draft" },
+      { from: "ground-draft", to: "check-answerable" },
       // The convergence edge. `claim-followup` sits OUTSIDE `check-claim`'s
       // branch body, so `check-answerable` is not absorbed into it and is
       // emitted as a top-level sibling branchone — which is the only place a
@@ -1294,17 +1740,17 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         from: "check-answerable",
         to: "resolve-next-due",
         condition:
-          "results['draft-reply']?.json?.decision == 'answer' || results['draft-reply']?.json?.decision == 'confirm_booking'",
+          "results['ground-draft']?.json?.decision == 'answer' || results['ground-draft']?.json?.decision == 'confirm_booking'",
       },
       {
         from: "check-answerable",
         to: "escalate-unanswerable",
-        condition: "results['draft-reply']?.json?.decision == 'escalate'",
+        condition: "results['ground-draft']?.json?.decision == 'escalate'",
       },
       {
         from: "check-answerable",
         to: "name-no-reply-owed",
-        condition: "results['draft-reply']?.json?.decision == 'no_reply_owed'",
+        condition: "results['ground-draft']?.json?.decision == 'no_reply_owed'",
       },
       { from: "escalate-unanswerable", to: "end-run-escalated" },
       { from: "name-no-reply-owed", to: "stop-followups" },
@@ -1322,13 +1768,13 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         from: "check-sent",
         to: "record-followup",
         condition:
-          "results['classify-send']?.outcome == 'sent' && results['draft-reply']?.json?.decision == 'answer'",
+          "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'answer'",
       },
       {
         from: "check-sent",
         to: "stop-followups-booked",
         condition:
-          "results['classify-send']?.outcome == 'sent' && results['draft-reply']?.json?.decision == 'confirm_booking'",
+          "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'confirm_booking'",
       },
       {
         from: "check-sent",
