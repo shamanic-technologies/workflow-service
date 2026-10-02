@@ -23,6 +23,9 @@ import {
   PLAN_LOOKUPS_CODE,
   GATHER_FACTS_CODE,
   GROUND_DRAFT_CODE,
+  ACQUISITION_QUESTIONS_PLAYBOOK,
+  PLAYBOOKS,
+  CLOSED_WITH_THANKS_REASON,
   OFFER_OVERVIEW_KEY,
   STANCES,
 } from "../../src/lib/ai-meeting-booking-dag.js";
@@ -40,11 +43,13 @@ const INSIDER = { stance: "insider", evidence: "I'm Sam at Acme." };
 /**
  * Runs compose-prompt. Callers that predate the identity stance pass up to the
  * facts argument; they get an insider thread, which is the voice they assert.
+ * Callers that predate the playbook get `none`, the thread they assert.
  */
 function composeReply(...args: unknown[]): Promise<Record<string, unknown>> {
   const a = [...args];
   while (a.length < 9) a.push(undefined);
   if (a.length < 10) a.push(INSIDER);
+  if (a.length < 11) a.push("none");
   return loadMain(COMPOSE_REPLY_PROMPT_CODE)(...a);
 }
 
@@ -982,7 +987,7 @@ describe("a last message that needs no reply at all", () => {
 
   it("is a third exit the model chooses, beside answer and escalate", () => {
     const decision = REPLY_RESPONSE_SCHEMA.properties.decision;
-    expect(decision.enum).toEqual(["answer", "escalate", "no_reply_owed", "confirm_booking"]);
+    expect(decision.enum).toEqual(["answer", "escalate", "no_reply_owed", "confirm_booking", "close_with_thanks"]);
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("reason");
     const arm = dag.edges.find(
       (e) => e.from === "check-answerable" && e.condition === "results['ground-draft']?.json?.decision == 'no_reply_owed'",
@@ -1273,7 +1278,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
   });
 
   it("asks the site one field per question, plus how the offer works", async () => {
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER } }, offer);
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER, playbook: "none" } }, offer);
     expect(out.questions).toEqual([{ key: "q1", question: "How does it work?" }]);
     const fields = out.fields as Array<{ key: string; description: string }>;
     expect(fields.map((f) => f.key)).toEqual([OFFER_OVERVIEW_KEY, "q1"]);
@@ -1384,7 +1389,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("requires the draft to say where each answer came from", () => {
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("answers");
-    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "interpreted", "booking", "none"]);
+    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "interpreted", "booking", "playbook", "none"]);
     expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.required).toContain("facts");
   });
 
@@ -1573,7 +1578,7 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
     await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [] } }, offer)).rejects.toThrow(/no identity stance/);
     await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "friendly", evidence: "" } } }, offer)).rejects.toThrow(/no identity stance/);
     quiet();
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "external", evidence: "I work with Doc Dinners." } } }, offer);
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "external", evidence: "I work with Doc Dinners." }, playbook: "none" } }, offer);
     expect(out.identity).toEqual({ stance: "external", evidence: "I work with Doc Dinners." });
     expect(byId.get("compose-prompt")?.inputMapping?.identity).toBe("$ref:plan-lookups.output.identity");
     expect(byId.get("ground-draft")?.inputMapping).toMatchObject({
@@ -1710,5 +1715,107 @@ describe("no em dash or en dash ever reaches a prospect (Dr. Joe draft, 2026-10-
     expect(out.message as string).toContain("Never use an em dash or an en dash.");
     expect(`${out.message as string}${out.systemPrompt as string}`).not.toMatch(/[\u2013\u2014]/);
     expect(JSON.stringify(REPLY_RESPONSE_SCHEMA)).not.toMatch(/[\u2013\u2014]/);
+  });
+});
+
+describe("a thread opened by the acquisition-questions sequence plays its game (owner, 2026-10-03)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const nodes = new Map(dag.nodes.map((n) => [n.id, n]));
+  const quietLogs = () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  };
+  const offer = { offerId: "o1", name: "Missed-call AI receptionist", bookingUrl: "https://book.example.com/x" };
+  const brand = { brand: { name: "CallCatch", domain: "callcatch.ai" } };
+  const blind = { stance: "blind", evidence: "I work on patient acquisition for clinics like yours." };
+  const opener = {
+    direction: "outbound",
+    text: "Hey Sophie,\n\nI work on patient acquisition for dental clinics.\n\nIf I sent you 10 people for whitening, what would you charge per person?\n\nWhen someone calls while you're with a patient, do they reach voicemail, a receptionist, or an AI?",
+  };
+  const thread = (...rest: Array<{ direction: string; text: string }>) => ({ conversation: { messages: [opener, ...rest] } });
+  const booking = { timezone: "America/New_York", degraded: false, bookingUrl: offer.bookingUrl, slots: ["2026-10-06T10:00:00-04:00"] };
+  const composeGame = (conv: unknown, playbook = "acquisition_questions") =>
+    composeReply({ followup: { followupCount: 0 } }, { leadDetail: { lead: { firstName: "Sophie" } } }, conv, null, booking, offer, brand, "2026-10-03", undefined, blind, playbook);
+
+  it("step 1 names the outreach off the messages we sent, and the plan refuses a thread without one", async () => {
+    expect(PLAYBOOKS).toEqual(["acquisition_questions", "none"]);
+    expect(QUESTIONS_RESPONSE_SCHEMA.required).toContain("playbook");
+    const step1 = await loadMain(COMPOSE_QUESTIONS_PROMPT_CODE)(thread({ direction: "inbound", text: "$250. Voicemail." }), offer, brand);
+    expect(step1.message as string).toContain("- acquisition_questions:");
+    expect(step1.message as string).toContain("what they would charge per person if we sent them a group");
+    await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: blind } }, offer)).rejects.toThrow(/no playbook/);
+    quietLogs();
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: blind, playbook: "acquisition_questions" } }, offer);
+    expect(out.playbook).toBe("acquisition_questions");
+    expect(nodes.get("compose-prompt")?.inputMapping?.playbook).toBe("$ref:plan-lookups.output.playbook");
+    expect(nodes.get("ground-draft")?.inputMapping?.playbook).toBe("$ref:plan-lookups.output.playbook");
+  });
+
+  it("gives the model the strategy, not a script, and only in such a thread", async () => {
+    const game = await composeGame(thread({ direction: "inbound", text: "We'd charge $250 a head. Calls go to voicemail when we're busy." }));
+    const message = game.message as string;
+    expect(message).toContain("THE GAME THIS THREAD IS IN");
+    for (const line of ACQUISITION_QUESTIONS_PLAYBOOK) expect(message).toContain(line);
+    expect(message).toContain("their price x the customers they miss");
+    expect(message).toContain("We do not hold a group of customers today");
+    expect(message).toContain("close_with_thanks");
+    expect(message).toContain("this is our reply to it");
+    expect(`${message}${game.systemPrompt as string}`).not.toMatch(/[\u2013\u2014]/);
+    const plain = await composeGame(thread({ direction: "inbound", text: "Tell me more." }), "none");
+    expect(plain.message as string).not.toContain("THE GAME THIS THREAD IS IN");
+    await expect(composeGame(thread(), "bogus")).rejects.toThrow(/no playbook/);
+  });
+
+  it("follows up twice when they go quiet, then stops", async () => {
+    const reply = { direction: "inbound", text: "$250. Voicemail." };
+    const ours = { direction: "outbound", text: "x" };
+    const first = (await composeGame(thread(reply, ours))).message as string;
+    expect(first).toContain("Write follow-up 1 of 2");
+    const second = (await composeGame(thread(reply, ours, ours))).message as string;
+    expect(second).toContain("Write follow-up 2 of 2");
+    const done = (await composeGame(thread(reply, ours, ours, ours))).message as string;
+    expect(done).toContain("that is every follow-up this game allows. Set decision to no_reply_owed");
+  });
+
+  it("accepts a playbook answer only in a thread that sequence opened", async () => {
+    quietLogs();
+    const facts = { questions: [{ key: "q1", question: "Who are you?" }, { key: "q2", question: "Can you send the patients?" }], exact: [], interpreted: [], withheld: [] };
+    const draft = {
+      json: {
+        decision: "answer", question: "Who are you?", reason: "r",
+        replyHtml: "<p>Fair question. We don't hold a group of patients today; the ones I mean already call you.</p>",
+        answers: [{ key: "q1", source: "playbook", facts: [] }, { key: "q2", source: "playbook", facts: [] }],
+      },
+    };
+    const played = await loadMain(GROUND_DRAFT_CODE)(draft, facts, blind, offer, brand, "acquisition_questions");
+    expect((played.json as Record<string, unknown>).decision).toBe("answer");
+    const elsewhere = await loadMain(GROUND_DRAFT_CODE)(draft, facts, blind, offer, brand, "none");
+    expect((elsewhere.json as Record<string, unknown>).decision).toBe("escalate");
+  });
+
+  it("thanks a prospect who already has it solved through the same send, then stops their follow-ups", async () => {
+    quietLogs();
+    const arm = dag.edges.find((e) => e.from === "check-answerable" && e.to === "resolve-next-due");
+    expect(arm?.condition).toContain("'close_with_thanks'");
+    const resolved = await loadMain(RESOLVE_NEXT_DUE_CODE)({ json: { decision: "close_with_thanks", replyHtml: "<p>Thanks Sophie.</p>" } }, "2026-10-06T00:00:00Z");
+    expect(resolved).toEqual({ nextDueAt: null, source: "closed_with_thanks" });
+    const sent = dag.edges.find((e) => e.from === "check-sent" && e.to === "stop-followups-closed");
+    expect(sent?.condition).toContain("results['classify-send']?.outcome == 'sent'");
+    expect(sent?.condition).toContain("'close_with_thanks'");
+    expect(nodes.get("stop-followups-closed")?.config?.body).toEqual({ kind: "stopped", reason: CLOSED_WITH_THANKS_REASON });
+    expect(dag.edges).toContainEqual({ from: "stop-followups-closed", to: "end-run-closed-with-thanks" });
+    const record = dag.edges.find((e) => e.from === "check-sent" && e.to === "record-followup");
+    expect(record?.condition).not.toContain("close_with_thanks");
+    // A thank-you is a written reply: a blind thread still never names the client in it.
+    const leak = { json: { decision: "close_with_thanks", question: "We have an AI", reason: "r", replyHtml: "<p>Thanks, CallCatch would not add much then.</p>", answers: [] } };
+    expect(((await loadMain(GROUND_DRAFT_CODE)(leak, { questions: [] }, blind, offer, brand, "acquisition_questions")).json as Record<string, unknown>).decision).toBe("escalate");
+  });
+
+  it("compiles to a flow whose new branches converge at top level", () => {
+    const flow = dagToOpenFlow(dag, `${FEATURE_SLUG}-test`);
+    const ids = JSON.stringify(flow.value.modules);
+    expect(ids).toContain("stop_followups_closed");
+    expect(ids).toContain("end_run_closed_with_thanks");
   });
 });
