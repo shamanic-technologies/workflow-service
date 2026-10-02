@@ -1676,3 +1676,39 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
     }
   });
 });
+
+describe("no em dash or en dash ever reaches a prospect (Dr. Joe draft, 2026-10-02)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const facts = { questions: [], exact: [], interpreted: [], withheld: [] };
+  const run = async (replyHtml: string, decision = "answer") => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const draft = { json: { decision, question: "q", reason: "r", replyHtml, answers: [] } };
+    return (await loadMain(GROUND_DRAFT_CODE)(draft, facts, { stance: "external", evidence: "x" }, null, null)).json as Record<string, unknown>;
+  };
+
+  it("rewrites every dash in the reply before anything is sent", async () => {
+    const json = await run("<p>They offer a guarantee\u2014if it does not work, they keep going. Events bring 10\u201330 patients &mdash; every time &ndash; and 5 &#8211; 7 more &#x2014; ok.</p>");
+    const html = json.replyHtml as string;
+    expect(html).not.toMatch(/[\u2013\u2014]/);
+    expect(html).not.toMatch(/&(mdash|ndash);|&#(8212|8211|x2014|x2013);/i);
+    expect(html).toBe("<p>They offer a guarantee, if it does not work, they keep going. Events bring 10-30 patients, every time, and 5-7 more, ok.</p>");
+  });
+
+  it("does it on a booking confirmation too, and leaves a clean reply untouched", async () => {
+    expect((await run("<p>Thanks \u2014 see you Friday.</p>", "confirm_booking")).replyHtml).toBe("<p>Thanks, see you Friday.</p>");
+    expect((await run("<p>Plain reply - with a hyphen.</p>")).replyHtml).toBe("<p>Plain reply - with a hyphen.</p>");
+  });
+
+  it("bans the dash in the reply prompt, and the prompt models none itself", async () => {
+    const out = await composeReply(
+      { followup: { followupCount: 0 } }, { leadDetail: { lead: { firstName: "Joe" } } },
+      { conversation: { messages: [{ direction: "inbound", text: "How does it work?" }] } }, null,
+      { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
+      { name: "Dinner with Docs" }, { brand: { name: "Doc Dinners" } }, "2026-10-02",
+    );
+    expect(out.message as string).toContain("Never use an em dash or an en dash.");
+    expect(`${out.message as string}${out.systemPrompt as string}`).not.toMatch(/[\u2013\u2014]/);
+    expect(JSON.stringify(REPLY_RESPONSE_SCHEMA)).not.toMatch(/[\u2013\u2014]/);
+  });
+});

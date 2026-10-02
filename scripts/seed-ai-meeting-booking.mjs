@@ -263,6 +263,18 @@ export function needsIdentityStance(dag) {
   return !!ground && !String(ground.config?.code ?? "").includes("stance");
 }
 
+/**
+ * True when a stored DAG can still send a prospect an em dash or an en dash.
+ * The Dr. Joe draft read "guarantee\u2014if the strategy" (2026-10-02); the current
+ * DAG bans both in the prompt and rewrites any that slip through in
+ * `ground-draft`, before the send. The repair is an upgrade carrying the
+ * current DAG.
+ */
+export function needsDashBan(dag) {
+  const ground = (dag?.nodes ?? []).find((n) => n?.id === "ground-draft");
+  return !!ground && !String(ground.config?.code ?? "").includes("u2014");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -293,7 +305,8 @@ async function main() {
         needsTimingPreference(w.dag) ||
         needsAnswerFacts(w.dag) ||
         needsOwnedFacts(w.dag) ||
-        needsIdentityStance(w.dag))
+        needsIdentityStance(w.dag) ||
+        needsDashBan(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
