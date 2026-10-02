@@ -93,12 +93,16 @@
  * brand-service is read once for the answers: what the CUSTOMER stated (offer
  * answers, confirmed offer and brand user-fields) is EXACT; what extract-fields
  * reads off the brand's site (one field per question, plus how the offer works)
- * is INTERPRETED. `gather-facts` tags and logs every fact with that provenance.
- * (3) The draft answers only from those facts and names, per question, the
- * source it used; `ground-draft` turns any answer that leans on no fact into an
- * escalation naming exactly the unanswered question(s), so the client is asked
- * rather than the prospect told something invented. Everything downstream reads
- * `ground-draft`, never the raw draft.
+ * is INTERPRETED. `gather-facts` tags and logs every fact with that provenance
+ * and an id (E1.., I1..); an operator PLACEHOLDER answer is withheld, never a
+ * fact. (3) The draft answers only from those facts, speaking as the team that
+ * runs the offer (first person, never "our site says"), and cites per question
+ * the fact ids it used; `ground-draft` turns any answer that cites no real fact
+ * into an escalation naming exactly the unanswered question(s), so the client is
+ * asked rather than the prospect told something invented or hedged. Either a
+ * fact is solid enough to state as our own, or its question escalates: there is
+ * no hedged middle. Everything downstream reads `ground-draft`, never the raw
+ * draft.
  *
  * The single stated degradation: if the booking page cannot be read, the reply
  * still goes out with the plain booking link and no slots, logged loudly.
@@ -675,11 +679,25 @@ export async function main(listed, offer) {
  *    `confirmed`. The model may state these as fact.
  *  - `interpreted` — what was READ OFF the brand's site: the extraction for each
  *    question and for the overview, and user-fields still `suggested` (an
- *    auto-extract prefill nobody confirmed). The model must phrase these
- *    cautiously.
+ *    auto-extract prefill nobody confirmed). They only fill gaps the exact
+ *    facts leave, and only when solid enough to state as our own.
+ *
+ * Every fact gets an id (E1.. exact, I1.. interpreted) that the draft cites and
+ * `ground-draft` checks.
  *
  * Empty values ("Unknown", "", [], null) are dropped, never shown as a blank:
  * "the site says nothing" is a missing fact, not a fact.
+ *
+ * An operator PLACEHOLDER is no answer either. brand-service serves offer
+ * answers as bare `{question, answer}` pairs with no status or provenance, and
+ * Doc Dinners' "How much is it?" / "What is included?" hold
+ * "PLACEHOLDER — not a real answer, do not quote this to anyone...". Filed as an
+ * EXACT fact, a price question would be answered from it. With no field to read,
+ * the literal marker (a value opening with the word PLACEHOLDER) is matched, on
+ * every source; the pair is WITHHELD — never in the prompt as a fact, listed only
+ * as a thing our client has not answered yet, so a question it would have covered
+ * escalates. A per-answer status on brand-service's answers read would make this
+ * match unnecessary.
  */
 export const GATHER_FACTS_CODE = `
 export async function main(plan, offerAnswers, offerFields, brandFields, extracted) {
@@ -690,6 +708,7 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
     if (typeof v === "object") return Object.keys(v).length === 0;
     return false;
   };
+  const isPlaceholder = (v) => typeof v === "string" && /^\\s*placeholder\\b/i.test(v);
   const render = (v) => {
     if (typeof v === "string") return v.trim();
     if (Array.isArray(v)) return v.filter((x) => !isEmpty(x)).map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("; ");
@@ -698,10 +717,17 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
 
   const exact = [];
   const interpreted = [];
+  const withheld = [];
+  const addExact = (f) => exact.push({ id: "E" + (exact.length + 1), ...f });
+  const addInterpreted = (f) => interpreted.push({ id: "I" + (interpreted.length + 1), ...f });
 
   for (const a of offerAnswers?.answers ?? []) {
     if (isEmpty(a?.question) || isEmpty(a?.answer)) continue;
-    exact.push({ source: "offer-answers", label: String(a.question).trim(), value: String(a.answer).trim() });
+    if (isPlaceholder(a.answer)) {
+      withheld.push({ source: "offer-answers", label: String(a.question).trim() });
+      continue;
+    }
+    addExact({ source: "offer-answers", label: String(a.question).trim(), value: String(a.answer).trim() });
   }
 
   const seenConfirmed = new Set();
@@ -709,32 +735,39 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
     for (const [key, field] of Object.entries(read?.fields ?? {})) {
       if (isEmpty(field?.value)) continue;
       const value = render(field.value);
+      if (isPlaceholder(value)) {
+        withheld.push({ source: scope, label: key });
+        continue;
+      }
       if (field?.provenance === "confirmed") {
         if (seenConfirmed.has(key + "::" + value)) continue;
         seenConfirmed.add(key + "::" + value);
-        exact.push({ source: scope, label: key, value });
+        addExact({ source: scope, label: key, value });
       } else if (scope === "offer-user-fields") {
         // The suggested prefill is brand-wide and identical on both reads;
         // listing it once is enough.
-        interpreted.push({ source: "site-prefill", label: key, value });
+        addInterpreted({ source: "site-prefill", label: key, value });
       }
     }
   }
 
   const extractedFields = extracted?.fields ?? {};
   const overview = extractedFields["OVERVIEW_KEY"]?.value;
-  if (!isEmpty(overview)) {
-    interpreted.push({ source: "site-extraction", label: "how the offer works", value: render(overview) });
+  if (!isEmpty(overview) && !isPlaceholder(render(overview))) {
+    addInterpreted({ source: "site-extraction", label: "how the offer works", value: render(overview) });
   }
 
   const questions = (plan?.questions ?? []).map((q) => {
     const v = extractedFields[q.key]?.value;
-    const siteAnswer = isEmpty(v) ? null : render(v);
-    if (siteAnswer) interpreted.push({ source: "site-extraction", label: q.question, value: siteAnswer, questionKey: q.key });
+    const siteAnswer = isEmpty(v) || isPlaceholder(render(v)) ? null : render(v);
+    if (siteAnswer) addInterpreted({ source: "site-extraction", label: q.question, value: siteAnswer, questionKey: q.key });
     return { key: q.key, question: q.question, siteAnswer };
   });
 
-  const facts = { questions, exact, interpreted };
+  const facts = { questions, exact, interpreted, withheld };
+  if (withheld.length) {
+    console.error("[ai-meeting-booking] withheld operator PLACEHOLDER answer(s), not facts: " + JSON.stringify(withheld));
+  }
   console.log("[ai-meeting-booking] facts gathered for the reply (provenance: exact = stated by the customer, interpreted = read off the site): " + JSON.stringify(facts));
   return facts;
 }
@@ -744,10 +777,11 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
  * STEP 3's guard: a question the facts do not answer is NEVER answered.
  *
  * The draft states, per listed question, where its answer came from
- * (`exact` | `interpreted` | `booking` | `none`). This script holds the model to
- * it with no reading of anyone's text: a question marked `none`, a question the
- * draft did not account for, or a claim of a source that holds nothing at all
- * (`exact` with no stated facts, `interpreted` with no site facts) turns an
+ * (`exact` | `interpreted` | `booking` | `none`) and the ids of the facts it
+ * used. This script holds the model to it with no reading of anyone's text: a
+ * question marked `none`, a question the draft did not account for, or an
+ * `exact`/`interpreted` answer that cites no existing fact of that kind (a fact
+ * the model would not own, a withheld placeholder, an invented id) turns an
  * `answer` into an `escalate` naming exactly those questions, so the client is
  * asked rather than the prospect being told something invented. Every other
  * decision passes through untouched. Its output keeps the draft's `{ json }`
@@ -757,16 +791,19 @@ export const GROUND_DRAFT_CODE = `
 export async function main(draft, facts) {
   const json = { ...(draft?.json ?? {}) };
   const listed = facts?.questions ?? [];
-  const hasExact = (facts?.exact ?? []).length > 0;
-  const hasInterpreted = (facts?.interpreted ?? []).length > 0;
-  const declared = new Map((Array.isArray(json.answers) ? json.answers : []).map((a) => [String(a?.key), String(a?.source)]));
+  const ids = {
+    exact: new Set((facts?.exact ?? []).map((f) => String(f?.id))),
+    interpreted: new Set((facts?.interpreted ?? []).map((f) => String(f?.id))),
+  };
+  const declared = new Map((Array.isArray(json.answers) ? json.answers : []).map((a) => [String(a?.key), a ?? {}]));
 
   const audit = listed.map((q) => {
-    let source = declared.get(q.key) ?? "none";
-    if (source === "exact" && !hasExact) source = "none";
-    if (source === "interpreted" && !hasInterpreted) source = "none";
+    const a = declared.get(q.key) ?? {};
+    let source = String(a.source ?? "none");
+    const cited = Array.isArray(a.facts) ? a.facts.map(String) : [];
     if (!["exact", "interpreted", "booking"].includes(source)) source = "none";
-    return { key: q.key, question: q.question, source };
+    if ((source === "exact" || source === "interpreted") && !cited.some((id) => ids[source].has(id))) source = "none";
+    return { key: q.key, question: q.question, source, facts: cited };
   });
   const unanswered = audit.filter((a) => a.source === "none");
 
@@ -857,20 +894,30 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const asked = facts?.questions ?? [];
   const exactFacts = facts?.exact ?? [];
   const interpretedFacts = facts?.interpreted ?? [];
-  const factLine = (f) => "- [" + f.source + "] " + f.label + ": " + f.value;
+  const withheldFacts = facts?.withheld ?? [];
+  const factLine = (f) => "- " + f.id + " " + f.label + ": " + f.value;
   const factsSection = asked.length === 0 ? [] : [
     "WHAT THEY ASKED (listed from their last message)",
     ...asked.map((q) => "- " + q.key + ": " + q.question),
     "",
-    "EXACT FACTS: what our client stated themselves. You may state these as fact.",
+    "EXACT FACTS: what our client stated themselves. These are the strongest facts you have.",
     exactFacts.length ? exactFacts.map(factLine).join("\\n") : "(none stated)",
     "",
-    "INTERPRETED FACTS: read off our client's website by a machine. Use them, but phrase them with care (\\"as far as I can see\\", \\"our site describes it as\\"), never as a promise, a price commitment or a guarantee.",
+    "INTERPRETED FACTS: worked out from our client's public material, less certain than the exact facts. Use one only to fill a gap the exact facts leave.",
     interpretedFacts.length ? interpretedFacts.map(factLine).join("\\n") : "(nothing found)",
     "",
+    ...(withheldFacts.length ? [
+      "NOT ANSWERED BY OUR CLIENT YET: anything they ask about these topics has no answer here and escalates.",
+      withheldFacts.map((w) => "- " + w.label).join("\\n"),
+      "",
+    ] : []),
     "HOW TO ANSWER WHAT THEY ASKED",
-    "Answer each listed question ONLY from the facts above (or, for when to meet, from the availability under BOOKING). Do not add anything they do not say.",
-    "For EVERY listed question, return it in answers with its key and the source you answered it from: exact, interpreted, booking, or none.",
+    "Answer each listed question ONLY from the facts above (or, for when to meet, from the availability under BOOKING). Do not add anything the facts do not say.",
+    "Lead with what our client stated: OPEN your answer with the exact facts that bear on the question (their results, numbers, guarantees, exclusivity), numbers exactly as stated. Interpreted facts come after, only to fill what the exact facts leave open, in a sentence or two of your own words: never paste them as a list.",
+    "You speak as the team that runs this offer. State every fact in the first person, as our own knowledge (\\"we host...\\", \\"each event brings...\\"). The facts are what we know, not something we read somewhere: never point to a website, a page, a brochure or to how we describe it, and never hedge a fact.",
+    "Owning a fact does not license more than it says: no promise, price, guarantee or number our client did not state.",
+    "Use a fact only if you would state it plainly as our own. If the only fact that would answer a question is one you would not state that way, that question has no answer here.",
+    "For EVERY listed question, return it in answers with its key, the source you answered it from (exact, interpreted, booking, or none), and in facts the ids of the facts you used (E1, I2, ...).",
     "If even ONE listed question has no answer in the facts above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets a real answer instead of a guess.",
     "",
   ];
@@ -969,6 +1016,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You answer one prospect at a time, in an email thread that is already running.",
     "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
     "You answer what they asked before you ask for anything.",
+    "You speak as the team that runs what you sell: what you know about it you state as your own, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
     "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
     "When their last message needs no answer — a refusal, a request to stop, a goodbye — you send nothing and hand nothing over.",
@@ -1153,8 +1201,13 @@ export const REPLY_RESPONSE_SCHEMA = {
         properties: {
           key: { type: "string", description: "The listed question's key, e.g. q1." },
           source: { type: "string", enum: ["exact", "interpreted", "booking", "none"] },
+          facts: {
+            type: "array",
+            description: "The ids of the facts the answer uses (E1, I2, ...). Empty for booking or none.",
+            items: { type: "string" },
+          },
         },
-        required: ["key", "source"],
+        required: ["key", "source", "facts"],
       },
     },
   },
