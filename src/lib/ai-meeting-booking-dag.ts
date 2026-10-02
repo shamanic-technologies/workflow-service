@@ -835,6 +835,19 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
 export const GROUND_DRAFT_CODE = `
 export async function main(draft, facts, identity, offer, brand) {
   const json = { ...(draft?.json ?? {}) };
+
+  // No em dash or en dash ever reaches a prospect, whatever the model wrote:
+  // a dash between two numbers is a hyphen, any other one a comma.
+  if (typeof json.replyHtml === "string") {
+    const before = json.replyHtml;
+    json.replyHtml = before
+      .replace(/&(mdash|ndash);|&#(8212|8211|x2014|x2013);/gi, (m) => (/mdash|8212|2014/i.test(m) ? "\\u2014" : "\\u2013"))
+      .replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-")
+      .replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ");
+    if (json.replyHtml !== before) {
+      console.error("[ai-meeting-booking] the draft used a dash a prospect must never read; rewritten before anything is sent");
+    }
+  }
   const writes = json.decision === "answer" || json.decision === "confirm_booking";
 
   // An identity we could not read off the thread is never guessed at.
@@ -1106,7 +1119,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Set decision to answer.",
     "",
     "WHEN YOU CANNOT ANSWER",
-    "Everything you may state is above. If answering what they asked would mean inventing something that is not there — a price, a number of seats, a spec, a reference, a commitment nobody here has made — then you cannot answer it.",
+    "Everything you may state is above. If answering what they asked would mean inventing something that is not there (a price, a number of seats, a spec, a reference, a commitment nobody here has made), then you cannot answer it.",
     "In that case set decision to escalate and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
     "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate. When they can meet is not one either: that is answer.",
     "",
@@ -1121,7 +1134,8 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Return it as an ISO-8601 timestamp, strictly after now and no more than one year out.",
     "",
     "HOW TO WRITE IT",
-    "Write only the words the prospect reads, as HTML. No signature — the mailbox that answers appends its own.",
+    "Write only the words the prospect reads, as HTML. No signature: the mailbox that answers appends its own.",
+    "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
     "No subject line: this goes into the thread they already have.",
     "Short. Plain. The way one person writes to another.",
   ].join("\\n");
@@ -1133,7 +1147,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
     "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
-    "When their last message needs no answer — a refusal, a request to stop, a goodbye — you send nothing and hand nothing over.",
+    "When their last message needs no answer (a refusal, a request to stop, a goodbye), you send nothing and hand nothing over.",
     "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
   ].join(" ");
 
@@ -1270,21 +1284,21 @@ export const REPLY_RESPONSE_SCHEMA = {
       type: "string",
       enum: ["answer", "escalate", "no_reply_owed", "confirm_booking"],
       description:
-        "no_reply_owed: their last message needs no answer at all — they declined, asked us to stop, " +
+        "no_reply_owed: their last message needs no answer at all: they declined, asked us to stop, " +
         "said it was sent in error, or closed the exchange without asking anything. Nothing is sent, " +
         "nobody is alerted, their follow-ups stop. " +
         "confirm_booking: they told us they booked, scheduled or moved the meeting. Write one or two " +
         "sentences thanking them and confirming the time if they gave one, asking for nothing; " +
         "their follow-ups stop after it. " +
         "answer: you can answer what they wrote from the facts in front of you. " +
-        "escalate: they asked a real question you cannot answer without inventing something — a price, " +
+        "escalate: they asked a real question you cannot answer without inventing something: a price, " +
         "a spec, a reference, a commitment nobody here has made. A person takes the thread over. " +
         "When they can meet is never a reason to escalate: offer times that fit, or the booking link.",
     },
     question: {
       type: "string",
       description:
-        "What they asked, in their own words — the question you answered, or the one you could not. " +
+        "What they asked, in their own words: the question you answered, or the one you could not. " +
         "When no reply is owed, what their last message said, in their own words.",
     },
     reason: {
@@ -1300,7 +1314,7 @@ export const REPLY_RESPONSE_SCHEMA = {
     nextDueAt: {
       type: "string",
       description:
-        "ISO-8601 timestamp of when the next follow-up is owed. Only when decision is answer — " +
+        "ISO-8601 timestamp of when the next follow-up is owed. Only when decision is answer; " +
         "otherwise nothing was sent and the schedule is being emptied, not advanced.",
     },
     answers: {
