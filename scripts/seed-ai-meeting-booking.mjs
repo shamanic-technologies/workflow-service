@@ -249,6 +249,20 @@ export function needsOwnedFacts(dag) {
   return !!gather && !String(gather.config?.code ?? "").includes("withheld");
 }
 
+/**
+ * True when a stored DAG still drafts every reply AS the client, whatever the
+ * thread told the prospect. A sequence that said "I work with Doc Dinners" was
+ * answered "Our Dinner with Docs system..." (Dr. Joe, 2026-10-02), and a thread
+ * that never named the client would have been answered naming it. The current
+ * DAG reads the identity our own emails gave (insider, external, blind), keeps
+ * it, and escalates a thread it cannot tell. The repair is an upgrade carrying
+ * the current DAG.
+ */
+export function needsIdentityStance(dag) {
+  const ground = (dag?.nodes ?? []).find((n) => n?.id === "ground-draft");
+  return !!ground && !String(ground.config?.code ?? "").includes("stance");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -278,7 +292,8 @@ async function main() {
         needsBookingConfirmation(w.dag) ||
         needsTimingPreference(w.dag) ||
         needsAnswerFacts(w.dag) ||
-        needsOwnedFacts(w.dag))
+        needsOwnedFacts(w.dag) ||
+        needsIdentityStance(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
