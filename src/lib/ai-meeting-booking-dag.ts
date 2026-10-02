@@ -577,9 +577,18 @@ export function readBookingSlotsCode(): string {
  * Timing ("can we talk Thursday?") is deliberately NOT listed: the booking
  * section already answers it, and a scheduling preference must never become an
  * "unanswered question" that escalates.
+ *
+ * The same read also names WHO WE SAID WE WERE in this thread (`identity`). The
+ * sequences that open these threads are written by different prompts, and they
+ * do not agree: some write as the client ("I'm with [Client]"), some as an
+ * outside representative ("I work with Doc Dinners", signed by the agency), and
+ * some never name the client at all. The reply must keep the identity the
+ * prospect was already given, so the emails we sent are the ground truth: the
+ * model reads them, no keyword list does. A thread it cannot tell is `unclear`,
+ * and nothing is sent on it.
  */
 export const COMPOSE_QUESTIONS_PROMPT_CODE = `
-export async function main(conversation, offer) {
+export async function main(conversation, offer, brand) {
   const messages = conversation?.conversation?.messages ?? [];
   const transcript = messages.map((m) => {
     const who = m?.direction === "inbound" ? "PROSPECT" : "US";
@@ -596,14 +605,25 @@ export async function main(conversation, offer) {
     "Write each as one short question, close to their own words. One item per distinct thing they want to know.",
     "Do NOT list: when they can meet or any scheduling, a refusal, a request to stop, a thank-you, a goodbye, or a statement that asks nothing.",
     "If they ask nothing, return an empty list.",
+    "",
+    "Then read the messages WE sent (marked US), signatures included, and say how they presented the sender relative to our client" +
+      (brand?.brand?.name ? ", " + brand.brand.name : "") + ". Return identity.stance:",
+    "- insider: the sender writes AS our client, as part of it (\\"I'm with [client]\\", \\"I'm [name] at [client]\\", \\"our company\\" meaning the client).",
+    "- external: the sender works with or represents our client from outside it (\\"I work with [client]\\", \\"I represent these folks\\", an agency signature).",
+    "- blind: our messages never name our client at all.",
+    "- unclear: there is no message from us on record, or our messages name the client but give no way to tell which of the above, or contradict each other.",
+    "Put in identity.evidence the words from our messages that decided it, quoted exactly (empty for unclear when there are none).",
   ].join("\\n");
 
-  const systemPrompt = "You read one email and list the questions in it. You never answer them and you never invent one.";
+  const systemPrompt = "You read one email and list the questions in it, and you say how our side of the thread presented itself. You never answer the questions and you never invent one.";
   return { message, systemPrompt };
 }
 `.trim();
 
-/** What the step-1 model returns: the questions, nothing else. */
+/** The identities a thread can have given the prospect; see COMPOSE_QUESTIONS_PROMPT_CODE. */
+export const STANCES = ["insider", "external", "blind", "unclear"] as const;
+
+/** What the step-1 model returns: the questions, and who we said we were. */
 export const QUESTIONS_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -620,8 +640,18 @@ export const QUESTIONS_RESPONSE_SCHEMA = {
         required: ["question"],
       },
     },
+    identity: {
+      type: "object",
+      additionalProperties: false,
+      description: "How the messages we sent presented the sender relative to our client.",
+      properties: {
+        stance: { type: "string", enum: [...STANCES] },
+        evidence: { type: "string", description: "The words from our messages that decided it, quoted exactly." },
+      },
+      required: ["stance", "evidence"],
+    },
   },
-  required: ["questions"],
+  required: ["questions", "identity"],
 } as const;
 
 /**
@@ -652,6 +682,14 @@ export async function main(listed, offer) {
     .slice(0, 10)
     .map((question, i) => ({ key: "q" + (i + 1), question }));
 
+  const stance = listed?.json?.identity?.stance;
+  if (!STANCES_LIST.includes(stance)) {
+    throw new Error("[ai-meeting-booking] the question-listing step named no identity stance (" + JSON.stringify(stance) +
+      "); refusing to draft without knowing who we told them we are");
+  }
+  const identity = { stance, evidence: String(listed.json.identity.evidence ?? "") };
+  console.log("[ai-meeting-booking] identity given to the prospect in this thread: " + JSON.stringify(identity));
+
   const about = offer?.name ? "\\"" + offer.name + "\\"" : "what the brand sells";
   const fields = [
     {
@@ -665,9 +703,9 @@ export async function main(listed, offer) {
         "Use only what the site says, as close to its wording as possible. If the site does not answer it, return Unknown.",
     })),
   ];
-  return { questions, fields };
+  return { questions, fields, identity };
 }
-`.trim().replace("OVERVIEW_KEY", OFFER_OVERVIEW_KEY);
+`.trim().replace("OVERVIEW_KEY", OFFER_OVERVIEW_KEY).replace("STANCES_LIST", JSON.stringify(STANCES));
 
 /**
  * STEP 2's assembly: every fact brand-service holds that could answer them,
@@ -784,12 +822,51 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
  * the model would not own, a withheld placeholder, an invented id) turns an
  * `answer` into an `escalate` naming exactly those questions, so the client is
  * asked rather than the prospect being told something invented. Every other
- * decision passes through untouched. Its output keeps the draft's `{ json }`
+ * decision passes through untouched.
+ *
+ * It also holds the reply to the identity the thread gave the prospect, the two
+ * ways a rule can: a thread whose identity is `unclear` never gets a written
+ * reply (answer or booking confirmation turn into an escalation), and a `blind`
+ * thread never gets one that names the client, the offer, or a domain of theirs
+ * (brand domain, site, booking page). The VOICE itself (insider "we" versus
+ * external "they") is the prompt's job and is not policed by string matching. Its output keeps the draft's `{ json }`
  * shape, so every node downstream reads it exactly as it read the draft.
  */
 export const GROUND_DRAFT_CODE = `
-export async function main(draft, facts) {
+export async function main(draft, facts, identity, offer, brand) {
   const json = { ...(draft?.json ?? {}) };
+  const writes = json.decision === "answer" || json.decision === "confirm_booking";
+
+  // An identity we could not read off the thread is never guessed at.
+  if (writes && identity?.stance === "unclear") {
+    const asked = String(json.question ?? "").trim() || "(their last message)";
+    console.error("[ai-meeting-booking] our identity in this thread is unclear; nothing is sent and the thread is escalated");
+    return {
+      json: { decision: "escalate", question: asked, reason: "Our identity in this thread is unclear (insider, external or unnamed), so a person answers in the right voice.", answers: json.answers ?? [] },
+      overridden: true,
+      audit: [],
+    };
+  }
+
+  // A blind thread never names the client: a reply that would is not sent.
+  if (writes && identity?.stance === "blind") {
+    const host = (u) => { try { return new URL(/^https?:/i.test(u) ? u : "https://" + u).hostname.replace(/^www\\./i, ""); } catch (e) { return null; } };
+    const b = brand?.brand ?? {};
+    const terms = [b.name, offer?.name, host(String(b.domain ?? "")), host(String(b.url ?? "")), host(String(offer?.bookingUrl ?? ""))]
+      .filter((t) => typeof t === "string" && t.trim().length > 2);
+    const text = String(json.replyHtml ?? "").toLowerCase();
+    const leaked = [...new Set(terms.filter((t) => text.includes(t.toLowerCase())))];
+    if (leaked.length > 0) {
+      const asked = String(json.question ?? "").trim() || "(their last message)";
+      console.error("[ai-meeting-booking] the draft names our client in a blind thread (" + leaked.join(", ") + "); nothing is sent and the thread is escalated");
+      return {
+        json: { decision: "escalate", question: asked, reason: "The draft would have named our client in a thread that never named them: " + leaked.join(", "), answers: json.answers ?? [] },
+        overridden: true,
+        audit: [],
+      };
+    }
+  }
+
   const listed = facts?.questions ?? [];
   const ids = {
     exact: new Set((facts?.exact ?? []).map((f) => String(f?.id))),
@@ -839,9 +916,39 @@ export async function main(draft, facts) {
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   const timezone = booking?.timezone ?? "UTC";
+
+  // WHO WE SAID WE WERE. The voice of the reply follows the identity our own
+  // emails already gave the prospect; the facts are owned the same way in
+  // every voice, only who "we" is and what may be named change.
+  const stance = identity?.stance;
+  if (!STANCES_LIST.includes(stance)) {
+    throw new Error("[ai-meeting-booking] no identity stance for this thread (" + JSON.stringify(stance) +
+      "); refusing to draft without knowing who we told them we are");
+  }
+  const client = brand?.brand?.name ?? "our client";
+  const evidence = identity?.evidence ? " Our own words in this thread: \\"" + identity.evidence + "\\"." : "";
+  const voice = {
+    insider: [
+      "WHO WE ARE TO THEM: in this thread we have written as " + client + " itself." + evidence,
+      "Keep that identity. You speak as the team that runs this offer: \\"we\\" is " + client + ". State every fact in the first person, as our own knowledge (\\"we host...\\", \\"each event brings...\\").",
+    ],
+    external: [
+      "WHO WE ARE TO THEM: in this thread we have presented ourselves as working WITH " + client + ", from outside it. We are not " + client + "." + evidence,
+      "Keep that identity. Name " + client + " in the third person and state its facts as theirs, plainly, the way someone who works closely with them knows them (\\"" + client + " runs...\\", \\"they handle...\\", \\"each event brings...\\").",
+      "\\"I\\" is the person writing. \\"We\\" may only mean the arrangement between us and the prospect (\\"we can set up a quick call\\"), never " + client + " itself: never \\"our system\\", \\"our events\\", \\"our team handles\\", \\"we host\\" for what " + client + " does.",
+    ],
+    blind: [
+      "WHO WE ARE TO THEM: in this thread we have NEVER named our client, on purpose." + evidence,
+      "Keep it that way. Never write " + client + ", never write the offer's name (\\"" + String(offer?.name ?? "") + "\\"), never write a website, a domain or a link that would reveal who they are. Refer to them the way our emails did, in the third person (\\"the team I work with\\", \\"they\\"), and restate any fact that names them without the name.",
+    ],
+    unclear: [
+      "WHO WE ARE TO THEM: our messages in this thread do not make clear whether we wrote as " + client + ", for " + client + " from outside, or without naming them.",
+      "Do not guess an identity. If a reply is owed, set decision to escalate, put what they asked in question, and say in reason that our identity in the thread is unclear. A person answers them in the right voice.",
+    ],
+  }[stance];
 
   // The whole person and company record, one line per field that HOLDS
   // something. An absent field is omitted, never printed as a blank label.
@@ -914,9 +1021,9 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "HOW TO ANSWER WHAT THEY ASKED",
     "Answer each listed question ONLY from the facts above (or, for when to meet, from the availability under BOOKING). Do not add anything the facts do not say.",
     "Lead with what our client stated: OPEN your answer with the exact facts that bear on the question (their results, numbers, guarantees, exclusivity), numbers exactly as stated. Interpreted facts come after, only to fill what the exact facts leave open, in a sentence or two of your own words: never paste them as a list.",
-    "You speak as the team that runs this offer. State every fact in the first person, as our own knowledge (\\"we host...\\", \\"each event brings...\\"). The facts are what we know, not something we read somewhere: never point to a website, a page, a brochure or to how we describe it, and never hedge a fact.",
+    "State every fact in the voice set under WHO WE ARE TO THEM. The facts are what we know, not something we read somewhere: never point to a website, a page, a brochure or to how anyone describes it, and never hedge a fact.",
     "Owning a fact does not license more than it says: no promise, price, guarantee or number our client did not state.",
-    "Use a fact only if you would state it plainly as our own. If the only fact that would answer a question is one you would not state that way, that question has no answer here.",
+    "Use a fact only if you would state it plainly as known. If the only fact that would answer a question is one you would not state that way, that question has no answer here.",
     "For EVERY listed question, return it in answers with its key, the source you answered it from (exact, interpreted, booking, or none), and in facts the ids of the facts you used (E1, I2, ...).",
     "If even ONE listed question has no answer in the facts above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets a real answer instead of a guess.",
     "",
@@ -953,7 +1060,12 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     return "- " + (weekday ? weekday + " " : "") + String(s).slice(0, 10) + " " + String(s).slice(11, 16) + " (" + s + ")";
   }).join("\\n");
 
-  const bookingSection = booking?.degraded
+  // A blind thread never gives the link: a booking page names who runs it.
+  const bookingSection = stance === "blind"
+    ? (!booking?.degraded
+        ? "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words. Do NOT give any link (a booking page would reveal who our client is): if neither works, ask which times suit them and say you will send an invite. If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and ask which times in their window suit them.\\n" + slotLines
+        : "The availability could not be read (" + booking?.degradedReason + "). Do NOT invent times and do NOT give any link (it would reveal who our client is). Ask them which times suit them and say you will send an invite.")
+    : booking?.degraded
     ? (booking?.bookingUrl
         ? "The booking page could not be read (" + booking.degradedReason + "). Do NOT invent times. Give them the booking link and let them pick: " + booking.bookingUrl
         : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent times and do NOT invent a link. Ask them which times suit them and say you will send an invite.")
@@ -962,7 +1074,9 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const message = [
     "Today is " + (currentDate ?? new Date().toISOString().split("T")[0]) + ".",
     "",
-    "You are answering one prospect who replied to " + (brand?.brand?.name ?? "our client") + "'s outreach and showed interest.",
+    "You are answering one prospect who replied to the outreach we sent for our client, " + client + ", and showed interest.",
+    "",
+    ...voice,
     "",
     "WHO THEY ARE",
     ...personLines,
@@ -1016,16 +1130,16 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You answer one prospect at a time, in an email thread that is already running.",
     "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
     "You answer what they asked before you ask for anything.",
-    "You speak as the team that runs what you sell: what you know about it you state as your own, never as what a website or a page says.",
+    "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
     "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
     "When their last message needs no answer — a refusal, a request to stop, a goodbye — you send nothing and hand nothing over.",
     "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
   ].join(" ");
 
-  return { message, systemPrompt, ladderNextDueAt, timezone };
+  return { message, systemPrompt, ladderNextDueAt, timezone, stance };
 }
-`.trim();
+`.trim().replace("STANCES_LIST", JSON.stringify(STANCES));
 
 /**
  * Bounds the date the model chose against the contract lead-service publishes.
@@ -1368,6 +1482,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           conversation: "$ref:conversation.output",
           offer: "$ref:offer-economics.output",
+          brand: "$ref:brand-profile.output",
         },
       },
       {
@@ -1474,6 +1589,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           brand: "$ref:brand-profile.output",
           currentDate: "$ref:flow_input.currentDate",
           facts: "$ref:gather-facts.output",
+          identity: "$ref:plan-lookups.output.identity",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -1510,6 +1626,9 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           draft: "$ref:draft-reply.output",
           facts: "$ref:gather-facts.output",
+          identity: "$ref:plan-lookups.output.identity",
+          offer: "$ref:offer-economics.output",
+          brand: "$ref:brand-profile.output",
         },
       },
       // Can the model answer what they asked, or does a person have to? It

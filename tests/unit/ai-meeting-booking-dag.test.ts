@@ -24,6 +24,7 @@ import {
   GATHER_FACTS_CODE,
   GROUND_DRAFT_CODE,
   OFFER_OVERVIEW_KEY,
+  STANCES,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -32,6 +33,19 @@ const DAG_OPTS = { provider: "google", model: "pro" } as const;
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, unknown>> {
   const body = code.replace(/^export async function main/, "async function main") + "\nreturn main;";
   return new Function(body)() as (...args: unknown[]) => Promise<Record<string, unknown>>;
+}
+
+const INSIDER = { stance: "insider", evidence: "I'm Sam at Acme." };
+
+/**
+ * Runs compose-prompt. Callers that predate the identity stance pass up to the
+ * facts argument; they get an insider thread, which is the voice they assert.
+ */
+function composeReply(...args: unknown[]): Promise<Record<string, unknown>> {
+  const a = [...args];
+  while (a.length < 9) a.push(undefined);
+  if (a.length < 10) a.push(INSIDER);
+  return loadMain(COMPOSE_REPLY_PROMPT_CODE)(...a);
 }
 
 /** Every node reachable from `start`, following edges forward. */
@@ -693,7 +707,7 @@ describe("composing the prompt", () => {
   };
 
   const call = (booking: unknown, followupCount = 0) =>
-    loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+    composeReply(
       { followup: { ...base.followup.followup, followupCount } },
       base.leadDetail,
       base.conversation,
@@ -740,7 +754,7 @@ describe("composing the prompt", () => {
 
   it("refuses to answer when the campaign's offer read carries no name", async () => {
     await expect(
-      loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+      composeReply(
         base.followup, base.leadDetail, base.conversation, base.priorGeneration,
         { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
         { offerId: "offer-nameless", name: null }, base.brand, base.currentDate,
@@ -942,7 +956,7 @@ describe("handing an unanswerable question to a human", () => {
   });
 
   it("tells the model to hand over rather than deflect back to the call", async () => {
-    const out = await loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+    const out = await composeReply(
       { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
       { leadDetail: { lead: { firstName: "Ada", timezone: "UTC" } } },
       { conversation: { messages: [{ direction: "inbound", text: "What does it cost for 5 seats?" }] } },
@@ -1027,7 +1041,7 @@ describe("a last message that needs no reply at all", () => {
   });
 
   it("tells the model a refusal or goodbye is not a question to escalate", async () => {
-    const out = await loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+    const out = await composeReply(
       { followup: { id: "row-1", leadId: "lead-1", followupCount: 1 } },
       { leadDetail: { lead: { firstName: "Cynthia", timezone: "UTC" } } },
       { conversation: { messages: [{ direction: "inbound", text: "Apologies, my previous email was sent in error. We are not interested at this time. Thank you for your time." }] } },
@@ -1058,7 +1072,7 @@ describe("a prospect who tells us the meeting is booked", () => {
   const JOANIE = "Scheduled a call for Friday! Thank you";
 
   async function composeFor(lastMessage: string) {
-    return loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+    return composeReply(
       { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
       { leadDetail: { lead: { firstName: "Joanie", timezone: "America/New_York" } } },
       {
@@ -1160,7 +1174,7 @@ describe("a prospect who tells us when they are free", () => {
     },
   };
   const compose = (slots: string[]) =>
-    loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+    composeReply(
       { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
       { leadDetail: { lead: { firstName: "Stella", timezone: "America/Chicago" } } },
       stellaThread,
@@ -1259,7 +1273,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
   });
 
   it("asks the site one field per question, plus how the offer works", async () => {
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }] } }, offer);
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER } }, offer);
     expect(out.questions).toEqual([{ key: "q1", question: "How does it work?" }]);
     const fields = out.fields as Array<{ key: string; description: string }>;
     expect(fields.map((f) => f.key)).toEqual([OFFER_OVERVIEW_KEY, "q1"]);
@@ -1315,7 +1329,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
   });
 
   const compose = (facts: unknown, lead: Record<string, unknown> = { firstName: "Joe", timezone: "America/Chicago" }) =>
-    loadMain(COMPOSE_REPLY_PROMPT_CODE)(
+    composeReply(
       { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
       { leadDetail: { lead } },
       conversation,
@@ -1510,5 +1524,155 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     const top = flow.value.modules.map((m) => m.id);
     expect(top).toContain("check_answerable");
     expect(top).toContain("check_sent");
+  });
+});
+
+describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Doc Dinners, 2026-10-02)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  afterEach(() => vi.restoreAllMocks());
+  const quiet = () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  };
+
+  const brand = { brand: { name: "Doc Dinners", domain: "docdinners.com", url: "https://www.docdinners.com" } };
+  const offer = { offerId: "offer-1", name: "Dinner with Docs", bookingUrl: "https://web.docdinners.com/appointment-booking-page" };
+  const conversation = {
+    conversation: {
+      messages: [
+        { direction: "outbound", text: "I work with Doc Dinners. We run end-to-end educational dinner events for chiropractors.\n--\nRoger Lee\nDistribute.you | Marketing Agency" },
+        { direction: "inbound", text: "Send me more information on how it works." },
+      ],
+    },
+  };
+  const facts = {
+    questions: [{ key: "q1", question: "How does it work?", siteAnswer: null }],
+    exact: [{ id: "E1", source: "offer-user-fields", label: "results", value: "10 to 30+ new patient appointments per event" }],
+    interpreted: [],
+    withheld: [],
+  };
+  const booking = { timezone: "America/New_York", degraded: false, bookingUrl: offer.bookingUrl, slots: ["2026-10-06T10:00:00-04:00"] };
+  const composeFor = (identity: unknown, b: unknown = booking) =>
+    composeReply({ followup: { followupCount: 0 } }, { leadDetail: { lead: { firstName: "Joe" } } }, conversation, null, b, offer, brand, "2026-10-02", facts, identity);
+  const text = (out: Record<string, unknown>) => `${out.message as string}\n${out.systemPrompt as string}`;
+
+  it("names the stance on the same model read that lists the questions, from the messages WE sent", async () => {
+    expect(QUESTIONS_RESPONSE_SCHEMA.required).toContain("identity");
+    expect(QUESTIONS_RESPONSE_SCHEMA.properties.identity.properties.stance.enum).toEqual(["insider", "external", "blind", "unclear"]);
+    expect(byId.get("compose-questions-prompt")?.inputMapping?.brand).toBe("$ref:brand-profile.output");
+    const out = await loadMain(COMPOSE_QUESTIONS_PROMPT_CODE)(conversation, offer, brand);
+    const message = out.message as string;
+    expect(message).toContain("read the messages WE sent (marked US), signatures included");
+    expect(message).toContain("our client, Doc Dinners");
+    for (const stance of STANCES) expect(message).toContain(`- ${stance}:`);
+    expect(message).toContain("I work with Doc Dinners.");
+  });
+
+  it("refuses to plan when the model named no stance", async () => {
+    await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [] } }, offer)).rejects.toThrow(/no identity stance/);
+    await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "friendly", evidence: "" } } }, offer)).rejects.toThrow(/no identity stance/);
+    quiet();
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "external", evidence: "I work with Doc Dinners." } } }, offer);
+    expect(out.identity).toEqual({ stance: "external", evidence: "I work with Doc Dinners." });
+    expect(byId.get("compose-prompt")?.inputMapping?.identity).toBe("$ref:plan-lookups.output.identity");
+    expect(byId.get("ground-draft")?.inputMapping).toMatchObject({
+      identity: "$ref:plan-lookups.output.identity", offer: "$ref:offer-economics.output", brand: "$ref:brand-profile.output",
+    });
+  });
+
+  it("refuses to draft without a stance", async () => {
+    await expect(composeReply({ followup: { followupCount: 0 } }, { leadDetail: { lead: {} } }, conversation, null, booking, offer, brand, "2026-10-02", facts, null))
+      .rejects.toThrow(/no identity stance/);
+  });
+
+  it("insider: speaks AS the client, first person", async () => {
+    const t = text(await composeFor({ stance: "insider", evidence: "I'm Sam at Doc Dinners." }));
+    expect(t).toContain("in this thread we have written as Doc Dinners itself");
+    expect(t).toContain("\"we\" is Doc Dinners");
+    expect(t).toContain("State every fact in the first person, as our own knowledge");
+    expect(t).not.toContain("We are not Doc Dinners");
+  });
+
+  it("external: \"I work with X\" voice, X in the third person, never \"our system\"", async () => {
+    const out = await composeFor({ stance: "external", evidence: "I work with Doc Dinners." });
+    const t = text(out);
+    expect(out.stance).toBe("external");
+    expect(t).toContain("we have presented ourselves as working WITH Doc Dinners, from outside it. We are not Doc Dinners.");
+    expect(t).toContain("Our own words in this thread: \"I work with Doc Dinners.\"");
+    expect(t).toContain("Name Doc Dinners in the third person");
+    expect(t).toContain("never \"our system\", \"our events\"");
+    // The insider licence is not in front of the model.
+    expect(t).not.toContain("State every fact in the first person");
+    expect(t).not.toContain("You speak as the team that runs");
+    // Ownership from #481 stays: plain facts, never a site.
+    expect(t).toContain("never point to a website, a page, a brochure");
+    expect(t).toContain("never hedge a fact");
+    // Booking unchanged: two slots and the link.
+    expect(t).toContain("Propose EXACTLY TWO");
+    expect(t).toContain(offer.bookingUrl);
+  });
+
+  it("blind: the client name, the offer name and any link of theirs are forbidden, and no booking link is given", async () => {
+    const t = text(await composeFor({ stance: "blind", evidence: "" }));
+    expect(t).toContain("we have NEVER named our client, on purpose");
+    expect(t).toContain("Never write Doc Dinners, never write the offer's name (\"Dinner with Docs\")");
+    expect(t).toContain("Do NOT give any link");
+    expect(t).not.toContain("give the link so they can pick another");
+    expect(t).not.toContain(offer.bookingUrl);
+    expect(t).not.toContain("State every fact in the first person");
+    const degraded = text(await composeFor({ stance: "blind", evidence: "" }, { timezone: "UTC", degraded: true, degradedReason: "unreadable", bookingUrl: offer.bookingUrl, slots: [] }));
+    expect(degraded).not.toContain(offer.bookingUrl);
+    expect(degraded).toContain("say you will send an invite");
+  });
+
+  it("unclear: tells the model to escalate rather than guess", async () => {
+    const t = text(await composeFor({ stance: "unclear", evidence: "" }));
+    expect(t).toContain("Do not guess an identity. If a reply is owed, set decision to escalate");
+  });
+
+  const answered = (replyHtml: string, decision = "answer") => ({
+    json: { decision, question: "How does it work?", reason: "r", replyHtml, nextDueAt: "2026-10-09T00:00:00Z", answers: [{ key: "q1", source: "exact", facts: ["E1"] }] },
+  });
+
+  it("unclear: any reply that would be sent becomes an escalation; nothing is sent", async () => {
+    quiet();
+    for (const decision of ["answer", "confirm_booking"]) {
+      const out = await loadMain(GROUND_DRAFT_CODE)(answered("<p>Hi</p>", decision), facts, { stance: "unclear", evidence: "" }, offer, brand);
+      const json = out.json as Record<string, unknown>;
+      expect(out.overridden).toBe(true);
+      expect(json.decision).toBe("escalate");
+      expect(json.question).toBe("How does it work?");
+      expect(json.replyHtml).toBeUndefined();
+      expect(String(json.reason)).toContain("identity in this thread is unclear");
+    }
+    // A message that needs no reply still needs none.
+    const none = { json: { decision: "no_reply_owed", question: "q", reason: "r", answers: [] } };
+    expect((await loadMain(GROUND_DRAFT_CODE)(none, facts, { stance: "unclear", evidence: "" }, offer, brand)).json).toEqual(none.json);
+  });
+
+  it("blind: a draft naming the client, the offer, or a domain of theirs is never sent", async () => {
+    quiet();
+    const blind = { stance: "blind", evidence: "" };
+    for (const leak of ["<p>Doc Dinners runs it</p>", "<p>Our Dinner with Docs works</p>", "<p>see docdinners.com</p>", "<p>book at https://web.docdinners.com/x</p>"]) {
+      const out = await loadMain(GROUND_DRAFT_CODE)(answered(leak), facts, blind, offer, brand);
+      expect(out.overridden).toBe(true);
+      expect((out.json as Record<string, unknown>).decision).toBe("escalate");
+      expect((out.json as Record<string, unknown>).replyHtml).toBeUndefined();
+    }
+    const clean = answered("<p>The team I work with books 10 to 30+ new patient appointments per event.</p>");
+    const out = await loadMain(GROUND_DRAFT_CODE)(clean, facts, blind, offer, brand);
+    expect(out.overridden).toBe(false);
+    expect(out.json).toEqual(clean.json);
+  });
+
+  it("insider and external drafts that name the client pass", async () => {
+    quiet();
+    for (const stance of ["insider", "external"]) {
+      const draft = answered("<p>Doc Dinners books 10 to 30+ new patient appointments per event.</p>");
+      const out = await loadMain(GROUND_DRAFT_CODE)(draft, facts, { stance, evidence: "x" }, offer, brand);
+      expect(out.overridden).toBe(false);
+      expect(out.json).toEqual(draft.json);
+    }
   });
 });
