@@ -104,6 +104,12 @@
  * no hedged middle. Everything downstream reads `ground-draft`, never the raw
  * draft.
  *
+ * SOME THREADS ARE A GAME. When step 1 reads that the outreach which opened
+ * the thread is one with a playbook (`PLAYBOOKS`), the draft is given that
+ * game's STRATEGY (`ACQUISITION_QUESTIONS_PLAYBOOK`) and adapts it; it may then
+ * answer "who are you" from the playbook (source `playbook`) and thank-and-stop
+ * a prospect who already has the problem solved (`close_with_thanks`).
+ *
  * The single stated degradation: if the booking page cannot be read, the reply
  * still goes out with the plain booking link and no slots, logged loudly.
  * Everything else fails loud and lands on the error branch — including every
@@ -613,15 +619,28 @@ export async function main(conversation, offer, brand) {
     "- blind: our messages never name our client at all.",
     "- unclear: there is no message from us on record, or our messages name the client but give no way to tell which of the above, or contradict each other.",
     "Put in identity.evidence the words from our messages that decided it, quoted exactly (empty for unclear when there are none).",
+    "",
+    "Last, say which outreach opened this thread, from the messages WE sent. Return playbook:",
+    "- acquisition_questions: our messages introduced us as working on customer (or patient) acquisition for businesses like theirs, and asked them what they would charge per person if we sent them a group of people for one specific service, and/or what happens today when someone calls them while they are busy (voicemail, a receptionist, an AI).",
+    "- none: anything else.",
   ].join("\\n");
 
-  const systemPrompt = "You read one email and list the questions in it, and you say how our side of the thread presented itself. You never answer the questions and you never invent one.";
+  const systemPrompt = "You read one email and list the questions in it, and you say how our side of the thread presented itself and which outreach opened it. You never answer the questions and you never invent one.";
   return { message, systemPrompt };
 }
 `.trim();
 
 /** The identities a thread can have given the prospect; see COMPOSE_QUESTIONS_PROMPT_CODE. */
 export const STANCES = ["insider", "external", "blind", "unclear"] as const;
+
+/**
+ * The outreach that opened the thread, when it is one the reply has to PLAY
+ * rather than merely continue. Read off the messages we sent by the step-1
+ * model, like the identity: the sequences are LLM-written per lead, so no
+ * phrase or template id names them reliably, and the thread is what the
+ * prospect actually read. `none` is every thread today but those below.
+ */
+export const PLAYBOOKS = ["acquisition_questions", "none"] as const;
 
 /** What the step-1 model returns: the questions, and who we said we were. */
 export const QUESTIONS_RESPONSE_SCHEMA = {
@@ -650,8 +669,13 @@ export const QUESTIONS_RESPONSE_SCHEMA = {
       },
       required: ["stance", "evidence"],
     },
+    playbook: {
+      type: "string",
+      enum: [...PLAYBOOKS],
+      description: "Which outreach opened this thread, read off the messages we sent.",
+    },
   },
-  required: ["questions", "identity"],
+  required: ["questions", "identity", "playbook"],
 } as const;
 
 /**
@@ -690,6 +714,13 @@ export async function main(listed, offer) {
   const identity = { stance, evidence: String(listed.json.identity.evidence ?? "") };
   console.log("[ai-meeting-booking] identity given to the prospect in this thread: " + JSON.stringify(identity));
 
+  const playbook = listed?.json?.playbook;
+  if (!PLAYBOOKS_LIST.includes(playbook)) {
+    throw new Error("[ai-meeting-booking] the question-listing step named no playbook (" + JSON.stringify(playbook) +
+      "); refusing to draft without knowing which outreach opened the thread");
+  }
+  console.log("[ai-meeting-booking] outreach that opened this thread: " + playbook);
+
   const about = offer?.name ? "\\"" + offer.name + "\\"" : "what the brand sells";
   const fields = [
     {
@@ -703,9 +734,12 @@ export async function main(listed, offer) {
         "Use only what the site says, as close to its wording as possible. If the site does not answer it, return Unknown.",
     })),
   ];
-  return { questions, fields, identity };
+  return { questions, fields, identity, playbook };
 }
-`.trim().replace("OVERVIEW_KEY", OFFER_OVERVIEW_KEY).replace("STANCES_LIST", JSON.stringify(STANCES));
+`.trim()
+  .replace("OVERVIEW_KEY", OFFER_OVERVIEW_KEY)
+  .replace("STANCES_LIST", JSON.stringify(STANCES))
+  .replace("PLAYBOOKS_LIST", JSON.stringify(PLAYBOOKS));
 
 /**
  * STEP 2's assembly: every fact brand-service holds that could answer them,
@@ -833,7 +867,7 @@ export async function main(plan, offerAnswers, offerFields, brandFields, extract
  * shape, so every node downstream reads it exactly as it read the draft.
  */
 export const GROUND_DRAFT_CODE = `
-export async function main(draft, facts, identity, offer, brand) {
+export async function main(draft, facts, identity, offer, brand, playbook) {
   const json = { ...(draft?.json ?? {}) };
 
   // No em dash or en dash ever reaches a prospect, whatever the model wrote:
@@ -848,7 +882,7 @@ export async function main(draft, facts, identity, offer, brand) {
       console.error("[ai-meeting-booking] the draft used a dash a prospect must never read; rewritten before anything is sent");
     }
   }
-  const writes = json.decision === "answer" || json.decision === "confirm_booking";
+  const writes = json.decision === "answer" || json.decision === "confirm_booking" || json.decision === "close_with_thanks";
 
   // An identity we could not read off the thread is never guessed at.
   if (writes && identity?.stance === "unclear") {
@@ -891,7 +925,10 @@ export async function main(draft, facts, identity, offer, brand) {
     const a = declared.get(q.key) ?? {};
     let source = String(a.source ?? "none");
     const cited = Array.isArray(a.facts) ? a.facts.map(String) : [];
-    if (!["exact", "interpreted", "booking"].includes(source)) source = "none";
+    // "playbook" answers only exist in a thread that sequence opened (who we
+    // are, whether we hold a group of customers): elsewhere it is no source.
+    const sources = playbook === "acquisition_questions" ? ["exact", "interpreted", "booking", "playbook"] : ["exact", "interpreted", "booking"];
+    if (!sources.includes(source)) source = "none";
     if ((source === "exact" || source === "interpreted") && !cited.some((id) => ids[source].has(id))) source = "none";
     return { key: q.key, question: q.question, source, facts: cited };
   });
@@ -916,6 +953,35 @@ export async function main(draft, facts, identity, offer, brand) {
 `.trim();
 
 /**
+ * THE GAME of a thread opened by the acquisition-questions cold sequence
+ * (`scripts/fork-acquisition-questions-sequence.mjs`, owner-approved
+ * 2026-10-03). That sequence introduces us as a customer acquisition agency and
+ * asks two questions; their answers are the pitch. The reply is given the
+ * STRATEGY, never a canned reply per case (owner rule: explain the game so the
+ * model adapts). Keep it in agreement with the sequence's own text.
+ *
+ * Two exits it relies on: `close_with_thanks` (they already have the problem
+ * solved: one thank-you, then their follow-ups stop) and the `playbook` answer
+ * source (who we are, whether we hold a group: answered from this strategy,
+ * not from a brand fact, which `ground-draft` accepts only in such a thread).
+ */
+export const ACQUISITION_QUESTIONS_PLAYBOOK = [
+  "This prospect was contacted by a sequence where we introduced ourselves as a customer acquisition agency and asked two things: what they would charge per person if we sent them a group of customers for one specific service, and what happens today when a customer calls them while they are busy (voicemail, receptionist, AI).",
+  "The game: their answers are the pitch. Their price tells us what one lost customer costs them. Their phone answer tells us whether they lose customers today. Our client's product recovers exactly those customers. So the customers we \"bring\" are real: they already call, and the product stops them from going to a competitor.",
+  "How to play it once they reply:",
+  "- An answer to our questions (a price, how their calls are handled) is owed a reply even when it asks nothing back: set decision to answer.",
+  "- Turn their own figures into the reason to care (their price x the customers they miss). Never invent a figure they did not give or the facts in front of you do not state.",
+  "- If they already have the problem solved (an AI or someone always answers), thank them and stop: set decision to close_with_thanks and write one or two sentences of thanks that ask for nothing.",
+  "- If they ask who we are or ask for the group: be straight. We do not hold a group of customers today; the customers we mean are the ones already calling them. Then make the intro offer. A question answered this way takes source playbook in answers.",
+  "- Never claim anyone chose, called or visited them. Never imply we will send people we do not have.",
+  "- The ask is always light: an intro to the team behind the product, answerable in one line. Until they have said yes to that intro, it REPLACES proposing the meeting: no times, no link. Once they have said yes, propose the meeting as under BOOKING.",
+  "- Follow up twice if they go quiet, each time with a new angle, never \"just checking in\".",
+] as const;
+
+/** How many follow-ups the acquisition-questions game sends a prospect who went quiet. */
+export const PLAYBOOK_QUIET_FOLLOWUPS = 2;
+
+/**
  * Builds the single string the model is asked to answer.
  *
  * chat-service `/complete` takes one flat `message`, so the interpolation has to
@@ -929,7 +995,7 @@ export async function main(draft, facts, identity, offer, brand) {
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   const timezone = booking?.timezone ?? "UTC";
 
@@ -1064,6 +1130,31 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const ladderDays = ladder[Math.min(followupCount, ladder.length - 1)];
   const ladderNextDueAt = new Date(Date.now() + ladderDays * 86400000).toISOString();
 
+  // THE GAME, when the outreach that opened this thread is one the reply has
+  // to play (see PLAYBOOKS). The strategy is explained, never scripted per
+  // case: the model adapts it to what they wrote. How many times we have
+  // already written since they last did is counted off the thread, because
+  // "follow up twice if they go quiet" is a count of OUR trailing messages.
+  if (!PLAYBOOKS_LIST.includes(playbook)) {
+    throw new Error("[ai-meeting-booking] no playbook for this thread (" + JSON.stringify(playbook) +
+      "); refusing to draft without knowing which outreach opened it");
+  }
+  let lastInbound = -1;
+  messages.forEach((m, i) => { if (m?.direction === "inbound") lastInbound = i; });
+  const oursSinceTheyWrote = lastInbound === -1 ? 0 : messages.length - 1 - lastInbound;
+  const quietFollowups = Math.max(0, oursSinceTheyWrote - 1);
+  const quietLine = oursSinceTheyWrote === 0
+    ? "Their message is the last one in the thread: this is our reply to it."
+    : quietFollowups >= QUIET_FOLLOWUPS
+    ? "The last message in the thread is ours and they have gone quiet. We already replied to them and followed up " + quietFollowups + " times since: that is every follow-up this game allows. Set decision to no_reply_owed and write nothing."
+    : "The last message in the thread is ours and they have gone quiet. We already replied to them" + (quietFollowups > 0 ? " and followed up " + quietFollowups + " time(s) since" : "") + ". Write follow-up " + (quietFollowups + 1) + " of " + QUIET_FOLLOWUPS + ": one new angle we have not used yet in this thread, never \\"just checking in\\". Set decision to answer.";
+  const gameSection = playbook !== "acquisition_questions" ? [] : [
+    "THE GAME THIS THREAD IS IN",
+    ...PLAYBOOK_LINES,
+    quietLine,
+    "",
+  ];
+
   // Each slot is labelled with its weekday so the model can match what the
   // prospect said ("next week", "Thursday afternoon") without doing calendar
   // arithmetic. The date part is already the prospect's local date.
@@ -1102,6 +1193,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     transcript || "(no messages on record)",
     "",
     ...factsSection,
+    ...gameSection,
     "FIRST: IS A REPLY OWED AT ALL",
     "Read their LAST message. Some messages need no answer from us: they declined or said they are not interested, asked us to stop writing, said their earlier message was sent in error, or said goodbye without asking or proposing anything.",
     "Writing back to those, even to propose the meeting, is exactly what makes us look like a machine. Set decision to no_reply_owed and write nothing: nobody hears from us, nobody is alerted, and their follow-ups stop. If they write again later, they come back on their own.",
@@ -1149,11 +1241,16 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
     "When their last message needs no answer (a refusal, a request to stop, a goodbye), you send nothing and hand nothing over.",
     "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
+    "When you are told which game the thread is in, you play that game.",
   ].join(" ");
 
-  return { message, systemPrompt, ladderNextDueAt, timezone, stance };
+  return { message, systemPrompt, ladderNextDueAt, timezone, stance, playbook };
 }
-`.trim().replace("STANCES_LIST", JSON.stringify(STANCES));
+`.trim()
+  .replace("STANCES_LIST", JSON.stringify(STANCES))
+  .replace("PLAYBOOKS_LIST", JSON.stringify(PLAYBOOKS))
+  .replace("PLAYBOOK_LINES", JSON.stringify(ACQUISITION_QUESTIONS_PLAYBOOK))
+  .replaceAll("QUIET_FOLLOWUPS", String(PLAYBOOK_QUIET_FOLLOWUPS));
 
 /**
  * Bounds the date the model chose against the contract lead-service publishes.
@@ -1182,6 +1279,10 @@ export async function main(draft, ladderNextDueAt) {
   // follow-ups are stopped, not advanced, so there is no next date to resolve.
   if (draft?.json?.decision === "confirm_booking") {
     return { nextDueAt: null, source: "booking_confirmed" };
+  }
+  // Same for a thank-you to a prospect who already has the problem solved.
+  if (draft?.json?.decision === "close_with_thanks") {
+    return { nextDueAt: null, source: "closed_with_thanks" };
   }
 
   const proposed = draft?.json?.nextDueAt;
@@ -1282,7 +1383,7 @@ export const REPLY_RESPONSE_SCHEMA = {
   properties: {
     decision: {
       type: "string",
-      enum: ["answer", "escalate", "no_reply_owed", "confirm_booking"],
+      enum: ["answer", "escalate", "no_reply_owed", "confirm_booking", "close_with_thanks"],
       description:
         "no_reply_owed: their last message needs no answer at all: they declined, asked us to stop, " +
         "said it was sent in error, or closed the exchange without asking anything. Nothing is sent, " +
@@ -1290,6 +1391,8 @@ export const REPLY_RESPONSE_SCHEMA = {
         "confirm_booking: they told us they booked, scheduled or moved the meeting. Write one or two " +
         "sentences thanking them and confirming the time if they gave one, asking for nothing; " +
         "their follow-ups stop after it. " +
+        "close_with_thanks: only when THE GAME this thread is in tells you to thank them and stop. Write one or two " +
+        "sentences of thanks asking for nothing; their follow-ups stop after it. " +
         "answer: you can answer what they wrote from the facts in front of you. " +
         "escalate: they asked a real question you cannot answer without inventing something: a price, " +
         "a spec, a reference, a commitment nobody here has made. A person takes the thread over. " +
@@ -1309,7 +1412,7 @@ export const REPLY_RESPONSE_SCHEMA = {
       type: "string",
       description:
         "The answer the prospect reads, as HTML. No signature, no subject. " +
-        "Only when decision is answer or confirm_booking: otherwise omit it, the prospect hears nothing from us.",
+        "Only when decision is answer, confirm_booking or close_with_thanks: otherwise omit it, the prospect hears nothing from us.",
     },
     nextDueAt: {
       type: "string",
@@ -1322,13 +1425,14 @@ export const REPLY_RESPONSE_SCHEMA = {
       description:
         "One entry per listed question (q1, q2, ...): where its answer came from. exact = a fact our client stated; " +
         "interpreted = a fact read off their website; booking = the availability or booking link; " +
+        "playbook = answered from THE GAME this thread is in (only when you are told one); " +
         "none = nothing in front of you answers it. Empty when no question was listed.",
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
           key: { type: "string", description: "The listed question's key, e.g. q1." },
-          source: { type: "string", enum: ["exact", "interpreted", "booking", "none"] },
+          source: { type: "string", enum: ["exact", "interpreted", "booking", "playbook", "none"] },
           facts: {
             type: "array",
             description: "The ids of the facts the answer uses (E1, I2, ...). Empty for booking or none.",
@@ -1347,6 +1451,9 @@ export const NO_REPLY_OWED_REASON = "no_reply_owed";
 
 /** The reason stored on the lead's follow-up schedule once a booking is confirmed. */
 export const BOOKING_CONFIRMED_REASON = "booking_confirmed";
+
+/** The reason stored once a prospect who already has the problem solved was thanked. */
+export const CLOSED_WITH_THANKS_REASON = "closed_with_thanks";
 
 /**
  * States, in the log, that this run sent nothing because no reply was owed, and
@@ -1604,6 +1711,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           currentDate: "$ref:flow_input.currentDate",
           facts: "$ref:gather-facts.output",
           identity: "$ref:plan-lookups.output.identity",
+          playbook: "$ref:plan-lookups.output.playbook",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -1643,6 +1751,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           identity: "$ref:plan-lookups.output.identity",
           offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
+          playbook: "$ref:plan-lookups.output.playbook",
         },
       },
       // Can the model answer what they asked, or does a person have to? It
@@ -1776,6 +1885,30 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         },
         retries: 0,
         inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+      },
+      // They already have the problem solved and the thank-you has landed:
+      // nothing left to follow up on, so the schedule is stopped.
+      {
+        id: "stop-followups-closed",
+        type: "http.call",
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/leads/{id}/followups",
+          body: { kind: "stopped", reason: CLOSED_WITH_THANKS_REASON },
+        },
+        retries: 0,
+        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+      },
+      {
+        id: "end-run-closed-with-thanks",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
       },
       {
         id: "end-run-booking-confirmed",
@@ -1926,7 +2059,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         from: "check-answerable",
         to: "resolve-next-due",
         condition:
-          "results['ground-draft']?.json?.decision == 'answer' || results['ground-draft']?.json?.decision == 'confirm_booking'",
+          "results['ground-draft']?.json?.decision == 'answer' || results['ground-draft']?.json?.decision == 'confirm_booking' || results['ground-draft']?.json?.decision == 'close_with_thanks'",
       },
       {
         from: "check-answerable",
@@ -1964,11 +2097,18 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       },
       {
         from: "check-sent",
+        to: "stop-followups-closed",
+        condition:
+          "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'close_with_thanks'",
+      },
+      {
+        from: "check-sent",
         to: "end-run-human-took-over",
         condition: "results['classify-send']?.outcome == 'human_took_over'",
       },
       { from: "record-followup", to: "end-run" },
       { from: "stop-followups-booked", to: "end-run-booking-confirmed" },
+      { from: "stop-followups-closed", to: "end-run-closed-with-thanks" },
     ],
     onError: "end-run-error",
   };
