@@ -28,8 +28,14 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("body.leadId");
   });
 
-  it("includes required email-gateway broadcast fields in the example", () => {
-    // broadcast send requires recipientFirstName, recipientLastName, recipientCompany
+  it("lists only type, to, subject and sequence as required for an email-gateway broadcast send", () => {
+    // email-gateway v0.22.2: the recipient profile fields are optional on POST /orgs/send (#323)
+    expect(prompt).toContain("Required fields: `type`, `to`, `subject`, `sequence`\n");
+    expect(prompt).not.toMatch(/Required fields:[^\n]*recipient(FirstName|LastName|Company)/);
+    expect(prompt).toMatch(/Optional personalization: `recipientFirstName`, `recipientLastName`, `recipientCompany`/);
+  });
+
+  it("still maps the optional recipient profile fields in the example when the lead has them", () => {
     expect(prompt).toContain("body.recipientFirstName");
     expect(prompt).toContain("body.recipientLastName");
     expect(prompt).toContain("body.recipientCompany");
