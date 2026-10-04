@@ -197,7 +197,8 @@ When using content-generation service (\`POST /generate\`):
 
 When sending via email-gateway (\`POST /send\` with \`type: "broadcast"\`):
 - Pass the ENTIRE \`sequence\` array from content-generation output: \`"body.sequence": "$ref:email-generate.output.<path to generated email sequence array>"\`
-- Required fields: \`to\`, \`subject\`, \`sequence\`, \`recipientFirstName\`, \`recipientLastName\`, \`recipientCompany\`
+- Required fields: \`type\`, \`to\`, \`subject\`, \`sequence\`
+- Optional personalization: \`recipientFirstName\`, \`recipientLastName\`, \`recipientCompany\`. Map each one when the fetch node's response declares that field for the recipient; omit any it does not serve. Never invent a path and never substitute a placeholder value.
 - Also map \`body.timezone\` to the recipient's IANA timezone from the same node the recipient's email comes from: \`"body.timezone": "$ref:fetch-lead.output.<path to the recipient's timezone>"\`. It schedules the sequence in the prospect's local business hours. Omit it only when the fetch node's response declares no timezone field — never invent a path for it, and never substitute a default.
 - The sequence is variable-length (LLM determines how many follow-up steps) — always pass it as-is
 

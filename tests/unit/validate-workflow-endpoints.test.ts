@@ -883,7 +883,7 @@ describe("field validation — object/array template variables are allowed", () 
                       brandId: { type: "string" },
                       campaignId: { type: "string" },
                     },
-                    required: ["type", "to", "subject", "recipientFirstName", "recipientLastName", "recipientCompany"],
+                    required: ["type", "to", "subject", "sequence"],
                   },
                 },
               },
@@ -913,6 +913,7 @@ describe("field validation — object/array template variables are allowed", () 
           inputMapping: {
             "body.to": "$ref:fetch-lead.output.lead.email",
             "body.subject": "$ref:email-gen.output.subject",
+            "body.sequence": "$ref:email-gen.output.sequence",
             "body.recipientFirstName": "$ref:fetch-lead.output.lead.firstName",
             "body.recipientLastName": "$ref:fetch-lead.output.lead.lastName",
             "body.recipientCompany": "$ref:fetch-lead.output.lead.publicationName",
