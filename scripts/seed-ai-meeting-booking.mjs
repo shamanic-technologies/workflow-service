@@ -291,6 +291,20 @@ export function needsPlaybook(dag) {
 }
 
 /**
+ * True when a stored DAG still tells the model to "be straight" with an
+ * acquisition-questions prospect who asks for the group: it opened its reply by
+ * confessing we hold no customers (Parva, 2026-10-05). The current playbook
+ * plays the hypothetical forward instead. The repair is an upgrade carrying the
+ * current DAG.
+ */
+export function needsConditionalHypothetical(dag) {
+  const compose = (dag?.nodes ?? []).find((n) => n?.id === "compose-prompt");
+  if (!compose) return false;
+  const code = String(compose.config?.code ?? "");
+  return code.includes("We do not hold a group") || (code.includes("THE GAME THIS THREAD IS IN") && !code.includes("Stay inside the hypothetical"));
+}
+
+/**
  * True when a stored DAG gives a chat step an output budget a thinking model
  * cannot fit in. Gemini 3.1 Pro spends its thought tokens out of the same cap,
  * so list-questions at 800 died on `MAX_TOKENS` before answering a prospect who
@@ -336,7 +350,8 @@ async function main() {
         needsIdentityStance(w.dag) ||
         needsDashBan(w.dag) ||
         needsPlaybook(w.dag) ||
-        needsThinkingBudget(w.dag))
+        needsThinkingBudget(w.dag) ||
+        needsConditionalHypothetical(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }

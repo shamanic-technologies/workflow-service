@@ -1773,8 +1773,13 @@ describe("a thread opened by the acquisition-questions sequence plays its game (
     const message = game.message as string;
     expect(message).toContain("THE GAME THIS THREAD IS IN");
     for (const line of ACQUISITION_QUESTIONS_PLAYBOOK) expect(message).toContain(line);
-    expect(message).toContain("their price x the customers they miss");
-    expect(message).toContain("We do not hold a group of customers today");
+    expect(message).toContain("their price x the few of that group they would lose");
+    expect(message).toContain("Stay inside the hypothetical our first email set up");
+    expect(message).toContain("Always conditional (would), never past tense");
+    expect(message).toContain("COULD catch more of them (could, never will)");
+    expect(message).not.toMatch(/be straight/i);
+    expect(message).not.toContain("We do not hold a group");
+    expect(message).not.toContain("they already call");
     expect(message).toContain("close_with_thanks");
     expect(message).toContain("this is our reply to it");
     expect(`${message}${game.systemPrompt as string}`).not.toMatch(/[\u2013\u2014]/);
