@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import {
+  CHAT_STEP_MAX_TOKENS,
   FEATURE_SLUG,
   buildAiMeetingBookingDag,
 } from "../dist/lib/ai-meeting-booking-dag.js";
@@ -289,6 +290,19 @@ export function needsPlaybook(dag) {
   return !String(ground.config?.code ?? "").includes("playbook") || !nodes.some((n) => n?.id === "stop-followups-closed");
 }
 
+/**
+ * True when a stored DAG gives a chat step an output budget a thinking model
+ * cannot fit in. Gemini 3.1 Pro spends its thought tokens out of the same cap,
+ * so list-questions at 800 died on `MAX_TOKENS` before answering a prospect who
+ * replied with interest (Legistai, 2026-10-05). The repair is an upgrade
+ * carrying the current DAG.
+ */
+export function needsThinkingBudget(dag) {
+  return (dag?.nodes ?? []).some(
+    (n) => n?.config?.service === "chat" && !(Number(n.config?.body?.maxTokens) >= CHAT_STEP_MAX_TOKENS),
+  );
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -321,7 +335,8 @@ async function main() {
         needsOwnedFacts(w.dag) ||
         needsIdentityStance(w.dag) ||
         needsDashBan(w.dag) ||
-        needsPlaybook(w.dag))
+        needsPlaybook(w.dag) ||
+        needsThinkingBudget(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
