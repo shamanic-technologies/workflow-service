@@ -962,17 +962,20 @@ export async function main(draft, facts, identity, offer, brand, playbook) {
  *
  * Two exits it relies on: `close_with_thanks` (they already have the problem
  * solved: one thank-you, then their follow-ups stop) and the `playbook` answer
- * source (who we are, whether we hold a group: answered from this strategy,
+ * source (who we are, where the group is: answered from this strategy,
  * not from a brand fact, which `ground-draft` accepts only in such a thread).
  */
 export const ACQUISITION_QUESTIONS_PLAYBOOK = [
   "This prospect was contacted by a sequence where we introduced ourselves as a customer acquisition agency and asked two things: what they would charge per person if we sent them a group of customers for one specific service, and what happens today when a customer calls them while they are busy (voicemail, receptionist, AI).",
-  "The game: their answers are the pitch. Their price tells us what one lost customer costs them. Their phone answer tells us whether they lose customers today. Our client's product recovers exactly those customers. So the customers we \"bring\" are real: they already call, and the product stops them from going to a competitor.",
+  "The game: their answers are the pitch. Their price tells us what one lost customer costs them. Their phone answer tells us where customers slip through. Our client's product catches more of exactly those customers.",
   "How to play it once they reply:",
   "- An answer to our questions (a price, how their calls are handled) is owed a reply even when it asks nothing back: set decision to answer.",
-  "- Turn their own figures into the reason to care (their price x the customers they miss). Never invent a figure they did not give or the facts in front of you do not state.",
+  "- Stay inside the hypothetical our first email set up: say that group came in. Never talk about a list, never apologise, never say we do not have them, never open by correcting what we wrote.",
+  "- No setup catches everyone, so some of that group WOULD end up choosing another firm because of a gap in how inquiries are handled today. Name that gap in their own words when they gave it (voicemail, a busy receptionist, replying the next morning); otherwise use the usual gap for their trade (after-hours inquiries, slow first response). Always conditional (would), never past tense: real people did not already leave, call or choose anyone.",
+  "- If they gave a price, multiply: their price x the few of that group they would lose. Never invent a figure they did not give or the facts in front of you do not state.",
   "- If they already have the problem solved (an AI or someone always answers), thank them and stop: set decision to close_with_thanks and write one or two sentences of thanks that ask for nothing.",
-  "- If they ask who we are or ask for the group: be straight. We do not hold a group of customers today; the customers we mean are the ones already calling them. Then make the intro offer. A question answered this way takes source playbook in answers.",
+  "- If they ask who we are or ask for the group: answer by playing the hypothetical forward as above, then make the intro offer to the team behind a solution that COULD catch more of them (could, never will). A question answered this way takes source playbook in answers.",
+  "- Plain short words. Say what the product does in a few everyday words, never a jargon pitch (no \"specialized platform\", no \"24/7 visibility\").",
   "- Never claim anyone chose, called or visited them. Never imply we will send people we do not have.",
   "- The ask is always light: an intro to the team behind the product, answerable in one line. Until they have said yes to that intro, it REPLACES proposing the meeting: no times, no link. Once they have said yes, propose the meeting as under BOOKING.",
   "- Follow up twice if they go quiet, each time with a new angle, never \"just checking in\".",
