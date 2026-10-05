@@ -1345,6 +1345,22 @@ export async function main(send) {
 
 export const FEATURE_SLUG = "ai-meeting-booking";
 
+/**
+ * Output budget of EVERY chat-service `/complete` step in this DAG.
+ *
+ * The configured model is a THINKING model (`pro` resolves to Gemini 3.1 Pro),
+ * and its thought tokens are billed against the same `maxOutputTokens` as the
+ * JSON it returns. A cap sized for the JSON alone (800 on list-questions) left
+ * the model no room: chat-service logged `MAX_TOKENS hit | tokensOutput=786`
+ * and failed loud, so a prospect who replied with interest (Legistai,
+ * 2026-10-05) was never answered, every retry dying the same way. chat-service
+ * reserves cost on this cap and bills what was actually produced, so a
+ * generous cap costs nothing on a run that does not use it. Do not size a
+ * step's cap from its expected JSON length; a test pins every chat step at or
+ * above this floor.
+ */
+export const CHAT_STEP_MAX_TOKENS = 16_000;
+
 export interface AiMeetingBookingDagOptions {
   /** chat-service provider, e.g. "google". */
   provider: string;
@@ -1619,7 +1635,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
             responseFormat: "json",
             responseSchema: QUESTIONS_RESPONSE_SCHEMA,
             temperature: 0,
-            maxTokens: 800,
+            maxTokens: CHAT_STEP_MAX_TOKENS,
           },
         },
         retries: 0,
@@ -1729,7 +1745,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
             responseFormat: "json",
             responseSchema: REPLY_RESPONSE_SCHEMA,
             temperature: 0.4,
-            maxTokens: 2000,
+            maxTokens: CHAT_STEP_MAX_TOKENS,
           },
         },
         retries: 0,

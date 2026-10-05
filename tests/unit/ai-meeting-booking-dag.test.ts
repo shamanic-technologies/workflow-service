@@ -28,6 +28,7 @@ import {
   CLOSED_WITH_THANKS_REASON,
   OFFER_OVERVIEW_KEY,
   STANCES,
+  CHAT_STEP_MAX_TOKENS,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -70,6 +71,21 @@ function descendants(dag: DAG, start: string): Set<string> {
 }
 
 describe("ai-meeting-booking DAG", () => {
+  // Regression: list-questions shipped maxTokens 800 and Gemini 3.1 Pro (a
+  // thinking model, thought tokens count against the cap) died on MAX_TOKENS,
+  // so an interested prospect went unanswered (Legistai, 2026-10-05).
+  it("gives every chat step an output budget a thinking model can fit in", () => {
+    expect(CHAT_STEP_MAX_TOKENS).toBeGreaterThanOrEqual(16_000);
+    const chat = buildAiMeetingBookingDag(DAG_OPTS).nodes.filter(
+      (n) => (n.config as { service?: string } | undefined)?.service === "chat",
+    );
+    expect(chat.map((n) => n.id).sort()).toEqual(["draft-reply", "list-questions"]);
+    for (const n of chat) {
+      const body = (n.config as { body: { maxTokens?: number } }).body;
+      expect(body.maxTokens, n.id).toBeGreaterThanOrEqual(CHAT_STEP_MAX_TOKENS);
+    }
+  });
+
   const dag = buildAiMeetingBookingDag(DAG_OPTS);
   const byId = new Map(dag.nodes.map((n) => [n.id, n]));
 
