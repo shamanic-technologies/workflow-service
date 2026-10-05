@@ -143,19 +143,19 @@ export function templateTokens(prompt) {
  * off the template these tokens were taken from, so a missing one throws
  * rather than being invented.
  */
-export function buildTemplate(descriptionSource) {
+export function buildTemplateFor(spec, descriptionSource) {
   const described = new Map((descriptionSource.variables ?? []).map((v) => [v.name, v]));
-  const variables = templateTokens(TEMPLATE_PROMPT).map((name) => {
+  const variables = templateTokens(spec.templatePrompt).map((name) => {
     const v = described.get(name);
     if (!v || typeof v.description !== "string" || v.description.trim() === "") {
       throw new Error(
         `template "${descriptionSource.type}" carries no description for "{{${name}}}" — ` +
-        `refusing to store "${TEMPLATE_TYPE}" with an undescribed variable`,
+        `refusing to store "${spec.templateType}" with an undescribed variable`,
       );
     }
     return { name, description: v.description };
   });
-  return { type: TEMPLATE_TYPE, prompt: TEMPLATE_PROMPT, variables };
+  return { type: spec.templateType, prompt: spec.templatePrompt, variables };
 }
 
 /** The content-generation call: the only node in these DAGs posting to `/generate`. */
@@ -164,11 +164,11 @@ export function findGenerateNode(dag) {
 }
 
 /**
- * The source DAG with its content call pointed at the new template and model.
+ * The source DAG with its content call pointed at the spec's template and model.
  * Every token the template states must already be mapped by the source, or the
  * fork would generate with a blank where a prospect or client fact belongs.
  */
-export function withYcColdEmail(dag) {
+export function withTemplateFor(spec, dag) {
   const clone = structuredClone(dag);
   const node = findGenerateNode(clone);
   if (!node) throw new Error("no content-generation /generate node in DAG");
@@ -177,14 +177,28 @@ export function withYcColdEmail(dag) {
       .map((k) => k.match(/^body\.variables\.(.+)$/)?.[1])
       .filter(Boolean),
   );
-  const unmapped = templateTokens(TEMPLATE_PROMPT).filter((t) => !mapped.has(t));
+  const unmapped = templateTokens(spec.templatePrompt).filter((t) => !mapped.has(t));
   if (unmapped.length > 0) {
     throw new Error(`source DAG does not map ${JSON.stringify(unmapped)} on its content call`);
   }
-  node.config.body.type = TEMPLATE_TYPE;
-  node.config.body.model = MODEL;
+  node.config.body.type = spec.templateType;
+  node.config.body.model = spec.model;
   return clone;
 }
+
+export const SPEC = {
+  templateType: TEMPLATE_TYPE,
+  templatePrompt: TEMPLATE_PROMPT,
+  descriptionSourceType: DESCRIPTION_SOURCE_TYPE,
+  model: MODEL,
+  defaultSourceDynasty: DEFAULT_SOURCE_DYNASTY,
+  legKey: LEG_KEY,
+  legNote: LEG_NOTE,
+  workflowDescription: WORKFLOW_DESCRIPTION,
+};
+
+export const buildTemplate = (descriptionSource) => buildTemplateFor(SPEC, descriptionSource);
+export const withYcColdEmail = (dag) => withTemplateFor(SPEC, dag);
 
 /**
  * Every assignment on the leg other than `dynastySlug`, compared before and
@@ -208,7 +222,11 @@ function arg(name) {
   return i === -1 ? undefined : process.argv[i + 1];
 }
 
-async function main() {
+/**
+ * Template -> fork -> leg, for any `spec` shaped like `SPEC`. Shared with
+ * `fork-yc-cold-email-click.mjs`; every check below holds for both.
+ */
+export async function runFork(spec) {
   const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
   const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
   const CG_URL = process.env.CONTENT_GENERATION_SERVICE_URL;
@@ -217,7 +235,7 @@ async function main() {
   const FS_KEY = process.env.FEATURES_SERVICE_API_KEY;
   const APPLY = process.argv.includes("--apply");
   const ORG_ID = arg("org");
-  const DYNASTY = arg("dynasty") ?? DEFAULT_SOURCE_DYNASTY;
+  const DYNASTY = arg("dynasty") ?? spec.defaultSourceDynasty;
 
   if (!API_KEY || !CG_URL || !CG_KEY || !FS_URL || !FS_KEY) {
     console.error(
@@ -259,25 +277,25 @@ async function main() {
 
   // 1. The template, BEFORE the workflow: a DAG naming a type content-generation
   //    has never stored is a workflow that 404s on its first run.
-  const source = await cg("GET", `/platform-prompts?type=${encodeURIComponent(DESCRIPTION_SOURCE_TYPE)}`);
+  const source = await cg("GET", `/platform-prompts?type=${encodeURIComponent(spec.descriptionSourceType)}`);
   if (source.status !== 200) {
-    throw new Error(`description source ${DESCRIPTION_SOURCE_TYPE} unreadable (${source.status})`);
+    throw new Error(`description source ${spec.descriptionSourceType} unreadable (${source.status})`);
   }
-  const template = buildTemplate(source.payload);
-  const existing = await cg("GET", `/platform-prompts?type=${encodeURIComponent(TEMPLATE_TYPE)}`);
+  const template = buildTemplateFor(spec, source.payload);
+  const existing = await cg("GET", `/platform-prompts?type=${encodeURIComponent(spec.templateType)}`);
   if (existing.status === 200) {
-    if (existing.payload.prompt !== TEMPLATE_PROMPT) {
-      throw new Error(`template ${TEMPLATE_TYPE} is stored but DIFFERS from this file; refusing to fork onto it`);
+    if (existing.payload.prompt !== spec.templatePrompt) {
+      throw new Error(`template ${spec.templateType} is stored but DIFFERS from this file; refusing to fork onto it`);
     }
-    console.log(`template ${TEMPLATE_TYPE}: already stored, matches this file`);
+    console.log(`template ${spec.templateType}: already stored, matches this file`);
   } else if (!APPLY) {
-    console.log(`template ${TEMPLATE_TYPE}: would create (${template.prompt.length} chars, variables ${template.variables.map((v) => v.name).join(",")})`);
+    console.log(`template ${spec.templateType}: would create (${template.prompt.length} chars, variables ${template.variables.map((v) => v.name).join(",")})`);
   } else {
     const created = await cg("POST", "/platform-prompts", template);
     if (created.status !== 201 && created.status !== 200) {
-      throw new Error(`creating ${TEMPLATE_TYPE} failed ${created.status} ${JSON.stringify(created.payload)}`);
+      throw new Error(`creating ${spec.templateType} failed ${created.status} ${JSON.stringify(created.payload)}`);
     }
-    console.log(`template ${TEMPLATE_TYPE}: created`);
+    console.log(`template ${spec.templateType}: created`);
   }
 
   // 2. The workflow: fork the source dynasty's CURRENT head.
@@ -293,14 +311,15 @@ async function main() {
   if (got.status !== 200) {
     throw new Error(`GET workflow ${heads[0].id} failed ${got.status} ${JSON.stringify(got.payload)}`);
   }
-  const dag = withYcColdEmail(got.payload.dag);
-  console.log(`source: ${got.payload.workflowSlug} (${got.payload.id}), template ${findGenerateNode(got.payload.dag).config.body.type}`);
+  const dag = withTemplateFor(spec, got.payload.dag);
+  const sourceBody = findGenerateNode(got.payload.dag).config.body;
+  console.log(`source: ${got.payload.workflowSlug} (${got.payload.id}), template ${sourceBody.type}, model ${sourceBody.model}`);
 
   if (!APPLY) {
-    console.log(`would fork onto ${TEMPLATE_TYPE} / ${MODEL}, then assign the fork active on ${LEG_KEY}`);
+    console.log(`would fork onto ${spec.templateType} / ${spec.model}, then assign the fork active on ${spec.legKey}`);
     return;
   }
-  const put = await wf("PUT", `/workflows/${got.payload.id}`, { dag, description: WORKFLOW_DESCRIPTION });
+  const put = await wf("PUT", `/workflows/${got.payload.id}`, { dag, description: spec.workflowDescription });
   let forkId;
   if (put.status === 201) {
     forkId = put.payload.id;
@@ -316,26 +335,26 @@ async function main() {
     throw new Error(`GET fork ${forkId} failed ${fork.status} ${JSON.stringify(fork.payload)}`);
   }
   const forkDynasty = fork.payload.workflowDynastySlug;
-  if (findGenerateNode(fork.payload.dag)?.config.body.type !== TEMPLATE_TYPE) {
-    throw new Error(`workflow ${fork.payload.workflowSlug} does not run ${TEMPLATE_TYPE}; refusing to assign it`);
+  if (findGenerateNode(fork.payload.dag)?.config.body.type !== spec.templateType) {
+    throw new Error(`workflow ${fork.payload.workflowSlug} does not run ${spec.templateType}; refusing to assign it`);
   }
 
   // 3. The leg: add the fork, touch nothing else.
-  const legQuery = `/internal/workflow-leg-assignments?featureSlug=${FEATURE_SLUG}&legKey=${LEG_KEY}`;
+  const legQuery = `/internal/workflow-leg-assignments?featureSlug=${FEATURE_SLUG}&legKey=${spec.legKey}`;
   const before = await fs("GET", legQuery);
   if (before.status !== 200) throw new Error(`leg read failed ${before.status} ${JSON.stringify(before.payload)}`);
   const current = before.payload.assignments.find((a) => a.workflowDynastySlug === forkDynasty);
   if (current?.state === "active") {
-    console.log(`leg ${LEG_KEY}: ${forkDynasty} already active (decided by ${current.decidedBy})`);
+    console.log(`leg ${spec.legKey}: ${forkDynasty} already active (decided by ${current.decidedBy})`);
     return;
   }
   const assigned = await fs("PUT", "/internal/workflow-leg-assignments", {
     featureSlug: FEATURE_SLUG,
-    legKey: LEG_KEY,
+    legKey: spec.legKey,
     workflowDynastySlug: forkDynasty,
     state: "active",
     decidedBy: DECIDED_BY,
-    note: LEG_NOTE,
+    note: spec.legNote,
   });
   if (assigned.status !== 200) {
     throw new Error(`leg assignment failed ${assigned.status} ${JSON.stringify(assigned.payload)}`);
@@ -345,11 +364,11 @@ async function main() {
   const moved = otherAssignmentsMoved(before.payload.assignments, after.payload.assignments, forkDynasty);
   if (moved.length > 0) throw new Error(`other assignments moved during the write: ${moved.join(", ")}`);
   console.log(
-    `leg ${LEG_KEY}: ${forkDynasty} assigned active (was ${assigned.payload.previousState ?? "unassigned"}); ` +
+    `leg ${spec.legKey}: ${forkDynasty} assigned active (was ${assigned.payload.previousState ?? "unassigned"}); ` +
     `${before.payload.assignments.length - (current ? 1 : 0)} other assignment(s) unchanged`,
   );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  await runFork(SPEC);
 }
