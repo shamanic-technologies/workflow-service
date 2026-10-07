@@ -585,6 +585,39 @@ function getAudiencePropagationScope(dag: DAG): AudiencePropagationScope {
  */
 export const BUYING_SIGNAL_VARIABLE = "leadBuyingSignal";
 
+/**
+ * The content-generation variable a served lead's QUALIFICATION rides in.
+ *
+ * lead-service serves `lead.qualification` (`{ domain, checks: [...] }`): every
+ * enabled check of the campaign's offer on the lead's company, whatever it found
+ * (pass, fail, could not check), with its evidence sentence and screenshot link.
+ * Passed AND failed checks both reach the writer, verbatim, as context only
+ * (owner 2026-10-07): nothing here filters, reshapes or tells the model to cite
+ * them, a template that wants them says so. Same conversion-time injection and
+ * scope as the buying signal. A qualification with no checks (an offer with no
+ * enabled check, or a pre-qualification lead-service) resolves to `undefined`,
+ * so the key drops out of the body and the request is byte-identical to before.
+ */
+export const QUALIFICATION_VARIABLE = "leadQualification";
+
+/**
+ * The served-lead facts carried to every `/generate` downstream of the served
+ * lead fetch, as `body.variables.<variable>` = expression over the fetch result.
+ * Each expression resolves to `undefined` (never `""`) when there is nothing to
+ * say, so the key drops out of the JSON body.
+ */
+const SERVED_LEAD_CONTEXT: Array<{ variable: string; expr: (leadModuleId: string) => string }> = [
+  {
+    variable: BUYING_SIGNAL_VARIABLE,
+    expr: (id) => `results.${id}?.lead?.buyingSignal ?? undefined`,
+  },
+  {
+    variable: QUALIFICATION_VARIABLE,
+    expr: (id) =>
+      `((q) => (q && Array.isArray(q.checks) && q.checks.length > 0 ? q : undefined))(results.${id}?.lead?.qualification)`,
+  },
+];
+
 interface ServedLeadScope {
   /** Module id of the single lead-service `/orgs/buffer/next` node, or null. */
   leadModuleId: string | null;
@@ -635,16 +668,17 @@ function getServedLeadScope(dag: DAG): ServedLeadScope {
 
 /**
  * True when the node's own DAG already decides what `body.variables` holds for
- * the signal — an explicit mapping of it, a static value for it, or a mapping
+ * the variable — an explicit mapping of it, a static value for it, or a mapping
  * of the WHOLE body / variables object (which an added key would replace).
  */
-function statesBuyingSignalAlready(
+function statesVariableAlready(
+  variable: string,
   scriptConfig: Record<string, unknown>,
   inputMapping?: Record<string, string>,
 ): boolean {
   if (inputMapping) {
     if ("body" in inputMapping || "body.variables" in inputMapping) return true;
-    if (`body.variables.${BUYING_SIGNAL_VARIABLE}` in inputMapping) return true;
+    if (`body.variables.${variable}` in inputMapping) return true;
   }
   const body = scriptConfig.body;
   if (!body || typeof body !== "object") return false;
@@ -652,7 +686,7 @@ function statesBuyingSignalAlready(
   return (
     !!variables &&
     typeof variables === "object" &&
-    BUYING_SIGNAL_VARIABLE in (variables as Record<string, unknown>)
+    variable in (variables as Record<string, unknown>)
   );
 }
 
@@ -818,22 +852,24 @@ function nodeToModule(
     extraTransforms["body.offerId"] = { type: "javascript", expr: offerRef };
   }
 
-  // Carry the served lead's buying signal to the email writer. See
-  // BUYING_SIGNAL_VARIABLE. `?? undefined` turns lead-service's `null` into an
-  // absent key, and this bypasses the `?? ""` that DAG-mapped variables get, so a
-  // lead with no signal sends exactly the body it sent before.
+  // Carry the served lead's buying signal and offer checks to the email writer.
+  // See BUYING_SIGNAL_VARIABLE / QUALIFICATION_VARIABLE. Each resolves to
+  // `undefined` when empty and bypasses the `?? ""` that DAG-mapped variables
+  // get, so a lead with neither sends exactly the body it sent before.
   const servedLead = getServedLeadScope(dag);
   if (
     servedLead.leadModuleId &&
     servedLead.descendants.has(moduleId) &&
     (loopBodyIds === null || loopBodyIds.has(servedLead.leadModuleId)) &&
-    callsContentGeneration(node) &&
-    !statesBuyingSignalAlready(scriptConfig, resolvedInputMapping)
+    callsContentGeneration(node)
   ) {
-    extraTransforms[`body.variables.${BUYING_SIGNAL_VARIABLE}`] = {
-      type: "javascript",
-      expr: `results.${servedLead.leadModuleId}?.lead?.buyingSignal ?? undefined`,
-    };
+    for (const ctx of SERVED_LEAD_CONTEXT) {
+      if (statesVariableAlready(ctx.variable, scriptConfig, resolvedInputMapping)) continue;
+      extraTransforms[`body.variables.${ctx.variable}`] = {
+        type: "javascript",
+        expr: ctx.expr(servedLead.leadModuleId),
+      };
+    }
   }
 
   const inputTransforms = buildInputTransforms(
