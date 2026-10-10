@@ -227,7 +227,7 @@ export const WorkflowResponseSchema = z
     audienceType: WorkflowAudienceTypeSchema.nullable().describe("Optional workflow audience type tag."),
     tags: z.array(z.string()).describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
-    workflowDynastySignatureName: z.string().describe("Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."),
+    workflowDynastySignatureName: z.string().describe("Star name of this lineage, lowercase (e.g. 'vega'; 'bright-vega' once a feature has burned every single IAU star name). Lineages created before 2026-10-10 keep their older word (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."),
     version: z.number().int().describe("Version number within the lineage. Starts at 1."),
     dag: z.unknown().describe("The DAG definition as submitted."),
     contentModel: z.string().nullable().describe(
@@ -580,7 +580,7 @@ export const WorkflowFromDescriptionResultSchema = z
     featureSlug: z.string().describe("Feature slug used to build the name."),
     tags: z.array(z.string()).describe("Tags assigned to this workflow."),
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
-    workflowDynastySignatureName: z.string().describe("Poetic word for this lineage."),
+    workflowDynastySignatureName: z.string().describe("Star name of this lineage (older lineages keep their pre-2026-10-10 word)."),
     version: z.number().int().describe("Version number within the lineage."),
     workflowDynastyStatus: z.enum(["active", "deprecated"]).describe(
       "Dynasty-level status, inherited from the lineage. 'deprecated' means the lineage is " +
