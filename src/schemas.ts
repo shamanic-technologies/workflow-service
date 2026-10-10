@@ -222,9 +222,15 @@ export const WorkflowResponseSchema = z
     workflowDynastySlug: z.string().describe("Stable lineage slug (constant across all versions of a dynasty). Use for dynasty-level grouping."),
     workflowDynastyName: z.string().describe("Stable lineage display name (constant across all versions of a dynasty)."),
     description: z.string().nullable(),
-    category: WorkflowCategorySchema.nullable().describe("Optional workflow category tag."),
-    channel: WorkflowChannelSchema.nullable().describe("Optional workflow channel tag."),
-    audienceType: WorkflowAudienceTypeSchema.nullable().describe("Optional workflow audience type tag."),
+    category: WorkflowCategorySchema.nullable().describe("Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."),
+    channel: WorkflowChannelSchema.nullable().describe("Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."),
+    audienceType: WorkflowAudienceTypeSchema.nullable().describe("Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."),
+    pipeId: z.string().nullable().describe(
+      "The features-service pipe this workflow runs on, `<channel slug>|<leg key>`. Null on workflows written before 2026-10-10 or supplied as a client DAG without one."
+    ),
+    producesStep: z.string().nullable().describe(
+      "The features-service step this workflow produces (its pipe's toStep). Null when no pipe is stated."
+    ),
     tags: z.array(z.string()).describe("Free-form tags for filtering/grouping (e.g. [\"email\", \"linkedin\"])."),
     signature: z.string().describe("Deterministic SHA-256 hash of the canonical DAG JSON. Changes when any node, edge, or config changes."),
     workflowDynastySignatureName: z.string().describe("Star name of this lineage, lowercase (e.g. 'vega'; 'bright-vega' once a feature has burned every single IAU star name). Lineages created before 2026-10-10 keep their older word (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."),
@@ -536,7 +542,13 @@ export const CreateWorkflowFromDescriptionSchema = z
       "Natural-language description of the desired workflow."
     ),
     featureSlug: z.string().min(1).describe(
-      "Feature slug from features-service. Required — used to build the workflow name."
+      "The workflow's channel slug in features-service (e.g. 'sales-cold-email-outreach'). Required: it names " +
+      "the workflow and its pipes are the ones the workflow can run on."
+    ),
+    pipeId: z.string().min(1).optional().describe(
+      "The features-service pipe the workflow runs on, `<channel slug>|<leg key>` " +
+      "(GET /internal/catalogue/pipes). Its channel slug must equal featureSlug. Omit it when the channel has " +
+      "one pipe, or to let the generator pick the pipe the description is about."
     ),
     hints: GenerateWorkflowHintsSchema.optional().describe(
       "Optional hints to guide generation."
@@ -557,9 +569,14 @@ export const UpgradeWorkflowFromDescriptionSchema = z
     dag: DAGSchema.optional().describe(
       "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, " +
       "its signature computed, and the upgrade applies the same in-place / new-version branching as " +
-      "the LLM path. category/channel/audienceType are inherited from the existing row (no LLM to infer them). " +
+      "the LLM path. category/channel/audienceType, pipeId and producesStep are inherited from the existing row. " +
       "Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running " +
       "generation. Either `dag` or `description` MUST be provided."
+    ),
+    pipeId: z.string().min(1).optional().describe(
+      "The features-service pipe to regenerate for, `<channel slug>|<leg key>`. Defaults to the pipe the " +
+      "dynasty already runs on; when the dynasty states none, the generator resolves it from featureSlug. " +
+      "Ignored when `dag` is provided."
     ),
     hints: GenerateWorkflowHintsSchema.optional().describe(
       "Optional hints to guide generation. Ignored when `dag` is provided."
@@ -582,6 +599,21 @@ export const WorkflowFromDescriptionResultSchema = z
     signature: z.string().describe("SHA-256 hash of the canonical DAG JSON."),
     workflowDynastySignatureName: z.string().describe("Star name of this lineage (older lineages keep their pre-2026-10-10 word)."),
     version: z.number().int().describe("Version number within the lineage."),
+    pipe: z.object({
+      id: z.string().describe("Pipe id, `<channel slug>|<leg key>`."),
+      channelSlug: z.string(),
+      legKey: z.string(),
+      mode: z.enum(["proactive", "reactive"]).describe("proactive: the workflow finds its own people. reactive: a trigger hands them over."),
+      triggerId: z.string().nullable().describe("The trigger of a reactive pipe (features-service); null on a proactive one."),
+    }).nullable().describe(
+      "The pipe as the generator read it from the features-service catalogue on THIS call. Null when the call ran no generation (client-supplied DAG)."
+    ),
+    pipeId: z.string().nullable().describe(
+      "The pipe the stored workflow runs on, `<channel slug>|<leg key>`. Null on a dynasty that states none (written before 2026-10-10)."
+    ),
+    producesStep: z.string().nullable().describe(
+      "The features-service step the stored workflow produces (its pipe's toStep): its ROI is that step's value over what a run costs. Null when no pipe is stated."
+    ),
     workflowDynastyStatus: z.enum(["active", "deprecated"]).describe(
       "Dynasty-level status, inherited from the lineage. 'deprecated' means the lineage is " +
       "retired, so the workflow named here cannot be executed — upgrading a retired dynasty " +

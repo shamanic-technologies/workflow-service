@@ -28,6 +28,11 @@ export const workflows = pgTable(
     category: text("category"),
     channel: text("channel"),
     audienceType: text("audience_type"),
+    // The features-service pipe this workflow runs on (`<channel slug>|<leg key>`) and the step it
+    // produces (that pipe's toStep). Set by the generator; null on workflows written before
+    // 2026-10-10 or supplied as a client DAG, never guessed.
+    pipeId: text("pipe_id"),
+    producesStep: text("produces_step"),
     signature: text("signature").notNull(),
     workflowDynastySignatureName: text("workflow_dynasty_signature_name").notNull(),
     version: integer("version").notNull().default(1),

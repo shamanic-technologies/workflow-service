@@ -20,7 +20,9 @@ import {
 import {
   generateWorkflow,
   GenerationValidationError,
+  type GeneratedPipe,
 } from "../lib/workflow-generator.js";
+import { PipeResolutionError } from "../lib/catalogue-client.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import {
   pickWorkflowDynastySignatureName,
@@ -136,7 +138,7 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
     }, req.headers).catch(() => {});
 
     const generated = await generateWorkflow(
-      { description: body.description, hints: body.hints },
+      { description: body.description, featureSlug: body.featureSlug, pipeId: body.pipeId, hints: body.hints },
       dsHeaders,
     );
 
@@ -175,6 +177,9 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
           workflowDynastySignatureName: existingMatch.workflowDynastySignatureName,
           version: existingMatch.version,
           workflowDynastyStatus: existingMatch.workflowDynastyStatus as "active" | "deprecated",
+          pipeId: existingMatch.pipeId,
+          producesStep: existingMatch.producesStep,
+          pipe: generated.pipe,
           action: "existing" as const,
         },
         dag: existingMatch.dag,
@@ -232,9 +237,12 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
         workflowDynastyName,
         description: generated.description,
         featureSlug: body.featureSlug,
-        category: generated.category,
-        channel: generated.channel,
-        audienceType: generated.audienceType,
+        // The legacy provenance tags are no longer generated: the pipe says what the workflow is.
+        category: null,
+        channel: null,
+        audienceType: null,
+        pipeId: generated.pipe.id,
+        producesStep: generated.producesStep,
         signature,
         workflowDynastySignatureName,
         version: 1,
@@ -266,6 +274,9 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
         workflowDynastySignatureName: created.workflowDynastySignatureName,
         version: created.version,
         workflowDynastyStatus: created.workflowDynastyStatus as "active" | "deprecated",
+        pipeId: created.pipeId,
+        producesStep: created.producesStep,
+        pipe: generated.pipe,
         action: "created" as const,
       },
       dag: generated.dag,
@@ -287,6 +298,10 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
         error: err.message,
         details: err.validationErrors,
       });
+      return;
+    }
+    if (err instanceof PipeResolutionError) {
+      res.status(422).json({ error: err.message, reason: "pipe_unresolved" });
       return;
     }
     console.error("[workflow-service] CREATE error:", err);
@@ -338,6 +353,9 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     let resolvedCategory: typeof existing.category;
     let resolvedChannel: typeof existing.channel;
     let resolvedAudienceType: typeof existing.audienceType;
+    let resolvedPipeId: typeof existing.pipeId = existing.pipeId;
+    let resolvedProducesStep: typeof existing.producesStep = existing.producesStep;
+    let generatedPipe: GeneratedPipe | null = null;
 
     if (body.dag) {
       const rejection = await validateClientDag(body.dag as DAG, dsHeaders);
@@ -354,14 +372,23 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       resolvedAudienceType = existing.audienceType;
     } else {
       const generated = await generateWorkflow(
-        { description: body.description!, hints: body.hints },
+        {
+          description: body.description!,
+          featureSlug: existing.featureSlug,
+          pipeId: body.pipeId ?? existing.pipeId ?? undefined,
+          hints: body.hints,
+        },
         dsHeaders,
       );
       dag = generated.dag as DAG;
       resolvedDescription = generated.description;
-      resolvedCategory = generated.category;
-      resolvedChannel = generated.channel;
-      resolvedAudienceType = generated.audienceType;
+      // Legacy provenance tags stay what the dynasty already says; the pipe is the new identity.
+      resolvedCategory = existing.category;
+      resolvedChannel = existing.channel;
+      resolvedAudienceType = existing.audienceType;
+      resolvedPipeId = generated.pipe.id;
+      resolvedProducesStep = generated.producesStep;
+      generatedPipe = generated.pipe;
     }
 
     const newSignature = computeDAGSignature(dag);
@@ -390,6 +417,8 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
           category: resolvedCategory,
           channel: resolvedChannel,
           audienceType: resolvedAudienceType,
+          pipeId: resolvedPipeId,
+          producesStep: resolvedProducesStep,
           dag,
           updatedAt: new Date(),
         })
@@ -408,6 +437,9 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
           workflowDynastySignatureName: updated.workflowDynastySignatureName,
           version: updated.version,
           workflowDynastyStatus: updated.workflowDynastyStatus as "active" | "deprecated",
+          pipeId: updated.pipeId,
+          producesStep: updated.producesStep,
+          pipe: generatedPipe,
           action: "updated" as const,
         },
         dag,
@@ -437,6 +469,8 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       category: resolvedCategory,
       channel: resolvedChannel,
       audienceType: resolvedAudienceType,
+      pipeId: resolvedPipeId,
+      producesStep: resolvedProducesStep,
     });
     const newVersion = created.version;
 
@@ -459,6 +493,9 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         workflowDynastySignatureName: created.workflowDynastySignatureName,
         version: created.version,
         workflowDynastyStatus: created.workflowDynastyStatus as "active" | "deprecated",
+        pipeId: created.pipeId,
+        producesStep: created.producesStep,
+        pipe: generatedPipe,
         action: "upgraded" as const,
       },
       dag,
@@ -480,6 +517,10 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         error: err.message,
         details: err.validationErrors,
       });
+      return;
+    }
+    if (err instanceof PipeResolutionError) {
+      res.status(422).json({ error: err.message, reason: "pipe_unresolved" });
       return;
     }
     console.error("[workflow-service] UPGRADE error:", err);

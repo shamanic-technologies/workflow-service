@@ -100,6 +100,14 @@ import supertest from "supertest";
 import app from "../../src/index.js";
 
 const request = supertest(app);
+const PIPE = {
+  id: "cold-email-outreach|lead_found_to_conversation",
+  channelSlug: "cold-email-outreach",
+  legKey: "lead_found_to_conversation",
+  mode: "proactive" as const,
+  triggerId: null,
+};
+const USAGE = { calls: 3, tokensInput: 1000, tokensOutput: 500, systemPromptChars: 4000 };
 const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
 const AUTH = { "x-api-key": "test-api-key", ...IDENTITY };
 
@@ -113,9 +121,9 @@ describe("POST /workflows/create", () => {
   it("creates a workflow from a description", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "Search leads, generate email, send",
     });
 
@@ -134,8 +142,15 @@ describe("POST /workflows/create", () => {
     expect(res.body.workflow.workflowSlug).toContain("cold-email-outreach-");
     expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
+    expect(res.body.workflow.pipeId).toBe(PIPE.id);
+    expect(res.body.workflow.producesStep).toBe("conversation");
+    expect(res.body.workflow.pipe).toEqual(PIPE);
+    const insertedRow = mockDbRows[mockDbRows.length - 1] as Record<string, unknown>;
+    expect(insertedRow.pipeId).toBe(PIPE.id);
+    expect(insertedRow.producesStep).toBe("conversation");
+    expect(insertedRow.category).toBeNull();
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      { description: "I want a cold email outreach workflow that finds leads and sends emails", hints: undefined },
+      { description: "I want a cold email outreach workflow that finds leads and sends emails", featureSlug: "cold-email-outreach", pipeId: undefined, hints: undefined },
       { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
     const inserted = mockDbRows[0] as Record<string, unknown>;
@@ -168,9 +183,9 @@ describe("POST /workflows/create", () => {
 
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "Regenerated description",
     });
 
@@ -243,9 +258,9 @@ describe("POST /workflows/create", () => {
   it("passes hints through to generator", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "Test",
     });
 
@@ -259,7 +274,7 @@ describe("POST /workflows/create", () => {
       });
 
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
-      { description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] } },
+      expect.objectContaining({ description: "Cold email outreach with lead search", hints: { services: ["lead", "email-gateway"] } }),
       { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
     );
   });
@@ -322,9 +337,9 @@ describe("POST /workflows/create", () => {
   it("ignores body.style and produces a poetic single-word signature name", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "Cold outreach",
     });
 
@@ -362,9 +377,9 @@ describe("POST /workflows/create", () => {
     for (const dag of dags) {
       mockGenerateWorkflow.mockResolvedValueOnce({
         dag,
-        category: "sales",
-        channel: "email",
-        audienceType: "cold-outreach",
+        pipe: PIPE,
+        producesStep: "conversation",
+        usage: USAGE,
         description: "ok",
       });
       // No idempotent match; feature-scoped name set is the names already taken on this feature.
@@ -390,9 +405,9 @@ describe("POST /workflows/create", () => {
   it("does not reuse a name burned on the same feature by another org", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: { ...VALID_LINEAR_DAG, edges: [{ from: "z1", to: "z2" }] },
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "org-B asks for the same feature",
     });
 
@@ -413,9 +428,9 @@ describe("POST /workflows/create", () => {
   it("does not reuse a name that has been deprecated for the same feature (burned for life)", async () => {
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: { ...VALID_LINEAR_DAG, edges: [{ from: "p1", to: "p2" }] },
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "fresh dag",
     });
 
@@ -495,9 +510,9 @@ describe("POST /workflows/upgrade", () => {
 
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: VALID_LINEAR_DAG,
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "New description for the same DAG",
     });
 
@@ -544,9 +559,9 @@ describe("POST /workflows/upgrade", () => {
 
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: { ...VALID_LINEAR_DAG, edges: [{ from: "x1", to: "y1" }] },
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "Upgraded v2",
     });
 
@@ -585,9 +600,9 @@ describe("POST /workflows/upgrade", () => {
 
     mockGenerateWorkflow.mockResolvedValueOnce({
       dag: { ...VALID_LINEAR_DAG, edges: [{ from: "x1", to: "y1" }] },
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       description: "Upgraded v2",
     });
 
@@ -686,6 +701,8 @@ describe("POST /workflows/upgrade", () => {
     category?: string;
     channel?: string;
     audienceType?: string;
+    pipeId?: string;
+    producesStep?: string;
   }): { id: string; signature: string } {
     const sig = "sig-fixture-existing";
     const row = {
@@ -706,6 +723,8 @@ describe("POST /workflows/upgrade", () => {
       category: opts?.category ?? "sales",
       channel: opts?.channel ?? "email",
       audienceType: opts?.audienceType ?? "cold-outreach",
+      pipeId: opts?.pipeId ?? null,
+      producesStep: opts?.producesStep ?? null,
       creationType: "scratch",
       createdFromWorkflow: null,
       windmillFlowPath: "f/workflows/org-1/client_dag_feature_umber",
@@ -738,9 +757,9 @@ describe("POST /workflows/upgrade", () => {
       status: "active",
       dag: VALID_LINEAR_DAG,
       description: "existing",
-      category: "sales",
-      channel: "email",
-      audienceType: "cold-outreach",
+      pipe: PIPE,
+      producesStep: "conversation",
+      usage: USAGE,
       creationType: "scratch",
       createdFromWorkflow: null,
       windmillFlowPath: "f/workflows/org-1/feat_a_alabaster",
@@ -798,6 +817,8 @@ describe("POST /workflows/upgrade", () => {
       category: "outlets",
       channel: "database",
       audienceType: "discovery",
+      pipeId: "client-dag-feature|lead_found_to_conversation",
+      producesStep: "conversation",
     });
     const NEW_DAG = {
       ...VALID_LINEAR_DAG,
@@ -820,6 +841,8 @@ describe("POST /workflows/upgrade", () => {
     expect(insertedRow.category).toBe("outlets");
     expect(insertedRow.channel).toBe("database");
     expect(insertedRow.audienceType).toBe("discovery");
+    expect(insertedRow.pipeId).toBe("client-dag-feature|lead_found_to_conversation");
+    expect(insertedRow.producesStep).toBe("conversation");
     expect(insertedRow.creationType).toBe("upgrade");
   });
 
