@@ -1840,3 +1840,45 @@ describe("a thread opened by the acquisition-questions sequence plays its game (
     expect(ids).toContain("end_run_closed_with_thanks");
   });
 });
+
+describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)", () => {
+  const chatBodies = (dag: DAG) =>
+    dag.nodes
+      .filter((n) => (n.config as { service?: string } | undefined)?.service === "chat")
+      .map((n) => ({ id: n.id, body: (n.config as { body: Record<string, unknown> }).body }));
+
+  it("keeps the Gemini cell's temperatures exactly as they were", () => {
+    const bodies = chatBodies(buildAiMeetingBookingDag({ provider: "google", model: "pro" }));
+    expect(bodies.map((b) => [b.id, b.body.temperature])).toEqual([
+      ["list-questions", 0],
+      ["draft-reply", 0.4],
+    ]);
+  });
+
+  it("drops temperature from both chat steps when the model refuses sampling", () => {
+    const bodies = chatBodies(buildAiMeetingBookingDag({ provider: "anthropic", model: "opus", omitTemperature: true }));
+    expect(bodies).toHaveLength(2);
+    for (const b of bodies) {
+      expect(b.body).not.toHaveProperty("temperature");
+      expect(b.body.provider).toBe("anthropic");
+      expect(b.body.model).toBe("opus");
+      expect(b.body.responseSchema).toBeTruthy();
+    }
+  });
+
+  it("differs from the Gemini DAG in the two chat bodies and nowhere else", () => {
+    const gemini = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
+    const opus = buildAiMeetingBookingDag({ provider: "anthropic", model: "opus", omitTemperature: true });
+    const strip = (dag: DAG) =>
+      JSON.stringify({
+        ...dag,
+        nodes: dag.nodes.map((n) =>
+          (n.config as { service?: string } | undefined)?.service === "chat"
+            ? { ...n, config: { ...(n.config as object), body: null } }
+            : n,
+        ),
+      });
+    expect(strip(opus)).toBe(strip(gemini));
+    expect(JSON.stringify(opus)).not.toBe(JSON.stringify(gemini));
+  });
+});
