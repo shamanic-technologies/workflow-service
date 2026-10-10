@@ -177,7 +177,7 @@ export const CreateWorkflowSchema = z
     pipeId: z.string().min(1).optional().describe(
       "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: " +
       "it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). " +
-      "The workflow is then assigned to that pipe in features-service (PUT /internal/workflow-leg-assignments, active at once), " +
+      "The workflow is then registered on that pipe in features-service (POST /internal/workflow-leg-assignments/register, active at once), " +
       "which owns the link; this service stores no pipe."
     ),
     tags: z.array(z.string()).optional().describe(
