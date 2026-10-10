@@ -162,3 +162,88 @@ export async function fetchServiceSpec(
 
   return res.json() as Promise<Record<string, unknown>>;
 }
+
+// --- Agent discovery (api-registry GET /discover/*, three levels) ---------------------------
+//
+// Level 1 lists every service in one line, level 2 one service's endpoints with their measured
+// cost, duration, success rate and ROI, level 3 the full doc of ONE endpoint. The workflow
+// generator walks them in that order so the model only ever reads the docs of the endpoints it
+// picked, instead of every service's full spec (7.7M characters on 2026-10-10).
+
+export interface DiscoveredService {
+  name: string;
+  description: string;
+  endpoints: number | null;
+  error?: string;
+}
+
+export interface DiscoverServicesResponse {
+  serviceCount: number;
+  services: DiscoveredService[];
+}
+
+export interface DiscoveredEndpoint {
+  method: string;
+  path: string;
+  summary: string;
+  stats?: unknown;
+  roi?: unknown;
+}
+
+export interface DiscoverServiceEndpointsResponse {
+  service: string;
+  description: string;
+  endpointCount: number;
+  endpoints: DiscoveredEndpoint[];
+}
+
+/** Level 3 body: the endpoint's full doc (request body, responses) plus its run stats and ROI. */
+export type DiscoverEndpointResponse = Record<string, unknown> & {
+  service: string;
+  method: string;
+  path: string;
+};
+
+async function discoverGet<T>(path: string, downstreamHeaders?: DownstreamHeaders): Promise<T> {
+  const { baseUrl, apiKey } = getApiRegistryConfig();
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "GET",
+    headers: buildHeaders(apiKey, downstreamHeaders),
+    signal: AbortSignal.timeout(600_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`api-registry error: GET ${path} -> ${res.status} ${res.statusText}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Level 1: every registered service, one line each. */
+export function discoverServices(downstreamHeaders?: DownstreamHeaders): Promise<DiscoverServicesResponse> {
+  return discoverGet<DiscoverServicesResponse>("/discover/services", downstreamHeaders);
+}
+
+/** Level 2: every endpoint of one service (limit 200 = the registry's max), most used first. */
+export function discoverServiceEndpoints(
+  service: string,
+  downstreamHeaders?: DownstreamHeaders,
+): Promise<DiscoverServiceEndpointsResponse> {
+  return discoverGet<DiscoverServiceEndpointsResponse>(
+    `/discover/services/${encodeURIComponent(service)}/endpoints?limit=200`,
+    downstreamHeaders,
+  );
+}
+
+/** Level 3: the full doc of one endpoint. */
+export function discoverEndpoint(
+  service: string,
+  method: string,
+  path: string,
+  downstreamHeaders?: DownstreamHeaders,
+): Promise<DiscoverEndpointResponse> {
+  const q = `method=${encodeURIComponent(method.toUpperCase())}&path=${encodeURIComponent(path)}`;
+  return discoverGet<DiscoverEndpointResponse>(
+    `/discover/services/${encodeURIComponent(service)}/endpoint?${q}`,
+    downstreamHeaders,
+  );
+}

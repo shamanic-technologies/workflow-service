@@ -101,6 +101,9 @@ export interface UpgradeWorkflowParams {
   category: WorkflowRow["category"];
   channel: WorkflowRow["channel"];
   audienceType: WorkflowRow["audienceType"];
+  /** The pipe the new version runs on and the step it produces. Omitted = the predecessor's. */
+  pipeId?: WorkflowRow["pipeId"];
+  producesStep?: WorkflowRow["producesStep"];
 }
 
 /**
@@ -159,6 +162,8 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
         category: params.category,
         channel: params.channel,
         audienceType: params.audienceType,
+        pipeId: params.pipeId !== undefined ? params.pipeId : existing.pipeId,
+        producesStep: params.producesStep !== undefined ? params.producesStep : existing.producesStep,
         tags: (existing.tags as string[]) ?? [],
         signature,
         workflowDynastySignatureName: existing.workflowDynastySignatureName,
@@ -292,6 +297,9 @@ export async function forkWorkflowRow(params: ForkWorkflowParams): Promise<ForkR
         category: existing.category,
         channel: existing.channel,
         audienceType: existing.audienceType,
+        // A fork runs on its source's pipe (same work, another variant).
+        pipeId: existing.pipeId,
+        producesStep: existing.producesStep,
         tags: params.tags,
         signature,
         workflowDynastySignatureName,
