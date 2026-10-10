@@ -159,30 +159,38 @@ export async function activeLegsOfDynasty(
 }
 
 /**
- * States that `workflowDynastySlug` serves the leg (active at once: owner option A, 2026-10-10).
- * Idempotent on features-service's side. Throws LegAssignmentError on anything but 2xx: a workflow
- * features-service does not know serves a pipe is a workflow that never runs.
+ * Registers that `workflowDynastySlug` serves the pipe `<featureSlug>|<legKey>`, ACTIVE at once (owner
+ * 2026-10-10, option A), through features-service `POST /internal/workflow-leg-assignments/register`
+ * (insert-if-absent: 201 created, 200 already on the pipe with the row untouched). `decidedBy` and
+ * `note` travel as the note; the registrant is always "workflow-service". Throws LegAssignmentError
+ * on anything but 2xx: a workflow features-service does not know serves a pipe never runs.
  */
 export async function assignWorkflowToLeg(
   assignment: { featureSlug: string; legKey: string; workflowDynastySlug: string; decidedBy: string; note: string },
   downstreamHeaders?: DownstreamHeaders,
 ): Promise<LegAssignment> {
   const { baseUrl, apiKey } = config();
-  const res = await fetch(`${baseUrl}/internal/workflow-leg-assignments`, {
-    method: "PUT",
+  const pipeId = `${assignment.featureSlug}|${assignment.legKey}`;
+  const res = await fetch(`${baseUrl}/internal/workflow-leg-assignments/register`, {
+    method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, ...downstreamHeaders },
-    body: JSON.stringify({ ...assignment, state: "active" }),
+    body: JSON.stringify({
+      pipeId,
+      workflowDynastySlug: assignment.workflowDynastySlug,
+      registeredBy: "workflow-service",
+      note: `${assignment.decidedBy}: ${assignment.note}`,
+    }),
     signal: AbortSignal.timeout(600_000),
   });
   const text = await res.text().catch(() => "");
   if (!res.ok) {
     throw new LegAssignmentError(
-      `features-service refused to assign ${assignment.workflowDynastySlug} to ${assignment.featureSlug}|${assignment.legKey}: PUT /internal/workflow-leg-assignments -> ${res.status}: ${text}`,
+      `features-service refused to register ${assignment.workflowDynastySlug} on pipe ${pipeId}: POST /internal/workflow-leg-assignments/register -> ${res.status}: ${text}`,
     );
   }
-  const parsed = z.object({ assignment: LegAssignmentSchema }).safeParse(JSON.parse(text));
+  const parsed = z.object({ created: z.boolean(), assignment: LegAssignmentSchema }).safeParse(JSON.parse(text));
   if (!parsed.success) {
-    throw new LegAssignmentError(`features-service PUT /internal/workflow-leg-assignments returned an unexpected shape: ${parsed.error.message}`);
+    throw new LegAssignmentError(`features-service POST /internal/workflow-leg-assignments/register returned an unexpected shape: ${parsed.error.message}`);
   }
   return parsed.data.assignment;
 }
