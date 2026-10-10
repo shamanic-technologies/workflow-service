@@ -12,8 +12,9 @@ import {
   TWO_WORD_NAME_COUNT,
 } from "../../src/lib/workflow-dynasty-signature-name.js";
 import {
-  FEATURES_SERVICE_UPLIFTING_WORDS,
-  BIRD_AND_RIVER_STAR_NAMES,
+  FEATURES_SERVICE_FAMILY_WORDS,
+  PIPE_BIRD_WORDS,
+  PATH_RIVER_WORDS,
 } from "../fixtures/features-service-name-families.js";
 
 function fakeSig(seed: string): string {
@@ -22,9 +23,7 @@ function fakeSig(seed: string): string {
 
 const IAU_LOWER = new Set(IAU_SINGLE_WORD_STAR_NAMES.map((n) => n.toLowerCase()));
 const ADJ_LOWER = new Set(STAR_NAME_ADJECTIVES.map((a) => a.toLowerCase()));
-const OTHER_FAMILIES = new Set(
-  [...FEATURES_SERVICE_UPLIFTING_WORDS, ...BIRD_AND_RIVER_STAR_NAMES].map((w) => w.toLowerCase()),
-);
+const OTHER_FAMILIES = new Set(FEATURES_SERVICE_FAMILY_WORDS.map((w) => w.toLowerCase()));
 
 function burnAllSingles(): Set<string> {
   return new Set(STAR_NAME_POOL);
@@ -51,7 +50,9 @@ describe("star name pool", () => {
     }
   });
 
-  it("never collides with a features-service family (uplifting words, birds, rivers)", () => {
+  it("never collides with a features-service family (uplifting words, birds, rivers, their adjectives)", () => {
+    expect(PIPE_BIRD_WORDS.length).toBeGreaterThan(0);
+    expect(PATH_RIVER_WORDS.length).toBeGreaterThan(0);
     const pool = new Set(STAR_NAME_POOL);
     const collisions = [...OTHER_FAMILIES].filter((w) => pool.has(w) || ADJ_LOWER.has(w));
     expect(collisions).toEqual([]);
