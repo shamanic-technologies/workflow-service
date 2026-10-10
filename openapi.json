@@ -148,7 +148,7 @@
           },
           "workflowDynastySignatureName": {
             "type": "string",
-            "description": "Poetic word for this lineage (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."
+            "description": "Star name of this lineage, lowercase (e.g. 'vega'; 'bright-vega' once a feature has burned every single IAU star name). Lineages created before 2026-10-10 keep their older word (e.g. 'sequoia'). Set once at lineage creation. Unique among all workflows (any status, any org) within the same featureSlug."
           },
           "version": {
             "type": "integer",
@@ -1517,7 +1517,7 @@
           },
           "workflowDynastySignatureName": {
             "type": "string",
-            "description": "Poetic word for this lineage."
+            "description": "Star name of this lineage (older lineages keep their pre-2026-10-10 word)."
           },
           "version": {
             "type": "integer",
