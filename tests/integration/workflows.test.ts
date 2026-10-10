@@ -153,6 +153,25 @@ vi.mock("../../src/lib/api-registry-client.js", () => ({
 
 // Mock features-client
 vi.mock("../../src/lib/features-client.js", () => ({}));
+const mockFetchPipe = vi.fn();
+vi.mock("../../src/lib/catalogue-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/catalogue-client.js")>();
+  return { ...actual, fetchPipe: (...a: unknown[]) => mockFetchPipe(...a) };
+});
+const MEETING_PIPE = {
+  id: "ai-meeting-booking|conversation_to_meeting_booked",
+  name: "Pipit",
+  line: "AI Meeting Booking: Positive reply → Meeting booked",
+  channelSlug: "ai-meeting-booking",
+  channelName: "AI Meeting Booking",
+  legKey: "conversation_to_meeting_booked",
+  fromStep: "conversation",
+  toStep: "meeting_booked",
+  mode: "reactive",
+  triggerId: "conversation",
+  operatedBy: "platform",
+  runnable: true,
+};
 
 // Shared so a test can assert the flow was never pushed (e.g. on a conflict,
 // which must not leave an orphan flow behind in Windmill).
@@ -219,6 +238,46 @@ describe("POST /workflows", () => {
     expect(res.body.signature).toMatch(/^[a-f0-9]{64}$/);
     expect(res.body.workflowDynastySignatureName).toBeTruthy();
     expect(res.body.windmillFlowPath).toContain("f/workflows/org-1/");
+  });
+
+  it("stores the stated pipe and the step it produces, read from the catalogue", async () => {
+    mockFetchPipe.mockResolvedValueOnce(MEETING_PIPE);
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({ featureSlug: "ai-meeting-booking", pipeId: MEETING_PIPE.id, dag: VALID_LINEAR_DAG });
+    expect(res.status).toBe(201);
+    expect(res.body.pipeId).toBe(MEETING_PIPE.id);
+    expect(res.body.producesStep).toBe("meeting_booked");
+    expect(mockFetchPipe).toHaveBeenCalledWith(MEETING_PIPE.id, expect.anything());
+  });
+
+  it("refuses a pipe of another channel, or worked by the customer, with 422 and writes nothing", async () => {
+    mockFetchPipe.mockResolvedValueOnce(MEETING_PIPE);
+    const wrong = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({ featureSlug: "sales-cold-email-outreach", pipeId: MEETING_PIPE.id, dag: VALID_LINEAR_DAG });
+    expect(wrong.status).toBe(422);
+    mockFetchPipe.mockResolvedValueOnce({ ...MEETING_PIPE, operatedBy: "customer" });
+    const customer = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({ featureSlug: "ai-meeting-booking", pipeId: MEETING_PIPE.id, dag: VALID_LINEAR_DAG });
+    expect(customer.status).toBe(422);
+    expect(customer.body.reason).toBe("pipe_unresolved");
+    expect(mockDbRows).toHaveLength(0);
+    expect(mockCreateFlow).not.toHaveBeenCalled();
+  });
+
+  it("leaves the pipe null when none is stated", async () => {
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({ featureSlug: "sales-cold-email-outreach", dag: VALID_LINEAR_DAG });
+    expect(res.status).toBe(201);
+    expect(res.body.pipeId).toBeNull();
+    expect(res.body.producesStep).toBeNull();
   });
 
   it("creates a paid-reach workflow that describes itself truthfully", async () => {

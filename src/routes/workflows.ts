@@ -22,7 +22,7 @@ import {
   GenerationValidationError,
   type GeneratedPipe,
 } from "../lib/workflow-generator.js";
-import { PipeResolutionError } from "../lib/catalogue-client.js";
+import { PipeResolutionError, fetchPipe } from "../lib/catalogue-client.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import {
   pickWorkflowDynastySignatureName,
@@ -538,6 +538,20 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     const orgId = res.locals.orgId as string;
     const dag = body.dag as DAG;
 
+    // A stated pipe is read from the catalogue BEFORE anything is written: it must exist, belong to
+    // this featureSlug's channel and be platform-worked. Its toStep is the step the workflow produces.
+    let pipeIdentity: { pipeId: string; producesStep: string } | null = null;
+    if (body.pipeId) {
+      const pipe = await fetchPipe(body.pipeId, extractDownstreamHeaders(req));
+      if (pipe.channelSlug !== body.featureSlug) {
+        throw new PipeResolutionError(`Pipe "${pipe.id}" belongs to channel "${pipe.channelSlug}", not to featureSlug "${body.featureSlug}"`);
+      }
+      if (pipe.operatedBy === "customer") {
+        throw new PipeResolutionError(`Pipe "${pipe.id}" is worked by the customer's own team: no workflow runs on it`);
+      }
+      pipeIdentity = { pipeId: pipe.id, producesStep: pipe.toStep };
+    }
+
     // Topology + live endpoint/field validation. A client-supplied DAG gets the
     // same gate the LLM path has always had.
     const rejection = await validateClientDag(dag, extractDownstreamHeaders(req));
@@ -637,6 +651,8 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         category: body.category,
         channel: body.channel,
         audienceType: body.audienceType,
+        pipeId: pipeIdentity?.pipeId ?? null,
+        producesStep: pipeIdentity?.producesStep ?? null,
         tags: body.tags ?? [],
         signature,
         workflowDynastySignatureName,
@@ -658,6 +674,10 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     if (constraintError) {
       console.error("[workflow-service] write rejected by the database:", err);
       res.status(400).json(constraintError);
+      return;
+    }
+    if (err instanceof PipeResolutionError) {
+      res.status(422).json({ error: err.message, reason: "pipe_unresolved" });
       return;
     }
     console.error("[workflow-service] POST error:", err);
