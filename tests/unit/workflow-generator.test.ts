@@ -341,6 +341,7 @@ describe("generateWorkflow", () => {
       legKey: "lead_found_to_conversation",
       mode: "proactive",
       triggerId: null,
+      toStep: "conversation",
     });
     expect(result.producesStep).toBe("conversation");
   });

@@ -50,7 +50,7 @@
           "journalists",
           "advertising"
         ],
-        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
       },
       "WorkflowChannel": {
         "type": "string",
@@ -60,7 +60,7 @@
           "database",
           "ads"
         ],
-        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
       },
       "WorkflowAudienceType": {
         "type": "string",
@@ -71,7 +71,7 @@
           "audience-targeting",
           "conversation-follow-up"
         ],
-        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
       },
       "WorkflowResponse": {
         "type": "object",
@@ -134,16 +134,6 @@
           },
           "audienceType": {
             "$ref": "#/components/schemas/WorkflowAudienceType"
-          },
-          "pipeId": {
-            "type": "string",
-            "nullable": true,
-            "description": "The features-service pipe this workflow runs on, `<channel slug>|<leg key>`. Null on workflows written before 2026-10-10 or supplied as a client DAG without one."
-          },
-          "producesStep": {
-            "type": "string",
-            "nullable": true,
-            "description": "The features-service step this workflow produces (its pipe's toStep). Null when no pipe is stated."
           },
           "tags": {
             "type": "array",
@@ -251,8 +241,6 @@
           "category",
           "channel",
           "audienceType",
-          "pipeId",
-          "producesStep",
           "tags",
           "signature",
           "workflowDynastySignatureName",
@@ -580,7 +568,7 @@
           "pipeId": {
             "type": "string",
             "minLength": 1,
-            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). Stored with `producesStep` = the pipe's toStep. Omit it and both stay null."
+            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). The workflow is then assigned to that pipe in features-service (PUT /internal/workflow-leg-assignments, active at once), which owns the link; this service stores no pipe."
           },
           "tags": {
             "type": "array",
@@ -1587,6 +1575,10 @@
                 "type": "string",
                 "nullable": true,
                 "description": "The trigger of a reactive pipe (features-service); null on a proactive one."
+              },
+              "toStep": {
+                "type": "string",
+                "description": "The step the pipe produces: the workflow's ROI is that step's value over what a run costs."
               }
             },
             "required": [
@@ -1594,27 +1586,10 @@
               "channelSlug",
               "legKey",
               "mode",
-              "triggerId"
+              "triggerId",
+              "toStep"
             ],
-            "description": "The pipe as the generator read it from the features-service catalogue on THIS call. Null when the call ran no generation (client-supplied DAG)."
-          },
-          "pipeId": {
-            "type": "string",
-            "nullable": true,
-            "description": "The pipe the stored workflow runs on, `<channel slug>|<leg key>`. Null on a dynasty that states none (written before 2026-10-10)."
-          },
-          "producesStep": {
-            "type": "string",
-            "nullable": true,
-            "description": "The features-service step the stored workflow produces (its pipe's toStep): its ROI is that step's value over what a run costs. Null when no pipe is stated."
-          },
-          "workflowDynastyStatus": {
-            "type": "string",
-            "enum": [
-              "active",
-              "deprecated"
-            ],
-            "description": "Dynasty-level status, inherited from the lineage. 'deprecated' means the lineage is retired, so the workflow named here cannot be executed — upgrading a retired dynasty does not un-retire it."
+            "description": "The pipe as the generator read it from the features-service catalogue on THIS call, and the one the dynasty is now assigned to there (features-service owns the link). Null when the call ran no generation (client-supplied DAG)."
           },
           "action": {
             "type": "string",
@@ -1638,9 +1613,6 @@
           "workflowDynastySignatureName",
           "version",
           "pipe",
-          "pipeId",
-          "producesStep",
-          "workflowDynastyStatus",
           "action"
         ]
       },
@@ -1736,14 +1708,14 @@
                 "$ref": "#/components/schemas/DAG"
               },
               {
-                "description": "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, its signature computed, and the upgrade applies the same in-place / new-version branching as the LLM path. category/channel/audienceType, pipeId and producesStep are inherited from the existing row. Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running generation. Either `dag` or `description` MUST be provided."
+                "description": "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, its signature computed, and the upgrade applies the same in-place / new-version branching as the LLM path. category/channel/audienceType are inherited from the existing row. Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running generation. Either `dag` or `description` MUST be provided."
               }
             ]
           },
           "pipeId": {
             "type": "string",
             "minLength": 1,
-            "description": "The features-service pipe to regenerate for, `<channel slug>|<leg key>`. Defaults to the pipe the dynasty already runs on; when the dynasty states none, the generator resolves it from featureSlug. Ignored when `dag` is provided."
+            "description": "The features-service pipe to regenerate for, `<channel slug>|<leg key>`. Defaults to the pipe features-service assigns the dynasty to when it is exactly one; otherwise the generator resolves it from featureSlug. Ignored when `dag` is provided."
           },
           "hints": {
             "allOf": [

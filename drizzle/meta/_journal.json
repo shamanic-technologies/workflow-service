@@ -260,6 +260,13 @@
       "when": 1791640853712,
       "tag": "0036_workflow_pipe_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791653977964,
+      "tag": "0037_drop_workflow_pipe_identity",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { LegAssignmentError } from "../lib/catalogue-client.js";
 import type { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -221,6 +222,11 @@ function handleError(res: Response, err: unknown): void {
   if (constraintError) {
     console.error("[workflow-service] prompt-edit write rejected by the database:", err);
     res.status(400).json(constraintError);
+    return;
+  }
+  if (err instanceof LegAssignmentError) {
+    console.error("[workflow-service] prompt-edit fork written but its pipe assignment failed:", err.message);
+    res.status(502).json({ error: err.message, reason: "leg_assignment_failed" });
     return;
   }
   console.error("[workflow-service] prompt-edit error:", err);
