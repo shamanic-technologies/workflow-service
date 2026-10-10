@@ -577,6 +577,11 @@
               }
             ]
           },
+          "pipeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). Stored with `producesStep` = the pipe's toStep. Omit it and both stay null."
+          },
           "tags": {
             "type": "array",
             "items": {

@@ -1369,6 +1369,12 @@ export interface AiMeetingBookingDagOptions {
   provider: string;
   /** chat-service model alias, e.g. "pro". */
   model: string;
+  /**
+   * Leave `temperature` out of both chat steps. Required for a model that refuses sampling
+   * parameters: chat-service answers 400 to `temperature` on Anthropic `sonnet`, `opus` and
+   * `fable` (always-thinking models). The Gemini cell keeps its 0 / 0.4.
+   */
+  omitTemperature?: boolean;
 }
 
 /**
@@ -1637,7 +1643,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
             model: opts.model,
             responseFormat: "json",
             responseSchema: QUESTIONS_RESPONSE_SCHEMA,
-            temperature: 0,
+            ...(opts.omitTemperature ? {} : { temperature: 0 }),
             maxTokens: CHAT_STEP_MAX_TOKENS,
           },
         },
@@ -1747,7 +1753,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
             model: opts.model,
             responseFormat: "json",
             responseSchema: REPLY_RESPONSE_SCHEMA,
-            temperature: 0.4,
+            ...(opts.omitTemperature ? {} : { temperature: 0.4 }),
             maxTokens: CHAT_STEP_MAX_TOKENS,
           },
         },

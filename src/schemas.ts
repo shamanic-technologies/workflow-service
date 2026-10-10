@@ -174,6 +174,11 @@ export const CreateWorkflowSchema = z
     category: WorkflowCategorySchema.optional().describe("Optional workflow category tag."),
     channel: WorkflowChannelSchema.optional().describe("Optional workflow channel tag."),
     audienceType: WorkflowAudienceTypeSchema.optional().describe("Optional workflow audience type tag."),
+    pipeId: z.string().min(1).optional().describe(
+      "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: " +
+      "it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). " +
+      "Stored with `producesStep` = the pipe's toStep. Omit it and both stay null."
+    ),
     tags: z.array(z.string()).optional().describe(
       "Free-form tags for filtering/grouping (e.g. channels used in the DAG: [\"email\", \"linkedin\"])."
     ),

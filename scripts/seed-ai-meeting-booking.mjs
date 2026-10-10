@@ -6,10 +6,11 @@
  * meeting: it performs the `conversation_to_meeting_booked` leg of an offer.
  * Everything underneath it already runs; this is the thing that runs.
  *
- * ONE dynasty, not a matrix. The cold-email channels fan out across prompt
- * angles and models because they are looking for the one that converts; there
- * is nothing to compare here yet — the first question is whether the answer
- * lands at all, and a second cell would only split the evidence.
+ * ONE dynasty PER MODEL CELL (`CELLS`), identical DAGs otherwise. It began as one
+ * Gemini dynasty; the owner asked on 2026-10-10 for a second on Claude Opus 5.5 so
+ * the two ROIs on the `conversation_to_meeting_booked` pipe can be compared. Each
+ * dynasty is repaired with ITS OWN cell: upgrading every stale dynasty with one
+ * cell would silently turn the Opus arm back into the Gemini one.
  *
  * IDEMPOTENCE — enforced HERE as well as by the route. `POST /workflows` answers
  * a clean 409 on a duplicate signature, but a 409 per already-covered cell is
@@ -49,8 +50,24 @@ const APPLY = process.argv.includes("--apply");
  */
 const ORG_ID = process.env.ORG_ID ?? "f0420eb5-8f72-4f0a-a150-f473746df1e6";
 
-/** The model the answer is drafted with, through chat-service. */
-export const CELL = { provider: "google", model: "pro" };
+/**
+ * The models the answer is drafted with, through chat-service (which declares the cost). One
+ * dynasty each. Anthropic's always-thinking models refuse `temperature` (400), hence
+ * `omitTemperature` on that cell; the Gemini cell keeps its 0 / 0.4.
+ */
+export const CELLS = [
+  { provider: "google", model: "pro" },
+  { provider: "anthropic", model: "opus", omitTemperature: true },
+];
+
+/** The features-service pipe every cell runs on; its toStep (meeting_booked) is what each produces. */
+export const PIPE_ID = "ai-meeting-booking|conversation_to_meeting_booked";
+
+/** The cell a stored DAG was built from, or undefined when it matches none of `CELLS`. */
+export function cellForDag(dag) {
+  const key = cellOf(dag);
+  return CELLS.find((c) => `${c.provider}::${c.model}` === key);
+}
 
 export const DESCRIPTION =
   "Answers one prospect who showed sales interest and is owed our next message. " +
@@ -331,7 +348,9 @@ async function main() {
 
   const covered = new Map();
   const stale = [];
+  const dagBySlug = new Map();
   for (const w of existing.payload?.workflows ?? []) {
+    if (w.workflowDynastySlug) dagBySlug.set(w.workflowDynastySlug, w.dag);
     const cell = cellOf(w.dag);
     if (cell) covered.set(cell, w.workflowDynastySlug ?? w.workflowSlug);
     if (
@@ -357,7 +376,6 @@ async function main() {
     }
   }
 
-  const cell = `${CELL.provider}::${CELL.model}`;
   console.log(`${FEATURE_SLUG}: ${existing.payload?.workflows?.length ?? 0} active workflow(s)`);
   console.log(APPLY ? "APPLY" : "DRY RUN (pass --apply to write)");
 
@@ -366,9 +384,15 @@ async function main() {
       console.log(`  ${slug}: would upgrade (stored DAG is behind the current one)`);
       continue;
     }
+    const own = cellForDag(dagBySlug.get(slug));
+    if (!own) {
+      console.error(`  ${slug}: NOT UPGRADED, its drafting model ${cellOf(dagBySlug.get(slug))} is none of CELLS`);
+      process.exitCode = 1;
+      continue;
+    }
     const res = await call("POST", "/workflows/upgrade", {
       workflowDynastySlug: slug,
-      dag: buildAiMeetingBookingDag(CELL),
+      dag: buildAiMeetingBookingDag(own),
     });
     if (res.status === 200 || res.status === 201) {
       console.log(`  ${slug}: upgraded -> ${res.payload?.workflowSlug ?? "unknown"}`);
@@ -378,38 +402,37 @@ async function main() {
     }
   }
 
-  if (covered.has(cell)) {
-    console.log(`  ${cell}: already covered by ${covered.get(cell)}`);
-    return;
+  for (const c of CELLS) {
+    const cell = `${c.provider}::${c.model}`;
+    if (covered.has(cell)) {
+      console.log(`  ${cell}: already covered by ${covered.get(cell)}`);
+      continue;
+    }
+    if (!APPLY) {
+      console.log(`  ${cell}: would create`);
+      continue;
+    }
+    const { status, payload } = await call("POST", "/workflows", {
+      featureSlug: FEATURE_SLUG,
+      pipeId: PIPE_ID,
+      description: DESCRIPTION,
+      // Provenance, not behaviour: this converts an existing conversation rather
+      // than opening one, so it is not cold outreach.
+      category: "sales",
+      channel: "email",
+      audienceType: "conversation-follow-up",
+      tags: ["email", "meeting-booking", "reply", c.model],
+      dag: buildAiMeetingBookingDag(c),
+    });
+    if (status === 201) {
+      console.log(`  ${cell}: created ${payload?.workflowDynastySlug} (pipe ${payload?.pipeId}, produces ${payload?.producesStep})`);
+    } else if (status === 409) {
+      console.log(`  ${cell}: already exists (${payload?.existingWorkflowSlug ?? "unknown"})`);
+    } else {
+      console.error(`  ${cell}: FAILED ${status} ${JSON.stringify(payload)}`);
+      process.exitCode = 1;
+    }
   }
-
-  if (!APPLY) {
-    console.log(`  ${cell}: would create`);
-    return;
-  }
-
-  const { status, payload } = await call("POST", "/workflows", {
-    featureSlug: FEATURE_SLUG,
-    description: DESCRIPTION,
-    // Provenance, not behaviour: this converts an existing conversation rather
-    // than opening one, so it is not cold outreach.
-    category: "sales",
-    channel: "email",
-    audienceType: "conversation-follow-up",
-    tags: ["email", "meeting-booking", "reply", CELL.model],
-    dag: buildAiMeetingBookingDag(CELL),
-  });
-
-  if (status === 201) {
-    console.log(`  ${cell}: created ${payload?.workflowDynastySlug}`);
-    return;
-  }
-  if (status === 409) {
-    console.log(`  ${cell}: already exists (${payload?.workflowSlug ?? "unknown"})`);
-    return;
-  }
-  console.error(`  ${cell}: FAILED ${status} ${JSON.stringify(payload)}`);
-  process.exitCode = 1;
 }
 
 // Importable by the test suite; only runs when executed directly.
