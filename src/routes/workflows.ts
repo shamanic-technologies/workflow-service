@@ -22,7 +22,10 @@ import {
   GenerationValidationError,
 } from "../lib/workflow-generator.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
-import { pickWorkflowDynastySignatureName } from "../lib/workflow-dynasty-signature-name.js";
+import {
+  pickWorkflowDynastySignatureName,
+  workflowDynastySignatureNameToDisplay,
+} from "../lib/workflow-dynasty-signature-name.js";
 import { extractHttpEndpoints } from "../lib/extract-http-endpoints.js";
 import { fetchProviderRequirements } from "../lib/key-service-client.js";
 import { enrichProvidersWithDomains } from "../lib/provider-domains.js";
@@ -198,7 +201,7 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
 
     const featureName = featureSlugToName(body.featureSlug);
     const workflowDynastySlug = `${body.featureSlug}-${workflowDynastySignatureName}`;
-    const workflowDynastyName = `${featureName} ${workflowDynastySignatureName.charAt(0).toUpperCase() + workflowDynastySignatureName.slice(1)}`;
+    const workflowDynastyName = `${featureName} ${workflowDynastySignatureNameToDisplay(workflowDynastySignatureName)}`;
     const workflowSlug = workflowDynastySlug; // v1 — no version suffix
     const workflowName = workflowDynastyName;
 
@@ -552,7 +555,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
 
     const featureName = featureSlugToName(body.featureSlug);
     const workflowDynastySlug = `${body.featureSlug}-${workflowDynastySignatureName}`;
-    const workflowDynastyName = `${featureName} ${workflowDynastySignatureName.charAt(0).toUpperCase() + workflowDynastySignatureName.slice(1)}`;
+    const workflowDynastyName = `${featureName} ${workflowDynastySignatureNameToDisplay(workflowDynastySignatureName)}`;
     const workflowSlug = workflowDynastySlug; // v1 — no version suffix
     const workflowName = workflowDynastyName;
 

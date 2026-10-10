@@ -4,7 +4,10 @@ import { workflows } from "../db/schema.js";
 import type { DAG } from "./dag-validator.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
 import { getWindmillClient } from "./windmill-client.js";
-import { pickWorkflowDynastySignatureName } from "./workflow-dynasty-signature-name.js";
+import {
+  pickWorkflowDynastySignatureName,
+  workflowDynastySignatureNameToDisplay,
+} from "./workflow-dynasty-signature-name.js";
 
 /**
  * The two lineage writes that turn a DAG into a NEW workflow row next to an
@@ -235,7 +238,7 @@ export async function forkWorkflowRow(params: ForkWorkflowParams): Promise<ForkR
 
   const featureName = featureSlugToName(existing.featureSlug);
   const newWorkflowDynastySlug = `${existing.featureSlug}-${workflowDynastySignatureName}`;
-  const newWorkflowDynastyName = `${featureName} ${workflowDynastySignatureName.charAt(0).toUpperCase() + workflowDynastySignatureName.slice(1)}`;
+  const newWorkflowDynastyName = `${featureName} ${workflowDynastySignatureNameToDisplay(workflowDynastySignatureName)}`;
   const newWorkflowSlug = newWorkflowDynastySlug; // v1 has no version suffix
   const newWorkflowName = newWorkflowDynastyName;
 

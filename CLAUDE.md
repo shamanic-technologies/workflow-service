@@ -152,7 +152,7 @@ The billing frame is obsolete (there is no per-compute bill now), but the measur
 
 ## Workflow naming and versioning
 
-Workflows follow a dynasty model: each workflow belongs to a lineage (dynasty) that tracks its evolution through upgrades. Names and slugs are derived from the `feature_slug` and a poetic `workflow_dynasty_signature_name` generated once per dynasty.
+Workflows follow a dynasty model: each workflow belongs to a lineage (dynasty) that tracks its evolution through upgrades. Names and slugs are derived from the `feature_slug` and a poetic `workflow_dynasty_signature_name` generated once per dynasty. **Workflows are STARS** (owner 2026-10-10: one name family per concept; funnels = uplifting words, pipes = birds, sales paths = rivers, all features-service): a new dynasty takes an IAU star name, then `adjective-star` (`bright-vega`, "Bright Vega") once a feature has burned every single star, then THROWS (`WorkflowDynastySignatureNamePoolExhaustedError`, no numeric suffix). The pool excludes common English words and every features-service family word (`EXCLUDED_STAR_NAMES` + `tests/fixtures/features-service-name-families.ts`: append there when features-service grows a pool). Names given earlier from the old mixed pool stay as they are.
 
 ### Naming rule
 
@@ -168,7 +168,7 @@ The bare word `dynasty` does not exist in this repo — always `workflow_dynasty
 |---|---|---|---|
 | `workflow_slug` | text | Yes (globally) | Technical identifier, immutable once created. Used as API key for execution (`POST /workflows/by-slug/:workflowSlug/execute`). |
 | `workflow_name` | text | Yes (globally) | Human-readable display name. |
-| `workflow_dynasty_signature_name` | text | Unique per `feature_slug` (any status, any org) | Poetic word generated deterministically from the DAG hash. Set once at dynasty creation, never changes within the dynasty. Burned for life. |
+| `workflow_dynasty_signature_name` | text | Unique per `feature_slug` (any status, any org) | Star name (lowercase, slug-safe) picked deterministically from the DAG hash. Set once at dynasty creation, never changes within the dynasty. Burned for life. |
 | `workflow_dynasty_slug` | text | No | Stable lineage slug. Constant across all versions of a dynasty. |
 | `workflow_dynasty_name` | text | No | Stable lineage display name. Constant across all versions of a dynasty. |
 | `signature` | text | Unique per `(feature_slug, status='active')` | Hash of the DAG structure. Used for deduplication on upgrade. |
@@ -181,7 +181,7 @@ The bare word `dynasty` does not exist in this repo — always `workflow_dynasty
 
 ```
 workflow_dynasty_slug = feature_slug + "-" + workflow_dynasty_signature_name
-workflow_dynasty_name = TitleCase(feature_slug.replace("-", " ")) + " " + Capitalize(workflow_dynasty_signature_name)
+workflow_dynasty_name = TitleCase(feature_slug.replace("-", " ")) + " " + TitleCase(workflow_dynasty_signature_name.replace("-", " "))
 workflow_slug         = workflow_dynasty_slug                        if version == 1
                       | workflow_dynasty_slug + "-v{version}"        if version >= 2
 workflow_name         = workflow_dynasty_name                        if version == 1
