@@ -5,6 +5,8 @@ export interface ChatServiceCompleteRequest {
   message: string;
   systemPrompt: string;
   responseFormat?: "json";
+  /** JSON Schema the provider enforces server-side. Anthropic requires it for JSON output, strict (additionalProperties: false). */
+  responseSchema?: Record<string, unknown>;
   temperature?: number;
   maxTokens?: number;
   provider: ChatProvider;

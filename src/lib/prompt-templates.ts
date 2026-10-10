@@ -1,5 +1,7 @@
 import { NODE_TYPE_REGISTRY } from "./node-type-registry.js";
 import { LEAD_CONTEXT_PATHS } from "./lead-context-variables.js";
+import type { CataloguePipe, CatalogueStep, CataloguePipeSummary } from "./catalogue-client.js";
+import type { DiscoveredService, DiscoverServiceEndpointsResponse } from "./api-registry-client.js";
 
 /**
  * The recipient-context variables a generated workflow should map. The
@@ -10,17 +12,58 @@ import { LEAD_CONTEXT_PATHS } from "./lead-context-variables.js";
  */
 const LEAD_CONTEXT_VARIABLE_NAMES = Object.keys(LEAD_CONTEXT_PATHS).join(", ");
 
-export interface ServiceContext {
-  services: Array<{ name: string; description: string; endpointCount: number }>;
-  specs: Record<string, unknown>;
+/** The pipe a workflow is generated for, and the step it produces (both from features-service). */
+export interface PipeContext {
+  pipe: CataloguePipe;
+  fromStep: CatalogueStep;
+  toStep: CatalogueStep;
+}
+
+/** Level-3 docs (api-registry `/discover/services/{service}/endpoint`) of the endpoints the model picked. */
+export interface EndpointDocs {
+  docs: Array<Record<string, unknown>>;
 }
 
 export interface BuildSystemPromptOptions {
-  serviceContext?: ServiceContext;
+  pipeContext?: PipeContext;
+  endpointDocs?: EndpointDocs;
+}
+
+/**
+ * The owner's vocabulary (2026-10-10), shared by the three generation prompts. Kept as ONE text so
+ * the three calls can never describe the model differently.
+ */
+export const DISTRIBUTE_MODEL_VOCABULARY = `## The Model You Are Building For
+
+distribute.you is a cold email specialist. Every name below is a real object in the platform:
+
+- **Step**: a stage a person reaches (Lead found, Website visit, Positive reply, Meeting booked, Paid client...).
+- **Sales Path**: a chain of steps that ends at Paid client.
+- **Channel**: how we work a person (e.g. "sales-cold-email-outreach", "ai-meeting-booking").
+- **Pipe**: one leg of a sales path (fromStep -> toStep) worked by ONE channel. Its id is \`<channel slug>|<leg key>\`.
+- **Sales Funnel**: a sales path with one pipe on each leg.
+- **Workflow**: what you are writing. It runs on ONE pipe and moves people from the pipe's fromStep to its toStep, which is the step it PRODUCES (its ROI is the value of that step over what a run costs). It is either:
+  - **proactive**: it goes and finds its own people (e.g. pulls the next lead), or
+  - **reactive**: someone who reached the pipe's fromStep (its trigger, e.g. a positive reply) is handed to it.
+- **Campaign**: a sales funnel capped by a max budget and a max volume (proactive) or by an "Up to" cap (reactive). Every pipe of the funnel stops when the funnel's cap is reached.`;
+
+function pipeSection(ctx: PipeContext): string {
+  const { pipe, fromStep, toStep } = ctx;
+  const mode =
+    pipe.mode === "proactive"
+      ? "PROACTIVE: each run finds its own next person to work (the gate-check says whether the campaign's caps leave room)."
+      : `REACTIVE on trigger "${pipe.triggerId ?? fromStep.id}": each run works one person who reached "${fromStep.name}" and is owed the next move. It does not source new people.`;
+  return `## The Pipe This Workflow Runs On
+
+- Pipe: \`${pipe.id}\` (${pipe.line})
+- Channel: \`${pipe.channelSlug}\` (${pipe.channelName})
+- Leg: \`${pipe.legKey}\`: from step \`${fromStep.id}\` (${fromStep.name}: ${fromStep.line}) to step \`${toStep.id}\` (${toStep.name}: ${toStep.line})
+- Mode: ${mode}
+- Produces step: \`${toStep.id}\` (${toStep.name}). Write the workflow so a run's work is what moves a person toward "${toStep.name}" and nothing else; do not add work that belongs to another pipe (another leg or another channel).`;
 }
 
 export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
-  const { serviceContext } = options ?? {};
+  const { pipeContext, endpointDocs } = options ?? {};
 
   const nodeTypes = Object.entries(NODE_TYPE_REGISTRY)
     .map(([type, path]) => {
@@ -30,31 +73,27 @@ export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
     .join("\n");
 
   let serviceSection: string;
-  if (serviceContext) {
-    const serviceList = serviceContext.services
-      .map((s) => `- **${s.name}**: ${s.description} (${s.endpointCount} endpoints)`)
-      .join("\n");
+  if (endpointDocs) {
+    serviceSection = `## Endpoint Docs
 
-    serviceSection = `## Available Services
-
-${serviceList}
-
-## Service OpenAPI Specs
-
-Below are the full OpenAPI specifications for each service. Use these to determine the correct endpoint paths, request body fields, and response schemas. Do NOT guess — only use endpoints and fields documented here.
+Below is the full doc of every endpoint you picked (request body, responses, measured cost and ROI). Use these to determine the correct paths, request body fields and response schemas. Do NOT guess: only use endpoints and fields documented here.
 
 \`\`\`json
-${JSON.stringify(serviceContext.specs, null, 2)}
+${JSON.stringify(endpointDocs.docs)}
 \`\`\`
 
-Do NOT invent endpoints or fields that are not in the specs above. If a service or endpoint you need does not exist, adjust the workflow to use only real endpoints.`;
+Do NOT invent endpoints or fields that are not in the docs above. If an endpoint you need is not here, adjust the workflow to use only documented endpoints.`;
   } else {
-    serviceSection = `## Service Discovery
+    serviceSection = `## Endpoint Docs
 
-No service context is available. Use only well-known endpoint paths.`;
+No endpoint docs are available. Use only well-known endpoint paths.`;
   }
 
+  const pipeBlock = pipeContext ? `\n\n${pipeSection(pipeContext)}` : "";
+
   return `You are a workflow architect that generates valid DAG (Directed Acyclic Graph) workflows.
+
+${DISTRIBUTE_MODEL_VOCABULARY}${pipeBlock}
 
 ## DAG Format
 
@@ -126,14 +165,14 @@ Static body fields go in config.body, dynamic overrides go in inputMapping with 
 
 ### Placeholders in examples
 
-Examples below use natural-language placeholders like \`<path to X>\` for any value that lives in another service's OpenAPI spec (endpoint paths and response field paths). These are NOT literal strings — you MUST resolve every \`<...>\` against the live OpenAPI specs injected later in this prompt and emit the actual JSON path. Emitting a literal \`<...>\` token in the final DAG is a hard failure.
+Examples below use natural-language placeholders like \`<path to X>\` for any value that lives in another service's OpenAPI spec (endpoint paths and response field paths). These are NOT literal strings — you MUST resolve every \`<...>\` against the endpoint docs injected later in this prompt and emit the actual JSON path. Emitting a literal \`<...>\` token in the final DAG is a hard failure.
 
 For path parameters (e.g. \`/internal/brands/{brandId}\`), use \`params.*\` in inputMapping:
 - "params.brandId": "$ref:start-run.output.<path to brandId in start-run response>" → replaces {brandId} in the path
 
 ### \`$ref\` resolution rule (HARD)
 
-Every \`$ref\` path you emit MUST resolve against the OpenAPI specs injected below. Two distinct cases:
+Every \`$ref\` path you emit MUST resolve against the endpoint docs injected below. Two distinct cases:
 
 1. **Fixed-schema objects** (declared via \`properties\`): use the property names verbatim from the spec. NEVER invent a key. If the upstream node response declares \`data.organization.name\`, you MUST emit \`$ref:node.output.data.organization.name\` — not \`data.organizationName\`, not \`data.org.name\`, not \`data.organization_name\`. Resolution failure = validation error.
 
@@ -141,7 +180,7 @@ Every \`$ref\` path you emit MUST resolve against the OpenAPI specs injected bel
 
 If a needed field is absent from a fixed-schema response, do NOT invent a path. Either pick a different upstream node that legitimately exposes the value, or omit the field. Inventing paths against fixed schemas is a hard failure.
 
-The flattening in case 1 is not hypothetical — it is the mistake that has actually been made, on lead-service, seven times. lead-service \`POST /orgs/buffer/next\` serves the canonical lead under \`lead.data\` and the lead's employer under \`lead.data.organization\`, a NESTED object. So the person's job title is \`lead.data.currentTitle\` (there is no \`lead.data.title\`), and every company field hangs off the organization: \`lead.data.organization.name\`, \`.industry\`, \`.keywords\`, \`.technologyNames\`, \`.shortDescription\`, \`.latestFundingStage\`, \`.websiteUrl\`, and the head count is \`.estimatedNumEmployees\` (there is no \`.size\`). Never write \`lead.data.organizationName\` or any other flattened \`organization<Field>\` form: it renders as an empty string with no error and no log line, so the prompt silently reads \`Company: \` on every run. Read the spec below for the full set rather than working from this list.
+The flattening in case 1 is not hypothetical — it is the mistake that has actually been made, on lead-service, seven times. lead-service \`POST /orgs/buffer/next\` serves the canonical lead under \`lead.data\` and the lead's employer under \`lead.data.organization\`, a NESTED object. So the person's job title is \`lead.data.currentTitle\` (there is no \`lead.data.title\`), and every company field hangs off the organization: \`lead.data.organization.name\`, \`.industry\`, \`.keywords\`, \`.technologyNames\`, \`.shortDescription\`, \`.latestFundingStage\`, \`.websiteUrl\`, and the head count is \`.estimatedNumEmployees\` (there is no \`.size\`). Never write \`lead.data.organizationName\` or any other flattened \`organization<Field>\` form: it renders as an empty string with no error and no log line, so the prompt silently reads \`Company: \` on every run. Read the doc below for the full set rather than working from this list.
 
 ## Special Config Keys (stripped before passing to script)
 
@@ -149,24 +188,6 @@ The flattening in case 1 is not hypothetical — it is the mistake that has actu
 - stopAfterIf (string): JS expression using "result" variable. Stops the entire flow gracefully when true. No onError triggered. Example: "result.allowed == false"
 - skipIf (string): JS expression using "results.<module_id>". Skips only this step when true. Example: "results.fetch_lead.found == false"
 - validateResponse ({ field, equals }): throws error if response[field] !== equals, triggers onError handler.
-
-## Dimension Enums (MUST pick from these)
-
-These three tags describe the workflow; they never change what it does. Pick the values that are
-TRUE of the workflow you just wrote — never the closest-looking value from another channel.
-
-- category: "sales" | "pr" | "outlets" | "journalists" | "advertising"
-- channel: "email" | "database" | "ads"
-- audienceType: "cold-outreach" | "discovery" | "audience-targeting" | "conversation-follow-up"
-
-A workflow that buys placements on an ad platform (Google Ads, Meta Ads, LinkedIn Ads, TikTok,
-YouTube, Reddit, a newsletter or podcast sponsorship) is category "advertising", channel "ads",
-audienceType "audience-targeting" — it sends no email and builds no database, and it describes its
-audience to the platform as targeting criteria instead of contacting anyone one by one.
-
-A workflow that answers people who already replied to us — continuing their existing thread rather
-than opening a new one — is audienceType "conversation-follow-up". These people are not cold: they
-wrote to us first, and the workflow's whole job is to answer what they said.
 
 ${serviceSection}
 
@@ -204,11 +225,10 @@ When sending via email-gateway (\`POST /send\` with \`type: "broadcast"\`):
 
 ## Campaign Execution Model
 
-Campaign service orchestrates workflow execution with budget constraints. Key concepts:
-- A campaign has budget limits: max leads and/or max spend, scoped per day, per week, or per month
-- Campaign service triggers the workflow (DAG) repeatedly, roughly every minute, until the budget is exhausted
-- Each workflow run processes ONE unit of work (e.g. one lead, one email send)
-- The gate-check step validates that budget remains before each run — if budget is exhausted, it returns allowed=false and the flow stops gracefully via stopAfterIf
+A campaign is a sales funnel capped by a max budget and a max volume (proactive pipes) or an "Up to" cap (reactive pipes); every pipe of the funnel stops when the funnel's cap is reached. Campaign service dispatches the workflow of each pipe. Key concepts:
+- Campaign service triggers the workflow (DAG) repeatedly, roughly every minute, until the cap is reached
+- Each workflow run processes ONE unit of work (e.g. one lead, one email send, one reply)
+- The gate-check step validates that the cap leaves room before each run — if not, it returns allowed=false and the flow stops gracefully via stopAfterIf
 - The end-run step reports success/failure AND whether to stop the campaign:
   - stopCampaign: false → campaign-service automatically re-triggers the workflow
   - stopCampaign: true → this run's audience had nobody to serve (fetch-lead found == false). It stops NOTHING: campaign-service marks that one audience exhausted for a while and picks another on the next run
@@ -369,120 +389,14 @@ You MUST respond with a JSON object matching this exact shape:
 
 \`\`\`json
 {
-  "category": "sales" | "pr" | "outlets" | "journalists" | "advertising",
-  "channel": "email" | "database" | "ads",
-  "audienceType": "cold-outreach" | "discovery" | "audience-targeting" | "conversation-follow-up",
-  "description": "Human-readable description of what this workflow does (1-2 sentences)",
-  "dag": {
-    "nodes": [{ "id": "string", "type": "string", "config": {}, "inputMapping": {}, "retries": 0 }],
-    "edges": [{ "from": "string", "to": "string", "condition": "optional" }],
-    "onError": "optional-node-id"
-  }
+  "description": "Human-readable description of what this workflow does on its pipe (1-2 sentences)",
+  "dag": "the DAG serialized as ONE JSON string"
 }
 \`\`\`
 
-Generate a single workflow DAG that fulfills the user's description. Return ONLY the JSON object, no explanation.`;
-}
+\`dag\` is a STRING holding the JSON of the DAG object, \`{ "nodes": [{ "id", "type", "config", "inputMapping", "retries" }], "edges": [{ "from", "to", "condition" }], "onError" }\`, escaped as any JSON string is. It is parsed with JSON.parse, so it must be exactly one valid JSON object and nothing else.
 
-export interface BuildUpgradeSystemPromptOptions {
-  currentDag: Record<string, unknown>;
-  invalidEndpoints: Array<{ service: string; method: string; path: string; reason: string }>;
-  fieldErrors?: Array<{ nodeId: string; service: string; method: string; path: string; field: string; reason: string }>;
-  serviceContext?: ServiceContext;
-}
-
-export function buildUpgradeSystemPrompt(options: BuildUpgradeSystemPromptOptions): string {
-  const { currentDag, invalidEndpoints, fieldErrors = [], serviceContext } = options;
-
-  const brokenList = invalidEndpoints
-    .map((ep) => `- ${ep.method} ${ep.service}${ep.path} — ${ep.reason}`)
-    .join("\n");
-
-  const fieldErrorList = fieldErrors
-    .map((f) => `- Node "${f.nodeId}": ${f.reason}`)
-    .join("\n");
-
-  const hasBrokenEndpoints = invalidEndpoints.length > 0;
-  const hasFieldErrors = fieldErrors.length > 0;
-
-  let issuesSection = "";
-
-  if (hasBrokenEndpoints) {
-    issuesSection += `## Broken Endpoints
-
-The following endpoints in this DAG are invalid — they no longer exist in the upstream service:
-
-${brokenList}
-`;
-  }
-
-  if (hasFieldErrors) {
-    issuesSection += `${hasBrokenEndpoints ? "\n" : ""}## Field Errors
-
-The following nodes send incorrect body fields to their endpoints (missing required fields or sending unknown fields):
-
-${fieldErrorList}
-
-To fix field errors, update the node's \`inputMapping\` (add missing \`body.*\` entries or remove incorrect ones) and/or \`config.body\` to match the endpoint's actual request schema. Refer to the service specs below.
-`;
-  }
-
-  let serviceSpecsSection = "";
-  if (serviceContext) {
-    serviceSpecsSection = `## Service OpenAPI Specs
-
-Below are the OpenAPI specifications for the relevant services. Use these to find the correct endpoint paths and request body schemas.
-
-\`\`\`json
-${JSON.stringify(serviceContext.specs, null, 2)}
-\`\`\`
-`;
-  }
-
-  return `You are a workflow maintenance engineer. Your job is to FIX a broken workflow DAG by correcting endpoint paths and body field mappings.
-
-## Current DAG (DO NOT change business logic)
-
-\`\`\`json
-${JSON.stringify(currentDag, null, 2)}
-\`\`\`
-
-${issuesSection}
-${serviceSpecsSection}
-## Your Task
-
-Fix the broken endpoints and field errors using the service specs above, then return the corrected DAG.
-
-## CRITICAL RULES
-
-- **Preserve ALL business logic exactly**: same node IDs, same edges, same conditions, same retries, same onError
-- **Only change what's broken**: update config.path, config.body, or inputMapping on the affected nodes
-- **Do NOT add, remove, or reorder nodes or edges**
-- **Do NOT change conditions, stopAfterIf, skipIf, or any non-broken config keys**
-- **Keep the same category, channel, audienceType, and description**
-- If you cannot find a replacement endpoint, keep the original and note it in the description
-- When fixing field errors, use \`$ref:flow_input.fieldName\` or \`$ref:node-id.output.fieldName\` for dynamic values in inputMapping
-- NEVER add cost-tracking nodes — cost tracking is handled internally by each downstream service
-
-## Output Format
-
-You MUST respond with a JSON object matching this exact shape:
-
-\`\`\`json
-{
-  "category": "sales" | "pr" | "outlets" | "journalists" | "advertising",
-  "channel": "email" | "database" | "ads",
-  "audienceType": "cold-outreach" | "discovery" | "audience-targeting" | "conversation-follow-up",
-  "description": "Human-readable description",
-  "dag": {
-    "nodes": [...],
-    "edges": [...],
-    "onError": "optional-node-id"
-  }
-}
-\`\`\`
-
-Return ONLY the JSON object, no explanation.`;
+Generate a single workflow DAG for the pipe above that fulfills the user's description. Return ONLY the JSON object, no explanation.`;
 }
 
 export function buildRetryUserMessage(
@@ -498,4 +412,103 @@ export function buildRetryUserMessage(
 ${errorList}
 
 Original request: ${originalDescription}`;
+}
+
+// --- Discovery calls (levels 1 and 2), made before the DAG is written -----------------------
+
+/** Services the generator never offers: api-service is a proxy, the DAG calls the service behind it. */
+export const HIDDEN_SERVICES: ReadonlySet<string> = new Set(["api", "api-registry"]);
+
+export interface ServicePickPromptOptions {
+  /** The resolved pipe, or null while the model still has to choose among `candidatePipes`. */
+  pipeContext: PipeContext | null;
+  candidatePipes: CataloguePipeSummary[];
+  services: DiscoveredService[];
+}
+
+/**
+ * Call 1 of 3: the model reads level 1 (one line per service) and names the services the workflow
+ * needs. When the channel has several pipes and the caller named none, it also picks the pipe.
+ */
+export function buildServicePickPrompt(options: ServicePickPromptOptions): string {
+  const { pipeContext, candidatePipes, services } = options;
+  const serviceList = services
+    .filter((s) => !HIDDEN_SERVICES.has(s.name))
+    .map((s) => `- **${s.name}**: ${s.description}`)
+    .join("\n");
+  const pipeBlock = pipeContext
+    ? pipeSection(pipeContext)
+    : `## Pick The Pipe
+
+The workflow runs on exactly ONE of these pipes of its channel. Pick the one the user's description is about:
+
+${candidatePipes.map((p) => `- \`${p.id}\` (${p.mode}): ${p.line}`).join("\n")}`;
+  const pipeField = pipeContext ? "" : `\n  "pipeId": "one pipe id from the list above",`;
+
+  return `You are a workflow architect planning a workflow before you write it.
+
+${DISTRIBUTE_MODEL_VOCABULARY}
+
+${pipeBlock}
+
+## Services
+
+${serviceList}
+
+## Your Task
+
+Name every service the workflow will call. A campaign workflow always needs "campaign" (gate-check, start-run, end-run). Pick only services you will actually call; you will see their endpoints next.
+
+## Output Format
+
+Return ONLY this JSON object:
+
+\`\`\`json
+{${pipeField}
+  "services": ["service name", "..."]
+}
+\`\`\``;
+}
+
+export interface EndpointPickPromptOptions {
+  pipeContext: PipeContext;
+  endpoints: DiscoverServiceEndpointsResponse[];
+}
+
+/** Call 2 of 3: the model reads level 2 (endpoints with measured cost, success, ROI) and picks the ones it will call. */
+export function buildEndpointPickPrompt(options: EndpointPickPromptOptions): string {
+  const listing = options.endpoints
+    .map((svc) => {
+      const rows = svc.endpoints
+        .map((e) => `  - ${e.method} ${e.path}: ${e.summary}${e.stats || e.roi ? ` ${JSON.stringify({ stats: e.stats, roi: e.roi })}` : ""}`)
+        .join("\n");
+      return `### ${svc.service}: ${svc.description}\n${rows}`;
+    })
+    .join("\n\n");
+
+  return `You are a workflow architect planning a workflow before you write it.
+
+${DISTRIBUTE_MODEL_VOCABULARY}
+
+${pipeSection(options.pipeContext)}
+
+## Endpoints
+
+Each endpoint shows its measured stats (success rate, average cost and duration per run) and, when it produces a step, its ROI. Prefer the endpoints that do the job at the best measured cost.
+
+${listing}
+
+## Your Task
+
+Pick every endpoint the workflow will call, including the campaign chassis (gate-check, start-run, end-run). You will receive the full doc of exactly these endpoints next, and nothing else.
+
+## Output Format
+
+Return ONLY this JSON object:
+
+\`\`\`json
+{
+  "endpoints": [{ "service": "service name", "method": "POST", "path": "/path/exactly/as/listed" }]
+}
+\`\`\``;
 }

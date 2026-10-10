@@ -50,7 +50,7 @@
           "journalists",
           "advertising"
         ],
-        "description": "Optional workflow category tag."
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."
       },
       "WorkflowChannel": {
         "type": "string",
@@ -60,7 +60,7 @@
           "database",
           "ads"
         ],
-        "description": "Optional workflow channel tag."
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."
       },
       "WorkflowAudienceType": {
         "type": "string",
@@ -71,7 +71,7 @@
           "audience-targeting",
           "conversation-follow-up"
         ],
-        "description": "Optional workflow audience type tag."
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: read pipeId."
       },
       "WorkflowResponse": {
         "type": "object",
@@ -134,6 +134,16 @@
           },
           "audienceType": {
             "$ref": "#/components/schemas/WorkflowAudienceType"
+          },
+          "pipeId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The features-service pipe this workflow runs on, `<channel slug>|<leg key>`. Null on workflows written before 2026-10-10 or supplied as a client DAG without one."
+          },
+          "producesStep": {
+            "type": "string",
+            "nullable": true,
+            "description": "The features-service step this workflow produces (its pipe's toStep). Null when no pipe is stated."
           },
           "tags": {
             "type": "array",
@@ -241,6 +251,8 @@
           "category",
           "channel",
           "audienceType",
+          "pipeId",
+          "producesStep",
           "tags",
           "signature",
           "workflowDynastySignatureName",
@@ -536,13 +548,34 @@
             "description": "Feature slug from features-service. Required — used to build the workflow slug/name and for feature-level grouping."
           },
           "category": {
-            "$ref": "#/components/schemas/WorkflowCategory"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowCategory"
+              },
+              {
+                "description": "Optional workflow category tag."
+              }
+            ]
           },
           "channel": {
-            "$ref": "#/components/schemas/WorkflowChannel"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowChannel"
+              },
+              {
+                "description": "Optional workflow channel tag."
+              }
+            ]
           },
           "audienceType": {
-            "$ref": "#/components/schemas/WorkflowAudienceType"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowAudienceType"
+              },
+              {
+                "description": "Optional workflow audience type tag."
+              }
+            ]
           },
           "tags": {
             "type": "array",
@@ -1523,6 +1556,53 @@
             "type": "integer",
             "description": "Version number within the lineage."
           },
+          "pipe": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Pipe id, `<channel slug>|<leg key>`."
+              },
+              "channelSlug": {
+                "type": "string"
+              },
+              "legKey": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "proactive",
+                  "reactive"
+                ],
+                "description": "proactive: the workflow finds its own people. reactive: a trigger hands them over."
+              },
+              "triggerId": {
+                "type": "string",
+                "nullable": true,
+                "description": "The trigger of a reactive pipe (features-service); null on a proactive one."
+              }
+            },
+            "required": [
+              "id",
+              "channelSlug",
+              "legKey",
+              "mode",
+              "triggerId"
+            ],
+            "description": "The pipe as the generator read it from the features-service catalogue on THIS call. Null when the call ran no generation (client-supplied DAG)."
+          },
+          "pipeId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The pipe the stored workflow runs on, `<channel slug>|<leg key>`. Null on a dynasty that states none (written before 2026-10-10)."
+          },
+          "producesStep": {
+            "type": "string",
+            "nullable": true,
+            "description": "The features-service step the stored workflow produces (its pipe's toStep): its ROI is that step's value over what a run costs. Null when no pipe is stated."
+          },
           "workflowDynastyStatus": {
             "type": "string",
             "enum": [
@@ -1552,6 +1632,9 @@
           "signature",
           "workflowDynastySignatureName",
           "version",
+          "pipe",
+          "pipeId",
+          "producesStep",
           "workflowDynastyStatus",
           "action"
         ]
@@ -1613,7 +1696,12 @@
           "featureSlug": {
             "type": "string",
             "minLength": 1,
-            "description": "Feature slug from features-service. Required — used to build the workflow name."
+            "description": "The workflow's channel slug in features-service (e.g. 'sales-cold-email-outreach'). Required: it names the workflow and its pipes are the ones the workflow can run on."
+          },
+          "pipeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>` (GET /internal/catalogue/pipes). Its channel slug must equal featureSlug. Omit it when the channel has one pipe, or to let the generator pick the pipe the description is about."
           },
           "hints": {
             "$ref": "#/components/schemas/GenerateWorkflowHints"
@@ -1643,9 +1731,14 @@
                 "$ref": "#/components/schemas/DAG"
               },
               {
-                "description": "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, its signature computed, and the upgrade applies the same in-place / new-version branching as the LLM path. category/channel/audienceType are inherited from the existing row (no LLM to infer them). Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running generation. Either `dag` or `description` MUST be provided."
+                "description": "Optional client-supplied DAG. When provided, the LLM is not invoked: the DAG is validated, its signature computed, and the upgrade applies the same in-place / new-version branching as the LLM path. category/channel/audienceType, pipeId and producesStep are inherited from the existing row. Use this to apply surgical fixes to a workflow (e.g. patch a single script node) without re-running generation. Either `dag` or `description` MUST be provided."
               }
             ]
+          },
+          "pipeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The features-service pipe to regenerate for, `<channel slug>|<leg key>`. Defaults to the pipe the dynasty already runs on; when the dynasty states none, the generator resolves it from featureSlug. Ignored when `dag` is provided."
           },
           "hints": {
             "allOf": [
