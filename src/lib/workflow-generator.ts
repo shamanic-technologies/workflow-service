@@ -61,6 +61,8 @@ export interface GeneratedPipe {
   legKey: string;
   mode: "proactive" | "reactive";
   triggerId: string | null;
+  /** The step the pipe produces (its toStep), as the catalogue serves it. */
+  toStep: string;
 }
 
 export interface GenerationUsage {
@@ -331,6 +333,7 @@ export async function generateWorkflow(
       legKey: ctx.pipe.legKey,
       mode: ctx.pipe.mode,
       triggerId: ctx.pipe.triggerId,
+      toStep: ctx.pipe.toStep,
     },
     producesStep: ctx.toStep.id,
     usage,

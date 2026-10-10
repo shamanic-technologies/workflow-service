@@ -154,10 +154,20 @@ vi.mock("../../src/lib/api-registry-client.js", () => ({
 // Mock features-client
 vi.mock("../../src/lib/features-client.js", () => ({}));
 const mockFetchPipe = vi.fn();
+
+// features-service owns the pipe <-> workflow link: these tests record what is assigned there.
+const mockAssignWorkflowToLeg = vi.fn(async (a: Record<string, unknown>) => ({ ...a, state: "active", decidedAt: "2026-10-10T00:00:00.000Z" }));
+const mockActiveLegsOfDynasty = vi.fn(async () => [] as string[]);
 vi.mock("../../src/lib/catalogue-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/catalogue-client.js")>();
-  return { ...actual, fetchPipe: (...a: unknown[]) => mockFetchPipe(...a) };
+  return {
+    ...actual,
+    fetchPipe: (...a: unknown[]) => mockFetchPipe(...a),
+    assignWorkflowToLeg: (...a: unknown[]) => mockAssignWorkflowToLeg(...(a as [Record<string, unknown>])),
+    activeLegsOfDynasty: (...a: unknown[]) => mockActiveLegsOfDynasty(...(a as [])),
+  };
 });
+
 const MEETING_PIPE = {
   id: "ai-meeting-booking|conversation_to_meeting_booked",
   name: "Pipit",
@@ -240,16 +250,35 @@ describe("POST /workflows", () => {
     expect(res.body.windmillFlowPath).toContain("f/workflows/org-1/");
   });
 
-  it("stores the stated pipe and the step it produces, read from the catalogue", async () => {
+  it("assigns the new workflow to the stated pipe in features-service, and stores no pipe itself", async () => {
+    mockAssignWorkflowToLeg.mockClear();
     mockFetchPipe.mockResolvedValueOnce(MEETING_PIPE);
     const res = await request
       .post("/workflows")
       .set(AUTH)
       .send({ featureSlug: "ai-meeting-booking", pipeId: MEETING_PIPE.id, dag: VALID_LINEAR_DAG });
     expect(res.status).toBe(201);
-    expect(res.body.pipeId).toBe(MEETING_PIPE.id);
-    expect(res.body.producesStep).toBe("meeting_booked");
     expect(mockFetchPipe).toHaveBeenCalledWith(MEETING_PIPE.id, expect.anything());
+    expect(mockAssignWorkflowToLeg).toHaveBeenCalledTimes(1);
+    expect(mockAssignWorkflowToLeg.mock.calls[0][0]).toMatchObject({
+      featureSlug: "ai-meeting-booking",
+      legKey: "conversation_to_meeting_booked",
+      workflowDynastySlug: res.body.workflowDynastySlug,
+    });
+    expect(res.body).not.toHaveProperty("pipeId");
+    expect(res.body).not.toHaveProperty("producesStep");
+  });
+
+  it("answers 502 naming the failure when features-service refuses the assignment", async () => {
+    const { LegAssignmentError } = await import("../../src/lib/catalogue-client.js");
+    mockFetchPipe.mockResolvedValueOnce(MEETING_PIPE);
+    mockAssignWorkflowToLeg.mockRejectedValueOnce(new LegAssignmentError("features-service refused: 404"));
+    const res = await request
+      .post("/workflows")
+      .set(AUTH)
+      .send({ featureSlug: "ai-meeting-booking", pipeId: MEETING_PIPE.id, dag: VALID_LINEAR_DAG });
+    expect(res.status).toBe(502);
+    expect(res.body.reason).toBe("leg_assignment_failed");
   });
 
   it("refuses a pipe of another channel, or worked by the customer, with 422 and writes nothing", async () => {
@@ -270,14 +299,14 @@ describe("POST /workflows", () => {
     expect(mockCreateFlow).not.toHaveBeenCalled();
   });
 
-  it("leaves the pipe null when none is stated", async () => {
+  it("assigns nothing when no pipe is stated", async () => {
+    mockAssignWorkflowToLeg.mockClear();
     const res = await request
       .post("/workflows")
       .set(AUTH)
       .send({ featureSlug: "sales-cold-email-outreach", dag: VALID_LINEAR_DAG });
     expect(res.status).toBe(201);
-    expect(res.body.pipeId).toBeNull();
-    expect(res.body.producesStep).toBeNull();
+    expect(mockAssignWorkflowToLeg).not.toHaveBeenCalled();
   });
 
   it("creates a paid-reach workflow that describes itself truthfully", async () => {
@@ -1287,6 +1316,40 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
     expect(res.body.version).toBe(1);
     // Source workflow must remain active — no auto-deprecate-on-fork.
     expect(existingWf.status).toBe("active");
+  });
+
+  it("assigns a fork to every leg its source actively serves, in features-service", async () => {
+    mockAssignWorkflowToLeg.mockClear();
+    mockActiveLegsOfDynasty.mockResolvedValueOnce(["lead_found_to_conversation", "lead_found_to_website_visit"]);
+    const existingWf = {
+      id: WF_DAG_REJECT_ID,
+      orgId: "org-1",
+      workflowSlug: "sales-email-cold-outreach-pine",
+      workflowName: "Sales Email Cold Outreach Pine",
+      workflowDynastySlug: "sales-email-cold-outreach-pine",
+      workflowDynastyName: "Sales Email Cold Outreach Pine",
+      featureSlug: "sales-email-cold-outreach",
+      workflowDynastySignatureName: "pine",
+      signature: "old-sig-123",
+      version: 1,
+      description: "Original",
+      dag: VALID_LINEAR_DAG,
+      tags: [],
+      status: "active",
+      windmillWorkspace: "prod",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    mockSelectResponses.push([existingWf], [], [{ workflowDynastySignatureName: "pine" }]);
+
+    const res = await request.put(`/workflows/${WF_DAG_REJECT_ID}`).set(AUTH).send({ dag: DAG_WITH_TRANSACTIONAL_EMAIL_SEND });
+
+    expect(res.status).toBe(201);
+    expect(mockActiveLegsOfDynasty).toHaveBeenCalledWith("sales-email-cold-outreach", "sales-email-cold-outreach-pine");
+    expect(mockAssignWorkflowToLeg.mock.calls.map((c) => [c[0].legKey, c[0].workflowDynastySlug])).toEqual([
+      ["lead_found_to_conversation", res.body.workflowDynastySlug],
+      ["lead_found_to_website_visit", res.body.workflowDynastySlug],
+    ]);
   });
 
   it("returns 409 with existingWorkflowId and existingWorkflowSlug when DAG signature conflicts", async () => {

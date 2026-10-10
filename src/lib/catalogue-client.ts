@@ -110,3 +110,79 @@ export async function fetchStep(stepId: string, downstreamHeaders?: DownstreamHe
   if (r.status === 404) throw new PipeResolutionError(`No step "${stepId}" in the features-service catalogue`);
   return r.body;
 }
+
+// --- Which workflow serves which pipe: features-service owns the link ---------------------------
+//
+// Owner 2026-10-10: the pipe <-> workflow link lives in features-service ONLY, as a stated
+// assignment per (channel, leg, workflow dynasty) (`/internal/workflow-leg-assignments`). This
+// service never stores it; it WRITES it when a workflow is born on a pipe (create, fork) and READS
+// it when it needs to know a dynasty's pipe (an LLM upgrade).
+
+export const LegAssignmentSchema = z.object({
+  featureSlug: z.string(),
+  legKey: z.string(),
+  workflowDynastySlug: z.string(),
+  state: z.enum(["active", "deprecated"]),
+  decidedBy: z.string(),
+  decidedAt: z.string(),
+  note: z.string().nullable(),
+});
+export type LegAssignment = z.infer<typeof LegAssignmentSchema>;
+
+/** Thrown when features-service refuses to record that a workflow serves a pipe. */
+export class LegAssignmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LegAssignmentError";
+  }
+}
+
+/** Every assignment of one channel (all legs, all dynasties, any state). */
+export async function listLegAssignments(featureSlug: string, downstreamHeaders?: DownstreamHeaders): Promise<LegAssignment[]> {
+  const r = await catalogueGet(
+    `/internal/workflow-leg-assignments?featureSlug=${encodeURIComponent(featureSlug)}`,
+    z.object({ assignments: z.array(LegAssignmentSchema) }),
+    downstreamHeaders,
+  );
+  if (r.status === 404) throw new Error(`features-service has no workflow-leg-assignments route (404)`);
+  return r.body.assignments;
+}
+
+/** The legs a dynasty is ACTIVELY assigned to on its channel. */
+export async function activeLegsOfDynasty(
+  featureSlug: string,
+  workflowDynastySlug: string,
+  downstreamHeaders?: DownstreamHeaders,
+): Promise<string[]> {
+  const rows = await listLegAssignments(featureSlug, downstreamHeaders);
+  return rows.filter((a) => a.workflowDynastySlug === workflowDynastySlug && a.state === "active").map((a) => a.legKey);
+}
+
+/**
+ * States that `workflowDynastySlug` serves the leg (active at once: owner option A, 2026-10-10).
+ * Idempotent on features-service's side. Throws LegAssignmentError on anything but 2xx: a workflow
+ * features-service does not know serves a pipe is a workflow that never runs.
+ */
+export async function assignWorkflowToLeg(
+  assignment: { featureSlug: string; legKey: string; workflowDynastySlug: string; decidedBy: string; note: string },
+  downstreamHeaders?: DownstreamHeaders,
+): Promise<LegAssignment> {
+  const { baseUrl, apiKey } = config();
+  const res = await fetch(`${baseUrl}/internal/workflow-leg-assignments`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, ...downstreamHeaders },
+    body: JSON.stringify({ ...assignment, state: "active" }),
+    signal: AbortSignal.timeout(600_000),
+  });
+  const text = await res.text().catch(() => "");
+  if (!res.ok) {
+    throw new LegAssignmentError(
+      `features-service refused to assign ${assignment.workflowDynastySlug} to ${assignment.featureSlug}|${assignment.legKey}: PUT /internal/workflow-leg-assignments -> ${res.status}: ${text}`,
+    );
+  }
+  const parsed = z.object({ assignment: LegAssignmentSchema }).safeParse(JSON.parse(text));
+  if (!parsed.success) {
+    throw new LegAssignmentError(`features-service PUT /internal/workflow-leg-assignments returned an unexpected shape: ${parsed.error.message}`);
+  }
+  return parsed.data.assignment;
+}

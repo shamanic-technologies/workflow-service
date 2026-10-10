@@ -97,6 +97,20 @@ vi.mock("../../src/lib/key-service-client.js", () => ({
 }));
 
 import supertest from "supertest";
+const mockFetchPipe = vi.fn();
+// features-service owns the pipe <-> workflow link: these tests record what is assigned there.
+const mockAssignWorkflowToLeg = vi.fn(async (a: Record<string, unknown>) => ({ ...a, state: "active", decidedAt: "2026-10-10T00:00:00.000Z" }));
+const mockActiveLegsOfDynasty = vi.fn(async () => [] as string[]);
+vi.mock("../../src/lib/catalogue-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/catalogue-client.js")>();
+  return {
+    ...actual,
+    fetchPipe: (...a: unknown[]) => mockFetchPipe(...a),
+    assignWorkflowToLeg: (...a: unknown[]) => mockAssignWorkflowToLeg(...(a as [Record<string, unknown>])),
+    activeLegsOfDynasty: (...a: unknown[]) => mockActiveLegsOfDynasty(...(a as [])),
+  };
+});
+
 import app from "../../src/index.js";
 
 const request = supertest(app);
@@ -106,6 +120,7 @@ const PIPE = {
   legKey: "lead_found_to_conversation",
   mode: "proactive" as const,
   triggerId: null,
+  toStep: "conversation",
 };
 const USAGE = { calls: 3, tokensInput: 1000, tokensOutput: 500, systemPromptChars: 4000 };
 const IDENTITY = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" };
@@ -142,13 +157,20 @@ describe("POST /workflows/create", () => {
     expect(res.body.workflow.workflowSlug).toContain("cold-email-outreach-");
     expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
-    expect(res.body.workflow.pipeId).toBe(PIPE.id);
-    expect(res.body.workflow.producesStep).toBe("conversation");
     expect(res.body.workflow.pipe).toEqual(PIPE);
+    expect(res.body.workflow).not.toHaveProperty("pipeId");
     const insertedRow = mockDbRows[mockDbRows.length - 1] as Record<string, unknown>;
-    expect(insertedRow.pipeId).toBe(PIPE.id);
-    expect(insertedRow.producesStep).toBe("conversation");
+    expect(insertedRow).not.toHaveProperty("pipeId");
     expect(insertedRow.category).toBeNull();
+    // features-service owns the link: the new dynasty is assigned to its pipe, active at once.
+    expect(mockAssignWorkflowToLeg).toHaveBeenCalledWith(
+      expect.objectContaining({
+        featureSlug: "cold-email-outreach",
+        legKey: "lead_found_to_conversation",
+        workflowDynastySlug: res.body.workflow.workflowDynastySlug,
+      }),
+      expect.anything(),
+    );
     expect(mockGenerateWorkflow).toHaveBeenCalledWith(
       { description: "I want a cold email outreach workflow that finds leads and sends emails", featureSlug: "cold-email-outreach", pipeId: undefined, hints: undefined },
       { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-caller-1", "x-brand-id": "brand-1" },
@@ -701,8 +723,6 @@ describe("POST /workflows/upgrade", () => {
     category?: string;
     channel?: string;
     audienceType?: string;
-    pipeId?: string;
-    producesStep?: string;
   }): { id: string; signature: string } {
     const sig = "sig-fixture-existing";
     const row = {
@@ -723,8 +743,6 @@ describe("POST /workflows/upgrade", () => {
       category: opts?.category ?? "sales",
       channel: opts?.channel ?? "email",
       audienceType: opts?.audienceType ?? "cold-outreach",
-      pipeId: opts?.pipeId ?? null,
-      producesStep: opts?.producesStep ?? null,
       creationType: "scratch",
       createdFromWorkflow: null,
       windmillFlowPath: "f/workflows/org-1/client_dag_feature_umber",
@@ -817,8 +835,6 @@ describe("POST /workflows/upgrade", () => {
       category: "outlets",
       channel: "database",
       audienceType: "discovery",
-      pipeId: "client-dag-feature|lead_found_to_conversation",
-      producesStep: "conversation",
     });
     const NEW_DAG = {
       ...VALID_LINEAR_DAG,
@@ -841,8 +857,6 @@ describe("POST /workflows/upgrade", () => {
     expect(insertedRow.category).toBe("outlets");
     expect(insertedRow.channel).toBe("database");
     expect(insertedRow.audienceType).toBe("discovery");
-    expect(insertedRow.pipeId).toBe("client-dag-feature|lead_found_to_conversation");
-    expect(insertedRow.producesStep).toBe("conversation");
     expect(insertedRow.creationType).toBe("upgrade");
   });
 

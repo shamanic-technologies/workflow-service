@@ -425,7 +425,7 @@ async function main() {
       dag: buildAiMeetingBookingDag(c),
     });
     if (status === 201) {
-      console.log(`  ${cell}: created ${payload?.workflowDynastySlug} (pipe ${payload?.pipeId}, produces ${payload?.producesStep})`);
+      console.log(`  ${cell}: created ${payload?.workflowDynastySlug}, assigned to ${PIPE_ID} in features-service`);
     } else if (status === 409) {
       console.log(`  ${cell}: already exists (${payload?.existingWorkflowSlug ?? "unknown"})`);
     } else {

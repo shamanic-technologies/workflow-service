@@ -75,6 +75,20 @@ vi.mock("../../src/lib/windmill-client.js", () => ({
 }));
 
 import supertest from "supertest";
+const mockFetchPipe = vi.fn();
+// features-service owns the pipe <-> workflow link: these tests record what is assigned there.
+const mockAssignWorkflowToLeg = vi.fn(async (a: Record<string, unknown>) => ({ ...a, state: "active", decidedAt: "2026-10-10T00:00:00.000Z" }));
+const mockActiveLegsOfDynasty = vi.fn(async () => [] as string[]);
+vi.mock("../../src/lib/catalogue-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/catalogue-client.js")>();
+  return {
+    ...actual,
+    fetchPipe: (...a: unknown[]) => mockFetchPipe(...a),
+    assignWorkflowToLeg: (...a: unknown[]) => mockAssignWorkflowToLeg(...(a as [Record<string, unknown>])),
+    activeLegsOfDynasty: (...a: unknown[]) => mockActiveLegsOfDynasty(...(a as [])),
+  };
+});
+
 import app from "../../src/index.js";
 
 const request = supertest(app);
