@@ -1,4 +1,5 @@
 import { eq, and } from "drizzle-orm";
+import { activeLegsOfDynasty, assignWorkflowToLeg } from "./catalogue-client.js";
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
 import type { DAG } from "./dag-validator.js";
@@ -101,9 +102,6 @@ export interface UpgradeWorkflowParams {
   category: WorkflowRow["category"];
   channel: WorkflowRow["channel"];
   audienceType: WorkflowRow["audienceType"];
-  /** The pipe the new version runs on and the step it produces. Omitted = the predecessor's. */
-  pipeId?: WorkflowRow["pipeId"];
-  producesStep?: WorkflowRow["producesStep"];
 }
 
 /**
@@ -162,8 +160,6 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
         category: params.category,
         channel: params.channel,
         audienceType: params.audienceType,
-        pipeId: params.pipeId !== undefined ? params.pipeId : existing.pipeId,
-        producesStep: params.producesStep !== undefined ? params.producesStep : existing.producesStep,
         tags: (existing.tags as string[]) ?? [],
         signature,
         workflowDynastySignatureName: existing.workflowDynastySignatureName,
@@ -297,9 +293,6 @@ export async function forkWorkflowRow(params: ForkWorkflowParams): Promise<ForkR
         category: existing.category,
         channel: existing.channel,
         audienceType: existing.audienceType,
-        // A fork runs on its source's pipe (same work, another variant).
-        pipeId: existing.pipeId,
-        producesStep: existing.producesStep,
         tags: params.tags,
         signature,
         workflowDynastySignatureName,
@@ -329,6 +322,19 @@ export async function forkWorkflowRow(params: ForkWorkflowParams): Promise<ForkR
   console.log(
     `[workflow-service] fork: "${existing.workflowSlug}" (${existing.id}) -> "${newWorkflowSlug}" (${forked.id}) [source kept active]`,
   );
+
+  // A fork serves its source's pipes, active at once (owner 2026-10-10, option A). The link lives in
+  // features-service; a failure throws LegAssignmentError (the row exists, the route says so).
+  const legs = await activeLegsOfDynasty(existing.featureSlug, existing.workflowDynastySlug);
+  for (const legKey of legs) {
+    await assignWorkflowToLeg({
+      featureSlug: existing.featureSlug,
+      legKey,
+      workflowDynastySlug: forked.workflowDynastySlug,
+      decidedBy: `workflow-service (fork of ${existing.workflowDynastySlug} by user ${params.userId})`,
+      note: "A fork serves its source's pipes, active at once (owner 2026-10-10, option A).",
+    });
+  }
 
   return { row: forked };
 }

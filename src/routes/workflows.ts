@@ -22,7 +22,25 @@ import {
   GenerationValidationError,
   type GeneratedPipe,
 } from "../lib/workflow-generator.js";
-import { PipeResolutionError, fetchPipe } from "../lib/catalogue-client.js";
+import {
+  PipeResolutionError,
+  LegAssignmentError,
+  fetchPipe,
+  assignWorkflowToLeg,
+  activeLegsOfDynasty,
+} from "../lib/catalogue-client.js";
+
+/** The pipe a dynasty serves, read from features-service, when it serves exactly one; else undefined (the generator resolves it). */
+async function soleAssignedPipe(featureSlug: string, workflowDynastySlug: string, headers: Record<string, string>): Promise<string | undefined> {
+  const legs = await activeLegsOfDynasty(featureSlug, workflowDynastySlug, headers);
+  return legs.length === 1 ? `${featureSlug}|${legs[0]}` : undefined;
+}
+
+/** A workflow row was written but features-service refused the pipe link: say exactly that. */
+function legAssignmentFailure(res: import("express").Response, err: LegAssignmentError): void {
+  console.error("[workflow-service] workflow written but its pipe assignment failed:", err.message);
+  res.status(502).json({ error: err.message, reason: "leg_assignment_failed" });
+}
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import {
   pickWorkflowDynastySignatureName,
@@ -177,8 +195,6 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
           workflowDynastySignatureName: existingMatch.workflowDynastySignatureName,
           version: existingMatch.version,
           workflowDynastyStatus: existingMatch.workflowDynastyStatus as "active" | "deprecated",
-          pipeId: existingMatch.pipeId,
-          producesStep: existingMatch.producesStep,
           pipe: generated.pipe,
           action: "existing" as const,
         },
@@ -241,8 +257,6 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
         category: null,
         channel: null,
         audienceType: null,
-        pipeId: generated.pipe.id,
-        producesStep: generated.producesStep,
         signature,
         workflowDynastySignatureName,
         version: 1,
@@ -254,6 +268,18 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
         createdByRunId: runId,
       })
       .returning();
+
+    // The workflow serves its pipe from birth (owner 2026-10-10, option A). The link lives in features-service.
+    await assignWorkflowToLeg(
+      {
+        featureSlug: created.featureSlug,
+        legKey: generated.pipe.legKey,
+        workflowDynastySlug: created.workflowDynastySlug,
+        decidedBy: `workflow-service (generated for user ${userId})`,
+        note: `Generated for pipe ${generated.pipe.id}, active at once (owner 2026-10-10, option A).`,
+      },
+      dsHeaders,
+    );
 
     traceEvent(runId, {
       service: "workflow-service",
@@ -274,8 +300,6 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
         workflowDynastySignatureName: created.workflowDynastySignatureName,
         version: created.version,
         workflowDynastyStatus: created.workflowDynastyStatus as "active" | "deprecated",
-        pipeId: created.pipeId,
-        producesStep: created.producesStep,
         pipe: generated.pipe,
         action: "created" as const,
       },
@@ -302,6 +326,10 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
     }
     if (err instanceof PipeResolutionError) {
       res.status(422).json({ error: err.message, reason: "pipe_unresolved" });
+      return;
+    }
+    if (err instanceof LegAssignmentError) {
+      legAssignmentFailure(res, err);
       return;
     }
     console.error("[workflow-service] CREATE error:", err);
@@ -353,8 +381,6 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     let resolvedCategory: typeof existing.category;
     let resolvedChannel: typeof existing.channel;
     let resolvedAudienceType: typeof existing.audienceType;
-    let resolvedPipeId: typeof existing.pipeId = existing.pipeId;
-    let resolvedProducesStep: typeof existing.producesStep = existing.producesStep;
     let generatedPipe: GeneratedPipe | null = null;
 
     if (body.dag) {
@@ -375,7 +401,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         {
           description: body.description!,
           featureSlug: existing.featureSlug,
-          pipeId: body.pipeId ?? existing.pipeId ?? undefined,
+          pipeId: body.pipeId ?? (await soleAssignedPipe(existing.featureSlug, existing.workflowDynastySlug, dsHeaders)),
           hints: body.hints,
         },
         dsHeaders,
@@ -386,9 +412,18 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       resolvedCategory = existing.category;
       resolvedChannel = existing.channel;
       resolvedAudienceType = existing.audienceType;
-      resolvedPipeId = generated.pipe.id;
-      resolvedProducesStep = generated.producesStep;
       generatedPipe = generated.pipe;
+      // Idempotent: the dynasty serves the pipe it was regenerated for.
+      await assignWorkflowToLeg(
+        {
+          featureSlug: existing.featureSlug,
+          legKey: generated.pipe.legKey,
+          workflowDynastySlug: existing.workflowDynastySlug,
+          decidedBy: `workflow-service (regenerated for user ${userId})`,
+          note: `Regenerated for pipe ${generated.pipe.id}.`,
+        },
+        dsHeaders,
+      );
     }
 
     const newSignature = computeDAGSignature(dag);
@@ -417,8 +452,6 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
           category: resolvedCategory,
           channel: resolvedChannel,
           audienceType: resolvedAudienceType,
-          pipeId: resolvedPipeId,
-          producesStep: resolvedProducesStep,
           dag,
           updatedAt: new Date(),
         })
@@ -437,8 +470,6 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
           workflowDynastySignatureName: updated.workflowDynastySignatureName,
           version: updated.version,
           workflowDynastyStatus: updated.workflowDynastyStatus as "active" | "deprecated",
-          pipeId: updated.pipeId,
-          producesStep: updated.producesStep,
           pipe: generatedPipe,
           action: "updated" as const,
         },
@@ -469,8 +500,6 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       category: resolvedCategory,
       channel: resolvedChannel,
       audienceType: resolvedAudienceType,
-      pipeId: resolvedPipeId,
-      producesStep: resolvedProducesStep,
     });
     const newVersion = created.version;
 
@@ -493,8 +522,6 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         workflowDynastySignatureName: created.workflowDynastySignatureName,
         version: created.version,
         workflowDynastyStatus: created.workflowDynastyStatus as "active" | "deprecated",
-        pipeId: created.pipeId,
-        producesStep: created.producesStep,
         pipe: generatedPipe,
         action: "upgraded" as const,
       },
@@ -523,6 +550,10 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       res.status(422).json({ error: err.message, reason: "pipe_unresolved" });
       return;
     }
+    if (err instanceof LegAssignmentError) {
+      legAssignmentFailure(res, err);
+      return;
+    }
     console.error("[workflow-service] UPGRADE error:", err);
     res.status(500).json({
       error: err instanceof Error ? err.message : "Internal server error",
@@ -540,7 +571,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
 
     // A stated pipe is read from the catalogue BEFORE anything is written: it must exist, belong to
     // this featureSlug's channel and be platform-worked. Its toStep is the step the workflow produces.
-    let pipeIdentity: { pipeId: string; producesStep: string } | null = null;
+    let statedLegKey: string | null = null;
     if (body.pipeId) {
       const pipe = await fetchPipe(body.pipeId, extractDownstreamHeaders(req));
       if (pipe.channelSlug !== body.featureSlug) {
@@ -549,7 +580,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
       if (pipe.operatedBy === "customer") {
         throw new PipeResolutionError(`Pipe "${pipe.id}" is worked by the customer's own team: no workflow runs on it`);
       }
-      pipeIdentity = { pipeId: pipe.id, producesStep: pipe.toStep };
+      statedLegKey = pipe.legKey;
     }
 
     // Topology + live endpoint/field validation. A client-supplied DAG gets the
@@ -651,8 +682,6 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         category: body.category,
         channel: body.channel,
         audienceType: body.audienceType,
-        pipeId: pipeIdentity?.pipeId ?? null,
-        producesStep: pipeIdentity?.producesStep ?? null,
         tags: body.tags ?? [],
         signature,
         workflowDynastySignatureName,
@@ -663,6 +692,19 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         createdByRunId: res.locals.runId as string,
       })
       .returning();
+
+    if (statedLegKey) {
+      await assignWorkflowToLeg(
+        {
+          featureSlug: workflow.featureSlug,
+          legKey: statedLegKey,
+          workflowDynastySlug: workflow.workflowDynastySlug,
+          decidedBy: `workflow-service (created with pipe ${body.pipeId} by user ${res.locals.userId as string})`,
+          note: "Created on this pipe, active at once (owner 2026-10-10, option A).",
+        },
+        extractDownstreamHeaders(req),
+      );
+    }
 
     res.status(201).json(formatWorkflow(workflow));
   } catch (err: unknown) {
@@ -678,6 +720,10 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     }
     if (err instanceof PipeResolutionError) {
       res.status(422).json({ error: err.message, reason: "pipe_unresolved" });
+      return;
+    }
+    if (err instanceof LegAssignmentError) {
+      legAssignmentFailure(res, err);
       return;
     }
     console.error("[workflow-service] POST error:", err);
@@ -1379,6 +1425,10 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     if (constraintError) {
       console.error("[workflow-service] write rejected by the database:", err);
       res.status(400).json(constraintError);
+      return;
+    }
+    if (err instanceof LegAssignmentError) {
+      legAssignmentFailure(res, err);
       return;
     }
     console.error("[workflow-service] PUT update error:", err);
