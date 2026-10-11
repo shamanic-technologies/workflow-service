@@ -231,7 +231,7 @@ A campaign is a sales funnel capped by a max budget and a max volume (proactive 
 - The gate-check step validates that the cap leaves room before each run — if not, it returns allowed=false and the flow stops gracefully via stopAfterIf
 - The end-run step reports success/failure AND whether to stop the campaign:
   - stopCampaign: false → campaign-service automatically re-triggers the workflow
-  - stopCampaign: true → this run's audience had nobody to serve (fetch-lead found == false). It stops NOTHING: campaign-service marks that one audience exhausted for a while and picks another on the next run
+  - stopCampaign: true → this run's audience had nobody to serve (fetch-lead found == false). It stops NOTHING: campaign-service marks that one audience exhausted for a while and picks another on the next run. Write it as a literal true on the no-lead end-run; the converter narrows it at run time to lead-service's audience_exhausted reason
 - Both "success" and "stopCampaign" are required fields in the /end-run body
 - campaign-service reads orgId and campaignId from headers (x-org-id, x-campaign-id) — do NOT pass them in the body
 - This is why campaign workflows MUST use the chassis pattern: gate-check → start-run → [business logic] → end-run, with onError → end-run-error
