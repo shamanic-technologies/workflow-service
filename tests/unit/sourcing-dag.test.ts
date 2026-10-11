@@ -20,3 +20,16 @@ describe("the workflow of a sourcing pipe (owner 2026-10-11: every pipe runs a w
     expect(dag.nodes).toEqual([expect.objectContaining({ type: "http.call", config: expect.objectContaining({ service: "lead", method: "POST", path: "/orgs/buffer/next" }) })]);
   });
 });
+
+describe("a pipe from Start (features-service fromStep: null)", () => {
+  it("parses, and a workflow generated for it starts at Start", async () => {
+    const { CataloguePipeSchema, START_STEP } = await import("../../src/lib/catalogue-client.js");
+    const pipe = CataloguePipeSchema.parse({
+      id: "lead-sourcing|start_to_lead_found", name: "Wren", line: "Lead Sourcing: Start → Lead found", channelSlug: "lead-sourcing",
+      channelName: "Lead Sourcing", legKey: "start_to_lead_found", fromStep: null, toStep: "lead_found", mode: "reactive",
+      triggerId: "lead_requested", operatedBy: "platform", runnable: true,
+    });
+    expect(pipe.fromStep).toBeNull();
+    expect(START_STEP.id).toBe("start");
+  });
+});
