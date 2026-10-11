@@ -80,11 +80,19 @@ export async function deprecateStaleWorkflows(
     };
   }
 
-  // 6. Deprecate candidates not used by an active campaign
+  // 6. Deprecate candidates not used by an active campaign — but NEVER the last active workflow of a channel: a
+  // channel with no active workflow can no longer be launched (campaign-service 409 `no_workflow`). A pipe that
+  // runs inside another run (a sourcing pipe on the inline `lead_requested` trigger, src/lib/sourcing-dag.ts) never
+  // records a run of its own, so "zero runs" says nothing about whether it is used.
   let deprecatedCount = 0;
   let keptByCampaign = 0;
+  const remaining = new Map<string, number>();
+  for (const wf of activeWorkflows) remaining.set(wf.featureSlug, (remaining.get(wf.featureSlug) ?? 0) + 1);
+  const newestFirst = [...candidates].sort(
+    (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
+  );
 
-  for (const wf of candidates) {
+  for (const wf of newestFirst.reverse()) {
     if (activeSlugs.has(wf.workflowSlug)) {
       keptByCampaign++;
       console.log(
@@ -92,6 +100,13 @@ export async function deprecateStaleWorkflows(
       );
       continue;
     }
+    if ((remaining.get(wf.featureSlug) ?? 0) <= 1) {
+      console.log(
+        `[workflow-service] Keeping stale workflow "${wf.workflowSlug}" — the last active workflow of channel ${wf.featureSlug}`,
+      );
+      continue;
+    }
+    remaining.set(wf.featureSlug, (remaining.get(wf.featureSlug) ?? 0) - 1);
 
     await database
       .update(workflows)
