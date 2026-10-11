@@ -219,6 +219,27 @@ describe("the client's facts", () => {
     expect((out.exact as Array<{ label: string }>).map((f) => f.label)).toEqual(["Price?", "tone"]);
   });
 
+  // Regression (staff probe 2026-10-11, run 8c45b238): distribute.you sells 4 offers, so the brand-scoped
+  // user-fields read 409s SEVERAL_OFFERS by design and every run died on the error branch.
+  it("reads a SEVERAL_OFFERS refusal of the brand-scoped read as no brand-level fields", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const main = loadMain(GATHER_CLIENT_FACTS_CODE);
+    const out = await main(
+      { answers: [] },
+      { fields: { urgency: { value: "Starts this week", provenance: "confirmed" } } },
+      { ok: false, status: 409, error: '{"code":"SEVERAL_OFFERS"}' },
+    );
+    expect((out.exact as Array<{ label: string }>).map((f) => f.label)).toEqual(["urgency"]);
+    const node = buildAiFollowUpEmailDag().nodes.find((n) => n.id === "brand-user-fields");
+    expect(node?.config?.tolerateFailure).toBe(true);
+  });
+
+  it("still fails loud on any other failure of the brand-scoped read", async () => {
+    const main = loadMain(GATHER_CLIENT_FACTS_CODE);
+    await expect(main({ answers: [] }, { fields: {} }, { ok: false, status: 500, error: "boom" })).rejects.toThrow(/500/);
+    await expect(main({ answers: [] }, { fields: {} }, { ok: false, status: 409, error: "other" })).rejects.toThrow(/409/);
+  });
+
   it("names a missing instruction in the log", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const out = await loadMain(NAME_MISSING_INSTRUCTION_CODE)("camp-1");

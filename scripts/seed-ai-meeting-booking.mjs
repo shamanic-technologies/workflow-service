@@ -282,6 +282,19 @@ export function needsIdentityStance(dag) {
 }
 
 /**
+ * True when a stored DAG dies on a brand that sells several offers: the
+ * brand-scoped user-fields read is refused there by design (409
+ * SEVERAL_OFFERS), and the old DAG threw on it (staff probe of the AI
+ * Follow-up Email workflow, 2026-10-11, distribute.you's 4 offers). The current
+ * DAG tolerates that one refusal and reads the offer's own fields. The repair
+ * is an upgrade carrying the current DAG.
+ */
+export function needsSeveralOffersTolerance(dag) {
+  const gather = (dag?.nodes ?? []).find((n) => n?.id === "gather-facts");
+  return !!gather && !String(gather.config?.code ?? "").includes("SEVERAL_OFFERS");
+}
+
+/**
  * True when a stored DAG can still send a prospect an em dash or an en dash.
  * The Dr. Joe draft read "guarantee\u2014if the strategy" (2026-10-02); the current
  * DAG bans both in the prompt and rewrites any that slip through in
@@ -386,7 +399,8 @@ async function main() {
         needsPlaybook(w.dag) ||
         needsThinkingBudget(w.dag) ||
         needsConditionalHypothetical(w.dag) ||
-        needsClientStatedFacts(w.dag))
+        needsClientStatedFacts(w.dag) ||
+        needsSeveralOffersTolerance(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
