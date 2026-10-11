@@ -266,7 +266,9 @@ export function buildAiFollowUpEmailDag(): DAG {
       {
         id: "brand-user-fields",
         type: "http.call",
-        config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields" },
+        // Refused (409 SEVERAL_OFFERS) for a brand selling several offers: gather-facts reads that one
+        // refusal as "no brand-level fields" and re-throws every other failure.
+        config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields", tolerateFailure: true },
         inputMapping: { "params.brandId": "$ref:claim-followup.output.followup.brandId" },
       },
       // What the client told us. No question list here: the instruction is the ask.

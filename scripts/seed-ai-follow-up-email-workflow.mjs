@@ -4,7 +4,8 @@
  * created ON its pipe (`pipeId`), so `POST /workflows` registers it through features-service's register route,
  * active at once.
  *
- * Idempotent: skipped when the channel already has an active workflow (a duplicate DAG signature would 409).
+ * Idempotent: creates when the channel has no active workflow, upgrades an active one whose stored DAG is behind
+ * the current one, and skips a current one.
  * Usage, from inside the workflow-service container:
  *   node seed-ai-follow-up-email-workflow.mjs            # dry run
  *   node seed-ai-follow-up-email-workflow.mjs --apply
@@ -48,10 +49,24 @@ const slug = AI_FOLLOW_UP_EMAIL_FEATURE_SLUG;
 const existing = await call("GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
 if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
 const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
+const current = buildAiFollowUpEmailDag();
 if (rows.length > 0) {
-  console.log(`${slug}: already has ${rows.map((w) => w.workflowSlug ?? w.slug).join(", ")} (skipped)`);
+  // A stored DAG behind the current one is upgraded in its own dynasty (same slug lineage, new version).
+  for (const w of rows) {
+    if (JSON.stringify(w.dag) === JSON.stringify(current)) {
+      console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
+      continue;
+    }
+    if (!APPLY) {
+      console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
+      continue;
+    }
+    const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current });
+    if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
+    console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
+  }
 } else {
-  const body = { featureSlug: slug, pipeId: AI_FOLLOW_UP_EMAIL_PIPE_ID, description: AI_FOLLOW_UP_EMAIL_DESCRIPTION, dag: buildAiFollowUpEmailDag() };
+  const body = { featureSlug: slug, pipeId: AI_FOLLOW_UP_EMAIL_PIPE_ID, description: AI_FOLLOW_UP_EMAIL_DESCRIPTION, dag: current };
   if (!APPLY) {
     console.log(`${slug}: WOULD create on pipe ${body.pipeId}`);
   } else {

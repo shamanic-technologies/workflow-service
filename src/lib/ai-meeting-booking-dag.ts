@@ -752,6 +752,18 @@ export async function main(listed) {
  */
 export const GATHER_FACTS_CODE = `
 export async function main(plan, offerAnswers, offerFields, brandFields) {
+  // The brand-scoped read is refused BY DESIGN once a brand sells several
+  // offers (409 SEVERAL_OFFERS: "name the offer"); the offer-scoped read above
+  // is then the answer, so that one refusal means "no brand-level fields".
+  // Every other failure of that read is still an error.
+  if (brandFields && brandFields.ok === false) {
+    if (brandFields.status === 409 && String(brandFields.error ?? "").includes("SEVERAL_OFFERS")) {
+      console.log("[facts] the brand sells several offers: brand-level fields are not read, the offer's own are");
+      brandFields = null;
+    } else {
+      throw new Error("brand user-fields read failed (" + String(brandFields.status) + "): " + String(brandFields.error ?? ""));
+    }
+  }
   const isEmpty = (v) => {
     if (v === null || v === undefined) return true;
     if (typeof v === "string") return v.trim() === "" || /^unknown$/i.test(v.trim());
@@ -1665,7 +1677,15 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       {
         id: "brand-user-fields",
         type: "http.call",
-        config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields" },
+        // A brand selling several offers refuses this read (409 SEVERAL_OFFERS);
+        // gather-facts reads that one refusal as "no brand-level fields" and
+        // re-throws every other failure.
+        config: {
+          service: "brand",
+          method: "GET",
+          path: "/orgs/brands/{brandId}/user-fields",
+          tolerateFailure: true,
+        },
         inputMapping: { "params.brandId": "$ref:claim-followup.output.followup.brandId" },
       },
       {
