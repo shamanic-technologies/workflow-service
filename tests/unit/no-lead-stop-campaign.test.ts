@@ -90,16 +90,20 @@ describe("applyNoLeadStopCampaign", () => {
     expect(JSON.stringify(before)).toBe(snapshot);
   });
 
-  it("translates to a flow whose empty branch ends with stopCampaign: true and whose send branch ends with false", () => {
+  it("translates to a flow whose empty branch ends with stopCampaign: true on audience_exhausted only, and whose send branch ends with false", () => {
     const { dag } = applyNoLeadStopCampaign(sharedEndRunDag());
     const flow = dagToOpenFlow(dag, "wf");
     const branch = flow.value.modules.find((m) => m.id === "check_lead")!.value as {
-      branches: Array<{ expr: string; modules: Array<{ id: string; value: { input_transforms: Record<string, { value?: unknown }> } }> }>;
+      branches: Array<{ expr: string; modules: Array<{ id: string; value: { input_transforms: Record<string, { value?: unknown; expr?: string }> } }> }>;
     };
     const empty = branch.branches.find((b) => b.expr.includes("found == false"))!;
     const sent = branch.branches.find((b) => b.expr.includes("found == true"))!;
     expect(empty.modules.map((m) => m.id)).toEqual(["end_run_no_lead"]);
-    expect(empty.modules[0].value.input_transforms.body.value).toEqual({ success: true, stopCampaign: true });
+    // The flag is read off lead-service's serve reason at run time (see
+    // no-lead-exhaustion-reason.test.ts): exhausted only on audience_exhausted.
+    const evaluate = new Function("results", `return (${empty.modules[0].value.input_transforms.body.expr});`);
+    expect(evaluate({ fetch_lead: { found: false, reason: "audience_exhausted" } })).toEqual({ success: true, stopCampaign: true, noWorkAvailable: false });
+    expect(evaluate({ fetch_lead: { found: false, reason: "source_campaign_off" } })).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
     expect(sent.modules.map((m) => m.id)).toEqual(["email_send", "end_run"]);
     expect(sent.modules[1].value.input_transforms.body.value).toEqual({ success: true, stopCampaign: false });
   });

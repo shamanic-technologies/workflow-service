@@ -735,6 +735,40 @@ function callsOfferScopedEndpoint(node: DAGNode): boolean {
   return isBrandExtractFields || isContentGeneration;
 }
 
+/**
+ * The ONLY lead-service serve reason that is evidence an audience ran out.
+ *
+ * lead-service `POST /orgs/buffer/next` names why every `{ found: false }` is
+ * empty (`reason`, its src/lib/serve-reasons.ts). `audience_exhausted` says
+ * human-service walked the audience and found nobody left; every other value
+ * (`source_campaign_off`, `credit_insufficient`, `serve_timed_out`,
+ * `no_audience`, `audience_not_serveable`, `source_budget_reached`, and any
+ * reason added later, and an absent one) says no exhaustion was observed.
+ */
+export const AUDIENCE_EXHAUSTED_REASON = "audience_exhausted";
+
+/**
+ * True for a campaign `/end-run` call whose DAG states a literal
+ * `stopCampaign: true`: the no-lead end-run every lead-serving workflow carries
+ * on its `fetch-lead.found == false` edge. A node that maps its body (or the
+ * flag) itself is left alone.
+ */
+function isNoLeadEndRun(
+  node: DAGNode,
+  scriptConfig: Record<string, unknown>,
+  inputMapping?: Record<string, string>,
+): boolean {
+  if (node.type !== "http.call") return false;
+  if (node.config?.service !== "campaign") return false;
+  const path = node.config?.path;
+  if (typeof path !== "string" || !/\/end-run$/.test(path)) return false;
+  if (inputMapping && ("body" in inputMapping || "body.stopCampaign" in inputMapping || "body.noWorkAvailable" in inputMapping)) {
+    return false;
+  }
+  const body = scriptConfig.body as Record<string, unknown> | undefined;
+  return !!body && typeof body === "object" && body.stopCampaign === true && !("noWorkAvailable" in body);
+}
+
 function nodeToModule(
   node: DAGNode,
   dag: DAG,
@@ -870,6 +904,26 @@ function nodeToModule(
         expr: ctx.expr(servedLead.leadModuleId),
       };
     }
+  }
+
+  // An empty serve is reported exhausted ONLY when lead-service says the
+  // audience is exhausted. Every stored lead-serving DAG ends its
+  // `found == false` edge on an end-run saying a literal `stopCampaign: true`,
+  // so a refused or unfinished serve (sources off, no credit, timed out) used
+  // to mark the audience exhausted for 24h at campaign-service and hold it out
+  // after the cause was gone (campaign 1e95a4c3, 2026-10-09: 11 audiences
+  // marked in 3 minutes while its sources were off). The flag is now read off
+  // the serve's own reason; any other reason ends the run as idle
+  // (`noWorkAvailable`: recheck later, nothing marked, nothing resolved).
+  if (
+    servedLead.leadModuleId &&
+    servedLead.descendants.has(moduleId) &&
+    (loopBodyIds === null || loopBodyIds.has(servedLead.leadModuleId)) &&
+    isNoLeadEndRun(node, scriptConfig, resolvedInputMapping)
+  ) {
+    const exhausted = `results.${servedLead.leadModuleId}?.reason === ${JSON.stringify(AUDIENCE_EXHAUSTED_REASON)}`;
+    extraTransforms["body.stopCampaign"] = { type: "javascript", expr: exhausted };
+    extraTransforms["body.noWorkAvailable"] = { type: "javascript", expr: `!(${exhausted})` };
   }
 
   const inputTransforms = buildInputTransforms(
