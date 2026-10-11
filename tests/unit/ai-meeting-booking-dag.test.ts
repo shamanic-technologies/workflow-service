@@ -26,7 +26,6 @@ import {
   ACQUISITION_QUESTIONS_PLAYBOOK,
   PLAYBOOKS,
   CLOSED_WITH_THANKS_REASON,
-  OFFER_OVERVIEW_KEY,
   STANCES,
   CHAT_STEP_MAX_TOKENS,
 } from "../../src/lib/ai-meeting-booking-dag.js";
@@ -1253,7 +1252,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
   it("runs the three fixed steps in order: list questions, read brand-service, draft, then the grounding guard", () => {
     const order = [
       "prior-generation", "compose-questions-prompt", "list-questions", "plan-lookups",
-      "offer-answers", "offer-user-fields", "brand-user-fields", "extract-answers", "gather-facts",
+      "offer-answers", "offer-user-fields", "brand-user-fields", "gather-facts",
       "compose-prompt", "draft-reply", "ground-draft", "check-answerable",
     ];
     for (let i = 0; i < order.length - 1; i++) {
@@ -1274,32 +1273,22 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     expect(out.message as string).toContain("Do NOT list: when they can meet");
   });
 
-  it("reads what the customer STATED, then extracts from the site in one call, naming brand and offer", () => {
+  it("reads only what the client told us, never their website (Shockwavecenters, 2026-10-11)", () => {
     expect(byId.get("offer-answers")?.config).toMatchObject({
       service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers",
     });
     expect(byId.get("offer-user-fields")?.config?.path).toBe("/orgs/brands/{brandId}/offers/{offerId}/user-fields");
     expect(byId.get("brand-user-fields")?.config?.path).toBe("/orgs/brands/{brandId}/user-fields");
-    const extract = byId.get("extract-answers");
-    expect(extract?.config).toMatchObject({
-      service: "brand", method: "POST", path: "/orgs/brands/extract-fields",
-      // extract returns "Unknown" when the site is silent; suggest would invent.
-      body: { mode: "extract" },
-    });
-    expect(extract?.inputMapping).toEqual({
-      "headers.x-brand-id": "$ref:claim-followup.output.followup.brandId",
-      "body.fields": "$ref:plan-lookups.output.fields",
-      "body.offerId": "$ref:campaign-detail.output.campaign.offerId",
-    });
+    // The site extraction that put list prices in a reply is gone, not countered.
+    expect(byId.has("extract-answers")).toBe(false);
+    expect(dag.nodes.some((n) => String(n.config?.path ?? "").includes("extract-fields"))).toBe(false);
+    expect(byId.get("gather-facts")?.inputMapping).not.toHaveProperty("extracted");
   });
 
-  it("asks the site one field per question, plus how the offer works", async () => {
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER, playbook: "none" } }, offer);
+  it("keys the questions and asks nothing of the site", async () => {
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER, playbook: "none" } });
     expect(out.questions).toEqual([{ key: "q1", question: "How does it work?" }]);
-    const fields = out.fields as Array<{ key: string; description: string }>;
-    expect(fields.map((f) => f.key)).toEqual([OFFER_OVERVIEW_KEY, "q1"]);
-    expect(fields[1].description).toContain("How does it work?");
-    expect(fields[1].description).toContain("return Unknown");
+    expect(out).not.toHaveProperty("fields");
   });
 
   it("refuses to draft when the question-listing step returned no list", async () => {
@@ -1319,34 +1308,46 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     },
   };
   const brandFields = { fields: { services: { value: "Hosted referral dinners", provenance: "confirmed" } } };
-  const extracted = {
-    fields: {
-      [OFFER_OVERVIEW_KEY]: { value: "Doc Dinners organises dinners where doctors meet referral partners." },
-      q1: { value: "Dinners are held monthly in your city." },
-      q2: { value: "Unknown" },
-    },
-  };
-
-  it("tags every fact with its provenance, and drops what the site does not say", async () => {
+  it("states only what the client told us: unconfirmed site prefill is not a fact", async () => {
     quiet();
-    const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields, extracted);
+    const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields);
     expect(facts.exact).toEqual([
       { id: "E1", source: "offer-answers", label: "How does it work?", value: "We host a dinner for 20 local doctors; you present for 15 minutes." },
       { id: "E2", source: "offer-user-fields", label: "services", value: "Hosted referral dinners" },
     ]);
-    const interpreted = facts.interpreted as Array<Record<string, unknown>>;
-    expect(interpreted).toContainEqual({ id: "I1", source: "site-prefill", label: "dreamOutcome", value: "A steady flow of referrals" });
-    expect(interpreted).toContainEqual({ id: "I2", source: "site-extraction", label: "how the offer works", value: "Doc Dinners organises dinners where doctors meet referral partners." });
-    expect(interpreted).toContainEqual({ id: "I3", source: "site-extraction", label: "How does it work?", value: "Dinners are held monthly in your city.", questionKey: "q1" });
+    expect(facts).not.toHaveProperty("interpreted");
+    expect(JSON.stringify(facts)).not.toContain("A steady flow of referrals");
     expect(facts.withheld).toEqual([]);
-    // "Unknown" is a missing fact, never a fact.
-    expect(JSON.stringify(facts)).not.toContain("Unknown");
+    expect(facts.neverGive).toEqual([]);
     expect(facts.questions).toEqual([
-      { key: "q1", question: "How does it work?", siteAnswer: "Dinners are held monthly in your city." },
-      { key: "q2", question: "What does it cost?", siteAnswer: null },
+      { key: "q1", question: "How does it work?" },
+      { key: "q2", question: "What does it cost?" },
     ]);
-    // The provenance is in the run's logs, so a person can audit why a fact was said.
-    expect(String((console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0])).toContain("exact = stated by the customer");
+    // The run's logs say what was used and what was left out, so a person can audit a reply.
+    const logged = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("the only facts the reply may state");
+    expect(logged).toContain("offer-user-fields:dreamOutcome");
+  });
+
+  it("sets the client's never-give list apart as a limit, never as a fact to state", async () => {
+    quiet();
+    const fields = {
+      fields: {
+        giveForFree: { value: ["A free 30-minute audit"], provenance: "confirmed" },
+        neverGive: { value: ["Regional or category exclusivity", "Free product samples"], provenance: "confirmed" },
+      },
+    };
+    const facts = await loadMain(GATHER_FACTS_CODE)(plan, { answers: [] }, fields, { fields: { neverGive: { value: ["Free product samples"], provenance: "confirmed" } } });
+    expect(facts.exact).toEqual([{ id: "E1", source: "offer-user-fields", label: "giveForFree", value: "A free 30-minute audit" }]);
+    expect(facts.neverGive).toEqual(["Regional or category exclusivity", "Free product samples"]);
+    const message = (await compose(facts)).message as string;
+    expect(message).toContain("WHAT OUR CLIENT NEVER GIVES");
+    expect(message).toContain("- Regional or category exclusivity");
+    expect(message).toContain("Each one is a whole thing");
+    expect(message).not.toMatch(/E\d+ neverGive/);
+    // It binds a message with no question too.
+    const followUp = (await compose({ ...facts, questions: [] })).message as string;
+    expect(followUp).toContain("WHAT OUR CLIENT NEVER GIVES");
   });
 
   const compose = (facts: unknown, lead: Record<string, unknown> = { firstName: "Joe", timezone: "America/Chicago" }) =>
@@ -1362,28 +1363,28 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
       facts,
     );
 
-  it("puts the customer's stated facts in front of the model as EXACT, and site reads as INTERPRETED", async () => {
+  it("puts only what the client told us in front of the model, and says why", async () => {
     quiet();
-    const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields, extracted);
+    const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields);
     const message = (await compose(facts)).message as string;
     expect(message).toContain("- q1: How does it work?");
-    expect(message).toContain("EXACT FACTS");
+    expect(message).toContain("WHAT OUR CLIENT TOLD US");
     expect(message).toContain("- E1 How does it work?: We host a dinner for 20 local doctors; you present for 15 minutes.");
-    expect(message).toContain("INTERPRETED FACTS");
-    expect(message).toContain("- I2 how the offer works: Doc Dinners organises dinners");
+    expect(message).toContain("is theirs to state, not ours");
+    expect(message).not.toMatch(/INTERPRETED|public material|fill a gap/);
     expect(message).toContain("set decision to escalate and put exactly the unanswered question(s)");
     // Booking behaviour is untouched.
     expect(message).toContain("EXACTLY TWO");
   });
 
   it("leaves the prompt without a facts section when they asked nothing", async () => {
-    const message = (await compose({ questions: [], exact: [], interpreted: [] })).message as string;
+    const message = (await compose({ questions: [], exact: [], neverGive: [] })).message as string;
     expect(message).not.toContain("WHAT THEY ASKED");
-    expect(message).not.toContain("EXACT FACTS");
+    expect(message).not.toContain("WHAT OUR CLIENT TOLD US");
   });
 
   it("hands the model the whole person and company record, omitting what is absent", async () => {
-    const message = (await compose({ questions: [], exact: [], interpreted: [] }, {
+    const message = (await compose({ questions: [], exact: [], neverGive: [] }, {
       firstName: "Joe", lastName: "Smith", currentTitle: "Owner", headline: "Chiropractor, Chiro Health Spa",
       seniority: "owner", departments: ["medical"], city: "Austin", state: "Texas", country: "United States",
       timezone: "America/Chicago", linkedinUrl: null, functions: [],
@@ -1405,14 +1406,13 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("requires the draft to say where each answer came from", () => {
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("answers");
-    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "interpreted", "booking", "playbook", "none"]);
+    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "booking", "playbook", "none"]);
     expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.required).toContain("facts");
   });
 
   const factsWithBoth = {
-    questions: plan.questions.map((q) => ({ ...q, siteAnswer: null })),
+    questions: plan.questions,
     exact: [{ id: "E1", source: "offer-answers", label: "How does it work?", value: "..." }],
-    interpreted: [],
   };
 
   it("lets an answer through when every question has a source that holds facts", async () => {
@@ -1436,7 +1436,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("treats a question the draft did not account for, or a source that holds nothing, as unanswered", async () => {
     quiet();
-    // q2 missing; q1 claims `interpreted` while no site fact exists.
+    // q2 missing; q1 claims the retired `interpreted` source, which is no source.
     const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>x</p>", answers: [{ key: "q1", source: "interpreted", facts: ["E1"] }] } };
     const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
     expect((out.json as Record<string, unknown>).decision).toBe("escalate");
@@ -1455,7 +1455,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
   describe("owning the information, never pointing at a site (Dr. Joe, 2026-10-02)", () => {
     it("no longer licenses attributing a fact to a site, a page or a source", async () => {
       quiet();
-      const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields, extracted);
+      const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields);
       const out = await compose(facts);
       const text = `${out.message as string}\n${out.systemPrompt as string}`;
       expect(text).not.toMatch(/as far as I can see/i);
@@ -1464,7 +1464,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
       expect(text).not.toMatch(/\[site-(extraction|prefill)\]/);
       expect(text).toContain("State every fact in the first person, as our own knowledge");
       expect(text).toContain("never point to a website, a page, a brochure");
-      expect(text).toContain("Lead with what our client stated");
+      expect(text).toContain("Open your answer with the facts that bear on the question");
     });
 
     it("holds a cited fact id to an existing fact of that kind: an invented id is no source", async () => {
@@ -1488,16 +1488,14 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
       ],
     };
     const pricePlan = { questions: [{ key: "q1", question: "How much is it?" }] };
-    const noSite = { fields: { [OFFER_OVERVIEW_KEY]: { value: "Unknown" }, q1: { value: "Unknown" } } };
 
     it("never files a placeholder as a fact; it is withheld and named as not answered yet", async () => {
       quiet();
-      const facts = await loadMain(GATHER_FACTS_CODE)(pricePlan, placeholderAnswers, { fields: {} }, { fields: {} }, noSite);
+      const facts = await loadMain(GATHER_FACTS_CODE)(pricePlan, placeholderAnswers, { fields: {} }, { fields: {} });
       expect(facts.exact).toEqual([
         { id: "E1", source: "offer-answers", label: "How many appointments?", value: "10 to 30+ new high-value patient appointments per event." },
       ]);
       expect(JSON.stringify(facts.exact)).not.toMatch(/placeholder/i);
-      expect(JSON.stringify(facts.interpreted)).not.toMatch(/placeholder/i);
       expect(facts.withheld).toEqual([
         { source: "offer-answers", label: "How much is it?" },
         { source: "offer-answers", label: "What is included?" },
@@ -1513,7 +1511,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
       const facts = await loadMain(GATHER_FACTS_CODE)(
         pricePlan, { answers: [] },
         { fields: { pricing: { value: "Placeholder: operator to fill", provenance: "confirmed" } } },
-        { fields: {} }, noSite,
+        { fields: {} },
       );
       expect(facts.exact).toEqual([]);
       expect(facts.withheld).toEqual([{ source: "offer-user-fields", label: "pricing" }]);
@@ -1521,7 +1519,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
     it("escalates a question only a placeholder covered, even when the draft claims an exact source", async () => {
       quiet();
-      const facts = await loadMain(GATHER_FACTS_CODE)(pricePlan, placeholderAnswers, { fields: {} }, { fields: {} }, noSite);
+      const facts = await loadMain(GATHER_FACTS_CODE)(pricePlan, placeholderAnswers, { fields: {} }, { fields: {} });
       // The draft can only cite ids that exist; the placeholder has none. Citing
       // the unrelated appointments fact under `exact` would pass the id check, so
       // the model is told to mark it none; a draft that cites nothing escalates.
@@ -1568,9 +1566,9 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
     },
   };
   const facts = {
-    questions: [{ key: "q1", question: "How does it work?", siteAnswer: null }],
+    questions: [{ key: "q1", question: "How does it work?" }],
     exact: [{ id: "E1", source: "offer-user-fields", label: "results", value: "10 to 30+ new patient appointments per event" }],
-    interpreted: [],
+    neverGive: [],
     withheld: [],
   };
   const booking = { timezone: "America/New_York", degraded: false, bookingUrl: offer.bookingUrl, slots: ["2026-10-06T10:00:00-04:00"] };
@@ -1700,7 +1698,7 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
 
 describe("no em dash or en dash ever reaches a prospect (Dr. Joe draft, 2026-10-02)", () => {
   afterEach(() => vi.restoreAllMocks());
-  const facts = { questions: [], exact: [], interpreted: [], withheld: [] };
+  const facts = { questions: [], exact: [], neverGive: [], withheld: [] };
   const run = async (replyHtml: string, decision = "answer") => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1801,7 +1799,7 @@ describe("a thread opened by the acquisition-questions sequence plays its game (
 
   it("accepts a playbook answer only in a thread that sequence opened", async () => {
     quietLogs();
-    const facts = { questions: [{ key: "q1", question: "Who are you?" }, { key: "q2", question: "Can you send the patients?" }], exact: [], interpreted: [], withheld: [] };
+    const facts = { questions: [{ key: "q1", question: "Who are you?" }, { key: "q2", question: "Can you send the patients?" }], exact: [], neverGive: [], withheld: [] };
     const draft = {
       json: {
         decision: "answer", question: "Who are you?", reason: "r",

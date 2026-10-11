@@ -19,6 +19,7 @@ import {
   fetchChannelPipes,
   fetchStep,
   PipeResolutionError,
+  START_STEP,
   type CataloguePipe,
   type CataloguePipeSummary,
 } from "./catalogue-client.js";
@@ -172,7 +173,7 @@ async function pipeContextOf(pipe: CataloguePipe, downstreamHeaders: DownstreamH
     throw new PipeResolutionError(`Pipe "${pipe.id}" is worked by the customer's own team: no workflow runs on it`);
   }
   const [fromStep, toStep] = await Promise.all([
-    fetchStep(pipe.fromStep, downstreamHeaders),
+    pipe.fromStep === null ? Promise.resolve(START_STEP) : fetchStep(pipe.fromStep, downstreamHeaders),
     fetchStep(pipe.toStep, downstreamHeaders),
   ]);
   return { pipe, fromStep, toStep };

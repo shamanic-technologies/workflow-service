@@ -246,7 +246,7 @@ export function needsTimingPreference(dag) {
  * NAMES. A prospect who wrote "Send me more information on how it works"
  * (Doc Dinners, 2026-10-01) could only be answered by paraphrasing our own
  * emails, inventing, or escalating. The current DAG lists their questions,
- * reads brand-service for what the customer stated and what the site says,
+ * reads brand-service for what the customer stated,
  * drafts only from that, and escalates any question no fact covers. The repair
  * is an upgrade carrying the current DAG.
  */
@@ -334,6 +334,21 @@ export function needsThinkingBudget(dag) {
   );
 }
 
+/**
+ * True when a stored DAG still states what was read off the client's WEBSITE
+ * as if the client had told us: an `extract-answers` node feeding an
+ * `interpreted` fact tier into the draft. Four device prices off
+ * shockwavecenters.com went to a prospect as the client's answer (2026-10-11);
+ * the current DAG states only what the client told us and escalates the rest.
+ * The repair is an upgrade carrying the current DAG.
+ */
+export function needsClientStatedFacts(dag) {
+  const nodes = dag?.nodes ?? [];
+  const gather = nodes.find((n) => n?.id === "gather-facts");
+  if (!gather) return false;
+  return nodes.some((n) => n?.id === "extract-answers") || String(gather.config?.code ?? "").includes("interpreted");
+}
+
 async function main() {
   if (!API_KEY) {
     console.error("WORKFLOW_SERVICE_API_KEY is required");
@@ -370,7 +385,8 @@ async function main() {
         needsDashBan(w.dag) ||
         needsPlaybook(w.dag) ||
         needsThinkingBudget(w.dag) ||
-        needsConditionalHypothetical(w.dag))
+        needsConditionalHypothetical(w.dag) ||
+        needsClientStatedFacts(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
