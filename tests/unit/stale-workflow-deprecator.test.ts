@@ -107,15 +107,31 @@ describe("deprecateStaleWorkflows", () => {
     const wfs = [
       makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }),
       makeWorkflow({ id: "wf-2", workflowSlug: "slug-2" }),
+      // The channel keeps a workflow that runs.
+      makeWorkflow({ id: "wf-3", workflowSlug: "slug-3" }),
     ];
 
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
 
-    const mockDb = createMockDb(wfs, []);
+    const mockDb = createMockDb(wfs, ["wf-3"]);
     const result = await deprecateStaleWorkflows(mockDb as any);
 
     expect(result.deprecatedCount).toBe(2);
     expect(mockDb._updateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never deprecates the LAST active workflow of a channel (a sourcing pipe runs inside another run: zero runs of its own)", async () => {
+    const wfs = [
+      makeWorkflow({ id: "wf-old", workflowSlug: "lead-sourcing-old", featureSlug: "lead-sourcing", createdAt: new Date(Date.now() - 30 * 24 * 3600_000).toISOString() }),
+      makeWorkflow({ id: "wf-new", workflowSlug: "lead-sourcing-new", featureSlug: "lead-sourcing", createdAt: TWO_WEEKS_AGO }),
+      makeWorkflow({ id: "wf-crm", workflowSlug: "sourcing-crm-contacts-x", featureSlug: "sourcing-crm-contacts" }),
+    ];
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+    const mockDb = createMockDb(wfs, []);
+    const result = await deprecateStaleWorkflows(mockDb as any);
+    // The older lead-sourcing workflow goes; the newest one of each channel stays.
+    expect(result.deprecatedCount).toBe(1);
+    expect(mockDb._updateMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps zero-run workflows that are used by active campaigns", async () => {
