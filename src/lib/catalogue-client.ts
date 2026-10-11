@@ -22,7 +22,8 @@ export const CataloguePipeSchema = z.object({
   channelSlug: z.string(),
   channelName: z.string(),
   legKey: z.string(),
-  fromStep: z.string(),
+  // null = START: a pipe from nothing (it finds its own people: a sourcing pipe, an ad), features-service's spelling.
+  fromStep: z.string().nullable(),
   toStep: z.string(),
   mode: z.enum(["proactive", "reactive"]),
   triggerId: z.string().nullable(),
@@ -40,6 +41,9 @@ export type CataloguePipeSummary = z.infer<typeof PipeListSchema>["rows"][number
 
 export const CatalogueStepSchema = z.object({ id: z.string(), name: z.string(), line: z.string() });
 export type CatalogueStep = z.infer<typeof CatalogueStepSchema>;
+
+/** The step a pipe from nothing starts at (features-service serves `fromStep: null` for it, never a step key). */
+export const START_STEP: CatalogueStep = { id: "start", name: "Start", line: "Nobody yet: the pipe finds its own people." };
 
 /** Thrown when the catalogue answers but the request names nothing a workflow can run on. */
 export class PipeResolutionError extends Error {
