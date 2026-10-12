@@ -7,6 +7,7 @@ import { eq, inArray } from "drizzle-orm";
 import { workflows, workflowRuns } from "../db/schema.js";
 import type { db as DbInstance } from "../db/index.js";
 import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
+import { listLegAssignments, type LegAssignment } from "./catalogue-client.js";
 
 type Database = typeof DbInstance;
 
@@ -16,6 +17,8 @@ interface DeprecationResult {
   deprecatedCount: number;
   keptByCampaign: number;
   skippedNoCampaignService: boolean;
+  /** features-service's pipe assignments could not be read: nothing was deprecated (a pipe could lose its workflow). */
+  skippedNoAssignments?: boolean;
 }
 
 /**
@@ -80,7 +83,35 @@ export async function deprecateStaleWorkflows(
     };
   }
 
-  // 6. Deprecate candidates not used by an active campaign — but NEVER the last active workflow of a channel: a
+  // 6. Which pipe each candidate serves (features-service owns the link). A channel runs several pipes, and a pipe
+  // whose ONLY workflow is a candidate would be left with none ("every pipe in prod HAS a workflow", owner
+  // 2026-10-11): a reactive pipe nobody has bought yet records no run, so "zero runs" says nothing there either.
+  const assignmentsBySlug = new Map<string, LegAssignment[]>();
+  try {
+    for (const slug of new Set(candidates.map((wf) => wf.featureSlug))) {
+      assignmentsBySlug.set(slug, await listLegAssignments(slug));
+    }
+  } catch (err) {
+    console.warn(
+      "[workflow-service] Cannot read pipe assignments — skipping stale workflow deprecation:",
+      err instanceof Error ? err.message : err,
+    );
+    return { deprecatedCount: 0, keptByCampaign: 0, skippedNoCampaignService: false, skippedNoAssignments: true };
+  }
+  const liveDynasties = new Set(activeWorkflows.map((wf) => wf.workflowDynastySlug));
+  /** A pipe this workflow serves that no OTHER live dynasty serves, or null. */
+  const soleWorkflowOfPipe = (wf: (typeof candidates)[number]): string | null => {
+    const rows = (assignmentsBySlug.get(wf.featureSlug) ?? []).filter((a) => a.state === "active");
+    for (const leg of rows.filter((a) => a.workflowDynastySlug === wf.workflowDynastySlug)) {
+      const others = rows.filter(
+        (a) => a.legKey === leg.legKey && a.workflowDynastySlug !== wf.workflowDynastySlug && liveDynasties.has(a.workflowDynastySlug),
+      );
+      if (others.length === 0) return `${wf.featureSlug}|${leg.legKey}`;
+    }
+    return null;
+  };
+
+  // 7. Deprecate candidates not used by an active campaign — but NEVER the last active workflow of a channel: a
   // channel with no active workflow can no longer be launched (campaign-service 409 `no_workflow`). A pipe that
   // runs inside another run (a sourcing pipe on the inline `lead_requested` trigger, src/lib/sourcing-dag.ts) never
   // records a run of its own, so "zero runs" says nothing about whether it is used.
@@ -106,12 +137,21 @@ export async function deprecateStaleWorkflows(
       );
       continue;
     }
+    const pipe = soleWorkflowOfPipe(wf);
+    if (pipe) {
+      console.log(`[workflow-service] Keeping stale workflow "${wf.workflowSlug}" — the last active workflow of pipe ${pipe}`);
+      continue;
+    }
     remaining.set(wf.featureSlug, (remaining.get(wf.featureSlug) ?? 0) - 1);
+    if (!activeWorkflows.some((o) => o.id !== wf.id && o.workflowDynastySlug === wf.workflowDynastySlug && o.status === "active")) {
+      liveDynasties.delete(wf.workflowDynastySlug);
+    }
 
     await database
       .update(workflows)
       .set({ status: "deprecated", updatedAt: new Date() })
       .where(eq(workflows.id, wf.id));
+    wf.status = "deprecated";
 
     deprecatedCount++;
     console.log(

@@ -6,6 +6,12 @@ vi.mock("../../src/lib/campaign-client.js", () => ({
   fetchActiveWorkflowSlugs: (...args: unknown[]) => mockFetchActiveWorkflowSlugs(...args),
 }));
 
+// Mock features-service pipe assignments
+const mockListLegAssignments = vi.fn();
+vi.mock("../../src/lib/catalogue-client.js", () => ({
+  listLegAssignments: (...args: unknown[]) => mockListLegAssignments(...args),
+}));
+
 // Mock DB
 vi.mock("../../src/db/index.js", () => ({
   db: "mock-db",
@@ -70,6 +76,8 @@ describe("deprecateStaleWorkflows", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mockFetchActiveWorkflowSlugs.mockReset();
+    mockListLegAssignments.mockReset();
+    mockListLegAssignments.mockResolvedValue([]);
   });
 
   it("returns early with no deprecations when there are no active workflows", async () => {
@@ -178,5 +186,40 @@ describe("deprecateStaleWorkflows", () => {
     const result = await deprecateStaleWorkflows(mockDb as any);
 
     expect(result.deprecatedCount).toBe(1); // only wf-no-runs
+  });
+
+  // Regression (FORM-TRIGGER-1012): ai-meeting-booking runs several pipes. Its form pipe's only workflow, bought by
+  // nobody yet, has zero runs: the channel guard did not hold it (the channel has others), the pipe would lose it.
+  it("never deprecates the LAST active workflow of a PIPE, even when its channel has others", async () => {
+    const wfs = [
+      makeWorkflow({ id: "wf-conv", workflowSlug: "amb-conv", featureSlug: "ai-meeting-booking" }),
+      makeWorkflow({ id: "wf-form", workflowSlug: "amb-form", featureSlug: "ai-meeting-booking" }),
+      makeWorkflow({ id: "wf-spare", workflowSlug: "amb-spare", featureSlug: "ai-meeting-booking" }),
+    ];
+    const assign = (legKey: string, workflowDynastySlug: string) => ({
+      featureSlug: "ai-meeting-booking", legKey, workflowDynastySlug, state: "active", decidedBy: "x", decidedAt: "x", note: null,
+    });
+    mockListLegAssignments.mockResolvedValue([
+      assign("conversation_to_meeting_booked", "amb-conv"),
+      assign("conversation_to_meeting_booked", "amb-spare"),
+      assign("form_submitted_to_meeting_booked", "amb-form"),
+    ]);
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+    const mockDb = createMockDb(wfs, ["wf-conv"]);
+    const result = await deprecateStaleWorkflows(mockDb as any);
+    // amb-spare goes (amb-conv still serves its pipe); amb-form stays, the only one on its pipe.
+    expect(result.deprecatedCount).toBe(1);
+    expect(mockListLegAssignments).toHaveBeenCalledWith("ai-meeting-booking");
+  });
+
+  it("deprecates nothing when the pipe assignments cannot be read", async () => {
+    const wfs = [makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }), makeWorkflow({ id: "wf-2", workflowSlug: "slug-2" })];
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+    mockListLegAssignments.mockRejectedValue(new Error("features-service down"));
+    const mockDb = createMockDb(wfs, []);
+    const result = await deprecateStaleWorkflows(mockDb as any);
+    expect(result.deprecatedCount).toBe(0);
+    expect(result.skippedNoAssignments).toBe(true);
+    expect(mockDb._updateMock).not.toHaveBeenCalled();
   });
 });
