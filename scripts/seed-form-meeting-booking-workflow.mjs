@@ -23,6 +23,8 @@ import {
   buildFormMeetingBookingDag,
 } from "../dist/lib/form-meeting-booking-dag.js";
 
+import { computeDAGSignature } from "../dist/lib/dag-signature.js";
+
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
 const FEATURES_URL = process.env.FEATURES_SERVICE_URL;
@@ -75,7 +77,8 @@ if (dynasties.length === 1) {
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
   const w = rows.find((r) => r.workflowDynastySlug === dynasties[0]);
   if (!w) throw new Error(`${dynasties[0]} is assigned to ${FORM_MEETING_BOOKING_PIPE_ID} but has no active version here`);
-  if (JSON.stringify(w.dag) === JSON.stringify(current)) {
+  // Key-sorted: the stored DAG is jsonb, which reorders keys, so a raw stringify never matches.
+  if (computeDAGSignature(w.dag) === computeDAGSignature(current)) {
     console.log(`${FORM_MEETING_BOOKING_PIPE_ID}: ${w.workflowSlug} is current (skipped)`);
   } else if (!APPLY) {
     console.log(`${FORM_MEETING_BOOKING_PIPE_ID}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
