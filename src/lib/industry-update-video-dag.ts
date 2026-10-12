@@ -259,7 +259,7 @@ export async function main(solid, day) {
     "TODAY: " + day.date,
     "",
     ...stories.map((s, i) => [
-      "=== STORY " + (i + 1) + " | candidateId: " + s.candidate.key + " | " + s.candidate.network + " post by " + (s.candidate.author ?? "?") + " | company in the news: " + s.company + " | relation: " + s.relation,
+      "=== STORY " + (i + 1) + " | candidateId: " + s.candidate.key + " | " + s.candidate.network + " post by " + (s.candidate.network === "x" && s.candidate.author ? "X handle @" + String(s.candidate.author).replace(/^@/, "") + " (name them by the full name their post or bio shows, and give this handle as their xHandle)" : (s.candidate.author ?? "?")) + " | company in the news: " + s.company + " | relation: " + s.relation,
       "Spotlit sentence: " + s.spotlight,
       "Post URL: " + s.candidate.url,
       "Post:",
@@ -326,9 +326,6 @@ export async function main(solid, write, pickInput, day, plan) {
     seenTag.add(k);
     tags.push(t);
   };
-  for (const s of solid.stories) {
-    if (s.candidate.network === "x" && s.candidate.author) addTag({ name: String(s.candidate.author), kind: "person", xHandle: String(s.candidate.author).replace(/^@/, "") });
-  }
   for (const e of json.entities ?? []) {
     const name = undash(e.name);
     if (!name) continue;
@@ -338,6 +335,11 @@ export async function main(solid, write, pickInput, day, plan) {
     const li = String(e.linkedinUrl ?? "").trim();
     if (/^https:\\/\\/(www\\.)?linkedin\\.com\\/(company|in)\\//.test(li)) t.linkedinUrl = li;
     addTag(t);
+  }
+  // The author of an X post is tagged by their handle even when the writer left them out.
+  for (const s of solid.stories) {
+    const h = s.candidate.network === "x" && s.candidate.author ? String(s.candidate.author).replace(/^@/, "") : null;
+    if (h && !tags.some((t) => (t.xHandle ?? "").toLowerCase() === h.toLowerCase())) addTag({ name: h, kind: "person", xHandle: h });
   }
   const links = solid.stories.map((s) => s.candidate.url);
   const xReply = ["Links:", ...links, "Credit to the people behind today's stories.", "Get started: distribute.you"].join("\\n\\n");
