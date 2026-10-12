@@ -503,6 +503,16 @@ function clientServiceConfig(): { baseUrl: string; apiKey: string } {
   return { baseUrl: baseUrl.replace(/\/$/, ""), apiKey };
 }
 
+/** fetch, with a transport failure named by the dependency it was meant to reach (undici says only "fetch failed"). */
+async function fetchNamed(what: string, url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+    throw new Error(`figure-reader: ${what} did not answer: ${cause?.code ?? cause?.message ?? (err as Error).message}`);
+  }
+}
+
 async function readJson(res: Response): Promise<unknown> {
   const text = await res.text();
   if (!text) return {};
@@ -521,7 +531,7 @@ export function productionDeps(
     async loadSpec() {
       if (specCache && Date.now() - specCache.at < SPEC_TTL_MS) return specCache.spec;
       const { baseUrl } = apiServiceConfig();
-      const res = await fetch(`${baseUrl}/openapi.json`, { signal: AbortSignal.timeout(600_000) });
+      const res = await fetchNamed("api-service /openapi.json", `${baseUrl}/openapi.json`, { signal: AbortSignal.timeout(600_000) });
       if (!res.ok) throw new Error(`figure-reader: api-service /openapi.json -> ${res.status}`);
       const spec = (await res.json()) as { paths?: Record<string, Record<string, OpenApiOperation>> };
       specCache = { at: Date.now(), spec };
@@ -531,7 +541,7 @@ export function productionDeps(
     async resolveRecipient(email) {
       const { baseUrl, apiKey } = clientServiceConfig();
       const headers = { "x-api-key": apiKey, ...downstreamHeaders };
-      const usersRes = await fetch(`${baseUrl}/internal/users?${new URLSearchParams({ email, limit: "5" })}`, {
+      const usersRes = await fetchNamed("client-service users by email", `${baseUrl}/internal/users?${new URLSearchParams({ email, limit: "5" })}`, {
         headers,
         signal: AbortSignal.timeout(600_000),
       });
@@ -543,7 +553,7 @@ export function productionDeps(
       const matches = users.filter((u) => (u.email ?? "").trim().toLowerCase() === email);
       const organizations: RecipientMembership[] = [];
       for (const user of matches) {
-        const orgsRes = await fetch(`${baseUrl}/internal/users/${encodeURIComponent(user.id)}/orgs`, {
+        const orgsRes = await fetchNamed("client-service memberships", `${baseUrl}/internal/users/${encodeURIComponent(user.id)}/orgs`, {
           headers,
           signal: AbortSignal.timeout(600_000),
         });
@@ -570,7 +580,7 @@ export function productionDeps(
             ...(downstreamHeaders["x-run-id"] ? { "x-run-id": downstreamHeaders["x-run-id"] } : {}),
           }
         : {};
-      const res = await fetch(`${baseUrl}${url}`, { headers, signal: AbortSignal.timeout(600_000) });
+      const res = await fetchNamed(`api-service GET ${url}`, `${baseUrl}${url}`, { headers, signal: AbortSignal.timeout(600_000) });
       const body = await readJson(res);
       if (res.status >= 500) throw new Error(`figure-reader: api-service GET ${url} -> ${res.status} ${JSON.stringify(body).slice(0, 300)}`);
       return { status: res.status, body };
