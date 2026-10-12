@@ -19,6 +19,8 @@ import {
   buildAiFollowUpEmailDag,
 } from "../dist/lib/ai-follow-up-email-dag.js";
 
+import { computeDAGSignature } from "../dist/lib/dag-signature.js";
+
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
 const ORG_ID = process.env.ORG_ID ?? "f0420eb5-8f72-4f0a-a150-f473746df1e6";
@@ -53,7 +55,8 @@ const current = buildAiFollowUpEmailDag();
 if (rows.length > 0) {
   // A stored DAG behind the current one is upgraded in its own dynasty (same slug lineage, new version).
   for (const w of rows) {
-    if (JSON.stringify(w.dag) === JSON.stringify(current)) {
+    // Key-sorted: the stored DAG is jsonb, which reorders keys, so a raw stringify never matches.
+  if (computeDAGSignature(w.dag) === computeDAGSignature(current)) {
       console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
       continue;
     }

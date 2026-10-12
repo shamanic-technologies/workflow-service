@@ -21,6 +21,8 @@ import {
   coldWhatsappPipeIdOf,
 } from "../dist/lib/cold-whatsapp-outreach-dag.js";
 
+import { computeDAGSignature } from "../dist/lib/dag-signature.js";
+
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
 const FEATURES_URL = process.env.FEATURES_SERVICE_URL;
@@ -66,7 +68,8 @@ if (rows.length > 1) throw new Error(`${slug}: ${rows.length} active workflows, 
 if (rows.length === 1) {
   const w = rows[0];
   dynastySlug = w.workflowDynastySlug;
-  if (JSON.stringify(w.dag) === JSON.stringify(current)) {
+  // Key-sorted: the stored DAG is jsonb, which reorders keys, so a raw stringify never matches.
+  if (computeDAGSignature(w.dag) === computeDAGSignature(current)) {
     console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
   } else if (!APPLY) {
     console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
