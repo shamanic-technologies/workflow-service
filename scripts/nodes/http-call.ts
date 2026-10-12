@@ -58,6 +58,11 @@ export async function main(
   // of nesting a condition inside a branch, which dag-to-openflow cannot build.
   // Only `true` skips: absent, false or anything else makes the call as before.
   skip?: boolean,
+  // Identity headers this one call must NOT carry (e.g. ["x-campaign-id"]): a
+  // staff notification the run sends is not the campaign speaking to a prospect,
+  // and crm-service files any WhatsApp send carrying a campaign id as that
+  // campaign's thread. Removed after every other header is set.
+  omitHeaders?: string[],
 ) {
   if (skip === true) {
     console.log(`[http-call] ${method} ${service} ${path} not called: skip is true for this run`);
@@ -128,6 +133,7 @@ export async function main(
   if (audienceId) reqHeaders["x-audience-id"] = audienceId;
   // Caller-supplied headers can override identity headers
   if (headers) Object.assign(reqHeaders, headers);
+  for (const name of omitHeaders ?? []) delete reqHeaders[name.toLowerCase()];
   // Resolved x-api-key always takes precedence
   if (apiKey) reqHeaders["x-api-key"] = apiKey;
 

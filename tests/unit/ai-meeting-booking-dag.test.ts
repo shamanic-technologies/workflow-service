@@ -34,6 +34,7 @@ import {
   FINALIZE_REPLY_CODE,
   CRM_WHATSAPP_SEND,
   PERSON_TIMELINE_READ,
+  COMPOSE_REP_ALERT_CODE,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -1079,7 +1080,7 @@ describe("a last message that needs no reply at all", () => {
       "end_run_no_reply_owed",
     ]);
     const escalate = branches.find((b) => b.expr.includes("'escalate'"));
-    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "hand_over", "end_run_escalated"]);
+    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "hand_over", "compose_rep_alert", "alert_rep", "end_run_escalated"]);
   });
 
   it("says why in the log", async () => {
@@ -2122,5 +2123,37 @@ describe("a person we never cold-emailed has no prior generation (WA-RESPONDER-1
 
   it("still fails loud when the read itself broke", async () => {
     await expect(composeReply(...args({ ok: false, status: 502, error: "down" }))).rejects.toThrow("could not read the email we generated for them (502)");
+  });
+});
+
+describe("a chat escalation alerts the brand's sales rep on WhatsApp (owner 2026-10-13)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const draft = { json: { decision: "escalate", question: "Can you send 3 references in Kazakhstan?" } };
+  const followup = { id: "row-1", dueAt: "2026-10-13T08:00:00.000Z", email: "ada@example.com" };
+  const brand = { brand: { salesRepPhone: "+33770657585" } };
+  const chat = { replyChannel: "whatsapp", person: { name: "Ada Lovelace", phone: "+33612345678" } };
+
+  it("sends the rep who wrote, what they asked, and that nothing was sent, from the brand's WhatsApp, with no campaign id", async () => {
+    const out = await loadMain(COMPOSE_REP_ALERT_CODE)(draft, followup, chat, brand);
+    expect(out).toMatchObject({ skip: false, phone: "+33770657585", idempotencyKey: "ai-meeting-booking:row-1:2026-10-13T08:00:00.000Z:rep-alert" });
+    expect(out.text).toBe(
+      "Needs your call: Ada Lovelace (+33612345678) wrote on whatsapp and I could not answer.\n\n" +
+      "They asked: \"Can you send 3 references in Kazakhstan?\"\n\n" +
+      "I sent them nothing. Please reply to them yourself.",
+    );
+    expect(String(out.text)).not.toMatch(/[\u2013\u2014]/);
+    expect(byId.get("alert-rep")?.config).toEqual({ ...CRM_WHATSAPP_SEND, omitHeaders: ["x-campaign-id"] });
+    expect(byId.get("alert-rep")?.inputMapping?.skip).toBe("$ref:compose-rep-alert.output.skip");
+    expect(descendants(dag, "hand-over").has("alert-rep")).toBe(true);
+    expect(descendants(dag, "alert-rep").has("end-run-escalated")).toBe(true);
+  });
+
+  it("alerts nobody on an email thread (instantly-service escalates those) and says so loudly when no rep phone is stated", async () => {
+    expect(await loadMain(COMPOSE_REP_ALERT_CODE)(draft, followup, { replyChannel: "email" }, brand)).toEqual({ skip: true, reason: "email_thread" });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await loadMain(COMPOSE_REP_ALERT_CODE)(draft, followup, chat, { brand: {} })).toEqual({ skip: true, reason: "no_sales_rep_phone" });
+    expect(String(err.mock.calls[0]?.[0])).toContain("no sales rep phone");
+    err.mockRestore();
   });
 });
