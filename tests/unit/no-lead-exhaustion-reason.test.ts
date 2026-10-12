@@ -78,7 +78,6 @@ describe("no-lead end-run reports exhaustion only on audience_exhausted", () => 
   it.each([
     "source_campaign_off",
     "no_audience",
-    "serve_timed_out",
     "audience_not_serveable",
     "credit_insufficient",
     "source_budget_reached",
@@ -86,6 +85,11 @@ describe("no-lead end-run reports exhaustion only on audience_exhausted", () => 
   ])("a %s serve ends idle, never stopCampaign true", (reason) => {
     const body = sentBody(bodyTransform(coldEmailDag(), "end_run_no_lead"), emptyServe(reason));
     expect(body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+  });
+
+  it("a serve_timed_out serve ends as a normal run: neither stopped nor idle, so the look goes on", () => {
+    const body = sentBody(bodyTransform(coldEmailDag(), "end_run_no_lead"), emptyServe("serve_timed_out"));
+    expect(body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: false });
   });
 
   it("an empty serve with no reason at all is not exhaustion", () => {
