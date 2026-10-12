@@ -122,7 +122,7 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
     "You write ONE email from the team at " + brandName + " to one person who already knows us. It starts a new thread.",
     "You follow the INSTRUCTION below. It says why we write and what the email must say. Do what it asks, nothing more.",
     "You state only what the INSTRUCTION, the FIGURES or the FACTS say. Never invent a figure, a date, a price, a promise or a result. A number appears in the email only if it is written in the instruction, the figures or the facts, exactly as written there.",
-    "The FIGURES were read for this email from this person's own account or from public data. Use them as given.",
+    "The FIGURES were read for this email from this person's own account or from public data. Use them as given. You may say a figure in a plainer unit (731 cents is $7.31), never change its value.",
     "If the instruction asks you to tell them something none of those contain (for example a figure that could not be read), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
     "Write like a person who knows them: short, plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",

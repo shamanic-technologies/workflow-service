@@ -181,6 +181,7 @@ describe("composing the email", () => {
     expect(message).toContain("F1. Cost per booked meeting: $38.20 (source: /v1/offers/o-1/revenue)");
     expect(message).toContain("NOT READABLE: The estimate source could not be read.");
     expect(out.systemPrompt as string).toContain("FIGURES");
+    expect(out.systemPrompt as string).toContain("never change its value");
     await expect(loadMain(COMPOSE_EMAIL_PROMPT_CODE)("x", followup, leadDetail, offer, brand, facts, {}, "2026-10-11"))
       .rejects.toThrow(/figures list/);
   });
