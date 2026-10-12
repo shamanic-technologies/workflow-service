@@ -26,6 +26,9 @@
  *    WhatsApp, the brand's WhatsApp not linked or not connected, or, on the follow-up, they wrote to us since) is a named REFUSAL, not an error: the
  *    run names it in the log and ends as a normal run, and it is the email path's job to reach them. Any other
  *    failure fails the run loud.
+ *  - A first message refused for a reason about the CHANNEL (`CHANNEL_UNREACHABLE_CODES`: no phone known, not on
+ *    WhatsApp) RELEASES the person to the brand's other pipes that can reach them (lead-service
+ *    `channel-refusals`, owner 2026-10-12): a refusal about the channel never burns the person.
  *  - Strictly AFTER the send, lead-service records what we owe them: a first message schedules the one follow-up
  *    (`schedule-by-email`, due in three days); a follow-up hands the row over for good. A refusal on a follow-up
  *    hands it over too (they answered: their thread is a person's now) or stops it (unreachable).
@@ -188,6 +191,12 @@ export async function main(draft, person, campaignId) {
 `.trim();
 
 /**
+ * crm-service refusals that are about the CHANNEL, not the person: the person is released to the brand's pipes that
+ * can reach them (lead-service `POST /orgs/campaigns/{campaignId}/leads/channel-refusals`).
+ */
+export const CHANNEL_UNREACHABLE_CODES = ["no_phone_known", "not_on_whatsapp"] as const;
+
+/**
  * What lead-service must record, read off the send. A refusal is legible here and in the log; anything else threw
  * before this node.
  */
@@ -200,6 +209,11 @@ export async function main(person, send, currentDate) {
       " (" + String(send.refusal ?? send.error ?? "") + "). Left to the email path.");
   }
   if (person?.kind === "first") {
+    // A refusal about the CHANNEL (no phone, not on WhatsApp) says nothing about the person: release them to the
+    // brand's pipes that can reach them (lead-service channel-refusals). Any other refusal ends the person here.
+    if (refused && ${JSON.stringify(CHANNEL_UNREACHABLE_CODES)}.includes(code)) {
+      return { action: "release", outcome: "unreachable", code, email: person.email };
+    }
     if (refused) return { action: "none", outcome: "unreachable", code };
     const due = new Date(Date.now() + ${FOLLOW_UP_AFTER_DAYS} * 24 * 3600 * 1000).toISOString();
     return { action: "schedule", outcome: "sent", dueAt: due, email: person.email };
@@ -418,6 +432,18 @@ export function buildColdWhatsappOutreachDag(): DAG {
       },
       // Converges (edge from pick-person, outside check-person's branch) so it is top level.
       { id: "check-record", type: "condition" },
+      // A channel refusal on a first message: the person goes back to the brand's pipes that can reach them.
+      {
+        id: "release-person",
+        type: "http.call",
+        config: { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/leads/channel-refusals" },
+        retries: 0,
+        inputMapping: {
+          "params.campaignId": "$ref:flow_input.campaignId",
+          "body.email": "$ref:record-plan.output.email",
+          "body.code": "$ref:record-plan.output.code",
+        },
+      },
       // A first message went out: the one follow-up is owed in FOLLOW_UP_AFTER_DAYS.
       {
         id: "schedule-followup",
@@ -475,6 +501,8 @@ export function buildColdWhatsappOutreachDag(): DAG {
       { from: "check-record", to: "schedule-followup", condition: "results['record-plan']?.action == 'schedule'" },
       { from: "check-record", to: "record-followup", condition: "results['record-plan']?.action == 'record'" },
       { from: "check-record", to: "end-run-unreachable", condition: "results['record-plan']?.action == 'none'" },
+      { from: "check-record", to: "release-person", condition: "results['record-plan']?.action == 'release'" },
+      { from: "release-person", to: "end-run-unreachable" },
       { from: "schedule-followup", to: "end-run" },
       { from: "record-followup", to: "end-run-followup" },
     ],

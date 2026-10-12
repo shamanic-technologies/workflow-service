@@ -107,7 +107,7 @@ describe("cold-whatsapp-outreach DAG", () => {
 
   it("records strictly AFTER the send: a first message schedules the follow-up, a follow-up hands the row over", () => {
     expect(descendants(dag, "send-whatsapp")).toEqual(
-      new Set(["record-plan", "check-record", "schedule-followup", "record-followup", "end-run-unreachable", "end-run", "end-run-followup"]),
+      new Set(["record-plan", "check-record", "schedule-followup", "record-followup", "release-person", "end-run-unreachable", "end-run", "end-run-followup"]),
     );
     expect(descendants(dag, "schedule-followup").has("send-whatsapp")).toBe(false);
     expect(byId.get("schedule-followup")?.config?.path).toBe("/orgs/campaigns/{campaignId}/followups/schedule-by-email");
@@ -203,8 +203,26 @@ describe("finalizing and recording", () => {
     const days = (Date.parse(sent.dueAt as string) - Date.now()) / 86400000;
     expect(days).toBeGreaterThan(2.9);
     expect(days).toBeLessThan(3.1);
-    const refused = await plan({ kind: "first", email: "a@x.com" }, { ok: false, skipped: true, code: "no_phone_known" }, "2026-10-12");
-    expect(refused).toEqual({ action: "none", outcome: "unreachable", code: "no_phone_known" });
+    const refused = await plan({ kind: "first", email: "a@x.com" }, { ok: false, skipped: true, code: "whatsapp_not_linked" }, "2026-10-12");
+    expect(refused).toEqual({ action: "none", outcome: "unreachable", code: "whatsapp_not_linked" });
+  });
+
+  it("a first message refused about the CHANNEL releases the person to the brand's pipes that can reach them", async () => {
+    const plan = loadMain(RECORD_PLAN_CODE);
+    for (const code of ["no_phone_known", "not_on_whatsapp"]) {
+      const out = await plan({ kind: "first", email: "a@x.com" }, { ok: false, skipped: true, code }, "2026-10-12");
+      expect(out).toEqual({ action: "release", outcome: "unreachable", code, email: "a@x.com" });
+    }
+    const release = buildColdWhatsappOutreachDag().nodes.find((n) => n.id === "release-person");
+    expect(release?.config).toMatchObject({
+      service: "lead",
+      method: "POST",
+      path: "/orgs/campaigns/{campaignId}/leads/channel-refusals",
+    });
+    expect(release?.inputMapping).toMatchObject({
+      "body.email": "$ref:record-plan.output.email",
+      "body.code": "$ref:record-plan.output.code",
+    });
   });
 
   it("a follow-up is handed over for good, sent or refused, so there is never a second", async () => {
