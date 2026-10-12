@@ -186,9 +186,15 @@ export async function main(
     result = { raw: text };
   }
 
-  // Validate response field if configured — throws to stop the flow and trigger onError
+  // Validate response field if configured — throws to stop the flow and trigger onError.
+  // A dotted field reads a nested one (`post.status`); a plain key reads as it always did.
   if (validateResponse) {
-    const actual = result[validateResponse.field];
+    const actual = validateResponse.field in result
+      ? result[validateResponse.field]
+      : validateResponse.field.split(".").reduce<unknown>(
+          (v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined),
+          result,
+        );
     if (actual !== validateResponse.equals) {
       throw new Error(
         `${method} ${service}${path} validation failed: ` +
