@@ -2037,6 +2037,145 @@
           "action",
           "prompt"
         ]
+      },
+      "ReadFiguresResponse": {
+        "type": "object",
+        "properties": {
+          "figures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "What the figure is, in words."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The value as the read served it (unit and currency kept), or a ratio of two served values."
+                },
+                "source": {
+                  "type": "string",
+                  "description": "The read it came from: a customer-API path, or a web question."
+                }
+              },
+              "required": [
+                "label",
+                "value",
+                "source"
+              ]
+            },
+            "description": "Every figure found. Each cites a read that succeeded; nothing estimated."
+          },
+          "missing": {
+            "type": "string",
+            "nullable": true,
+            "description": "Null when everything the question needs was found; else one sentence naming what could not be read and why (e.g. it belongs to another organization than the recipient's)."
+          },
+          "recipient": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "nullable": true
+              },
+              "isMember": {
+                "type": "boolean",
+                "description": "True when the recipient belongs to at least one organization."
+              },
+              "organizations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "orgId",
+                    "name"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "email",
+              "isMember",
+              "organizations"
+            ]
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "account",
+                    "public",
+                    "web"
+                  ]
+                },
+                "orgId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "target": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "refused": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Why the read was refused before any request left (never made). Null when made."
+                }
+              },
+              "required": [
+                "kind",
+                "orgId",
+                "target",
+                "status",
+                "refused"
+              ]
+            },
+            "description": "Every read planned, made or refused, in order."
+          }
+        },
+        "required": [
+          "figures",
+          "missing",
+          "recipient",
+          "reads"
+        ]
+      },
+      "ReadFiguresRequest": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000,
+            "description": "What the message must say, in words (e.g. the campaign's instruction). The reader works out which figures that needs and reads them."
+          },
+          "recipientEmail": {
+            "type": "string",
+            "format": "email",
+            "description": "The person the message goes to. Their OWN account (the organizations they belong to, per the identity provider) is the only account that can be read. Omitted, or a person who belongs to no organization: public figures only."
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -5233,6 +5372,134 @@
           },
           "502": {
             "description": "content-generation could not read or store the template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/figures/read": {
+      "post": {
+        "summary": "Read the figures a message needs: public ones and the recipient's own account figures",
+        "description": "General capability for any workflow (an `http.call` node). Works out which figures `question` needs and reads them at run time: PUBLIC figures (our public catalogue routes, the live web) and the figures of the organization(s) the RECIPIENT belongs to, read through the customer API gateway as that recipient, with no staff access. NEVER another organization's: the org a read acts in comes from the recipient's membership at the identity provider (never from the question), and every id a read names must come from an earlier read of the recipient's own account. A figure that cannot be read is named in `missing`; the caller decides what to do (the AI Follow-up Email workflow sends nothing). The model spend is declared by chat-service on the calling run.",
+        "tags": [
+          "Figures"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadFiguresRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was found and read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadFiguresResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A dependency failed (identity provider, gateway 5xx, chat-service)",
             "content": {
               "application/json": {
                 "schema": {

@@ -25,6 +25,7 @@ import workflowRunsRoutes from "./routes/workflow-runs.js";
 import openapiRoutes from "./routes/openapi.js";
 import publicWorkflowsRoutes from "./routes/public-workflows.js";
 import internalRoutes from "./routes/internal.js";
+import figuresRoutes from "./routes/figures.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -51,6 +52,7 @@ app.use(requireIdentity);
 app.use(workflowPromptEditRoutes);
 app.use(workflowsRoutes);
 app.use(workflowRunsRoutes);
+app.use(figuresRoutes);
 
 // 404 fallback
 app.use((_req, res) => {

@@ -121,6 +121,18 @@ describe("ai-follow-up-email DAG", () => {
     expect(handed.map((n) => n.id)).toEqual(["record-sent"]);
   });
 
+  it("reads the figures the instruction needs for the PERSON written to, before the email is composed", () => {
+    const read = byId.get("read-figures");
+    expect(read?.config).toEqual({ service: "workflow", method: "POST", path: "/orgs/figures/read" });
+    expect(read?.inputMapping).toEqual({
+      "body.question": "$ref:start-run.output.instruction",
+      "body.recipientEmail": "$ref:claim-followup.output.followup.email",
+    });
+    expect(dag.edges).toContainEqual({ from: "read-figures", to: "compose-email" });
+    expect(byId.get("compose-email")?.inputMapping?.figures).toBe("$ref:read-figures.output");
+    expect(descendants(dag, "read-figures").has("send-email")).toBe(true);
+  });
+
   it("an unwritable instruction sends nothing, releases the claim as stopped, and fails the run", () => {
     const edge = dag.edges.find((e) => e.from === "check-writable" && e.to === "release-unwritable");
     expect(edge?.condition).toContain("'cannot_write'");
@@ -154,10 +166,29 @@ describe("composing the email", () => {
   const brand = { brand: { name: "distribute.you" } };
   const facts = { exact: [{ id: "E1", label: "pricing", value: "The platform is free" }], neverGive: ["discounts"] };
 
+  const noFigures = { figures: [], missing: null };
+
+  it("puts the figures read for the email in front of the model, and what could not be read", async () => {
+    const figures = {
+      figures: [{ label: "Cost per booked meeting", value: "$38.20", source: "/v1/offers/o-1/revenue" }],
+      missing: "The estimate source could not be read.",
+    };
+    const out = await loadMain(COMPOSE_EMAIL_PROMPT_CODE)(
+      "Give Marie her exact cost per booked meeting and compare it to the $42 estimate.",
+      followup, leadDetail, offer, brand, facts, figures, "2026-10-11",
+    );
+    const message = out.message as string;
+    expect(message).toContain("F1. Cost per booked meeting: $38.20 (source: /v1/offers/o-1/revenue)");
+    expect(message).toContain("NOT READABLE: The estimate source could not be read.");
+    expect(out.systemPrompt as string).toContain("FIGURES");
+    await expect(loadMain(COMPOSE_EMAIL_PROMPT_CODE)("x", followup, leadDetail, offer, brand, facts, {}, "2026-10-11"))
+      .rejects.toThrow(/figures list/);
+  });
+
   it("puts the instruction verbatim, the person, and the client's facts in front of the model", async () => {
     const out = await loadMain(COMPOSE_EMAIL_PROMPT_CODE)(
       "Give Marie her exact cost per booked meeting: $37. Compare it to the $42 estimate.",
-      followup, leadDetail, offer, brand, facts, "2026-10-11",
+      followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11",
     );
     const message = out.message as string;
     expect(message).toContain("Give Marie her exact cost per booked meeting: $37. Compare it to the $42 estimate.");
@@ -173,9 +204,9 @@ describe("composing the email", () => {
 
   it("refuses to compose without an instruction, an offer name or a brand name", async () => {
     const main = loadMain(COMPOSE_EMAIL_PROMPT_CODE);
-    await expect(main("  ", followup, leadDetail, offer, brand, facts, "2026-10-11")).rejects.toThrow(/instruction/);
-    await expect(main("x", followup, leadDetail, {}, brand, facts, "2026-10-11")).rejects.toThrow(/offer/);
-    await expect(main("x", followup, leadDetail, offer, { brand: {} }, facts, "2026-10-11")).rejects.toThrow(/brand/);
+    await expect(main("  ", followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/instruction/);
+    await expect(main("x", followup, leadDetail, {}, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/offer/);
+    await expect(main("x", followup, leadDetail, offer, { brand: {} }, facts, noFigures, "2026-10-11")).rejects.toThrow(/brand/);
   });
 });
 
