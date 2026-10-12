@@ -39,7 +39,9 @@
  * with `?.`, because on another path the node it reads never ran.
  */
 import type { DAG } from "./dag-validator.js";
-import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
+import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
+
+export { CRM_WHATSAPP_SEND };
 
 export const COLD_WHATSAPP_OUTREACH_FEATURE_SLUG = "cold-whatsapp-outreach";
 
@@ -376,9 +378,6 @@ export const GATHER_CLIENT_FACTS_CODE =
   GATHER_FACTS_CODE.replace(GATHER_FACTS_SIGNATURE, "async function gatherFacts(plan, offerAnswers, offerFields, brandFields)") +
   "\n\nexport async function main(offerAnswers, offerFields, brandFields) {\n" +
   "  return gatherFacts(null, offerAnswers, offerFields, brandFields);\n}";
-
-/** crm-service's WhatsApp send (the brand's linked account). Wired against its served contract. */
-export const CRM_WHATSAPP_SEND = { service: "crm", method: "POST", path: "/orgs/whatsapp/messages" } as const;
 
 /**
  * crm-service refusals (422 `type: "refused"`) that mean "this person cannot be written to on WhatsApp now": they
