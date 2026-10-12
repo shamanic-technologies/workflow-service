@@ -485,4 +485,72 @@ describe("http-call script", () => {
       expect(result).toEqual({ cached: false, result: { rawMarkdown: "hi" } });
     });
   });
+
+  describe("skipOnRefusalCodes (RECONTACT-LOOP-1011)", () => {
+    // Declared right after tolerateFailure; Windmill passes it by NAME.
+    const SKIP_POSITION = 25;
+    const GATEWAY_ENVS = {
+      EMAIL_GATEWAY_SERVICE_URL: "https://gw.example.com",
+      EMAIL_GATEWAY_SERVICE_API_KEY: "gw-key",
+    };
+    const CODES = ["recent_brand_contact", "lead_opted_out"];
+
+    function callSend(codes: string[] | undefined) {
+      const args = new Array(SKIP_POSITION + 1).fill(undefined);
+      ["email-gateway", "POST", "/orgs/send", { to: "a@b.com" }, undefined, GATEWAY_ENVS]
+        .forEach((v, i) => { args[i] = v; });
+      args[7] = { field: "success", equals: true };
+      args[SKIP_POSITION] = codes;
+      return (main as (...a: unknown[]) => Promise<unknown>)(...args);
+    }
+
+    const refusal = {
+      error: "Lead was contacted for this brand recently",
+      code: "recent_brand_contact",
+      details: "No email was sent and nothing was billed.",
+    };
+
+    it("returns a skipped outcome on a 409 naming a listed code (validateResponse not applied)", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse(refusal, 409));
+      const result = await callSend(CODES);
+      expect(result).toEqual({
+        ok: false,
+        skipped: true,
+        status: 409,
+        code: "recent_brand_contact",
+        refusal: JSON.stringify(refusal),
+      });
+    });
+
+    it("reads the code nested under details when a hop wraps the upstream body", async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ error: "Lead has opted out", details: { code: "lead_opted_out" } }, 409),
+      );
+      const result = (await callSend(CODES)) as Record<string, unknown>;
+      expect(result.skipped).toBe(true);
+      expect(result.code).toBe("lead_opted_out");
+    });
+
+    it("still throws on a 5xx even when its body carries a listed code", async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ error: "Upstream service error", details: JSON.stringify(refusal), code: "recent_brand_contact" }, 502),
+      );
+      await expect(callSend(CODES)).rejects.toThrow("failed (502)");
+    });
+
+    it("still throws on a 4xx with an unlisted code", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ error: "x", code: "no_reply_to_thread" }, 409));
+      await expect(callSend(CODES)).rejects.toThrow("failed (409)");
+    });
+
+    it("still throws on a 4xx whose body is not JSON", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("recent_brand_contact", { status: 409 }));
+      await expect(callSend(CODES)).rejects.toThrow("failed (409)");
+    });
+
+    it("throws on the refusal when no codes are configured", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse(refusal, 409));
+      await expect(callSend(undefined)).rejects.toThrow("failed (409)");
+    });
+  });
 });

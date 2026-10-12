@@ -42,6 +42,15 @@ export async function main(
   // never throws is also a node Windmill never retries, so the only retry left is
   // whatever the called service does internally.
   tolerateFailure?: boolean,
+  // Refusal codes that are a normal OUTCOME for this one call, not an error.
+  // A 4xx whose JSON body names one of them in `code` (or `details.code`) is
+  // RETURNED as { ok: false, skipped: true, status, code, refusal } and the
+  // flow carries on. Every other non-2xx (5xx, transport, another 4xx, a 4xx
+  // with no such code) still throws. Set at conversion time on the cold-email
+  // send (see REFUSAL_SKIP_CODES in src/lib/dag-to-openflow.ts): the sender
+  // refuses a lead it contacted for the brand inside the re-contact window, or
+  // one who opted out, and that ends THAT lead, never the campaign's run.
+  skipOnRefusalCodes?: string[],
 ) {
   if (!service) {
     throw new Error(
@@ -141,6 +150,20 @@ export async function main(
 
   if (!response.ok) {
     const err = await response.text();
+    if (
+      skipOnRefusalCodes &&
+      skipOnRefusalCodes.length > 0 &&
+      response.status >= 400 &&
+      response.status < 500
+    ) {
+      const code = readRefusalCode(err);
+      if (code !== null && skipOnRefusalCodes.includes(code)) {
+        console.log(
+          `${method} ${service}${path} refused (${response.status} ${code}) — skipped, flow continues: ${err}`
+        );
+        return { ok: false, skipped: true, status: response.status, code, refusal: err };
+      }
+    }
     if (tolerateFailure) {
       console.error(
         `${method} ${service}${path} failed (${response.status}): ${err} — tolerated, flow continues`
@@ -176,4 +199,24 @@ export async function main(
   }
 
   return result;
+}
+
+// The machine-readable refusal code on an error body: top-level `code`, or
+// `details.code` when a hop nests the upstream body as an object. Never parsed
+// out of free text: a body that is not JSON, or names no code, is not a refusal.
+function readRefusalCode(text: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.code === "string") return obj.code;
+  const details = obj.details;
+  if (details && typeof details === "object" && typeof (details as Record<string, unknown>).code === "string") {
+    return (details as Record<string, unknown>).code as string;
+  }
+  return null;
 }

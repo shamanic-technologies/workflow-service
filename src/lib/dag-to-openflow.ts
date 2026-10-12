@@ -769,6 +769,53 @@ function isNoLeadEndRun(
   return !!body && typeof body === "object" && body.stopCampaign === true && !("noWorkAvailable" in body);
 }
 
+/**
+ * Sender refusals that end ONE lead, never the run (RECONTACT-LOOP-1011).
+ *
+ * instantly-service refuses a send with a 409 naming `recent_brand_contact`
+ * (the person was emailed for this brand inside the re-contact window) or
+ * `lead_opted_out` (they asked us to stop): "no email was sent and nothing was
+ * billed". email-gateway passes that 409 and its body through. A thrown send
+ * failed the whole run, campaign-service backed off 30 minutes, and the next
+ * run was served the same unsent people again: a paying campaign froze on 7
+ * people (Perky, 2026-10-11). The closed list is deliberate: every other
+ * refusal code and every 5xx still fails the run loud.
+ */
+export const REFUSAL_SKIP_CODES = ["recent_brand_contact", "lead_opted_out"] as const;
+
+function isCampaignEndRun(node: DAGNode | undefined): boolean {
+  return (
+    !!node &&
+    node.type === "http.call" &&
+    node.config?.service === "campaign" &&
+    typeof node.config?.path === "string" &&
+    /\/end-run$/.test(node.config.path)
+  );
+}
+
+/**
+ * True for an email-gateway `/orgs/send` whose every successor is a campaign
+ * `/end-run`: the cold-email shape, where a skipped send has nothing left to
+ * mis-record and the run ends as a normal, successful run. A send followed by
+ * anything else (a "mark this person handed" write, a record of what was sent)
+ * is left failing loud: skipping it would record a send that never happened.
+ */
+function isRefusalSkippableSend(
+  node: DAGNode,
+  dag: DAG,
+  scriptConfig: Record<string, unknown>,
+  inputMapping?: Record<string, string>,
+): boolean {
+  if (node.type !== "http.call") return false;
+  if (node.config?.service !== "email-gateway") return false;
+  if (node.config?.path !== "/orgs/send") return false;
+  if ("skipOnRefusalCodes" in scriptConfig) return false;
+  if (inputMapping && "skipOnRefusalCodes" in inputMapping) return false;
+  const outs = dag.edges.filter((e) => e.from === node.id);
+  if (outs.length === 0) return false;
+  return outs.every((e) => isCampaignEndRun(dag.nodes.find((n) => n.id === e.to)));
+}
+
 function nodeToModule(
   node: DAGNode,
   dag: DAG,
@@ -931,6 +978,12 @@ function nodeToModule(
     resolvedInputMapping,
     Object.keys(extraTransforms).length > 0 ? extraTransforms : undefined,
   );
+
+  // A send the sender refuses for this one lead ends the run as a normal run.
+  // See REFUSAL_SKIP_CODES.
+  if (isRefusalSkippableSend(node, dag, scriptConfig, resolvedInputMapping)) {
+    inputTransforms.skipOnRefusalCodes = { type: "static", value: [...REFUSAL_SKIP_CODES] };
+  }
 
   // Auto-inject identity + tracking context from flow_input unless explicitly mapped
   const autoInjects: Record<string, string> = {
