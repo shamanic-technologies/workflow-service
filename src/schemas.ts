@@ -876,6 +876,49 @@ export const PromptEditVariableErrorSchema = z
   })
   .openapi("PromptEditVariableError");
 
+// --- Figures (POST /orgs/figures/read) ---
+
+export const ReadFiguresRequestSchema = z
+  .object({
+    question: z.string().trim().min(1).max(8000).describe(
+      "What the message must say, in words (e.g. the campaign's instruction). The reader works out which " +
+      "figures that needs and reads them."
+    ),
+    recipientEmail: z.string().trim().email().optional().describe(
+      "The person the message goes to. Their OWN account (the organizations they belong to, per the identity " +
+      "provider) is the only account that can be read. Omitted, or a person who belongs to no organization: " +
+      "public figures only."
+    ),
+  })
+  .strict()
+  .openapi("ReadFiguresRequest");
+
+export const ReadFiguresResponseSchema = z
+  .object({
+    figures: z.array(z.object({
+      label: z.string().describe("What the figure is, in words."),
+      value: z.string().describe("The value as the read served it (unit and currency kept), or a ratio of two served values."),
+      source: z.string().describe("The read it came from: a customer-API path, or a web question."),
+    })).describe("Every figure found. Each cites a read that succeeded; nothing estimated."),
+    missing: z.string().nullable().describe(
+      "Null when everything the question needs was found; else one sentence naming what could not be read and why " +
+      "(e.g. it belongs to another organization than the recipient's)."
+    ),
+    recipient: z.object({
+      email: z.string().nullable(),
+      isMember: z.boolean().describe("True when the recipient belongs to at least one organization."),
+      organizations: z.array(z.object({ orgId: z.string(), name: z.string().nullable() })),
+    }),
+    reads: z.array(z.object({
+      kind: z.enum(["account", "public", "web"]),
+      orgId: z.string().nullable(),
+      target: z.string(),
+      status: z.number().int().nullable(),
+      refused: z.string().nullable().describe("Why the read was refused before any request left (never made). Null when made."),
+    })).describe("Every read planned, made or refused, in order."),
+  })
+  .openapi("ReadFiguresResponse");
+
 // --- Internal: Transfer Brand ---
 
 export const TransferBrandRequestSchema = z
@@ -1770,6 +1813,32 @@ registry.registerPath({
     },
   },
   responses: promptEditResponses,
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/orgs/figures/read",
+  summary: "Read the figures a message needs: public ones and the recipient's own account figures",
+  description:
+    "General capability for any workflow (an `http.call` node). Works out which figures `question` needs and " +
+    "reads them at run time: PUBLIC figures (our public catalogue routes, the live web) and the figures of the " +
+    "organization(s) the RECIPIENT belongs to, read through the customer API gateway as that recipient, with no " +
+    "staff access. NEVER another organization's: the org a read acts in comes from the recipient's membership at " +
+    "the identity provider (never from the question), and every id a read names must come from an earlier read of " +
+    "the recipient's own account. A figure that cannot be read is named in `missing`; the caller decides what to " +
+    "do (the AI Follow-up Email workflow sends nothing). The model spend is declared by chat-service on the " +
+    "calling run.",
+  tags: ["Figures"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    body: { required: true, content: { "application/json": { schema: ReadFiguresRequestSchema } } },
+  },
+  responses: {
+    200: { description: "What was found and read", content: { "application/json": { schema: ReadFiguresResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "A dependency failed (identity provider, gateway 5xx, chat-service)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
 });
 
 registry.registerPath({

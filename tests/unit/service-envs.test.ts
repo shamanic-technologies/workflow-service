@@ -26,6 +26,18 @@ describe("collectServiceEnvs", () => {
     Object.assign(process.env, originalEnv);
   });
 
+  it("never hands a flow the customer-API gateway credential the figure reader acts with", () => {
+    process.env.ADMIN_DISTRIBUTE_API_KEY = "admin-secret";
+    process.env.API_SERVICE_URL = "http://api-service:8080";
+    process.env.CHAT_SERVICE_API_KEY = "chat-key";
+
+    const result = collectServiceEnvs();
+
+    expect(result).not.toHaveProperty("ADMIN_DISTRIBUTE_API_KEY");
+    expect(result).not.toHaveProperty("API_SERVICE_URL");
+    expect(result.CHAT_SERVICE_API_KEY).toBe("chat-key");
+  });
+
   it("collects *_SERVICE_URL and *_SERVICE_API_KEY vars", () => {
     process.env.STRIPE_SERVICE_URL = "https://stripe.example.com";
     process.env.STRIPE_SERVICE_API_KEY = "sk_test_123";
