@@ -3,7 +3,9 @@
  * Ops script: one workflow per SOURCING pipe (`src/lib/sourcing-dag.ts`, owner 2026-10-11), each created ON its
  * pipe (`pipeId`), so `POST /workflows` registers it through features-service's register route, active at once.
  *
- * Idempotent: a channel that already has an active workflow is skipped (a duplicate DAG signature would 409).
+ * Idempotent: creates when a channel has no active workflow; upgrades an active one whose stored DAG is behind
+ * `buildSourcingDag()` in its OWN dynasty (`POST /workflows/upgrade`: new version, predecessor deprecated, the
+ * dynasty slug units store resolves forward to it); a current one is skipped.
  * Usage, from inside the workflow-service container:
  *   node seed-sourcing-workflows.mjs            # dry run
  *   node seed-sourcing-workflows.mjs --apply
@@ -38,15 +40,38 @@ async function call(method, path, body) {
   return { status: res.status, payload };
 }
 
+/** Key-sorted JSON: a stored jsonb DAG comes back with its keys reordered. */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+const current = buildSourcingDag();
+
 for (const slug of SOURCING_CHANNEL_SLUGS) {
   const existing = await call("GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
   if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
   if (rows.length > 0) {
-    console.log(`${slug}: already has ${rows.map((w) => w.workflowSlug ?? w.slug).join(", ")} (skipped)`);
+    for (const w of rows) {
+      if (canonical(w.dag) === canonical(current)) {
+        console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
+        continue;
+      }
+      if (!APPLY) {
+        console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (${w.workflowSlug}: stored DAG is behind the current one)`);
+        continue;
+      }
+      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description: SOURCING_DESCRIPTION });
+      if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
+      console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflow?.workflowSlug} v${up.payload.workflow?.version} (${up.status})`);
+    }
     continue;
   }
-  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: buildSourcingDag() };
+  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: current };
   if (!APPLY) {
     console.log(`${slug}: WOULD create on pipe ${body.pipeId}`);
     continue;
