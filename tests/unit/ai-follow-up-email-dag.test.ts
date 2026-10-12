@@ -124,6 +124,7 @@ describe("ai-follow-up-email DAG", () => {
   it("reads the figures the instruction needs for the PERSON written to, before the email is composed", () => {
     const read = byId.get("read-figures");
     expect(read?.config).toEqual({ service: "workflow", method: "POST", path: "/orgs/figures/read" });
+    expect(read?.retries).toBe(2);
     expect(read?.inputMapping).toEqual({
       "body.question": "$ref:start-run.output.instruction",
       "body.recipientEmail": "$ref:claim-followup.output.followup.email",
