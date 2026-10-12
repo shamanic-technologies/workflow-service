@@ -373,11 +373,14 @@ function buildConditionModule(
   const seenExprs = new Set<string>();
   const branches: Array<{ summary?: string; expr: string; modules: FlowModule[] }> = [];
 
-  // Collect all DAG node IDs that contain hyphens so we can replace them in expressions
-  const hyphenatedIds = dag.nodes
+  // Every DAG node id, longest first to avoid partial replacements. EVERY id is
+  // rewritten out of bracket notation, hyphenated or not: Windmill only resolves
+  // the results it finds written as `results.<id>`, so `results['claimed']` read
+  // undefined and the branchone silently took its default (WA-RESPONDER-1012:
+  // ai-meeting-booking runs never reached their end-run).
+  const nodeIds = dag.nodes
     .map((n) => n.id)
-    .filter((id) => id.includes("-"))
-    .sort((a, b) => b.length - a.length); // longest first to avoid partial replacements
+    .sort((a, b) => b.length - a.length);
 
   for (const edge of outEdges) {
     const rawExpr = edge.condition!;
@@ -388,7 +391,7 @@ function buildConditionModule(
     // versions so they match Windmill's module IDs.
     // Handles both bracket notation (results['fetch-lead']) and dot notation.
     let expr = rawExpr;
-    for (const id of hyphenatedIds) {
+    for (const id of nodeIds) {
       const underscored = id.replace(/-/g, "_");
       // Replace bracket-notation references: results['node-id'] or results["node-id"]
       expr = expr.replaceAll(`['${id}']`, `.${underscored}`);
