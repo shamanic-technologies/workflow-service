@@ -1724,6 +1724,19 @@ export async function main(draft, email) {
 `.trim();
 
 /**
+ * True when a stored DAG claims from ONE predecessor only. Several live campaigns
+ * can open conversations for one offer (cold email and cold WhatsApp); the claim
+ * passes every one as `alsoCampaignIds`. Without it one channel's people are
+ * never answered (67a0eb30, 2026-10-12).
+ */
+export function needsEveryPredecessorClaim(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, string> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const claim = nodes.find((n) => n?.id === "claim-followup");
+  if (!claim || !nodes.some((n) => n?.id === "predecessor-campaign")) return false;
+  return !("body.alsoCampaignIds" in (claim.inputMapping ?? {}));
+}
+
+/**
  * True when a stored DAG answers on email only: it reads no merged timeline, so
  * a person who answered on WhatsApp is never answered (WA-RESPONDER-1012).
  */

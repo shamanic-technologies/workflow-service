@@ -3,6 +3,7 @@ import {
   buildAiMeetingBookingDag,
   isConversationResponder,
   needsChannelAgnosticReply,
+  needsEveryPredecessorClaim,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 
@@ -30,5 +31,19 @@ describe("seed-ai-meeting-booking only upgrades CONVERSATION responders (WA-RESP
     // v0.48.62's DAG: no WhatsApp alert to the rep on a chat escalation.
     const noAlert = { ...conversation, nodes: conversation.nodes.filter((n) => n.id !== "alert-rep") };
     expect(needsChannelAgnosticReply(noAlert)).toBe(true);
+  });
+
+  it("calls a responder that claims from one predecessor only stale (several live campaigns open conversations)", () => {
+    expect(needsEveryPredecessorClaim(conversation)).toBe(false);
+    const onePredecessor = {
+      ...conversation,
+      nodes: conversation.nodes.map((n) => {
+        if (n.id !== "claim-followup") return n;
+        const { ["body.alsoCampaignIds"]: _dropped, ...rest } = n.inputMapping ?? {};
+        return { ...n, inputMapping: rest };
+      }),
+    };
+    expect(needsEveryPredecessorClaim(onePredecessor)).toBe(true);
+    expect(needsEveryPredecessorClaim(buildFormMeetingBookingDag())).toBe(false);
   });
 });
