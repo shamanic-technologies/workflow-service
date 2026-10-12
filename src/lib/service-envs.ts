@@ -12,6 +12,10 @@ const EXCLUDE = new Set([
   "WINDMILL_SERVER_URL",
   "WINDMILL_SERVER_API_KEY",
   "WORKFLOW_SERVICE_DATABASE_URL",
+  // The customer-API gateway credential the figure reader acts with (as ONE recipient, org pinned by this
+  // service). Never handed to a flow: with it any node could name any org.
+  "ADMIN_DISTRIBUTE_API_KEY",
+  "API_SERVICE_URL",
 ]);
 
 export function collectServiceEnvs(): Record<string, string> {

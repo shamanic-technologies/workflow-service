@@ -17,12 +17,16 @@
  *  - The person is claimed from THIS campaign's own queue (`claim-next`, atomic, at most one, exactly once). Unlike
  *    `ai-meeting-booking` there is no predecessor: this campaign names its person itself. Nobody due ends the run
  *    as idle (`noWorkAvailable`).
+ *  - Before writing, the figures the instruction needs are READ (`read-figures`, this service's own
+ *    `POST /orgs/figures/read`, a capability any workflow can call): public figures, and the figures of the
+ *    organization(s) the PERSON belongs to, read as that person and never another customer's. So "give Marie her
+ *    exact cost per booked meeting" needs no number in the instruction.
  *  - The email is written by the model through chat-service `/complete` (which owns the model, the key and the
- *    cost declaration), from the instruction plus what the CLIENT told us (`GATHER_FACTS_CODE`, shared with
- *    `ai-meeting-booking`: offer answers and confirmed user-fields, never the website). It may refuse:
- *    `cannot_write` when the instruction asks for something neither the instruction nor the facts hold (a figure
- *    nobody gave it). Then nothing is sent, the person's claim is released as `stopped` (so an edited instruction
- *    plus a new report can try again), and the run fails, named in the log.
+ *    cost declaration), from the instruction, the figures read, and what the CLIENT told us (`GATHER_FACTS_CODE`,
+ *    shared with `ai-meeting-booking`: offer answers and confirmed user-fields, never the website). It may refuse:
+ *    `cannot_write` when the instruction asks for something none of those hold (a figure that could not be read,
+ *    e.g. another organization's). Then nothing is sent, the person's claim is released as `stopped` (so an
+ *    edited instruction plus a new report can try again), and the run fails, named in the log.
  *  - The email goes out as a NEW thread through email-gateway's broadcast send (Instantly, our sending infra), so
  *    it lands in the Unibox like any outreach and the reply is threaded there. The send carries an idempotency key
  *    on the person's queue row.
@@ -89,7 +93,7 @@ export const EMAIL_RESPONSE_SCHEMA = {
  * interpolation happens in the flow; this is also what makes the prompt readable in the stored DAG.
  */
 export const COMPOSE_EMAIL_PROMPT_CODE = `
-export async function main(instruction, followup, leadDetail, offer, brand, facts, currentDate) {
+export async function main(instruction, followup, leadDetail, offer, brand, facts, figures, currentDate) {
   const text = typeof instruction === "string" ? instruction.trim() : "";
   if (!text) throw new Error("compose-email: the campaign carries no instruction");
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
@@ -110,12 +114,16 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
 
   const exact = facts?.exact ?? [];
   const neverGive = facts?.neverGive ?? [];
+  if (!figures || !Array.isArray(figures.figures)) throw new Error("compose-email: the figure read returned no figures list");
+  const read = figures.figures;
+  const notRead = typeof figures.missing === "string" && figures.missing.trim() ? figures.missing.trim() : null;
 
   const systemPrompt = [
     "You write ONE email from the team at " + brandName + " to one person who already knows us. It starts a new thread.",
     "You follow the INSTRUCTION below. It says why we write and what the email must say. Do what it asks, nothing more.",
-    "You state only what the INSTRUCTION or the FACTS say. Never invent a figure, a date, a price, a promise or a result. A number appears in the email only if it is written in the instruction or the facts.",
-    "If the instruction asks you to tell them something neither the instruction nor the facts contain (for example an exact figure nobody gave you), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
+    "You state only what the INSTRUCTION, the FIGURES or the FACTS say. Never invent a figure, a date, a price, a promise or a result. A number appears in the email only if it is written in the instruction, the figures or the facts, exactly as written there.",
+    "The FIGURES were read for this email from this person's own account or from public data. Use them as given.",
+    "If the instruction asks you to tell them something none of those contain (for example a figure that could not be read), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
     "Write like a person who knows them: short, plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
     "Do not sign off with a name or a signature block: ours is added below your text. End with your last sentence.",
@@ -133,7 +141,11 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
     "",
     "WHO WE ARE: " + brandName + ", offer \\"" + offerName + "\\".",
     "",
-    "FACTS our client told us (the only facts besides the instruction):",
+    "FIGURES read for this email (from their own account, or public):",
+    ...(read.length ? read.map((f, i) => "F" + (i + 1) + ". " + f.label + ": " + f.value + " (source: " + f.source + ")") : ["(none)"]),
+    ...(notRead ? ["NOT READABLE: " + notRead] : []),
+    "",
+    "FACTS our client told us:",
     ...(exact.length ? exact.map((f) => f.id + ". " + f.label + ": " + f.value) : ["(none)"]),
     ...(neverGive.length ? ["", "NEVER offer or promise any of these, whole or in part:", ...neverGive.map((x) => "- " + x)] : []),
   ].join("\\n");
@@ -283,6 +295,18 @@ export function buildAiFollowUpEmailDag(): DAG {
           brandFields: "$ref:brand-user-fields.output",
         },
       },
+      // The figures the instruction needs, read now: public ones and the PERSON's own account (never another
+      // customer's). A figure that cannot be read comes back in `missing`, and the writer refuses.
+      {
+        id: "read-figures",
+        type: "http.call",
+        config: { service: "workflow", method: "POST", path: "/orgs/figures/read" },
+        retries: 0,
+        inputMapping: {
+          "body.question": "$ref:start-run.output.instruction",
+          "body.recipientEmail": "$ref:claim-followup.output.followup.email",
+        },
+      },
       {
         id: "compose-email",
         type: "script",
@@ -295,6 +319,7 @@ export function buildAiFollowUpEmailDag(): DAG {
           offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
           facts: "$ref:gather-facts.output",
+          figures: "$ref:read-figures.output",
           currentDate: "$ref:flow_input.currentDate",
         },
       },
@@ -401,7 +426,8 @@ export function buildAiFollowUpEmailDag(): DAG {
       { from: "offer-answers", to: "offer-user-fields" },
       { from: "offer-user-fields", to: "brand-user-fields" },
       { from: "brand-user-fields", to: "gather-facts" },
-      { from: "gather-facts", to: "compose-email" },
+      { from: "gather-facts", to: "read-figures" },
+      { from: "read-figures", to: "compose-email" },
       { from: "compose-email", to: "draft-email" },
       { from: "draft-email", to: "finalize-email" },
       { from: "finalize-email", to: "check-writable" },

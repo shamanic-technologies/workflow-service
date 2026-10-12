@@ -11,6 +11,8 @@ export interface ChatServiceCompleteRequest {
   maxTokens?: number;
   provider: ChatProvider;
   model: ChatModel;
+  /** Opt-in native web search (Anthropic `web_search` tool / Google grounding). Text mode answers carry the source URLs. */
+  webSearch?: boolean;
 }
 
 export interface ChatServiceCompleteResponse {
