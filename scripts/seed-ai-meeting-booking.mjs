@@ -37,6 +37,7 @@ import {
   buildAiMeetingBookingDag,
   isConversationResponder,
   needsChannelAgnosticReply,
+  needsEveryPredecessorClaim,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
@@ -407,7 +408,8 @@ async function main() {
         needsConditionalHypothetical(w.dag) ||
         needsClientStatedFacts(w.dag) ||
         needsSeveralOffersTolerance(w.dag) ||
-        needsChannelAgnosticReply(w.dag))
+        needsChannelAgnosticReply(w.dag) ||
+        needsEveryPredecessorClaim(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
