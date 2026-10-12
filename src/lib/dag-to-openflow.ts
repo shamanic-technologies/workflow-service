@@ -6,6 +6,17 @@ import { buildInputTransforms, type InputTransform } from "./input-mapping.js";
 const NODE_TIMEOUT_SECONDS = 3600;
 
 /**
+ * Seconds between two retries of a node: 5 unless the node states `config.retryDelaySeconds`. A node that WAITS on
+ * a slow outcome (a post the box scheduler publishes within minutes) throws until it is there (`validateResponse`)
+ * and states a delay in proportion, so it asks once a minute rather than every five seconds. Never sent to the
+ * script.
+ */
+function retryDelaySecondsOf(node: DAGNode): number {
+  const d = node.config?.retryDelaySeconds;
+  return typeof d === "number" && Number.isFinite(d) && d > 0 ? Math.round(d) : 5;
+}
+
+/**
  * Reserved key under which the per-run `audienceId` is attached to each element
  * of a for-each iterator so it survives into the loop body.
  *
@@ -862,7 +873,7 @@ function nodeToModule(
       },
       timeout: { type: "static", value: NODE_TIMEOUT_SECONDS },
       retry: retries > 0
-        ? { constant: { attempts: retries, seconds: 5 } }
+        ? { constant: { attempts: retries, seconds: retryDelaySecondsOf(node) } }
         : { constant: { attempts: 0, seconds: 0 } },
     };
     if (stopAfterIf) {
@@ -888,7 +899,7 @@ function nodeToModule(
     ? node.config.stopAfterIf : undefined;
   const skipIf = typeof node.config?.skipIf === "string"
     ? node.config.skipIf : undefined;
-  const { retries: _r, stopAfterIf: _s, skipIf: _sk, ...scriptConfig } = node.config ?? {};
+  const { retries: _r, stopAfterIf: _s, skipIf: _sk, retryDelaySeconds: _rd, ...scriptConfig } = node.config ?? {};
 
   // For http.call nodes, rewrite "path.*" inputMapping keys to "params.*"
   // so collapseDotNotation doesn't replace the scalar path string with an object.
@@ -1055,7 +1066,7 @@ function nodeToModule(
     },
     timeout: { type: "static", value: NODE_TIMEOUT_SECONDS },
     retry: retries > 0
-      ? { constant: { attempts: retries, seconds: 5 } }
+      ? { constant: { attempts: retries, seconds: retryDelaySecondsOf(node) } }
       : { constant: { attempts: 0, seconds: 0 } },
   };
 
