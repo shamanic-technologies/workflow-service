@@ -51,7 +51,19 @@ export async function main(
   // refuses a lead it contacted for the brand inside the re-contact window, or
   // one who opted out, and that ends THAT lead, never the campaign's run.
   skipOnRefusalCodes?: string[],
+  // When true, the call is NOT made and { ok: false, skipped: true, notCalled: true }
+  // is returned. Mapped from an upstream result (`$ref`), it lets a flow carry one
+  // node per transport in a straight line and run only the one a run needs (the
+  // ai-meeting-booking reply goes out on the channel the person wrote on), instead
+  // of nesting a condition inside a branch, which dag-to-openflow cannot build.
+  // Only `true` skips: absent, false or anything else makes the call as before.
+  skip?: boolean,
 ) {
+  if (skip === true) {
+    console.log(`[http-call] ${method} ${service} ${path} not called: skip is true for this run`);
+    return { ok: false, skipped: true, notCalled: true };
+  }
+
   if (!service) {
     throw new Error(
       "http.call node is missing required config field \"service\". " +
