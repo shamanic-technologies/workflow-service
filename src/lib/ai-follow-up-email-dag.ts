@@ -301,7 +301,9 @@ export function buildAiFollowUpEmailDag(): DAG {
         id: "read-figures",
         type: "http.call",
         config: { service: "workflow", method: "POST", path: "/orgs/figures/read" },
-        retries: 0,
+        // A read: safe to retry. A sibling being redeployed (the box recreates containers every 5 min) is a
+        // transport failure that the next attempt does not meet.
+        retries: 2,
         inputMapping: {
           "body.question": "$ref:start-run.output.instruction",
           "body.recipientEmail": "$ref:claim-followup.output.followup.email",
