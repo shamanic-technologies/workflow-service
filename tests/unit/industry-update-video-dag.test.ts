@@ -220,10 +220,17 @@ describe("build-bulletin", () => {
     expect(out.linkedin.text.endsWith("Get started: distribute.you")).toBe(true);
     expect(out.x.reply).toContain("https://x/2");
     expect(out.tags).toEqual([
-      { name: "jasonlk", kind: "person", xHandle: "jasonlk" },
       { name: "Clay", kind: "company", xHandle: "clay", linkedinUrl: "https://www.linkedin.com/company/grow-with-clay" },
       { name: "Bill Stathopoulos", kind: "person" },
+      { name: "jasonlk", kind: "person", xHandle: "jasonlk" },
     ]);
+  });
+
+  it("tags an X poster under the full name the writer gave, never twice under their handle", async () => {
+    const named = copy();
+    named.json.entities.push({ name: "Jason Lemkin", kind: "person", candidateId: "c1", xHandle: "jasonlk", linkedinUrl: "" });
+    const out = await build(solid, named, pickInput, day, plan);
+    expect(out.tags.filter((t: any) => t.xHandle === "jasonlk")).toEqual([{ name: "Jason Lemkin", kind: "person", xHandle: "jasonlk" }]);
   });
 
   it("refuses an X text X would refuse, and a screen line too long to read", async () => {
