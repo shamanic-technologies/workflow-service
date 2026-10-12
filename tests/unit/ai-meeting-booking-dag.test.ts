@@ -1930,6 +1930,20 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     expect((await plan({ found: false, reason: "nothing_due" }, {})).skipPredecessor).toBe(false);
   });
 
+  it("claims across EVERY predecessor campaign-service names (cold email AND cold WhatsApp), the claim naming whose row it is", async () => {
+    expect(byId.get("plan-claim")?.inputMapping?.predecessorRead).toBe("$ref:predecessor-campaign.output");
+    expect(byId.get("claim-followup")?.inputMapping?.["body.alsoCampaignIds"]).toBe("$ref:plan-claim.output.alsoCampaignIds");
+    const plan = loadMain(PLAN_CLAIM_CODE);
+    const read = { predecessor: { campaignId: "wa-1" }, predecessors: [{ campaignId: "wa-1" }, { campaignId: "email-1" }] };
+    expect((await plan({ found: false, reason: "nothing_due" }, { people: [] }, read)).alsoCampaignIds).toEqual(["wa-1", "email-1"]);
+    expect((await plan({ found: false, reason: "nothing_due" }, { people: [] }, { predecessor: { campaignId: "x" } })).alsoCampaignIds).toEqual([]);
+    const claimed = loadMain(CLAIMED_CODE);
+    const row = { id: "row-1", campaignId: "email-1", email: "a@b.com" };
+    expect(await claimed({ found: false, reason: "nothing_due" }, { found: true, followup: row }, "resp-1", "wa-1")).toMatchObject({
+      found: true, heldCampaignId: "email-1", queue: "predecessor",
+    });
+  });
+
   it("answers whoever was claimed and names the campaign whose row it is", async () => {
     const claimed = loadMain(CLAIMED_CODE);
     const row = { id: "row-1", leadId: "l1", brandId: "b1", email: "Ada@Example.com", dueAt: "2026-10-12T16:00:00.000Z" };
