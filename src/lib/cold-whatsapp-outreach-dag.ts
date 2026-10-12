@@ -97,19 +97,139 @@ export async function main(claim, detail, served) {
 }
 `.trim();
 
+/** How many OTHER people's threads the owner's voice is learned from (besides this person's own thread). */
+export const VOICE_SAMPLE_PEOPLE = 4;
+
+/** A person counts as a voice sample when the owner wrote them at least this many messages on a personal channel. */
+export const VOICE_SAMPLE_MIN_OUTBOUND = 5;
+
+/**
+ * Where the history is read from (crm-service, the brand's people index), planned off the person and the brand's
+ * most recent personal-channel conversations: this person's merged thread, what our automated outreach already sent
+ * them on WhatsApp, and VOICE_SAMPLE_PEOPLE other people the owner really talked with (their threads teach the model
+ * how the owner writes). Fewer candidates than slots: the free slots repeat this person, which the reader drops, so
+ * every read node always has a valid query.
+ */
+export const HISTORY_PLAN_CODE = `
+export async function main(person, recent) {
+  const email = typeof person?.email === "string" ? person.email.trim().toLowerCase() : "";
+  const brandId = person?.brandId;
+  if (!email) throw new Error("history-plan: the person carries no email to find their thread by");
+  if (!brandId) throw new Error("history-plan: the person carries no brand");
+  if (!Array.isArray(recent?.people)) throw new Error("history-plan: the brand's people index answered no people list");
+  const self = { personId: null, timelineQuery: { brandId, personKey: "email:" + email }, sendsQuery: { brandId, email } };
+  const samples = [];
+  for (const p of recent.people) {
+    if (samples.length >= ${VOICE_SAMPLE_PEOPLE}) break;
+    if (!p?.personId || (p.emails ?? []).map((e) => String(e).toLowerCase()).includes(email)) continue;
+    const wrote = (p.presences ?? []).filter((x) => x?.source === "matrix").reduce((n, x) => n + (Number(x.outboundCount) || 0), 0);
+    if (wrote < ${VOICE_SAMPLE_MIN_OUTBOUND}) continue;
+    const key = p.emails?.[0] ? { email: p.emails[0] } : p.phones?.[0] ? { phone: p.phones[0] } : null;
+    samples.push({
+      personId: p.personId,
+      timelineQuery: { brandId, personId: p.personId },
+      // No email and no phone: nothing of ours was ever sent to them by address, so there is nothing to exclude.
+      sendsQuery: key ? { brandId, ...key } : self.sendsQuery,
+    });
+  }
+  while (samples.length < ${VOICE_SAMPLE_PEOPLE}) samples.push(self);
+  return { thread: self.timelineQuery, sends: self.sendsQuery, samples };
+}
+`.trim();
+
+/** Timeline sources that carry MESSAGES: one of them unreadable means the thread is unreadable, and nothing is written. */
+export const MESSAGE_SOURCES = ["gmail", "matrix", "instantly", "copilot"] as const;
+
+/**
+ * Reads this person's whole merged thread (every channel, oldest first) and the owner's own words, for the writer.
+ *
+ * - The THREAD: every message (and the last few events: signup, visit, payment) ever exchanged with this person. A
+ *   message our software sent (a cold email, a WhatsApp from this workflow, the AI Copilot) is labelled as such:
+ *   the person saw it, but the owner did not type it.
+ * - The OWNER'S VOICE: his own outbound messages on his personal channels, never one our software sent: this
+ *   person's thread first, then the other sampled people's. His chat messages (WhatsApp, LinkedIn) when he has any,
+ *   since a WhatsApp message is what is being written; his emails only when he never chatted.
+ *
+ * Fails the person loud when the thread cannot be read whole, or when there is not one message of the owner to learn
+ * his voice from: a blind generic message is exactly what this step exists to prevent.
+ */
+export const READ_HISTORY_CODE = `
+export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
+  if (!thread || !Array.isArray(thread.items)) throw new Error("read-history: the person's thread did not come back");
+  const failed = (thread.sources ?? []).filter((x) => ${JSON.stringify(MESSAGE_SOURCES)}.includes(x?.source) && x?.status === "failed");
+  if (failed.length) {
+    throw new Error("read-history: the person's thread is unreadable (" + failed.map((x) => x.source + ": " + (x.error ?? "failed")).join("; ") + "); nothing is written blind");
+  }
+  const clip = (t, n) => { const s = String(t ?? "").replace(/\\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "..." : s; };
+  const botOf = (r) => {
+    const rows = Array.isArray(r?.sends) ? r.sends : [];
+    return { ids: new Set(rows.map((x) => x?.eventId).filter(Boolean)), texts: new Set(rows.map((x) => clip(x?.text, 4000)).filter(Boolean)) };
+  };
+  const isBot = (i, bot) => i.source === "matrix" && (bot.ids.has(i.ref?.eventId) || bot.texts.has(clip(i.text, 4000)));
+  // What the OWNER typed himself: his personal channels, outbound, not sent by our software.
+  const ownerTyped = (i, bot) => i.kind === "message" && i.direction === "outbound" && (i.source === "gmail" || i.source === "matrix") && !isBot(i, bot) && clip(i.text, 10);
+  const day = (at) => (typeof at === "string" ? at.slice(0, 16).replace("T", " ") : "date unknown");
+
+  const bot = botOf(sends);
+  const items = thread.items;
+  const messages = items.filter((i) => i.kind === "message" && i.source !== "api" && clip(i.text, 10));
+  const label = (i) => {
+    if (i.direction === "inbound") return "THEM";
+    if (i.source === "instantly") return "US [automated cold email]";
+    if (i.source === "copilot") return "US [AI Copilot]";
+    if (isBot(i, bot)) return "US [automated WhatsApp]";
+    return "OWNER";
+  };
+  const lines = messages.slice(-60).map((i) =>
+    day(i.at) + " | " + i.channel + " | " + label(i) + ": " + (i.subject && i.channel === "email" ? "[" + clip(i.subject, 80) + "] " : "") + clip(i.text, 500));
+  const events = items.filter((i) => i.kind === "event").slice(-8).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (i.event?.step ?? "event") + " (" + i.source + ")");
+  const last = messages[messages.length - 1] ?? null;
+
+  // His chat voice (WhatsApp, LinkedIn: what this message is) first; his emails only when he never chatted.
+  const chat = [];
+  const mail = [];
+  const take = (i, who) => (i.source === "matrix" ? chat : mail).push(who + ", " + i.channel + ": " + clip(i.text, 300));
+  const own = messages.filter((i) => ownerTyped(i, bot));
+  for (const i of own.slice(-25)) take(i, "to this person");
+  const seen = new Set([thread.person?.personId]);
+  for (const [v, s] of [[v1, s1], [v2, s2], [v3, s3], [v4, s4]]) {
+    const pid = v?.person?.personId;
+    if (!Array.isArray(v?.items) || !pid || seen.has(pid)) continue;
+    seen.add(pid);
+    const b = botOf(s);
+    for (const i of v.items.filter((x) => ownerTyped(x, b)).slice(-12)) take(i, "to someone else");
+  }
+  const voice = chat.length ? chat : mail;
+  if (voice.length === 0) throw new Error("read-history: not one message the owner typed himself was found to learn his voice from; nothing is written blind");
+
+  return {
+    hasHistory: messages.length > 0,
+    ownerWroteThem: own.length > 0,
+    lastMessage: last ? { at: last.at, channel: last.channel, from: label(last), text: clip(last.text, 300) } : null,
+    threadLines: lines,
+    olderMessagesOmitted: Math.max(0, messages.length - lines.length),
+    eventLines: events,
+    voiceLines: voice,
+  };
+}
+`.trim();
+
 /**
  * Builds the system prompt and the message. chat-service `/complete` takes one flat `message`, so the
  * interpolation happens in the flow; this is also what makes the prompt readable in the stored DAG.
  * The strategy is explained to the model, never a script per case (owner rule).
  */
 export const COMPOSE_MESSAGE_PROMPT_CODE = `
-export async function main(person, instruction, offer, brand, rep, facts, currentDate) {
+export async function main(person, instruction, offer, brand, rep, facts, history, currentDate) {
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-message: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
   const brandName = typeof b.name === "string" && b.name.trim() ? b.name.trim() : null;
   if (!brandName) throw new Error("compose-message: the brand read carries no name");
   if (person?.kind !== "first" && person?.kind !== "followup") throw new Error("compose-message: no person to write to");
+  if (!Array.isArray(history?.threadLines) || !Array.isArray(history?.voiceLines) || history.voiceLines.length === 0) {
+    throw new Error("compose-message: no thread or no owner's voice was read; nothing is written blind");
+  }
 
   const present = (v) => typeof v === "string" ? v.trim() !== "" : v !== null && v !== undefined;
   const lead = person.lead ?? {};
@@ -125,29 +245,40 @@ export async function main(person, instruction, offer, brand, rep, facts, curren
 
   const senderName = present(rep?.salesRepFirstName) ? rep.salesRepFirstName.trim() : null;
   const senderRole = present(rep?.salesRepRole) ? rep.salesRepRole.trim() : (senderName ? "founder" : null);
+  const owner = senderName ?? "the founder";
   const exact = facts?.exact ?? [];
   const neverGive = facts?.neverGive ?? [];
   const text = typeof instruction === "string" ? instruction.trim() : "";
   const followup = person.kind === "followup";
+  const talked = history.hasHistory === true;
 
   const systemPrompt = [
-    "You write ONE WhatsApp message from " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ", to one person, from the brand's own WhatsApp number.",
-    "THE GAME: we want a real conversation with this person, not a sale. We want to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so we can compare with what we see elsewhere), what they think of us, what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift you can give. Pick ONE of these angles that fits what you know about them, and ask ONE easy question they can answer in a line. Never several questions.",
+    "You are " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ". You write ONE WhatsApp message to one person, from the brand's own WhatsApp number, exactly as " + owner + " would type it himself.",
+    "",
+    "WHAT " + owner.toUpperCase() + " WANTS FROM THIS CONVERSATION (a strategy, not a script): a real conversation, not a sale. He wants to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so he can compare with what he sees elsewhere), what they think of " + brandName + ", what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift. Pick the ONE angle that fits where the conversation is, and ask at most ONE easy question they can answer in a line (one question mark, never two questions joined by \\"and\\").",
+    "",
+    "WHERE THE CONVERSATION STANDS: THE THREAD below is every message ever exchanged with this person, on every channel (email, WhatsApp, LinkedIn), oldest first, plus a few events (signup, visits).",
+    talked
+      ? "They ALREADY talked with us. This is NOT a first contact: never introduce yourself, never say who you are or what " + brandName + " is, never thank them for signing up as if it were news. Pick the conversation back up from where it stopped, like a friend reopening a chat: answer anything they asked that was left unanswered, follow up on the last thing that was still alive, or bring a new angle that fits what they told us. Refer to what was actually said."
+      : "Nobody from " + brandName + " ever exchanged a message with them. This is a FIRST message: say who you are in a few words and why you write to them, personally.",
+    "Lines marked [automated ...] or [AI Copilot] were sent by our software, not typed by " + owner + ": the person saw them, so they are part of the history, but they are NEVER a model of how " + owner + " writes. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it.",
     followup
-      ? "This is our ONE follow-up: we wrote to them " + "${FOLLOW_UP_AFTER_DAYS}" + " days ago and they did not answer. Do not repeat the first message and do not guilt them. Give them a different, lighter reason to answer, or a short tip, and make it easy to say no. There will be no other message after this one."
-      : "This is our FIRST message to them on WhatsApp. Say who you are in a few words and why you are writing to them, personally.",
-    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked.",
-    "Write like a person texting someone they respect: short (2 to 4 short sentences, under 60 words), plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no links unless the instruction gives one, no emoji unless natural, no filler, no \\"I hope this finds you well\\".",
-    "State only what the INSTRUCTION or the FACTS say about us. Never invent a figure, a price, a promise, a result or a customer.",
-    "English only. Never use an em dash or an en dash. Use a comma or a period.",
-    senderName ? "End with your first name, " + senderName + ", on its own." : "Do not sign with a made-up name.",
-  ].join("\\n");
+      ? "Our last automated message to them, " + "${FOLLOW_UP_AFTER_DAYS}" + " days ago, got no answer. This is the ONE follow-up: do not repeat it and do not guilt them. Give them a different, lighter reason to answer, or a short tip, and make it easy to say no. There will be no other message after this one."
+      : "",
+    "",
+    "HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people). Copy his length, his tone, his greeting habits (or the lack of them), his punctuation and capitalisation, his emoji use (none if he uses none), whether he signs. If he writes several short lines, you may too (separate them with a line break). Write in the language he uses with THIS person in the thread; with no thread, write in English.",
+    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over his voice. It was written for the whole campaign without knowing this person: where it assumes something THE THREAD contradicts (that you never talked, that they just signed up, which language to use), THE THREAD wins.",
+    "Keep it as short as he would, never more than 60 words. No sales pitch, no links unless the instruction gives one, no filler, no \\"I hope this finds you well\\".",
+    "State only what the THREAD, the INSTRUCTION or the FACTS say. Never invent a figure, a price, a promise, a result or a customer.",
+    "Never use an em dash or an en dash. Use a comma or a period.",
+  ].filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\\n");
 
+  const last = history.lastMessage;
   const message = [
     "TODAY: " + String(currentDate ?? new Date().toISOString().slice(0, 10)),
     "",
     "INSTRUCTION:",
-    text || "(none: follow THE GAME)",
+    text || "(none: follow the strategy)",
     "",
     "WHO WE WRITE TO:",
     ...(personLines.length ? personLines : ["(nothing beyond their contact)"]),
@@ -157,6 +288,15 @@ export async function main(person, instruction, offer, brand, rep, facts, curren
     "FACTS our client told us:",
     ...(exact.length ? exact.map((f) => f.id + ". " + f.label + ": " + f.value) : ["(none)"]),
     ...(neverGive.length ? ["", "NEVER offer or promise any of these, whole or in part:", ...neverGive.map((x) => "- " + x)] : []),
+    "",
+    "THE THREAD with this person (oldest first; OWNER = " + owner + " typing himself):",
+    ...(history.olderMessagesOmitted > 0 ? ["(" + history.olderMessagesOmitted + " older messages not shown)"] : []),
+    ...(history.threadLines.length ? history.threadLines : ["(no message ever exchanged)"]),
+    ...(history.eventLines?.length ? ["", "RECENT EVENTS:", ...history.eventLines] : []),
+    ...(last ? ["", "THE CONVERSATION STOPPED HERE: " + last.from + " wrote last, " + String(last.at ?? "date unknown").slice(0, 10) + ": " + last.text] : []),
+    "",
+    "HIS OWN MESSAGES (how " + owner + " writes):",
+    ...history.voiceLines.map((l) => "- " + l),
   ].join("\\n");
 
   return { systemPrompt, message };
@@ -255,6 +395,7 @@ export const WHATSAPP_REFUSAL_CODES = [
 ] as const;
 
 const PERSON = "results['pick-person']";
+const VOICE_SLOTS = Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => i + 1);
 const endRun = (id: string, body: Record<string, unknown>) => ({
   id,
   type: "http.call" as const,
@@ -359,6 +500,65 @@ export function buildColdWhatsappOutreachDag(): DAG {
           brandFields: "$ref:brand-user-fields.output",
         },
       },
+      // The history: the brand's recent personal-channel conversations (voice samples), then this person's whole
+      // merged thread and what our software already sent them, read BEFORE anything is written.
+      {
+        id: "voice-people",
+        type: "http.call",
+        config: { service: "crm", method: "GET", path: "/orgs/people", query: { source: "matrix", limit: "30" } },
+        inputMapping: { "query.brandId": "$ref:pick-person.output.brandId" },
+      },
+      {
+        id: "history-plan",
+        type: "script",
+        config: { code: HISTORY_PLAN_CODE },
+        retries: 0,
+        inputMapping: { person: "$ref:pick-person.output", recent: "$ref:voice-people.output" },
+      },
+      // 404 person_not_found (nobody under that key in the people index) fails the person loud.
+      {
+        id: "person-thread",
+        type: "http.call",
+        config: { service: "crm", method: "GET", path: "/orgs/people/timeline" },
+        inputMapping: { query: "$ref:history-plan.output.thread" },
+      },
+      {
+        id: "person-sends",
+        type: "http.call",
+        config: { service: "crm", method: "GET", path: "/orgs/whatsapp/messages" },
+        inputMapping: { query: "$ref:history-plan.output.sends" },
+      },
+      ...VOICE_SLOTS.flatMap((n) => [
+        {
+          id: `voice-thread-${n}`,
+          type: "http.call" as const,
+          // One sample the reader cannot read is dropped; the person's own thread is never tolerated.
+          config: { service: "crm", method: "GET", path: "/orgs/people/timeline", tolerateFailure: true },
+          inputMapping: { query: `$ref:history-plan.output.samples.${n - 1}.timelineQuery` },
+        },
+        {
+          id: `voice-sends-${n}`,
+          type: "http.call" as const,
+          config: { service: "crm", method: "GET", path: "/orgs/whatsapp/messages", tolerateFailure: true },
+          inputMapping: { query: `$ref:history-plan.output.samples.${n - 1}.sendsQuery` },
+        },
+      ]),
+      {
+        id: "read-history",
+        type: "script",
+        config: { code: READ_HISTORY_CODE },
+        retries: 0,
+        inputMapping: {
+          thread: "$ref:person-thread.output",
+          sends: "$ref:person-sends.output",
+          ...Object.fromEntries(
+            VOICE_SLOTS.flatMap((n) => [
+              [`v${n}`, `$ref:voice-thread-${n}.output`],
+              [`s${n}`, `$ref:voice-sends-${n}.output`],
+            ]),
+          ),
+        },
+      },
       {
         id: "compose-message",
         type: "script",
@@ -371,6 +571,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
           brand: "$ref:brand-profile.output",
           rep: "$ref:sales-rep.output",
           facts: "$ref:gather-facts.output",
+          history: "$ref:read-history.output",
           currentDate: "$ref:flow_input.currentDate",
         },
       },
@@ -491,7 +692,16 @@ export function buildColdWhatsappOutreachDag(): DAG {
       { from: "offer-answers", to: "offer-user-fields" },
       { from: "offer-user-fields", to: "brand-user-fields" },
       { from: "brand-user-fields", to: "gather-facts" },
-      { from: "gather-facts", to: "compose-message" },
+      { from: "gather-facts", to: "voice-people" },
+      { from: "voice-people", to: "history-plan" },
+      { from: "history-plan", to: "person-thread" },
+      { from: "person-thread", to: "person-sends" },
+      { from: "person-sends", to: "voice-thread-1" },
+      ...VOICE_SLOTS.flatMap((n) => [
+        { from: `voice-thread-${n}`, to: `voice-sends-${n}` },
+        { from: `voice-sends-${n}`, to: n < VOICE_SAMPLE_PEOPLE ? `voice-thread-${n + 1}` : "read-history" },
+      ]),
+      { from: "read-history", to: "compose-message" },
       { from: "compose-message", to: "draft-message" },
       { from: "draft-message", to: "finalize-message" },
       { from: "finalize-message", to: "send-whatsapp" },
