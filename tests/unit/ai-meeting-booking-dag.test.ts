@@ -28,6 +28,12 @@ import {
   CLOSED_WITH_THANKS_REASON,
   STANCES,
   CHAT_STEP_MAX_TOKENS,
+  PLAN_CLAIM_CODE,
+  CLAIMED_CODE,
+  THREAD_CODE,
+  FINALIZE_REPLY_CODE,
+  CRM_WHATSAPP_SEND,
+  PERSON_TIMELINE_READ,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -110,9 +116,12 @@ describe("ai-meeting-booking DAG", () => {
       method: "POST",
       path: "/orgs/campaigns/{campaignId}/followups/claim-next",
     });
-    // Exactly one claim per run, and nothing here orders, filters or stops.
+    // Two claims, own queue then predecessor's, each atomic at lead-service;
+    // nothing here orders, filters or stops. The second is not called once the
+    // first found someone, so a run still answers at most one person.
     const claims = dag.nodes.filter((n) => String(n.config?.path ?? "").includes("claim-next"));
-    expect(claims).toHaveLength(1);
+    expect(claims.map((c) => c.id)).toEqual(["claim-own", "claim-followup"]);
+    expect(byId.get("claim-followup")?.inputMapping?.skip).toBe("$ref:plan-claim.output.skipPredecessor");
   });
 
   it("answers exactly one prospect — no loop anywhere in the flow", () => {
@@ -166,7 +175,7 @@ describe("ai-meeting-booking DAG", () => {
     });
     // The row the queue handed out, not the person: the follow-up debt is per
     // (lead, campaign) membership row.
-    expect(record?.inputMapping?.["params.id"]).toBe("$ref:claim-followup.output.followup.id");
+    expect(record?.inputMapping?.["params.id"]).toBe("$ref:claimed.output.followup.id");
     expect(record?.inputMapping?.["body.nextDueAt"]).toBe("$ref:resolve-next-due.output.nextDueAt");
   });
 
@@ -196,16 +205,17 @@ describe("ai-meeting-booking DAG", () => {
       method: "GET",
       path: "/orgs/conversations",
     });
+    expect(byId.get("conversation")?.config?.tolerateFailure).toBe(true);
     expect(byId.get("conversation")?.inputMapping).toEqual({
       "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
-      "query.email": "$ref:claim-followup.output.followup.email",
+      "query.email": "$ref:claimed.output.followup.email",
     });
     expect(byId.get("prior-generation")?.config).toMatchObject({
       service: "content-generation",
       path: "/generations/by-lead/{leadId}",
     });
     const compose = byId.get("compose-prompt")?.inputMapping ?? {};
-    expect(compose.conversation).toBe("$ref:conversation.output");
+    expect(compose.conversation).toBe("$ref:thread.output");
     expect(compose.priorGeneration).toBe("$ref:prior-generation.output");
   });
 
@@ -230,8 +240,9 @@ describe("ai-meeting-booking DAG", () => {
     expect(byId.get("claim-followup")?.inputMapping?.["params.campaignId"]).toBe(
       PREDECESSOR_CAMPAIGN_REF,
     );
+    // lead-service hops name the campaign whose row was claimed (own or predecessor).
     expect(byId.get("lead-detail")?.inputMapping?.["query.campaignId"]).toBe(
-      PREDECESSOR_CAMPAIGN_REF,
+      "$ref:claimed.output.heldCampaignId",
     );
     expect(byId.get("conversation")?.inputMapping?.["query.campaign_id"]).toBe(
       PREDECESSOR_CAMPAIGN_REF,
@@ -297,14 +308,14 @@ describe("ai-meeting-booking DAG", () => {
     // On the no-predecessor path `results.claim_followup` does not exist, so both
     // arms of check-claim must read false rather than raise.
     for (const e of dag.edges.filter((x) => x.from === "check-claim")) {
-      expect(e.condition).toContain("results['claim-followup']?.");
+      expect(e.condition).toContain("results['claimed']?.");
     }
     // check-claim converges rather than nesting inside the predecessor branch —
     // a condition node inside a branch body is built as an ordinary module and
     // silently does nothing.
     const incoming = dag.edges.filter((e) => e.to === "check-claim").map((e) => e.from);
     expect(incoming).toContain("predecessor-campaign");
-    expect(incoming).toContain("claim-followup");
+    expect(incoming).toContain("claimed");
   });
 
   it("goes through chat-service for the LLM call, which declares the spend", () => {
@@ -864,22 +875,29 @@ describe("declaring the caller, and standing down when a human has taken over", 
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const main = loadMain(CLASSIFY_SEND_CODE);
 
-    expect(await main({ success: true, status: "sent" })).toEqual({ outcome: "sent", status: "sent" });
+    const notCalled = { ok: false, skipped: true, notCalled: true };
+    expect(await main({ success: true, status: "sent" }, notCalled, "email")).toEqual({ outcome: "sent", status: "sent" });
     // Out of the prospect's sending window: queued, still sent as far as this
     // run is concerned, so the follow-up is recorded.
-    expect(await main({ success: true, status: "scheduled" })).toEqual({ outcome: "sent", status: "scheduled" });
+    expect(await main({ success: true, status: "scheduled" }, notCalled, "email")).toEqual({ outcome: "sent", status: "scheduled" });
 
     expect(
-      await main({ ok: false, status: 409, error: JSON.stringify({ error: "x", code: "human_took_over" }) }),
+      await main({ ok: false, status: 409, error: JSON.stringify({ error: "x", code: "human_took_over" }) }, notCalled, "email"),
     ).toEqual({ outcome: "human_took_over", status: 409 });
 
     // A 409 is NOT enough on its own — three other codes share it and all mean
     // the reply could not be sent.
     for (const code of ["no_reply_to_thread", "sending_account_unresolved", "mailbox_credential_unavailable"]) {
-      await expect(main({ ok: false, status: 409, error: JSON.stringify({ code }) })).rejects.toThrow(code);
+      await expect(main({ ok: false, status: 409, error: JSON.stringify({ code }) }, notCalled, "email")).rejects.toThrow(code);
     }
-    await expect(main({ ok: false, status: 502, error: "boom" })).rejects.toThrow("502");
-    await expect(main({ ok: false, status: 0, error: "timeout" })).rejects.toThrow("timeout");
+    await expect(main({ ok: false, status: 502, error: "boom" }, notCalled, "email")).rejects.toThrow("502");
+    await expect(main({ ok: false, status: 0, error: "timeout" }, notCalled, "email")).rejects.toThrow("timeout");
+
+    // A WhatsApp reply: crm-service's answer is the proof it went out.
+    expect(await main(notCalled, { status: "sent", duplicate: false, sendId: "s1" }, "whatsapp")).toEqual({
+      outcome: "sent", status: 200, channel: "whatsapp", duplicate: false,
+    });
+    await expect(main(notCalled, notCalled, "whatsapp")).rejects.toThrow("no send on record");
     err.mockRestore();
   });
 
@@ -939,7 +957,7 @@ describe("handing an unanswerable question to a human", () => {
     expect(scripts.some((c) => /answerable\s*=\s*\/|test\(.*price|includes\("price/i.test(c))).toBe(false);
 
     // It converges rather than nesting inside check-claim's branch body.
-    expect(dag.edges.filter((e) => e.to === "check-answerable").map((e) => e.from)).toContain("claim-followup");
+    expect(dag.edges.filter((e) => e.to === "check-answerable").map((e) => e.from)).toContain("claimed");
   });
 
   it("sends the prospect nothing and escalates with the question in their own words", () => {
@@ -952,8 +970,9 @@ describe("handing an unanswerable question to a human", () => {
     });
     expect(esc?.inputMapping).toEqual({
       "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
-      "body.email": "$ref:claim-followup.output.followup.email",
+      "body.email": "$ref:claimed.output.followup.email",
       "body.question": "$ref:ground-draft.output.json.question",
+      skip: "$ref:thread.output.skipEmail",
     });
 
     const reached = descendants(dag, "escalate-unanswerable");
@@ -965,14 +984,28 @@ describe("handing an unanswerable question to a human", () => {
     expect(byId.get("end-run-escalated")?.config?.body).toEqual({ success: true, stopCampaign: false });
   });
 
-  it("does not stop the ladder itself — the escalate route already did", () => {
-    // The escalation path touches no lead-service write: instantly-service's
-    // escalate route empties the schedule itself.
+  it("does not stop an EMAIL ladder itself — the escalate route already did; a chat thread is handed in lead-service", () => {
+    // On an email thread instantly-service's escalate route empties the
+    // schedule itself, so the only lead-service write on that path is the
+    // chat hand-over, which is not called on an email thread.
     const reached = descendants(dag, "escalate-unanswerable");
     const leadWrites = dag.nodes.filter(
       (n) => reached.has(n.id) && n.config?.service === "lead",
     );
-    expect(leadWrites).toEqual([]);
+    expect(leadWrites.map((n) => n.id)).toEqual(["hand-over"]);
+    const hand = byId.get("hand-over");
+    expect(hand?.config).toMatchObject({
+      service: "lead",
+      method: "POST",
+      path: "/orgs/leads/{id}/followups",
+      body: { kind: "handed", reason: "escalated" },
+    });
+    expect(hand?.inputMapping).toEqual({
+      "params.id": "$ref:claimed.output.followup.id",
+      skip: "$ref:thread.output.skipHandOver",
+    });
+    // Nothing is sent to the person on either channel.
+    expect(reached.has("send-whatsapp-reply")).toBe(false);
   });
 
   it("tells the model to hand over rather than deflect back to the call", async () => {
@@ -1027,7 +1060,7 @@ describe("a last message that needs no reply at all", () => {
       path: "/orgs/leads/{id}/followups",
       body: { kind: "stopped", reason: NO_REPLY_OWED_REASON },
     });
-    expect(stop?.inputMapping).toEqual({ "params.id": "$ref:claim-followup.output.followup.id" });
+    expect(stop?.inputMapping).toEqual({ "params.id": "$ref:claimed.output.followup.id" });
     expect(byId.get("end-run-no-reply-owed")?.config?.body).toEqual({ success: true, stopCampaign: false });
   });
 
@@ -1046,7 +1079,7 @@ describe("a last message that needs no reply at all", () => {
       "end_run_no_reply_owed",
     ]);
     const escalate = branches.find((b) => b.expr.includes("'escalate'"));
-    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "end_run_escalated"]);
+    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "hand_over", "end_run_escalated"]);
   });
 
   it("says why in the log", async () => {
@@ -1878,5 +1911,172 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
       });
     expect(strip(opus)).toBe(strip(gemini));
     expect(JSON.stringify(opus)).not.toBe(JSON.stringify(gemini));
+  });
+});
+
+
+describe("one responder for every channel: a WhatsApp answer gets its reply on WhatsApp (WA-RESPONDER-1012)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const notCalled = { ok: false, skipped: true, notCalled: true };
+
+  it("claims its OWN queue first, then the predecessor's only when nobody came and it names nobody", async () => {
+    expect(byId.get("claim-own")?.inputMapping).toEqual({ "params.campaignId": "$ref:flow_input.campaignId" });
+    const plan = loadMain(PLAN_CLAIM_CODE);
+    expect((await plan({ found: true, followup: {} }, { people: [] })).skipPredecessor).toBe(true);
+    expect((await plan({ found: false, reason: "nothing_due" }, { people: [{ email: "a@b.com" }] })).skipPredecessor).toBe(true);
+    expect((await plan({ found: false, reason: "nothing_due" }, { people: [] })).skipPredecessor).toBe(false);
+    expect((await plan({ found: false, reason: "nothing_due" }, {})).skipPredecessor).toBe(false);
+  });
+
+  it("answers whoever was claimed and names the campaign whose row it is", async () => {
+    const claimed = loadMain(CLAIMED_CODE);
+    const row = { id: "row-1", leadId: "l1", brandId: "b1", email: "Ada@Example.com", dueAt: "2026-10-12T16:00:00.000Z" };
+    expect(await claimed({ found: true, followup: row }, notCalled, "resp-1", "pred-1")).toMatchObject({
+      found: true, heldCampaignId: "resp-1", queue: "own", personKey: "email:ada@example.com",
+    });
+    expect(await claimed({ found: false, reason: "nothing_due" }, { found: true, followup: row }, "resp-1", "pred-1")).toMatchObject({
+      found: true, heldCampaignId: "pred-1", queue: "predecessor",
+    });
+    expect(await claimed({ found: false, reason: "nothing_due" }, notCalled, "resp-1", "pred-1")).toMatchObject({
+      found: false, reason: "nothing_due", followup: null,
+    });
+    await expect(claimed({ found: true, followup: { id: "row-1" } }, notCalled, "r", "p")).rejects.toThrow("without a row id or an email");
+  });
+
+  it("reads the person's chats from crm-service beside the email thread", () => {
+    expect(byId.get("person-timeline")?.config).toMatchObject({ ...PERSON_TIMELINE_READ, tolerateFailure: true });
+    expect(byId.get("person-timeline")?.inputMapping).toEqual({
+      "query.brandId": "$ref:claimed.output.followup.brandId",
+      "query.personKey": "$ref:claimed.output.personKey",
+    });
+    expect(byId.get("thread")?.inputMapping).toEqual({
+      conversation: "$ref:conversation.output",
+      timeline: "$ref:person-timeline.output",
+    });
+    expect(byId.get("compose-questions-prompt")?.inputMapping?.conversation).toBe("$ref:thread.output");
+  });
+
+  const log = () => vi.spyOn(console, "log").mockImplementation(() => {});
+  const wa = (direction: string, text: string, at: string) => ({
+    kind: "message", source: "matrix", channel: "whatsapp", direction, text, at,
+  });
+  const timeline = (items: unknown[], matrix = "ok") => ({
+    items, sources: [{ source: "matrix", status: matrix, error: matrix === "failed" ? "bridge down" : null }],
+  });
+
+  it("a person who only talked on WhatsApp is answered on WhatsApp, with the whole chat in order", async () => {
+    const l = log();
+    const out = await loadMain(THREAD_CODE)(
+      { ok: false, status: 404, error: "{\"code\":\"campaign_not_found\"}" },
+      timeline([
+        wa("inbound", "how much is it?", "2026-10-12T16:05:00.000Z"),
+        wa("outbound", "Hi Ada, quick question about your growth", "2026-10-12T15:00:00.000Z"),
+        { kind: "event", source: "gohighlevel", channel: "crm", direction: null, text: null, at: "2026-10-01T00:00:00.000Z" },
+        { kind: "message", source: "copilot", channel: "chat", direction: "inbound", text: "not this", at: "2026-10-12T16:06:00.000Z" },
+      ]),
+    );
+    l.mockRestore();
+    expect(out.replyChannel).toBe("whatsapp");
+    expect(out).toMatchObject({ skipEmail: true, skipWhatsapp: false, skipHandOver: false });
+    expect((out.conversation as { messages: Array<{ text: string; channel: string }> }).messages.map((m) => m.text)).toEqual([
+      "Hi Ada, quick question about your growth",
+      "how much is it?",
+    ]);
+  });
+
+  it("an email prospect is answered by email exactly as before; a later WhatsApp message moves the reply there", async () => {
+    const l = log();
+    const email = { conversation: { messages: [
+      { direction: "outbound", text: "cold email", at: "2026-10-01T10:00:00.000Z" },
+      { direction: "inbound", text: "tell me more", at: "2026-10-02T10:00:00.000Z" },
+    ] } };
+    const onlyEmail = await loadMain(THREAD_CODE)(email, { ok: false, status: 404, error: "person_not_found" });
+    expect(onlyEmail).toMatchObject({ replyChannel: "email", skipEmail: false, skipWhatsapp: true, skipHandOver: true });
+    const both = await loadMain(THREAD_CODE)(email, timeline([wa("inbound", "also, price?", "2026-10-03T10:00:00.000Z")]));
+    expect(both.replyChannel).toBe("whatsapp");
+    expect((both.conversation as { messages: unknown[] }).messages).toHaveLength(3);
+    // A ladder follow-up on a thread where they never wrote stays on email.
+    const silent = await loadMain(THREAD_CODE)({ conversation: { messages: [{ direction: "outbound", text: "x" }] } }, null);
+    expect(silent.replyChannel).toBe("email");
+    l.mockRestore();
+  });
+
+  it("fails loud instead of answering off half a conversation, or on a channel nothing sends on", async () => {
+    const main = loadMain(THREAD_CODE);
+    await expect(main({ ok: false, status: 502, error: "down" }, timeline([]))).rejects.toThrow("could not read the email thread (502)");
+    await expect(main({ ok: false, status: 404 }, { ok: false, status: 500, error: "x" })).rejects.toThrow("person's timeline (500)");
+    await expect(main({ ok: false, status: 404 }, timeline([wa("inbound", "hi", "2026-10-12T16:05:00.000Z")], "failed"))).rejects.toThrow("could not read the person's chats");
+    await expect(main({ ok: false, status: 404 }, timeline([]))).rejects.toThrow("no conversation with this person");
+    const tg = { kind: "message", source: "matrix", channel: "telegram", direction: "inbound", text: "hi", at: "2026-10-12T16:05:00.000Z" };
+    await expect(main({ ok: false, status: 404 }, timeline([tg]))).rejects.toThrow("telegram");
+  });
+
+  it("sends on exactly one transport per run: the email reply and the WhatsApp reply are each skipped unless theirs", () => {
+    expect(byId.get("send-reply")?.inputMapping?.skip).toBe("$ref:thread.output.skipEmail");
+    const send = byId.get("send-whatsapp-reply");
+    expect(send?.config).toEqual({ ...CRM_WHATSAPP_SEND });
+    expect(send?.inputMapping).toEqual({
+      "body.email": "$ref:claimed.output.followup.email",
+      "body.brandId": "$ref:claimed.output.followup.brandId",
+      "body.text": "$ref:finalize-reply.output.whatsappText",
+      "body.idempotencyKey": "$ref:finalize-reply.output.whatsappIdempotencyKey",
+      skip: "$ref:thread.output.skipWhatsapp",
+    });
+    // Both sends sit before the outcome is read, and the record comes after.
+    expect(descendants(dag, "send-reply").has("send-whatsapp-reply")).toBe(true);
+    expect(descendants(dag, "send-whatsapp-reply").has("classify-send")).toBe(true);
+    expect(descendants(dag, "send-whatsapp-reply").has("record-followup")).toBe(true);
+    expect(descendants(dag, "escalate-unanswerable").has("send-whatsapp-reply")).toBe(false);
+  });
+
+  it("the skip reaches Windmill as a live reference to the thread's verdict", () => {
+    const flow = dagToOpenFlow(dag, `${FEATURE_SLUG}-test`);
+    const all: Array<{ id: string; value: Record<string, unknown> }> = [];
+    const walk = (mods: Array<{ id: string; value: Record<string, unknown> }>) => {
+      for (const m of mods) {
+        all.push(m);
+        for (const b of ((m.value.branches as Array<{ modules: typeof mods }>) ?? [])) walk(b.modules);
+        if (m.value.default) walk(m.value.default as typeof mods);
+      }
+    };
+    walk(flow.value.modules as unknown as Array<{ id: string; value: Record<string, unknown> }>);
+    const transforms = (id: string) => (all.find((m) => m.id === id)?.value.input_transforms ?? {}) as Record<string, { type: string; expr?: string }>;
+    expect(transforms("send_whatsapp_reply").skip).toEqual({ type: "javascript", expr: expect.stringContaining("thread") });
+    expect(transforms("send_reply").skip?.expr).toContain("skipEmail");
+    expect(transforms("hand_over").skip?.expr).toContain("skipHandOver");
+    expect(transforms("claim_followup").skip?.expr).toContain("skipPredecessor");
+  });
+
+  it("turns the HTML answer into a plain WhatsApp text, keyed on the claimed row", async () => {
+    const out = await loadMain(FINALIZE_REPLY_CODE)(
+      { json: { replyHtml: "<p>Hi Ada,</p><p>It is $99 a month.<br>Book here: <a href=\"https://cal.com/x\">https://cal.com/x</a></p><ul><li>one</li><li>two</li></ul>" } },
+      { id: "row-1", dueAt: "2026-10-12T16:00:00.000Z" },
+    );
+    expect(out.whatsappText).toBe("Hi Ada,\n\nIt is $99 a month.\nBook here: https://cal.com/x\n\n- one\n\n- two");
+    expect(out.whatsappIdempotencyKey).toBe("ai-meeting-booking:row-1:2026-10-12T16:00:00.000Z:whatsapp");
+  });
+
+  it("tells the model to write a chat message when the reply goes out on WhatsApp, and keeps the email rules otherwise", async () => {
+    const args = (replyChannel: string) => [
+      { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
+      { leadDetail: { lead: { firstName: "Ada", timezone: "UTC" } } },
+      { replyChannel, conversation: { messages: [
+        { direction: "outbound", text: "Hi Ada", channel: "whatsapp", at: "2026-10-12T15:00:00.000Z" },
+        { direction: "inbound", text: "How does it work?", channel: replyChannel, at: "2026-10-12T16:00:00.000Z" },
+      ] } },
+      null,
+      { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
+      { offerId: "offer-1", name: "SSO audit", bookingUrl: null },
+      { brand: { name: "Acme" } },
+      "2026-10-12",
+    ];
+    const chat = (await composeReply(...args("whatsapp"))).message as string;
+    expect(chat).toContain("Their last message came on whatsapp");
+    expect(chat).toContain("US on whatsapp");
+    expect(chat).not.toContain("the mailbox that answers appends its own");
+    const mail = (await composeReply(...args("email"))).message as string;
+    expect(mail).toContain("the mailbox that answers appends its own");
+    expect(mail).not.toContain("Their last message came on");
   });
 });

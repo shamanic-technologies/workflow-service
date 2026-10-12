@@ -155,6 +155,170 @@ export const PREDECESSOR_READ = {
 } as const;
 
 /**
+ * crm-service's read of ONE person's whole exchange, every channel merged (Gmail,
+ * cold email, the owner's linked WhatsApp...). The responder takes the CHAT
+ * channels from it (source `matrix`); the email thread keeps coming from
+ * instantly-service, which holds the campaign's thread and its sends.
+ */
+export const PERSON_TIMELINE_READ = {
+  service: "crm",
+  method: "GET",
+  path: "/orgs/people/timeline",
+} as const;
+
+/** crm-service's WhatsApp send (the brand's linked account). Wired against its served contract. */
+export const CRM_WHATSAPP_SEND = { service: "crm", method: "POST", path: "/orgs/whatsapp/messages" } as const;
+
+/**
+ * The channels a reply can go out on, each with the one transport that sends
+ * it. The reply goes out on the channel of the person's LAST message; a
+ * channel missing here fails the run loud rather than answering elsewhere.
+ */
+export const REPLY_CHANNELS = ["email", "whatsapp"] as const;
+
+/** The reason stored when a conversation on a chat channel is handed to a person. */
+export const ESCALATED_REASON = "escalated";
+
+/**
+ * Whether this run may also claim from the PREDECESSOR's queue. It may not when
+ * its own queue already gave it someone (one person per run), nor when the
+ * campaign names its own people (`/start-run` `people`): it acts for them only,
+ * and they are filed on THIS campaign.
+ */
+export const PLAN_CLAIM_CODE = `
+export async function main(claimOwn, startRun) {
+  const people = Array.isArray(startRun?.people) ? startRun.people : [];
+  const ownFound = claimOwn?.found === true;
+  return { skipPredecessor: ownFound || people.length > 0, ownFound, namesPeople: people.length > 0 };
+}
+`.trim();
+
+/**
+ * The person this run answers, whichever queue held them, and the campaign
+ * whose row it is (lead-service hops name it). A predecessor claim that was not
+ * called reads as nobody.
+ */
+export const CLAIMED_CODE = `
+export async function main(claimOwn, claimPredecessor, campaignId, predecessorCampaignId) {
+  const pick = claimOwn?.found === true
+    ? { claim: claimOwn, heldCampaignId: campaignId, queue: "own" }
+    : claimPredecessor?.found === true
+      ? { claim: claimPredecessor, heldCampaignId: predecessorCampaignId, queue: "predecessor" }
+      : null;
+  if (!pick) {
+    return { found: false, reason: claimPredecessor?.reason ?? claimOwn?.reason ?? null, followup: null, heldCampaignId: null, queue: null, personKey: null };
+  }
+  const followup = pick.claim.followup;
+  if (!followup?.id || !followup?.email) {
+    throw new Error("[ai-meeting-booking] lead-service claimed someone without a row id or an email: " + JSON.stringify(followup));
+  }
+  return {
+    found: true,
+    followup,
+    heldCampaignId: pick.heldCampaignId,
+    queue: pick.queue,
+    personKey: "email:" + String(followup.email).trim().toLowerCase(),
+  };
+}
+`.trim();
+
+/**
+ * ONE conversation per person, whatever channel each message took: the email
+ * thread (instantly-service) plus every chat message of their merged timeline
+ * (crm-service, source matrix: WhatsApp today). The reply goes out on the
+ * channel of THEIR last message, so a person who wrote on WhatsApp is answered
+ * on WhatsApp, aware of the emails too.
+ *
+ * A 404 from either read is "no messages there" (a WhatsApp-only person has no
+ * email thread; a cold-email prospect may not be a CRM person). Any other
+ * failure, or a chat source crm-service could not read, fails loud: answering
+ * off half a conversation is worse than not answering this run.
+ */
+export const THREAD_CODE = `
+export async function main(conversation, timeline) {
+  const CHANNELS = REPLY_CHANNELS_LIST;
+  const failedRead = (read, what) => {
+    if (read?.ok === false && read?.status !== 404) {
+      throw new Error("[ai-meeting-booking] could not read " + what + " (" + String(read?.status) + "): " + String(read?.error ?? "").slice(0, 300));
+    }
+    return read?.ok === false;
+  };
+
+  const emailMessages = failedRead(conversation, "the email thread")
+    ? []
+    : (conversation?.conversation?.messages ?? []).map((m) => ({ ...m, channel: "email" }));
+
+  let chatMessages = [];
+  if (!failedRead(timeline, "the person's timeline") && timeline) {
+    const matrix = (timeline.sources ?? []).find((src) => src?.source === "matrix");
+    if (matrix?.status === "failed") {
+      throw new Error("[ai-meeting-booking] crm-service could not read the person's chats: " + String(matrix.error ?? ""));
+    }
+    chatMessages = (timeline.items ?? [])
+      .filter((i) => i?.kind === "message" && i?.source === "matrix" && (i?.direction === "inbound" || i?.direction === "outbound"))
+      .map((i) => ({ direction: i.direction, text: i.text ?? "", at: i.at ?? null, channel: String(i.channel ?? "chat") }));
+  }
+
+  const time = (m) => (m?.at ? Date.parse(m.at) : NaN);
+  const messages = [...emailMessages, ...chatMessages]
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => {
+      const ta = time(a.m), tb = time(b.m);
+      if (Number.isNaN(ta) && Number.isNaN(tb)) return a.i - b.i;
+      if (Number.isNaN(ta)) return 1;
+      if (Number.isNaN(tb)) return -1;
+      return ta - tb || a.i - b.i;
+    })
+    .map((x) => x.m);
+
+  const inbound = messages.filter((m) => m.direction === "inbound");
+  const last = inbound[inbound.length - 1] ?? null;
+  // No message of theirs anywhere: the email thread is the conversation, as it always was.
+  const replyChannel = last ? last.channel : (emailMessages.length > 0 ? "email" : null);
+  if (!replyChannel) {
+    throw new Error("[ai-meeting-booking] no conversation with this person on any channel; refusing to write to someone we have never talked with");
+  }
+  if (!CHANNELS.includes(replyChannel)) {
+    throw new Error("[ai-meeting-booking] their last message came on " + replyChannel + ", which no reply transport sends on (" + CHANNELS.join(", ") + ")");
+  }
+  console.log("[ai-meeting-booking] conversation: " + emailMessages.length + " email, " + chatMessages.length + " chat message(s); replying on " + replyChannel);
+  return {
+    conversation: { messages },
+    replyChannel,
+    skipEmail: replyChannel !== "email",
+    skipWhatsapp: replyChannel !== "whatsapp",
+    skipHandOver: replyChannel === "email",
+  };
+}
+`.trim().replace("REPLY_CHANNELS_LIST", JSON.stringify(REPLY_CHANNELS));
+
+/**
+ * The WhatsApp form of the answer: the same words as plain text (a chat shows
+ * no HTML), and the send's idempotency key, which names the claimed row and its
+ * due date so a retried run never writes twice.
+ */
+export const FINALIZE_REPLY_CODE = `
+export async function main(draft, followup) {
+  const html = String(draft?.json?.replyHtml ?? "");
+  const text = html
+    .replace(/<br\\s*\\/?>/gi, "\\n")
+    .replace(/<\\/(p|div|li|h[1-6])>/gi, "\\n\\n")
+    .replace(/<li[^>]*>/gi, "- ")
+    .replace(/<a[^>]*href="([^"]+)"[^>]*>([^<]*)<\\/a>/gi, (m, href, label) => (label && label.trim() !== href ? label.trim() + " " + href : href))
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \\t]+\\n/g, "\\n")
+    .replace(/\\n{3,}/g, "\\n\\n")
+    .trim();
+  if (!followup?.id) throw new Error("[ai-meeting-booking] finalize-reply: no claimed row");
+  return {
+    whatsappText: text,
+    whatsappIdempotencyKey: "ai-meeting-booking:" + followup.id + ":" + String(followup.dueAt ?? "") + ":whatsapp",
+  };
+}
+`.trim();
+
+/**
  * The campaign every LEAD-FACING hop names. Not `flow_input.campaignId` — that
  * is the campaign this run was dispatched for, which is the leg that PAYS, not
  * the leg that holds the person.
@@ -600,11 +764,12 @@ export async function main(conversation, offer, brand) {
   const messages = conversation?.conversation?.messages ?? [];
   const transcript = messages.map((m) => {
     const who = m?.direction === "inbound" ? "PROSPECT" : "US";
-    return who + ":\\n" + String(m?.text ?? "").trim();
+    const on = m?.channel && m.channel !== "email" ? " (on " + m.channel + ")" : "";
+    return who + on + ":\\n" + String(m?.text ?? "").trim();
   }).join("\\n\\n---\\n\\n");
 
   const message = [
-    "Below is an email thread between us and a prospect" + (offer?.name ? " about \\"" + offer.name + "\\"" : "") + ".",
+    "Below is our conversation with a prospect" + (offer?.name ? " about \\"" + offer.name + "\\"" : "") + ", oldest first: emails, and chat messages marked with their channel.",
     "",
     transcript || "(no messages on record)",
     "",
@@ -627,7 +792,7 @@ export async function main(conversation, offer, brand) {
     "- none: anything else.",
   ].join("\\n");
 
-  const systemPrompt = "You read one email and list the questions in it, and you say how our side of the thread presented itself and which outreach opened it. You never answer the questions and you never invent one.";
+  const systemPrompt = "You read one conversation and list the questions in its last message, and you say how our side of the thread presented itself and which outreach opened it. You never answer the questions and you never invent one.";
   return { message, systemPrompt };
 }
 `.trim();
@@ -1103,11 +1268,28 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   ];
 
   const messages = conversation?.conversation?.messages ?? [];
+  const replyChannel = conversation?.replyChannel ?? "email";
   const transcript = messages.map((m) => {
     const who = m?.direction === "inbound" ? "PROSPECT" : "US";
+    const on = m?.channel && m.channel !== "email" ? " on " + m.channel : "";
     const when = m?.at ? " (" + m.at + ")" : "";
-    return who + when + ":\\n" + String(m?.text ?? "").trim();
+    return who + on + when + ":\\n" + String(m?.text ?? "").trim();
   }).join("\\n\\n---\\n\\n");
+  // The reply goes out where they last wrote. Email keeps its thread rules;
+  // a chat is written as a chat, by the person who has been writing there.
+  const howToWrite = replyChannel === "email"
+    ? [
+        "Write only the words the prospect reads, as HTML. No signature: the mailbox that answers appends its own.",
+        "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
+        "No subject line: this goes into the thread they already have.",
+        "Short. Plain. The way one person writes to another.",
+      ]
+    : [
+        "Their last message came on " + replyChannel + ", so your reply goes out there, in the same chat, from the same number our earlier " + replyChannel + " messages came from.",
+        "Write it as a chat message from that person: short, plain, the language and tone of our earlier messages in that chat. No subject, no greeting block, no signature.",
+        "Put each paragraph in its own <p> (it is sent as plain text). A link is written out in full.",
+        "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
+      ];
 
   // What we sell them is the OFFER this campaign was dispatched for. An offer
   // read with no name is a broken row, not a prompt with a blank in it.
@@ -1221,14 +1403,11 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Return it as an ISO-8601 timestamp, strictly after now and no more than one year out.",
     "",
     "HOW TO WRITE IT",
-    "Write only the words the prospect reads, as HTML. No signature: the mailbox that answers appends its own.",
-    "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
-    "No subject line: this goes into the thread they already have.",
-    "Short. Plain. The way one person writes to another.",
+    ...howToWrite,
   ].join("\\n");
 
   const systemPrompt = [
-    "You answer one prospect at a time, in an email thread that is already running.",
+    "You answer one prospect at a time, in a conversation that is already running, by email or in a chat.",
     "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
     "You answer what they asked before you ask for anything.",
     "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
@@ -1316,7 +1495,15 @@ export async function main(draft, ladderNextDueAt) {
  * the follow-up is recorded.
  */
 export const CLASSIFY_SEND_CODE = `
-export async function main(send) {
+export async function main(send, whatsapp, replyChannel) {
+  // A chat reply went out through crm-service, which fails loud on any refusal,
+  // so reaching here with its answer means it was sent.
+  if (replyChannel !== "email") {
+    if (whatsapp?.status === "sent") {
+      return { outcome: "sent", status: 200, channel: replyChannel, duplicate: whatsapp?.duplicate === true };
+    }
+    throw new Error("[ai-meeting-booking] the " + String(replyChannel) + " reply has no send on record: " + JSON.stringify(whatsapp));
+  }
   if (send?.success === true) {
     return { outcome: "sent", status: send?.status ?? null };
   }
@@ -1531,9 +1718,35 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         },
       },
       // At most one person, exactly once, oldest-due-first. The claim is atomic
-      // and lives in lead-service; nothing here re-implements it. It names the
-      // PREDECESSOR's campaign — the queue is filled, and claimed, per campaign,
-      // and the debt was written against the leg that spoke to them.
+      // and lives in lead-service; nothing here re-implements it. FIRST this
+      // campaign's OWN queue: a trigger that names a person (a WhatsApp answer
+      // reported by crm-service, any channel later) files them on THIS campaign
+      // and makes them due here, and the ladder after answering them lives here.
+      {
+        id: "claim-own",
+        type: "http.call",
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/campaigns/{campaignId}/followups/claim-next",
+        },
+        retries: 0,
+        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
+      },
+      {
+        id: "plan-claim",
+        type: "script",
+        config: { code: PLAN_CLAIM_CODE },
+        retries: 0,
+        inputMapping: {
+          claimOwn: "$ref:claim-own.output",
+          startRun: "$ref:start-run.output",
+        },
+      },
+      // THEN the PREDECESSOR's queue, where the email path's debt is written
+      // (instantly-service makes a replier due on the leg that spoke to them).
+      // Not called when this run already holds someone, or when the campaign
+      // names its own people: it acts for them only.
       {
         id: "claim-followup",
         type: "http.call",
@@ -1543,7 +1756,22 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           path: "/orgs/campaigns/{campaignId}/followups/claim-next",
         },
         retries: 0,
-        inputMapping: { "params.campaignId": PREDECESSOR_CAMPAIGN_REF },
+        inputMapping: {
+          "params.campaignId": PREDECESSOR_CAMPAIGN_REF,
+          skip: "$ref:plan-claim.output.skipPredecessor",
+        },
+      },
+      {
+        id: "claimed",
+        type: "script",
+        config: { code: CLAIMED_CODE },
+        retries: 0,
+        inputMapping: {
+          claimOwn: "$ref:claim-own.output",
+          claimPredecessor: "$ref:claim-followup.output",
+          campaignId: "$ref:flow_input.campaignId",
+          predecessorCampaignId: PREDECESSOR_CAMPAIGN_REF,
+        },
       },
       { id: "check-claim", type: "condition" },
       // Which offer this campaign sells — the campaign row states it.
@@ -1567,7 +1795,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         id: "brand-profile",
         type: "http.call",
         config: { service: "brand", method: "GET", path: "/internal/brands/{id}" },
-        inputMapping: { "params.id": "$ref:claim-followup.output.followup.brandId" },
+        inputMapping: { "params.id": "$ref:claimed.output.followup.brandId" },
       },
       // The person, for their name and their own timezone.
       {
@@ -1575,11 +1803,12 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "lead", method: "GET", path: "/orgs/leads/{id}" },
         inputMapping: {
-          "params.id": "$ref:claim-followup.output.followup.id",
-          "query.campaignId": PREDECESSOR_CAMPAIGN_REF,
+          "params.id": "$ref:claimed.output.followup.id",
+          "query.campaignId": "$ref:claimed.output.heldCampaignId",
         },
       },
-      // What they wrote, and what we sent them.
+      // What they wrote, and what we sent them: the email thread (a person who
+      // only ever talked on WhatsApp has none, a 404 read by `thread`) ...
       {
         id: "conversation",
         type: "http.call",
@@ -1587,10 +1816,37 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           service: CONVERSATION_READ.service,
           method: CONVERSATION_READ.method,
           path: CONVERSATION_READ.path,
+          tolerateFailure: true,
         },
         inputMapping: {
           "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
-          "query.email": "$ref:claim-followup.output.followup.email",
+          "query.email": "$ref:claimed.output.followup.email",
+        },
+      },
+      // ... and every chat channel of the person's merged timeline (WhatsApp
+      // today). One person, one conversation, whatever channel each message took.
+      {
+        id: "person-timeline",
+        type: "http.call",
+        config: {
+          service: PERSON_TIMELINE_READ.service,
+          method: PERSON_TIMELINE_READ.method,
+          path: PERSON_TIMELINE_READ.path,
+          tolerateFailure: true,
+        },
+        inputMapping: {
+          "query.brandId": "$ref:claimed.output.followup.brandId",
+          "query.personKey": "$ref:claimed.output.personKey",
+        },
+      },
+      {
+        id: "thread",
+        type: "script",
+        config: { code: THREAD_CODE },
+        retries: 0,
+        inputMapping: {
+          conversation: "$ref:conversation.output",
+          timeline: "$ref:person-timeline.output",
         },
       },
       {
@@ -1598,7 +1854,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "content-generation", method: "GET", path: "/generations/by-lead/{leadId}" },
         retries: 0,
-        inputMapping: { "params.leadId": "$ref:claim-followup.output.followup.leadId" },
+        inputMapping: { "params.leadId": "$ref:claimed.output.followup.leadId" },
       },
       {
         id: "booking-slots",
@@ -1618,7 +1874,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { code: COMPOSE_QUESTIONS_PROMPT_CODE },
         retries: 0,
         inputMapping: {
-          conversation: "$ref:conversation.output",
+          conversation: "$ref:thread.output",
           offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
         },
@@ -1661,7 +1917,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers" },
         inputMapping: {
-          "params.brandId": "$ref:claim-followup.output.followup.brandId",
+          "params.brandId": "$ref:claimed.output.followup.brandId",
           "params.offerId": "$ref:campaign-detail.output.campaign.offerId",
         },
       },
@@ -1670,7 +1926,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/user-fields" },
         inputMapping: {
-          "params.brandId": "$ref:claim-followup.output.followup.brandId",
+          "params.brandId": "$ref:claimed.output.followup.brandId",
           "params.offerId": "$ref:campaign-detail.output.campaign.offerId",
         },
       },
@@ -1686,7 +1942,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           path: "/orgs/brands/{brandId}/user-fields",
           tolerateFailure: true,
         },
-        inputMapping: { "params.brandId": "$ref:claim-followup.output.followup.brandId" },
+        inputMapping: { "params.brandId": "$ref:claimed.output.followup.brandId" },
       },
       {
         id: "gather-facts",
@@ -1706,9 +1962,9 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         config: { code: COMPOSE_REPLY_PROMPT_CODE },
         retries: 0,
         inputMapping: {
-          followup: "$ref:claim-followup.output",
+          followup: "$ref:claimed.output",
           leadDetail: "$ref:lead-detail.output",
-          conversation: "$ref:conversation.output",
+          conversation: "$ref:thread.output",
           priorGeneration: "$ref:prior-generation.output",
           booking: "$ref:booking-slots.output",
           offer: "$ref:offer-economics.output",
@@ -1781,8 +2037,28 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         retries: 0,
         inputMapping: {
           "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
-          "body.email": "$ref:claim-followup.output.followup.email",
+          "body.email": "$ref:claimed.output.followup.email",
           "body.question": "$ref:ground-draft.output.json.question",
+          skip: "$ref:thread.output.skipEmail",
+        },
+      },
+      // A conversation on any other channel is handed to a person the same way
+      // the email hand-over ends: nothing is sent, the thread is a person's now
+      // (permanent, no automated responder claims it again), and the person
+      // stays in "Needs your call" until one of our people answers them.
+      {
+        id: "hand-over",
+        type: "http.call",
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/leads/{id}/followups",
+          body: { kind: "handed", reason: ESCALATED_REASON },
+        },
+        retries: 0,
+        inputMapping: {
+          "params.id": "$ref:claimed.output.followup.id",
+          skip: "$ref:thread.output.skipHandOver",
         },
       },
       // No reply is owed: nothing is sent and nothing is escalated. The run says
@@ -1796,7 +2072,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         retries: 0,
         inputMapping: {
           draft: "$ref:ground-draft.output",
-          email: "$ref:claim-followup.output.followup.email",
+          email: "$ref:claimed.output.followup.email",
         },
       },
       {
@@ -1809,7 +2085,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           body: { kind: "stopped", reason: NO_REPLY_OWED_REASON },
         },
         retries: 0,
-        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+        inputMapping: { "params.id": "$ref:claimed.output.followup.id" },
       },
       {
         id: "resolve-next-due",
@@ -1819,6 +2095,16 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           draft: "$ref:ground-draft.output",
           ladderNextDueAt: "$ref:compose-prompt.output.ladderNextDueAt",
+        },
+      },
+      {
+        id: "finalize-reply",
+        type: "script",
+        config: { code: FINALIZE_REPLY_CODE },
+        retries: 0,
+        inputMapping: {
+          draft: "$ref:ground-draft.output",
+          followup: "$ref:claimed.output.followup",
         },
       },
       // In their existing thread, from the mailbox that contacted them.
@@ -1845,8 +2131,25 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         retries: 0,
         inputMapping: {
           "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
-          "body.email": "$ref:claim-followup.output.followup.email",
+          "body.email": "$ref:claimed.output.followup.email",
           "body.body_html": "$ref:ground-draft.output.json.replyHtml",
+          skip: "$ref:thread.output.skipEmail",
+        },
+      },
+      // In the WhatsApp chat they wrote in: crm-service sends from the linked
+      // account that already talks with them. Every refusal fails loud: they
+      // just wrote to us there, so a refusal is a fault, not an outcome.
+      {
+        id: "send-whatsapp-reply",
+        type: "http.call",
+        config: { ...CRM_WHATSAPP_SEND },
+        retries: 0,
+        inputMapping: {
+          "body.email": "$ref:claimed.output.followup.email",
+          "body.brandId": "$ref:claimed.output.followup.brandId",
+          "body.text": "$ref:finalize-reply.output.whatsappText",
+          "body.idempotencyKey": "$ref:finalize-reply.output.whatsappIdempotencyKey",
+          skip: "$ref:thread.output.skipWhatsapp",
         },
       },
       {
@@ -1854,7 +2157,11 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "script",
         config: { code: CLASSIFY_SEND_CODE },
         retries: 0,
-        inputMapping: { send: "$ref:send-reply.output" },
+        inputMapping: {
+          send: "$ref:send-reply.output",
+          whatsapp: "$ref:send-whatsapp-reply.output",
+          replyChannel: "$ref:thread.output.replyChannel",
+        },
       },
       // Same convergence trick as `check-answerable`: an edge from `draft-reply`
       // keeps this at the top level instead of nesting it inside that branch.
@@ -1872,7 +2179,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         },
         retries: 0,
         inputMapping: {
-          "params.id": "$ref:claim-followup.output.followup.id",
+          "params.id": "$ref:claimed.output.followup.id",
           "body.nextDueAt": "$ref:resolve-next-due.output.nextDueAt",
         },
       },
@@ -1889,7 +2196,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           body: { kind: "stopped", reason: BOOKING_CONFIRMED_REASON },
         },
         retries: 0,
-        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+        inputMapping: { "params.id": "$ref:claimed.output.followup.id" },
       },
       // They already have the problem solved and the thank-you has landed:
       // nothing left to follow up on, so the schedule is stopped.
@@ -1903,7 +2210,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           body: { kind: "stopped", reason: CLOSED_WITH_THANKS_REASON },
         },
         retries: 0,
-        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+        inputMapping: { "params.id": "$ref:claimed.output.followup.id" },
       },
       {
         id: "end-run-closed-with-thanks",
@@ -2018,7 +2325,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "predecessor-campaign", to: "check-predecessor" },
       {
         from: "check-predecessor",
-        to: "claim-followup",
+        to: "claim-own",
         condition: "results['predecessor-campaign'].predecessor != null",
       },
       {
@@ -2027,7 +2334,10 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         condition: "results['predecessor-campaign'].predecessor == null",
       },
       { from: "name-missing-predecessor", to: "end-run-no-predecessor" },
-      { from: "claim-followup", to: "check-claim" },
+      { from: "claim-own", to: "plan-claim" },
+      { from: "plan-claim", to: "claim-followup" },
+      { from: "claim-followup", to: "claimed" },
+      { from: "claimed", to: "check-claim" },
       // `check-claim` also takes an edge from BEFORE the predecessor branch, so
       // it converges rather than nesting inside it: a condition node is only
       // translated at the level it is emitted, and a condition inside a branch
@@ -2035,14 +2345,16 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       // The `?.` matters for the same reason — on the no-predecessor path the
       // claim never ran, so both arms must read false rather than throw.
       { from: "predecessor-campaign", to: "check-claim" },
-      { from: "check-claim", to: "campaign-detail", condition: "results['claim-followup']?.found == true" },
-      { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup']?.found == false" },
+      { from: "check-claim", to: "campaign-detail", condition: "results['claimed']?.found == true" },
+      { from: "check-claim", to: "end-run-nobody-due", condition: "results['claimed']?.found == false" },
       { from: "campaign-detail", to: "offer-economics" },
       { from: "offer-economics", to: "brand-profile" },
       { from: "brand-profile", to: "lead-detail" },
       { from: "lead-detail", to: "booking-slots" },
       { from: "booking-slots", to: "conversation" },
-      { from: "conversation", to: "prior-generation" },
+      { from: "conversation", to: "person-timeline" },
+      { from: "person-timeline", to: "thread" },
+      { from: "thread", to: "prior-generation" },
       { from: "prior-generation", to: "compose-questions-prompt" },
       { from: "compose-questions-prompt", to: "list-questions" },
       { from: "list-questions", to: "plan-lookups" },
@@ -2054,11 +2366,11 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "compose-prompt", to: "draft-reply" },
       { from: "draft-reply", to: "ground-draft" },
       { from: "ground-draft", to: "check-answerable" },
-      // The convergence edge. `claim-followup` sits OUTSIDE `check-claim`'s
+      // The convergence edge. `claimed` sits OUTSIDE `check-claim`'s
       // branch body, so `check-answerable` is not absorbed into it and is
       // emitted as a top-level sibling branchone — which is the only place a
       // condition node actually does anything.
-      { from: "claim-followup", to: "check-answerable" },
+      { from: "claimed", to: "check-answerable" },
       {
         from: "check-answerable",
         to: "resolve-next-due",
@@ -2075,11 +2387,14 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         to: "name-no-reply-owed",
         condition: "results['ground-draft']?.json?.decision == 'no_reply_owed'",
       },
-      { from: "escalate-unanswerable", to: "end-run-escalated" },
+      { from: "escalate-unanswerable", to: "hand-over" },
+      { from: "hand-over", to: "end-run-escalated" },
       { from: "name-no-reply-owed", to: "stop-followups" },
       { from: "stop-followups", to: "end-run-no-reply-owed" },
-      { from: "resolve-next-due", to: "send-reply" },
-      { from: "send-reply", to: "classify-send" },
+      { from: "resolve-next-due", to: "finalize-reply" },
+      { from: "finalize-reply", to: "send-reply" },
+      { from: "send-reply", to: "send-whatsapp-reply" },
+      { from: "send-whatsapp-reply", to: "classify-send" },
       { from: "classify-send", to: "check-sent" },
       // Same convergence edge, one level down: `draft-reply` is outside
       // `check-answerable`'s branch body.

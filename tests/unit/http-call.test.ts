@@ -567,4 +567,29 @@ describe("http-call script", () => {
       await expect(callSend(undefined)).rejects.toThrow("failed (409)");
     });
   });
+  describe("skip (WA-RESPONDER-1012)", () => {
+    // Declared right after skipOnRefusalCodes; Windmill passes it by NAME.
+    const SKIP_POSITION = 26;
+
+    function call(skip: unknown) {
+      const args = new Array(SKIP_POSITION + 1).fill(undefined);
+      ["lead", "POST", "/orgs/x", { a: 1 }, undefined, serviceEnvs].forEach((v, i) => { args[i] = v; });
+      args[SKIP_POSITION] = skip;
+      return (main as (...a: unknown[]) => Promise<unknown>)(...args);
+    }
+
+    it("makes no call and says so when skip is true", async () => {
+      const result = await call(true);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result).toEqual({ ok: false, skipped: true, notCalled: true });
+    });
+
+    it("calls as before when skip is false, absent or not exactly true", async () => {
+      for (const value of [false, undefined, "true", 1]) {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ done: true }));
+        expect(await call(value)).toEqual({ done: true });
+      }
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+  });
 });
