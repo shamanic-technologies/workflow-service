@@ -2080,3 +2080,22 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     expect(mail).not.toContain("Their last message came on");
   });
 });
+
+describe("every branch expression reaches Windmill in dot notation (WA-RESPONDER-1012 regression)", () => {
+  it("never ships a results['<id>'] read: Windmill resolves only results.<id> and silently takes the default branch", () => {
+    const flow = dagToOpenFlow(buildAiMeetingBookingDag(DAG_OPTS), `${FEATURE_SLUG}-test`);
+    const exprs: string[] = [];
+    const walk = (mods: Array<{ value: Record<string, unknown> }>) => {
+      for (const m of mods) {
+        for (const b of ((m.value.branches as Array<{ expr: string; modules: typeof mods }>) ?? [])) {
+          exprs.push(b.expr);
+          walk(b.modules);
+        }
+      }
+    };
+    walk(flow.value.modules as unknown as Array<{ value: Record<string, unknown> }>);
+    expect(exprs.length).toBeGreaterThan(5);
+    for (const e of exprs) expect(e).not.toMatch(/results\[/);
+    expect(exprs).toContain("results.claimed?.found == false");
+  });
+});
