@@ -282,8 +282,10 @@ export async function main(conversation, timeline) {
     throw new Error("[ai-meeting-booking] their last message came on " + replyChannel + ", which no reply transport sends on (" + CHANNELS.join(", ") + ")");
   }
   console.log("[ai-meeting-booking] conversation: " + emailMessages.length + " email, " + chatMessages.length + " chat message(s); replying on " + replyChannel);
+  const person = timeline && timeline.ok !== false ? timeline.person ?? null : null;
   return {
     conversation: { messages },
+    person: { name: person?.displayName ?? null, phone: (person?.phones ?? [])[0] ?? null },
     replyChannel,
     skipEmail: replyChannel !== "email",
     skipWhatsapp: replyChannel !== "whatsapp",
@@ -314,6 +316,40 @@ export async function main(draft, followup) {
   return {
     whatsappText: text,
     whatsappIdempotencyKey: "ai-meeting-booking:" + followup.id + ":" + String(followup.dueAt ?? "") + ":whatsapp",
+  };
+}
+`.trim();
+
+/**
+ * A conversation on a chat channel that the responder hands over is announced to
+ * the brand's sales rep ON WHATSAPP (owner 2026-10-13: « send me a message
+ * instead on WA to tell me to answer »): who wrote, what they asked, that the AI
+ * sent nothing. The email path keeps instantly-service's escalation, which tells
+ * the client and the agency inbox itself. No rep phone stated on the brand = no
+ * alert, said loudly (the person still shows in "Needs your call").
+ */
+export const COMPOSE_REP_ALERT_CODE = `
+export async function main(draft, followup, thread, brand) {
+  const repPhone = brand?.brand?.salesRepPhone ?? null;
+  const onChat = thread?.replyChannel && thread.replyChannel !== "email";
+  if (!onChat) return { skip: true, reason: "email_thread" };
+  if (!repPhone) {
+    console.error("[ai-meeting-booking] escalated " + String(followup?.email) + " but the brand states no sales rep phone: nobody was alerted on WhatsApp (they stay in Needs your call)");
+    return { skip: true, reason: "no_sales_rep_phone" };
+  }
+  const who = (thread?.person?.name ?? followup?.email ?? "Someone") +
+    (thread?.person?.phone ? " (" + thread.person.phone + ")" : followup?.email ? " (" + followup.email + ")" : "");
+  const asked = String(draft?.json?.question ?? "").trim();
+  const text = [
+    "Needs your call: " + who + " wrote on " + thread.replyChannel + " and I could not answer.",
+    asked ? "They asked: \\"" + asked + "\\"" : null,
+    "I sent them nothing. Please reply to them yourself.",
+  ].filter(Boolean).join("\\n\\n");
+  return {
+    skip: false,
+    phone: repPhone,
+    text,
+    idempotencyKey: "ai-meeting-booking:" + String(followup?.id) + ":" + String(followup?.dueAt ?? "") + ":rep-alert",
   };
 }
 `.trim();
@@ -1685,6 +1721,7 @@ export function needsChannelAgnosticReply(dag: { nodes?: Array<{ id?: string; co
   const nodes = dag?.nodes ?? [];
   if (!nodes.some((n) => n?.id === "person-timeline")) return true;
   // A person we never cold-emailed has no prior generation: that read must tolerate its 404.
+  if (!nodes.some((n) => n?.id === "alert-rep")) return true;
   const prior = nodes.find((n) => n?.id === "prior-generation");
   return !!prior && prior.config?.tolerateFailure !== true;
 }
@@ -2076,6 +2113,34 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           skip: "$ref:thread.output.skipEmail",
         },
       },
+      // The brand's sales rep is told on WhatsApp (chat threads only). No
+      // campaign id on this send: it is not the campaign speaking to a prospect,
+      // and crm-service files any campaign-attributed send as a campaign thread.
+      {
+        id: "compose-rep-alert",
+        type: "script",
+        config: { code: COMPOSE_REP_ALERT_CODE },
+        retries: 0,
+        inputMapping: {
+          draft: "$ref:ground-draft.output",
+          followup: "$ref:claimed.output.followup",
+          thread: "$ref:thread.output",
+          brand: "$ref:brand-profile.output",
+        },
+      },
+      {
+        id: "alert-rep",
+        type: "http.call",
+        config: { ...CRM_WHATSAPP_SEND, omitHeaders: ["x-campaign-id"] },
+        retries: 0,
+        inputMapping: {
+          "body.phone": "$ref:compose-rep-alert.output.phone",
+          "body.brandId": "$ref:claimed.output.followup.brandId",
+          "body.text": "$ref:compose-rep-alert.output.text",
+          "body.idempotencyKey": "$ref:compose-rep-alert.output.idempotencyKey",
+          skip: "$ref:compose-rep-alert.output.skip",
+        },
+      },
       // A conversation on any other channel is handed to a person the same way
       // the email hand-over ends: nothing is sent, the thread is a person's now
       // (permanent, no automated responder claims it again), and the person
@@ -2422,7 +2487,9 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         condition: "results['ground-draft']?.json?.decision == 'no_reply_owed'",
       },
       { from: "escalate-unanswerable", to: "hand-over" },
-      { from: "hand-over", to: "end-run-escalated" },
+      { from: "hand-over", to: "compose-rep-alert" },
+      { from: "compose-rep-alert", to: "alert-rep" },
+      { from: "alert-rep", to: "end-run-escalated" },
       { from: "name-no-reply-owed", to: "stop-followups" },
       { from: "stop-followups", to: "end-run-no-reply-owed" },
       { from: "resolve-next-due", to: "finalize-reply" },
