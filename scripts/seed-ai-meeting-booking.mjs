@@ -35,6 +35,8 @@ import {
   CHAT_STEP_MAX_TOKENS,
   FEATURE_SLUG,
   buildAiMeetingBookingDag,
+  isConversationResponder,
+  needsChannelAgnosticReply,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
@@ -378,6 +380,10 @@ async function main() {
   const stale = [];
   const dagBySlug = new Map();
   for (const w of existing.payload?.workflows ?? []) {
+    if (!isConversationResponder(w.dag)) {
+      console.log(`  ${w.workflowDynastySlug ?? w.workflowSlug}: not a conversation responder, left alone`);
+      continue;
+    }
     if (w.workflowDynastySlug) dagBySlug.set(w.workflowDynastySlug, w.dag);
     const cell = cellOf(w.dag);
     if (cell) covered.set(cell, w.workflowDynastySlug ?? w.workflowSlug);
@@ -400,7 +406,8 @@ async function main() {
         needsThinkingBudget(w.dag) ||
         needsConditionalHypothetical(w.dag) ||
         needsClientStatedFacts(w.dag) ||
-        needsSeveralOffersTolerance(w.dag))
+        needsSeveralOffersTolerance(w.dag) ||
+        needsChannelAgnosticReply(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
