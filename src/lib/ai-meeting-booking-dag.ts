@@ -180,22 +180,32 @@ export const REPLY_CHANNELS = ["email", "whatsapp"] as const;
 export const ESCALATED_REASON = "escalated";
 
 /**
- * Whether this run may also claim from the PREDECESSOR's queue. It may not when
+ * Whether this run may also claim from the PREDECESSORS' queues. It may not when
  * its own queue already gave it someone (one person per run), nor when the
  * campaign names its own people (`/start-run` `people`): it acts for them only,
  * and they are filed on THIS campaign.
+ *
+ * `alsoCampaignIds` = every predecessor campaign-service names: several live
+ * campaigns may open conversations for one offer (cold email AND cold WhatsApp),
+ * and the people of each are owed an answer. lead-service claims each on its
+ * own exact id, in order, and the first claim wins (campaign 67a0eb30,
+ * 2026-10-12: one predecessor at a time could not serve two channels).
  */
 export const PLAN_CLAIM_CODE = `
-export async function main(claimOwn, startRun) {
+export async function main(claimOwn, startRun, predecessorRead) {
   const people = Array.isArray(startRun?.people) ? startRun.people : [];
   const ownFound = claimOwn?.found === true;
-  return { skipPredecessor: ownFound || people.length > 0, ownFound, namesPeople: people.length > 0 };
+  const listed = Array.isArray(predecessorRead?.predecessors) ? predecessorRead.predecessors : [];
+  const alsoCampaignIds = listed.map((p) => p?.campaignId).filter((id) => typeof id === "string" && id.length > 0);
+  return { skipPredecessor: ownFound || people.length > 0, ownFound, namesPeople: people.length > 0, alsoCampaignIds };
 }
 `.trim();
 
 /**
  * The person this run answers, whichever queue held them, and the campaign
- * whose row it is (lead-service hops name it). A predecessor claim that was not
+ * whose row it is (lead-service hops name it). A predecessor claim names the
+ * campaign that held the person itself (`followup.campaignId`): with several
+ * predecessors it is whichever one had them. A predecessor claim that was not
  * called reads as nobody.
  */
 export const CLAIMED_CODE = `
@@ -203,7 +213,7 @@ export async function main(claimOwn, claimPredecessor, campaignId, predecessorCa
   const pick = claimOwn?.found === true
     ? { claim: claimOwn, heldCampaignId: campaignId, queue: "own" }
     : claimPredecessor?.found === true
-      ? { claim: claimPredecessor, heldCampaignId: predecessorCampaignId, queue: "predecessor" }
+      ? { claim: claimPredecessor, heldCampaignId: claimPredecessor.followup?.campaignId ?? predecessorCampaignId, queue: "predecessor" }
       : null;
   if (!pick) {
     return { found: false, reason: claimPredecessor?.reason ?? claimOwn?.reason ?? null, followup: null, heldCampaignId: null, queue: null, personKey: null };
@@ -1804,6 +1814,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           claimOwn: "$ref:claim-own.output",
           startRun: "$ref:start-run.output",
+          predecessorRead: "$ref:predecessor-campaign.output",
         },
       },
       // THEN the PREDECESSOR's queue, where the email path's debt is written
@@ -1821,6 +1832,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         retries: 0,
         inputMapping: {
           "params.campaignId": PREDECESSOR_CAMPAIGN_REF,
+          "body.alsoCampaignIds": "$ref:plan-claim.output.alsoCampaignIds",
           skip: "$ref:plan-claim.output.skipPredecessor",
         },
       },
