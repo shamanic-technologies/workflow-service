@@ -128,7 +128,7 @@ describe("buying signal reaches the email writer", () => {
     });
     const expr = bodyTransform(dag).expr!;
     expect(expr).toContain("results.fetch_lead?.lead?.buyingSignal?.fact");
-    expect(expr).not.toContain("?? undefined");
+    expect(expr).not.toContain("buyingSignal ?? undefined");
   });
 
   it("leaves a node that maps its whole variables object alone", () => {

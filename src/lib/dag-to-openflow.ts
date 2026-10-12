@@ -47,6 +47,21 @@ const OFFER_ITER_KEY = "__wf_offer_id";
 /** The reference every loop-body node uses to read the threaded offerId. */
 const LOOP_BODY_OFFER_REF = `flow_input.iter.value?.${OFFER_ITER_KEY}`;
 
+/**
+ * Reserved key under which the campaign's `instruction` rides the same iter fold.
+ *
+ * campaign-service reports on `/start-run` the free-text instruction the campaign owner
+ * wrote for the message ("write as Kevin to a signup who never talked with us…"). Every
+ * outreach workflow writes from it whatever the channel: the WhatsApp DAG maps it into its
+ * own writer, and every content-generation `/generate` call receives it HERE, at conversion
+ * time, so no stored DAG has to name it (LEAK-1012: the cold-email workflows never did, and a
+ * signup got a generic cold pitch). Same mid-flow, results-only value as the offerId.
+ */
+const INSTRUCTION_ITER_KEY = "__wf_instruction";
+
+/** The reference every loop-body node uses to read the threaded instruction. */
+const LOOP_BODY_INSTRUCTION_REF = `flow_input.iter.value?.${INSTRUCTION_ITER_KEY}`;
+
 /** The reference every loop-body node uses to read the threaded audienceId. */
 const LOOP_BODY_AUDIENCE_REF = `flow_input.iter.value?.${AUDIENCE_ITER_KEY}`;
 
@@ -237,6 +252,9 @@ function buildModules(orderedNodes: DAGNode[], dag: DAG): FlowModule[] {
   const offerRef = startRunModuleId
     ? `results.${startRunModuleId}?.offerId`
     : null;
+  const instructionRef = startRunModuleId
+    ? `results.${startRunModuleId}?.instruction`
+    : null;
 
   // Build pass: iterate ordered nodes, skip consumed, build containers with nested modules
   const modules: FlowModule[] = [];
@@ -245,13 +263,13 @@ function buildModules(orderedNodes: DAGNode[], dag: DAG): FlowModule[] {
     if (consumed.has(node.id)) continue;
 
     if (node.type === "condition") {
-      const mod = buildConditionModule(node, dag, orderedNodes, conditionInfo.get(node.id)!, audienceRef, offerRef);
+      const mod = buildConditionModule(node, dag, orderedNodes, conditionInfo.get(node.id)!, audienceRef, offerRef, instructionRef);
       modules.push(mod);
     } else if (node.type === "for-each") {
-      const mod = buildForEachModule(node, orderedNodes, loopBodyInfo.get(node.id)!, dag, audienceRef, offerRef);
+      const mod = buildForEachModule(node, orderedNodes, loopBodyInfo.get(node.id)!, dag, audienceRef, offerRef, instructionRef);
       modules.push(mod);
     } else {
-      const mod = nodeToModule(node, dag, audienceRef, offerRef);
+      const mod = nodeToModule(node, dag, audienceRef, offerRef, instructionRef);
       if (mod) modules.push(mod);
     }
   }
@@ -365,6 +383,7 @@ function buildConditionModule(
   info: { branchNodeSets: Map<string, Set<string>>; afterNodes: Set<string> },
   audienceRef: string | null,
   offerRef: string | null,
+  instructionRef: string | null,
 ): FlowModule {
   const moduleId = node.id.replace(/-/g, "_");
   const outEdges = dag.edges.filter((e) => e.from === node.id && e.condition);
@@ -407,7 +426,7 @@ function buildConditionModule(
     for (const bn of branchNodes) {
       // branchone runs inline in the parent flow scope, so `results.start_run`
       // still resolves inside a branch body — forward the inline audienceRef.
-      const mod = nodeToModule(bn, dag, audienceRef, offerRef);
+      const mod = nodeToModule(bn, dag, audienceRef, offerRef, instructionRef);
       if (mod) branchModules.push(mod);
     }
 
@@ -428,6 +447,7 @@ function buildForEachModule(
   dag: DAG,
   audienceRef: string | null,
   offerRef: string | null,
+  instructionRef: string | null,
 ): FlowModule {
   const moduleId = node.id.replace(/-/g, "_");
   let iteratorExpr = (node.config?.iterator as string) ?? "flow_input.items";
@@ -450,6 +470,7 @@ function buildForEachModule(
       `(__wf_el && typeof __wf_el === "object") ? ` +
       `{ ...__wf_el, ${AUDIENCE_ITER_KEY}: ${audienceRef}` +
       (offerRef ? `, ${OFFER_ITER_KEY}: ${offerRef}` : "") +
+      (instructionRef ? `, ${INSTRUCTION_ITER_KEY}: ${instructionRef}` : "") +
       ` } : __wf_el)`;
   }
 
@@ -457,12 +478,13 @@ function buildForEachModule(
   // iteration element, not from the out-of-scope start-run result.
   const bodyAudienceRef = carriesAudience ? LOOP_BODY_AUDIENCE_REF : null;
   const bodyOfferRef = carriesAudience && offerRef ? LOOP_BODY_OFFER_REF : null;
+  const bodyInstructionRef = carriesAudience && instructionRef ? LOOP_BODY_INSTRUCTION_REF : null;
 
   const bodyNodes = orderedNodes.filter((n) => bodyNodeIds.has(n.id));
   const bodyModules: FlowModule[] = [];
   for (const bn of bodyNodes) {
     const mod = nodeToModule(
-      bn, dag, bodyAudienceRef, bodyOfferRef,
+      bn, dag, bodyAudienceRef, bodyOfferRef, bodyInstructionRef,
       new Set([...bodyNodeIds].map((id) => id.replace(/-/g, "_"))),
     );
     if (mod) bodyModules.push(mod);
@@ -732,6 +754,17 @@ function readsOfferAlready(
   );
 }
 
+/** True when the node's own DAG states `body.<field>` already (mapping, whole body, or static body). */
+function statesBodyFieldAlready(
+  field: string,
+  scriptConfig: Record<string, unknown>,
+  inputMapping?: Record<string, string>,
+): boolean {
+  if (inputMapping && ("body" in inputMapping || `body.${field}` in inputMapping)) return true;
+  const body = scriptConfig.body;
+  return !!body && typeof body === "object" && field in (body as Record<string, unknown>);
+}
+
 /**
  * The only two callee shapes that read an `offerId` on their request body.
  * Deliberately a closed list — a blanket injection into a strict-schema callee
@@ -848,6 +881,7 @@ function nodeToModule(
   dag: DAG,
   audienceRef: string | null,
   offerRef: string | null,
+  instructionRef: string | null,
   /** Module ids of the for-each body this node sits in; null outside a loop. */
   loopBodyIds: Set<string> | null = null,
 ): FlowModule | null {
@@ -958,6 +992,21 @@ function nodeToModule(
     callsOfferScopedEndpoint(node)
   ) {
     extraTransforms["body.offerId"] = { type: "javascript", expr: offerRef };
+  }
+
+  // Propagate the campaign's instruction into every content-generation /generate body, the
+  // same way and for the same reason as the offer: the email writer follows the instruction
+  // the campaign owner wrote (see INSTRUCTION_ITER_KEY). `?? undefined` drops the key from the
+  // JSON body when the campaign carries none (start-run answers null), so every campaign
+  // without an instruction sends a byte-identical request. A DAG that maps it itself wins.
+  if (
+    instructionRef &&
+    offerScope.startRunModuleId &&
+    offerScope.descendants.has(moduleId) &&
+    !statesBodyFieldAlready("instruction", scriptConfig, resolvedInputMapping) &&
+    callsContentGeneration(node)
+  ) {
+    extraTransforms["body.instruction"] = { type: "javascript", expr: `(${instructionRef}) ?? undefined` };
   }
 
   // Carry the served lead's buying signal and offer checks to the email writer.
