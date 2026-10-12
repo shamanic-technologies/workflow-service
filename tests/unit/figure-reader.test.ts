@@ -47,8 +47,8 @@ const SPEC = {
 
 const MARIE: RecipientScope = {
   email: "marie@acme.test",
-  userId: MARIE_USER,
-  organizations: [{ orgId: MARIE_ORG, name: "Acme" }],
+  userIds: [MARIE_USER],
+  organizations: [{ orgId: MARIE_ORG, name: "Acme", userId: MARIE_USER }],
 };
 
 describe("buildCatalogue", () => {
@@ -99,6 +99,7 @@ describe("gateRead — the no-leak gate", () => {
       isPublic: false,
       learnsNoIds: false,
       orgId: MARIE_ORG,
+      userId: MARIE_USER,
     });
   });
 
@@ -116,7 +117,7 @@ describe("gateRead — the no-leak gate", () => {
   });
 
   it("refuses every account read when the recipient belongs to no organization", () => {
-    const prospect: RecipientScope = { email: "p@x.test", userId: null, organizations: [] };
+    const prospect: RecipientScope = { email: "p@x.test", userIds: [], organizations: [] };
     const g = gateRead({ orgId: "", path: "/v1/brands", query: [] }, catalogue, prospect, new Set());
     expect((g as { reason: string }).reason).toMatch(/^not_a_member/);
   });
@@ -240,11 +241,31 @@ describe("readFigures", () => {
       { ...empty, status: "read", reads: [{ orgId: MARIE_ORG, path: "/v1/brands", query: [] }, { orgId: "", path: "/v1/public/features/showcase-outcomes", query: [] }] },
       { ...empty, status: "done", missing: "x" },
     ]);
-    d.resolveRecipient = async () => ({ email: "p@x.test", userId: null, organizations: [] });
+    d.resolveRecipient = async () => ({ email: "p@x.test", userIds: [], organizations: [] });
     const result = await readFigures({ question: "q", recipientEmail: "p@x.test" }, d);
     expect(result.recipient.isMember).toBe(false);
     expect(apiGet.mock.calls).toEqual([["/v1/public/features/showcase-outcomes", null]]);
     expect(result.reads[0].refused).toMatch(/^not_a_member/);
+  });
+
+  it("reads each of the mailbox's orgs as the user row that is its member", async () => {
+    const SECOND_USER = "55555555-5555-4555-8555-555555555555";
+    const SECOND_ORG = "66666666-6666-4666-8666-666666666666";
+    const { d, apiGet } = deps([{ ...empty, status: "done", missing: "x" }]);
+    d.resolveRecipient = async () => ({
+      email: "marie@acme.test",
+      userIds: [MARIE_USER, SECOND_USER],
+      organizations: [
+        { orgId: MARIE_ORG, name: "Acme", userId: MARIE_USER },
+        { orgId: SECOND_ORG, name: "Acme 2", userId: SECOND_USER },
+      ],
+    });
+    apiGet.mockImplementation(async () => ({ status: 200, body: { brands: [] } }));
+    await readFigures({ question: "q", recipientEmail: "marie@acme.test" }, d);
+    expect(apiGet.mock.calls).toEqual([
+      ["/v1/brands", { orgId: MARIE_ORG, userId: MARIE_USER }],
+      ["/v1/brands", { orgId: SECOND_ORG, userId: SECOND_USER }],
+    ]);
   });
 
   it("fails loud when the model answers no plan", async () => {
