@@ -592,4 +592,21 @@ describe("http-call script", () => {
       expect(mockFetch).toHaveBeenCalledTimes(4);
     });
   });
+  describe("omitHeaders (WA-RESPONDER-1012 escalation alert)", () => {
+    const POSITION = 27;
+    it("drops the named identity headers from this one call only", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ status: "sent" }));
+      const args = new Array(POSITION + 1).fill(undefined);
+      ["crm", "POST", "/orgs/whatsapp/messages", { text: "x" }, undefined, { CRM_SERVICE_URL: "https://crm", CRM_SERVICE_API_KEY: "k" }]
+        .forEach((v, i) => { args[i] = v; });
+      args[8] = "org-1";
+      args[12] = "camp-1";
+      args[POSITION] = ["x-campaign-id"];
+      await (main as (...a: unknown[]) => Promise<unknown>)(...args);
+      const [, options] = mockFetch.mock.calls[0];
+      expect(options.headers["x-campaign-id"]).toBeUndefined();
+      expect(options.headers["x-org-id"]).toBe("org-1");
+      expect(options.headers["x-api-key"]).toBe("k");
+    });
+  });
 });

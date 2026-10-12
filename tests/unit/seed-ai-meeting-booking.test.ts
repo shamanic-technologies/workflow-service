@@ -27,5 +27,8 @@ describe("seed-ai-meeting-booking only upgrades CONVERSATION responders (WA-RESP
       nodes: conversation.nodes.map((n) => (n.id === "prior-generation" ? { ...n, config: { ...n.config, tolerateFailure: undefined } } : n)),
     };
     expect(needsChannelAgnosticReply(strictPrior)).toBe(true);
+    // v0.48.62's DAG: no WhatsApp alert to the rep on a chat escalation.
+    const noAlert = { ...conversation, nodes: conversation.nodes.filter((n) => n.id !== "alert-rep") };
+    expect(needsChannelAgnosticReply(noAlert)).toBe(true);
   });
 });
