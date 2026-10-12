@@ -171,10 +171,14 @@ export function learnIdentifiers(value: unknown, owned: Set<string>, depth = 0):
 
 export interface RecipientOrg { orgId: string; name: string | null }
 
+/** One organization the recipient belongs to, and the user row of theirs that is its member (read as that user). */
+export interface RecipientMembership extends RecipientOrg { userId: string }
+
 export interface RecipientScope {
   email: string | null;
-  userId: string | null;
-  organizations: RecipientOrg[];
+  /** Every user row carrying exactly this email (one mailbox, so one person). */
+  userIds: string[];
+  organizations: RecipientMembership[];
 }
 
 export interface PlannedRead {
@@ -185,7 +189,7 @@ export interface PlannedRead {
 }
 
 export type GatedRead =
-  | { ok: true; url: string; template: string; isPublic: boolean; learnsNoIds: boolean; orgId: string | null }
+  | { ok: true; url: string; template: string; isPublic: boolean; learnsNoIds: boolean; orgId: string | null; userId: string | null }
   | { ok: false; reason: string };
 
 /**
@@ -214,6 +218,7 @@ export function gateRead(read: PlannedRead, catalogue: CatalogueEntry[], scope: 
   }
 
   let orgId: string | null = null;
+  let userId: string | null = null;
   if (!entry.isPublic) {
     const named = String(read.orgId ?? "").trim().toLowerCase();
     const org = scope.organizations.find((o) => o.orgId.toLowerCase() === named);
@@ -226,6 +231,7 @@ export function gateRead(read: PlannedRead, catalogue: CatalogueEntry[], scope: 
       };
     }
     orgId = org.orgId;
+    userId = org.userId;
     // Identifiers must come from HER account. A public read names none that matter: it carries no identity.
     let pathValues: string[];
     try {
@@ -244,7 +250,7 @@ export function gateRead(read: PlannedRead, catalogue: CatalogueEntry[], scope: 
   }
 
   const qs = new URLSearchParams(query.map((q) => [q.name, String(q.value ?? "")])).toString();
-  return { ok: true, url: qs ? `${path}?${qs}` : path, template: entry.template, isPublic: entry.isPublic, learnsNoIds: entry.learnsNoIds, orgId };
+  return { ok: true, url: qs ? `${path}?${qs}` : path, template: entry.template, isPublic: entry.isPublic, learnsNoIds: entry.learnsNoIds, orgId, userId };
 }
 
 // ---------------------------------------------------------------------------
@@ -358,13 +364,13 @@ export async function readFigures(
   if (!question) throw new Error("figure-reader: the question is empty");
   const email = input.recipientEmail?.trim().toLowerCase() || null;
 
-  const scope: RecipientScope = email ? await deps.resolveRecipient(email) : { email: null, userId: null, organizations: [] };
+  const scope: RecipientScope = email ? await deps.resolveRecipient(email) : { email: null, userIds: [], organizations: [] };
   const catalogue = buildCatalogue(await deps.loadSpec());
   if (catalogue.length === 0) throw new Error("figure-reader: api-service served no readable route");
 
   const owned = new Set<string>();
   for (const o of scope.organizations) owned.add(o.orgId.toLowerCase());
-  if (scope.userId) owned.add(scope.userId.toLowerCase());
+  for (const u of scope.userIds) owned.add(u.toLowerCase());
   if (email) owned.add(email);
 
   const reads: ReadRecord[] = [];
@@ -379,7 +385,7 @@ export async function readFigures(
       transcript.push(`REFUSED GET ${planned.path} (org ${planned.orgId || "none"}): ${gated.reason}`);
       return;
     }
-    const identity = gated.isPublic ? null : { orgId: gated.orgId as string, userId: scope.userId as string };
+    const identity = gated.isPublic ? null : { orgId: gated.orgId as string, userId: gated.userId as string };
     const res = await deps.apiGet(gated.url, identity);
     reads.push({ kind: gated.isPublic ? "public" : "account", orgId: gated.orgId, target: gated.url, status: res.status, refused: null });
     if (res.status >= 200 && res.status < 300) {
@@ -447,7 +453,11 @@ export async function readFigures(
       return {
         figures,
         missing,
-        recipient: { email, isMember: scope.organizations.length > 0, organizations: scope.organizations },
+        recipient: {
+          email,
+          isMember: scope.organizations.length > 0,
+          organizations: scope.organizations.map((o) => ({ orgId: o.orgId, name: o.name })),
+        },
         reads,
       };
     }
@@ -527,20 +537,26 @@ export function productionDeps(
       });
       if (!usersRes.ok) throw new Error(`figure-reader: client-service users by email -> ${usersRes.status} ${await usersRes.text()}`);
       const users = ((await usersRes.json()) as { users?: Array<{ id: string; email: string | null }> }).users ?? [];
-      // Exactly this email: the filter is the producer's, the equality is ours.
+      // Exactly this email: the filter is the producer's, the equality is ours. Several user rows can carry one
+      // address (one per identity it signed up with); they are one mailbox, so one person: their memberships
+      // are unioned, each org read as the row that is its member.
       const matches = users.filter((u) => (u.email ?? "").trim().toLowerCase() === email);
-      if (matches.length === 0) return { email, userId: null, organizations: [] };
-      if (matches.length > 1) {
-        throw new Error(`figure-reader: ${matches.length} users carry the email ${email}; refusing to choose whose account to read`);
+      const organizations: RecipientMembership[] = [];
+      for (const user of matches) {
+        const orgsRes = await fetch(`${baseUrl}/internal/users/${encodeURIComponent(user.id)}/orgs`, {
+          headers,
+          signal: AbortSignal.timeout(600_000),
+        });
+        const text = await orgsRes.text();
+        // A row the identity provider no longer knows belongs to no organization: a real answer, not a failure.
+        if (orgsRes.status === 404 && text.includes("identity_not_found")) continue;
+        if (!orgsRes.ok) throw new Error(`figure-reader: client-service memberships -> ${orgsRes.status} ${text}`);
+        const orgs = (JSON.parse(text) as { organizations?: Array<{ orgId: string; name: string | null }> }).organizations ?? [];
+        for (const o of orgs) {
+          if (!organizations.some((m) => m.orgId === o.orgId)) organizations.push({ orgId: o.orgId, name: o.name ?? null, userId: user.id });
+        }
       }
-      const user = matches[0];
-      const orgsRes = await fetch(`${baseUrl}/internal/users/${encodeURIComponent(user.id)}/orgs`, {
-        headers,
-        signal: AbortSignal.timeout(600_000),
-      });
-      if (!orgsRes.ok) throw new Error(`figure-reader: client-service memberships -> ${orgsRes.status} ${await orgsRes.text()}`);
-      const orgs = ((await orgsRes.json()) as { organizations?: Array<{ orgId: string; name: string | null }> }).organizations ?? [];
-      return { email, userId: user.id, organizations: orgs.map((o) => ({ orgId: o.orgId, name: o.name ?? null })) };
+      return { email, userIds: matches.map((u) => u.id), organizations };
     },
 
     async apiGet(url, identity) {
