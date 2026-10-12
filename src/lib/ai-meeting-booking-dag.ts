@@ -1674,6 +1674,25 @@ export async function main(draft, email) {
 }
 `.trim();
 
+/**
+ * True when a stored DAG answers on email only: it reads no merged timeline, so
+ * a person who answered on WhatsApp is never answered (WA-RESPONDER-1012).
+ */
+export function needsChannelAgnosticReply(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
+  return !(dag?.nodes ?? []).some((n) => n?.id === "person-timeline");
+}
+
+/**
+ * True when a stored DAG is a CONVERSATION responder: it reads the email thread
+ * (`conversation`). The feature also holds the form responder
+ * (`seed-form-meeting-booking-workflow.mjs`, pipe form_submitted_to_meeting_booked),
+ * whose DAG this script must never touch: upgrading it with this one would turn
+ * the form workflow into a conversation one.
+ */
+export function isConversationResponder(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
+  return (dag?.nodes ?? []).some((n) => n?.id === "conversation");
+}
+
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
   return {
     nodes: [
