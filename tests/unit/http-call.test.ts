@@ -25,6 +25,8 @@ describe("http-call script", () => {
   const serviceEnvs: Record<string, string> = {
     LEAD_SERVICE_URL: "https://lead.example.com",
     LEAD_SERVICE_API_KEY: "lead-key-123",
+    SOCIAL_SERVICE_URL: "https://social.example.com",
+    SOCIAL_SERVICE_API_KEY: "social-key",
     CAMPAIGN_SERVICE_URL: "https://campaign.example.com",
     CAMPAIGN_SERVICE_API_KEY: "campaign-key-456",
   };
@@ -154,6 +156,18 @@ describe("http-call script", () => {
 
     const [, options] = mockFetch.mock.calls[0];
     expect(options.headers["x-audience-id"]).toBe("audience-real-1");
+  });
+
+  it("validateResponse reads a nested field by its dotted path, and still throws when it differs", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ post: { status: "published" } }));
+    await expect(
+      main("social", "GET", "/internal/social-posts/1", undefined, undefined, serviceEnvs, undefined, { field: "post.status", equals: "published" }),
+    ).resolves.toEqual({ post: { status: "published" } });
+
+    mockFetch.mockResolvedValueOnce(jsonResponse({ post: { status: "queued" } }));
+    await expect(
+      main("social", "GET", "/internal/social-posts/1", undefined, undefined, serviceEnvs, undefined, { field: "post.status", equals: "published" }),
+    ).rejects.toThrow('expected post.status="published", got "queued"');
   });
 
   it("omits x-audience-id when audienceId is undefined (no empty header)", async () => {
