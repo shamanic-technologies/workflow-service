@@ -2099,3 +2099,28 @@ describe("every branch expression reaches Windmill in dot notation (WA-RESPONDER
     expect(exprs).toContain("results.claimed?.found == false");
   });
 });
+
+describe("a person we never cold-emailed has no prior generation (WA-RESPONDER-1012)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const node = dag.nodes.find((n) => n.id === "prior-generation");
+  const args = (prior: unknown) => [
+    { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
+    { leadDetail: { lead: { firstName: "Ada", timezone: "UTC" } } },
+    { replyChannel: "whatsapp", conversation: { messages: [{ direction: "inbound", text: "How does it work?", channel: "whatsapp" }] } },
+    prior,
+    { timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] },
+    { offerId: "offer-1", name: "SSO audit", bookingUrl: null },
+    { brand: { name: "Acme" } },
+    "2026-10-12",
+  ];
+
+  it("reads the generation tolerantly and drafts without a thread subject on a 404", async () => {
+    expect(node?.config?.tolerateFailure).toBe(true);
+    const out = await composeReply(...args({ ok: false, status: 404, error: "{\"error\":\"Generation not found\"}" }));
+    expect(out.message as string).toContain("THE CONVERSATION SO FAR, oldest first\n");
+  });
+
+  it("still fails loud when the read itself broke", async () => {
+    await expect(composeReply(...args({ ok: false, status: 502, error: "down" }))).rejects.toThrow("could not read the email we generated for them (502)");
+  });
+});

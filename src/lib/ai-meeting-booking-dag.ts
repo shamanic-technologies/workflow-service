@@ -1298,6 +1298,9 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
       ") has no name; refusing to answer a prospect without knowing what we sell them");
   }
 
+  if (priorGeneration?.ok === false && priorGeneration?.status !== 404) {
+    throw new Error("[ai-meeting-booking] could not read the email we generated for them (" + String(priorGeneration?.status) + "): " + String(priorGeneration?.error ?? "").slice(0, 300));
+  }
   const priorSubject = priorGeneration?.generation?.subject ?? null;
   const followupCount = Number(followup?.followup?.followupCount ?? 0);
 
@@ -1678,8 +1681,12 @@ export async function main(draft, email) {
  * True when a stored DAG answers on email only: it reads no merged timeline, so
  * a person who answered on WhatsApp is never answered (WA-RESPONDER-1012).
  */
-export function needsChannelAgnosticReply(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
-  return !(dag?.nodes ?? []).some((n) => n?.id === "person-timeline");
+export function needsChannelAgnosticReply(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  if (!nodes.some((n) => n?.id === "person-timeline")) return true;
+  // A person we never cold-emailed has no prior generation: that read must tolerate its 404.
+  const prior = nodes.find((n) => n?.id === "prior-generation");
+  return !!prior && prior.config?.tolerateFailure !== true;
 }
 
 /**
@@ -1871,7 +1878,15 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       {
         id: "prior-generation",
         type: "http.call",
-        config: { service: "content-generation", method: "GET", path: "/generations/by-lead/{leadId}" },
+        // A person we never cold-emailed (they answered a WhatsApp message) has no
+        // generation: a 404 there is "none", read by compose-prompt, which throws
+        // on any other failure.
+        config: {
+          service: "content-generation",
+          method: "GET",
+          path: "/generations/by-lead/{leadId}",
+          tolerateFailure: true,
+        },
         retries: 0,
         inputMapping: { "params.leadId": "$ref:claimed.output.followup.leadId" },
       },

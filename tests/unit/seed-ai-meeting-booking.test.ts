@@ -21,5 +21,11 @@ describe("seed-ai-meeting-booking only upgrades CONVERSATION responders (WA-RESP
     const emailOnly = { ...conversation, nodes: conversation.nodes.filter((n) => n.id !== "person-timeline") };
     expect(needsChannelAgnosticReply(emailOnly)).toBe(true);
     expect(needsChannelAgnosticReply(conversation)).toBe(false);
+    // v0.48.57's DAG: the prior-generation read still threw on a WhatsApp-only person's 404.
+    const strictPrior = {
+      ...conversation,
+      nodes: conversation.nodes.map((n) => (n.id === "prior-generation" ? { ...n, config: { ...n.config, tolerateFailure: undefined } } : n)),
+    };
+    expect(needsChannelAgnosticReply(strictPrior)).toBe(true);
   });
 });
