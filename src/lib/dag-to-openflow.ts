@@ -762,6 +762,19 @@ function callsOfferScopedEndpoint(node: DAGNode): boolean {
 export const AUDIENCE_EXHAUSTED_REASON = "audience_exhausted";
 
 /**
+ * The ONLY lead-service serve reason that is an UNFINISHED look, not an empty
+ * one (lead-service src/lib/serve-reasons.ts): the serve ran out of time while
+ * the source was still paging (Apollo page 22 of 14,700, Jev rejecting most of
+ * who it screened). The no-lead end-run reports it as a NORMAL run (neither
+ * stopped nor idle), so campaign-service re-runs it on the short cadence and
+ * the look continues. Reported idle, the campaign slept 10 min after every
+ * 2-min look and never got through its population (Perky b14e5ef5, 2026-10-12:
+ * zero leads since 12:00 UTC on a $42/day sourcing budget, $6 spent). Every
+ * other non-exhausted reason (sources off, credit, budget reached) is a wait.
+ */
+export const SERVE_TIMED_OUT_REASON = "serve_timed_out";
+
+/**
  * True for a campaign `/end-run` call whose DAG states a literal
  * `stopCampaign: true`: the no-lead end-run every lead-serving workflow carries
  * on its `fetch-lead.found == false` edge. A node that maps its body (or the
@@ -975,7 +988,9 @@ function nodeToModule(
   // after the cause was gone (campaign 1e95a4c3, 2026-10-09: 11 audiences
   // marked in 3 minutes while its sources were off). The flag is now read off
   // the serve's own reason; any other reason ends the run as idle
-  // (`noWorkAvailable`: recheck later, nothing marked, nothing resolved).
+  // (`noWorkAvailable`: recheck later, nothing marked, nothing resolved),
+  // except a timed-out serve, which ends as a normal run so the look goes on
+  // (see SERVE_TIMED_OUT_REASON).
   if (
     servedLead.leadModuleId &&
     servedLead.descendants.has(moduleId) &&
@@ -984,7 +999,8 @@ function nodeToModule(
   ) {
     const exhausted = `results.${servedLead.leadModuleId}?.reason === ${JSON.stringify(AUDIENCE_EXHAUSTED_REASON)}`;
     extraTransforms["body.stopCampaign"] = { type: "javascript", expr: exhausted };
-    extraTransforms["body.noWorkAvailable"] = { type: "javascript", expr: `!(${exhausted})` };
+    const timedOut = `results.${servedLead.leadModuleId}?.reason === ${JSON.stringify(SERVE_TIMED_OUT_REASON)}`;
+    extraTransforms["body.noWorkAvailable"] = { type: "javascript", expr: `!(${exhausted}) && !(${timedOut})` };
   }
 
   const inputTransforms = buildInputTransforms(
