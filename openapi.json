@@ -1817,6 +1817,115 @@
           "workflows"
         ]
       },
+      "PublicWorkflowDefinitionItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Workflow (version) ID."
+          },
+          "workflowSlug": {
+            "type": "string",
+            "description": "Version slug, the same value the identity-gated GET /workflows serves."
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Human-readable version name."
+          },
+          "workflowDynastySlug": {
+            "type": "string",
+            "description": "Stable dynasty slug across versions."
+          },
+          "workflowDynastyName": {
+            "type": "string",
+            "description": "Stable dynasty name across versions."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Version number within the dynasty."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated"
+            ],
+            "description": "Per-version lifecycle status."
+          },
+          "workflowDynastyStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated"
+            ],
+            "description": "Dynasty-level status (the whole lineage retired or not)."
+          },
+          "executable": {
+            "type": "boolean",
+            "description": "True only when both `status` and `workflowDynastyStatus` are 'active': this is the version that runs."
+          },
+          "featureSlug": {
+            "type": "string",
+            "description": "Feature slug."
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Stored workflow description, or null."
+          },
+          "dag": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DAG"
+              },
+              {
+                "description": "Full stored DAG of this version (what the workflow does)."
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "ISO timestamp the version was created."
+          }
+        },
+        "required": [
+          "id",
+          "workflowSlug",
+          "workflowName",
+          "workflowDynastySlug",
+          "workflowDynastyName",
+          "version",
+          "status",
+          "workflowDynastyStatus",
+          "executable",
+          "featureSlug",
+          "description",
+          "dag",
+          "createdAt"
+        ]
+      },
+      "PublicWorkflowDefinitionsResponse": {
+        "type": "object",
+        "properties": {
+          "featureSlug": {
+            "type": "string",
+            "description": "The feature slug queried."
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWorkflowDefinitionItem"
+            },
+            "description": "Every version of every workflow of the feature, ordered by dynasty slug then version."
+          }
+        },
+        "required": [
+          "featureSlug",
+          "workflows"
+        ]
+      },
       "ExecuteBySlugRequest": {
         "type": "object",
         "properties": {
@@ -4770,6 +4879,55 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PublicWorkflowsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/workflows/definitions": {
+      "get": {
+        "summary": "Public: every version of a feature's workflows, with DAG and description",
+        "description": "Service-to-service endpoint for org-less readers (e.g. a background judging sweep). Returns EVERY version of every workflow of one feature (active and deprecated, both status axes), each with its full stored DAG and description. Requires x-api-key. No identity headers needed.",
+        "tags": [
+          "Public"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One feature slug. Every version of every workflow of that feature is returned, any status."
+            },
+            "required": true,
+            "description": "One feature slug. Every version of every workflow of that feature is returned, any status.",
+            "name": "featureSlug",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicWorkflowDefinitionsResponse"
                 }
               }
             }
