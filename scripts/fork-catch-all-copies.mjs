@@ -33,8 +33,8 @@ export const TACTIC_ID = "catch-all";
 export const DECIDED_BY = "kevin";
 export const ACCEPTED_EMAILS = "valid_and_catch_all";
 export const SERVE_PATHS = ["/orgs/buffer/next", "/buffer/next"];
-/** Owner rule: nothing goes to Haiku 4.5 (the bare `haiku` alias resolves to it). Haiku 5.5 is allowed. */
-export const BANNED_MODELS = ["haiku", "claude-haiku-4-5"];
+/** Owner rule: nothing goes to Haiku 4.5. The bare `haiku` alias is Haiku 5.5 since 2026-10-09 (chat-service `anthropic.ts`), allowed. */
+export const BANNED_MODELS = ["claude-haiku-4-5"];
 export const COPY_MARKER = "Valid + Catch-all copy.";
 export const LEG_NOTE =
   "Owner decision 2026-10-13 (CATCHALL-SERVE-OPTION-1013): Valid + Catch-all copy of a top cold email workflow; active only once Jev judged it Catch-all.";
