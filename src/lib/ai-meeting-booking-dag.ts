@@ -1743,6 +1743,18 @@ export function needsEveryPredecessorClaim(dag: { nodes?: Array<{ id?: string; i
 }
 
 /**
+ * True when a stored DAG keys its WhatsApp reply or rep alert on the claimed row and its due date only
+ * (REDELIVERY-IDEMPOTENCY-1014): a redelivered occurrence re-dues the row, so the key changed and a run that
+ * sent then failed would write the person twice. Current = both nodes read `flow_input.trigger`.
+ */
+export function needsOccurrenceSendKey(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, string> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const keyed = nodes.filter((n) => n?.id === "finalize-reply" || n?.id === "compose-rep-alert");
+  if (keyed.length === 0) return false;
+  return keyed.some((n) => n.inputMapping?.trigger !== "$ref:flow_input.trigger");
+}
+
+/**
  * True when a stored DAG answers on email only: it reads no merged timeline, so
  * a person who answered on WhatsApp is never answered (WA-RESPONDER-1012).
  */

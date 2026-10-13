@@ -38,6 +38,7 @@ import {
   isConversationResponder,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
+  needsOccurrenceSendKey,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
@@ -409,7 +410,8 @@ async function main() {
         needsClientStatedFacts(w.dag) ||
         needsSeveralOffersTolerance(w.dag) ||
         needsChannelAgnosticReply(w.dag) ||
-        needsEveryPredecessorClaim(w.dag))
+        needsEveryPredecessorClaim(w.dag) ||
+        needsOccurrenceSendKey(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
