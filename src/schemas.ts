@@ -731,6 +731,37 @@ export const PublicWorkflowsResponseSchema = z
   })
   .openapi("PublicWorkflowsResponse");
 
+export const PublicWorkflowDefinitionsQuerySchema = z
+  .object({
+    featureSlug: z.string().min(1).describe("One feature slug. Every version of every workflow of that feature is returned, any status."),
+  })
+  .openapi("PublicWorkflowDefinitionsQuery");
+
+export const PublicWorkflowDefinitionItemSchema = z
+  .object({
+    id: z.string().uuid().describe("Workflow (version) ID."),
+    workflowSlug: z.string().describe("Version slug, the same value the identity-gated GET /workflows serves."),
+    workflowName: z.string().describe("Human-readable version name."),
+    workflowDynastySlug: z.string().describe("Stable dynasty slug across versions."),
+    workflowDynastyName: z.string().describe("Stable dynasty name across versions."),
+    version: z.number().int().describe("Version number within the dynasty."),
+    status: z.enum(["active", "deprecated"]).describe("Per-version lifecycle status."),
+    workflowDynastyStatus: z.enum(["active", "deprecated"]).describe("Dynasty-level status (the whole lineage retired or not)."),
+    executable: z.boolean().describe("True only when both `status` and `workflowDynastyStatus` are 'active': this is the version that runs."),
+    featureSlug: z.string().describe("Feature slug."),
+    description: z.string().nullable().describe("Stored workflow description, or null."),
+    dag: DAGSchema.describe("Full stored DAG of this version (what the workflow does)."),
+    createdAt: z.string().nullable().describe("ISO timestamp the version was created."),
+  })
+  .openapi("PublicWorkflowDefinitionItem");
+
+export const PublicWorkflowDefinitionsResponseSchema = z
+  .object({
+    featureSlug: z.string().describe("The feature slug queried."),
+    workflows: z.array(PublicWorkflowDefinitionItemSchema).describe("Every version of every workflow of the feature, ordered by dynasty slug then version."),
+  })
+  .openapi("PublicWorkflowDefinitionsResponse");
+
 // --- Provider Requirements schemas ---
 
 export const ServiceEndpointSchema = z
@@ -1652,6 +1683,33 @@ registry.registerPath({
       description: "Workflow metadata",
       content: {
         "application/json": { schema: PublicWorkflowsResponseSchema },
+      },
+    },
+    400: {
+      description: "Missing or invalid query parameters",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/public/workflows/definitions",
+  summary: "Public: every version of a feature's workflows, with DAG and description",
+  description:
+    "Service-to-service endpoint for org-less readers (e.g. a background judging sweep). Returns EVERY version " +
+    "of every workflow of one feature (active and deprecated, both status axes), each with its full stored DAG " +
+    "and description. Requires x-api-key. No identity headers needed.",
+  tags: ["Public"],
+  security: [{ apiKey: [] }],
+  request: {
+    query: PublicWorkflowDefinitionsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Workflow definitions",
+      content: {
+        "application/json": { schema: PublicWorkflowDefinitionsResponseSchema },
       },
     },
     400: {
