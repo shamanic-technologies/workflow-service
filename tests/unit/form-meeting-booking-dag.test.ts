@@ -228,6 +228,21 @@ describe("finalizing the answer", () => {
     });
   });
 
+  it("keys both sends on the OCCURRENCE when the run's trigger names the claimed person: a redelivery re-dues the row, the key holds", async () => {
+    const draft = { json: { decision: "answer", subject: "s", bodyHtml: "<p>x</p>", whatsappText: "x", reason: "r" } };
+    const first = await main(draft, { ...person, eventId: "evt-1" });
+    // campaign-service redelivers the same occurrence after a run that sent then failed: same eventId, NEW due date.
+    const redelivered = await main(draft, { ...person, eventId: "evt-1", dueAt: "2026-10-12T15:02:00.000Z" });
+    expect(first.idempotencyKey).toBe("form-meeting-booking:event:evt-1");
+    expect(first.whatsappIdempotencyKey).toBe("form-meeting-booking:event:evt-1:whatsapp");
+    expect(redelivered.idempotencyKey).toBe(first.idempotencyKey);
+    expect(redelivered.whatsappIdempotencyKey).toBe(first.whatsappIdempotencyKey);
+    // A new form fill by the same person is a new occurrence: answered.
+    const next = await main(draft, { ...person, eventId: "evt-2" });
+    expect(next.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(next.whatsappIdempotencyKey).not.toBe(first.whatsappIdempotencyKey);
+  });
+
   it("passes no_reply_owed through; throws on an empty answer or an unknown decision", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await main({ json: { decision: "no_reply_owed", reason: "test entry" } }, person)).toEqual({ decision: "no_reply_owed", reason: "test entry" });

@@ -2072,6 +2072,26 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     expect(out.whatsappIdempotencyKey).toBe("ai-meeting-booking:row-1:2026-10-12T16:00:00.000Z:whatsapp");
   });
 
+  it("keys the WhatsApp reply on the OCCURRENCE when the run's trigger names the claimed person (redelivery never writes twice)", async () => {
+    const main = loadMain(FINALIZE_REPLY_CODE);
+    const draft = { json: { replyHtml: "<p>Hi</p>" } };
+    const followup = { id: "row-1", email: "Ada@Example.com", dueAt: "2026-10-12T16:00:00.000Z" };
+    const trigger = { eventId: "evt-1", person: { email: "ada@example.com " } };
+    const first = await main(draft, followup, trigger);
+    const redelivered = await main(draft, { ...followup, dueAt: "2026-10-12T16:02:00.000Z" }, trigger);
+    expect(first.whatsappIdempotencyKey).toBe("ai-meeting-booking:event:evt-1:whatsapp");
+    expect(redelivered.whatsappIdempotencyKey).toBe(first.whatsappIdempotencyKey);
+    expect((await main(draft, followup, { ...trigger, eventId: "evt-2" })).whatsappIdempotencyKey).toBe("ai-meeting-booking:event:evt-2:whatsapp");
+    // A trigger naming someone else, or none (a scheduled rung), keys on the row and its due date.
+    expect((await main(draft, followup, { eventId: "evt-1", person: { email: "bob@example.com" } })).whatsappIdempotencyKey)
+      .toBe("ai-meeting-booking:row-1:2026-10-12T16:00:00.000Z:whatsapp");
+    expect((await main(draft, followup, "")).whatsappIdempotencyKey).toBe("ai-meeting-booking:row-1:2026-10-12T16:00:00.000Z:whatsapp");
+    const dag = buildAiMeetingBookingDag(DAG_OPTS);
+    for (const id of ["finalize-reply", "compose-rep-alert"]) {
+      expect(dag.nodes.find((n) => n.id === id)?.inputMapping?.trigger).toBe("$ref:flow_input.trigger");
+    }
+  });
+
   it("tells the model to write a chat message when the reply goes out on WhatsApp, and keeps the email rules otherwise", async () => {
     const args = (replyChannel: string) => [
       { followup: { id: "row-1", leadId: "lead-1", followupCount: 0 } },
@@ -2161,6 +2181,14 @@ describe("a chat escalation alerts the brand's sales rep on WhatsApp (owner 2026
     expect(byId.get("alert-rep")?.inputMapping?.skip).toBe("$ref:compose-rep-alert.output.skip");
     expect(descendants(dag, "hand-over").has("alert-rep")).toBe(true);
     expect(descendants(dag, "alert-rep").has("end-run-escalated")).toBe(true);
+  });
+
+  it("keys the rep alert on the occurrence when the run's trigger names the person: a redelivery alerts nobody twice", async () => {
+    const trigger = { eventId: "evt-9", person: { email: "ada@example.com" } };
+    const first = await loadMain(COMPOSE_REP_ALERT_CODE)(draft, followup, chat, brand, trigger);
+    const again = await loadMain(COMPOSE_REP_ALERT_CODE)(draft, { ...followup, dueAt: "2026-10-13T08:05:00.000Z" }, chat, brand, trigger);
+    expect(first.idempotencyKey).toBe("ai-meeting-booking:event:evt-9:rep-alert");
+    expect(again.idempotencyKey).toBe(first.idempotencyKey);
   });
 
   it("alerts nobody on an email thread (instantly-service escalates those) and says so loudly when no rep phone is stated", async () => {
