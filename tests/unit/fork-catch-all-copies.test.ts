@@ -3,7 +3,7 @@ import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 import type { DAG } from "../../src/types.js";
 // @ts-expect-error — plain .mjs ops script, no type declarations
-import { withCatchAll, copyDescription, isCopy, pickSources, judgmentState, contentModel, ACCEPTED_EMAILS, PIPE_ID } from "../../scripts/fork-catch-all-copies.mjs";
+import { withCatchAll, copyDescription, isCopy, pickSources, judgmentState, contentModel, ACCEPTED_EMAILS, PIPE_ID, BANNED_MODELS } from "../../scripts/fork-catch-all-copies.mjs";
 
 function sourceDag(model = "flash"): DAG {
   return {
@@ -58,9 +58,10 @@ describe("catch-all copies", () => {
       { id: "e", ...act },
       { id: "f", ...act },
     ];
-    const models: Record<string, string> = { a: "flash", c: "haiku", d: "pro", e: "haiku-5-5", f: "opus" };
+    const models: Record<string, string> = { a: "flash", c: "claude-haiku-4-5", d: "pro", e: "haiku", f: "opus" };
     const r = pickSources(rows, 3, (id: string) => models[id], (id: string) => id === "d");
     expect(r.picked).toEqual(["a", "e", "f"]);
+    expect(BANNED_MODELS).not.toContain("haiku");
     expect(r.skipped.map((s: string[]) => s[0])).toEqual(["b", "c", "d"]);
     expect(PIPE_ID).toBe("sales-cold-email-outreach|lead_found_to_conversation");
   });
