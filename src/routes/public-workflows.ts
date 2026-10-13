@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { eq, and, or, inArray } from "drizzle-orm";
+import { eq, and, or, inArray, asc } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
 import {
   PublicWorkflowsQuerySchema,
+  PublicWorkflowDefinitionsQuerySchema,
 } from "../schemas.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
@@ -75,6 +76,50 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
     });
   } catch (err: unknown) {
     console.error("[workflow-service] GET /public/workflows error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /public/workflows/definitions — every version of one feature's workflows,
+// any status on either axis, WITH its DAG and description (x-api-key, no
+// identity). For org-less readers that must judge what a workflow DOES (the
+// features-service tactic sweep); the identity-gated GET /workflows is the only
+// other read carrying the DAG, and a background job has no identity to send.
+router.get("/public/workflows/definitions", requireApiKey, async (req, res) => {
+  try {
+    const query = PublicWorkflowDefinitionsQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      res.status(400).json({ error: "Validation error", details: query.error });
+      return;
+    }
+    const featureSlug = query.data.featureSlug.trim();
+
+    const rows = await db
+      .select()
+      .from(workflows)
+      .where(eq(workflows.featureSlug, featureSlug))
+      .orderBy(asc(workflows.workflowDynastySlug), asc(workflows.version));
+
+    res.json({
+      featureSlug,
+      workflows: rows.map((w) => ({
+        id: w.id,
+        workflowSlug: w.workflowSlug,
+        workflowName: w.workflowName,
+        workflowDynastySlug: w.workflowDynastySlug,
+        workflowDynastyName: w.workflowDynastyName,
+        version: w.version,
+        status: w.status,
+        workflowDynastyStatus: w.workflowDynastyStatus,
+        executable: w.status === "active" && w.workflowDynastyStatus === "active",
+        featureSlug: w.featureSlug,
+        description: w.description ?? null,
+        dag: w.dag,
+        createdAt: w.createdAt ? w.createdAt.toISOString() : null,
+      })),
+    });
+  } catch (err: unknown) {
+    console.error("[workflow-service] GET /public/workflows/definitions error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

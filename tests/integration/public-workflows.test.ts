@@ -31,7 +31,11 @@ vi.mock("../../src/db/index.js", () => ({
 
         const rows = isWorkflowRuns ? mockWorkflowRunRows : mockWorkflowRows;
         const result = Promise.resolve(rows);
-        (result as any).where = (_condition?: unknown) => Promise.resolve(rows);
+        (result as any).where = (_condition?: unknown) => {
+          const filtered = Promise.resolve(rows);
+          (filtered as any).orderBy = () => Promise.resolve(rows);
+          return filtered;
+        };
         return result;
       },
     }),
@@ -370,5 +374,58 @@ describe("GET /workflows/dynasty/slugs", () => {
       .set(API_KEY)
       .query({ workflowDynastySlug: "does-not-exist" });
     expect(res.status).toBe(404);
+  });
+});
+
+// ==================== GET /public/workflows/definitions ====================
+
+describe("GET /public/workflows/definitions", () => {
+  const API_KEY = { "x-api-key": "test-api-key" };
+  beforeEach(() => {
+    mockWorkflowRows.length = 0;
+  });
+
+  it("requires the api key", async () => {
+    const res = await request.get("/public/workflows/definitions").query({ featureSlug: "sales-email-cold-outreach" });
+    expect(res.status).toBe(401);
+  });
+
+  it("needs no identity headers and 400s without a featureSlug", async () => {
+    const res = await request.get("/public/workflows/definitions").set(API_KEY);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns every version, both axes, with DAG, description and executable", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "00000000-0000-4000-8000-000000000001", status: "deprecated", version: 1, description: "v1 desc" }),
+      makeWorkflow({
+        id: "00000000-0000-4000-8000-000000000002",
+        workflowSlug: `${DEFAULT_WF_SLUG}-v2`,
+        version: 2,
+        description: "v2 desc",
+      }),
+      makeWorkflow({
+        id: "00000000-0000-4000-8000-000000000003",
+        workflowSlug: "sales-email-cold-outreach-beta",
+        workflowDynastySlug: "sales-email-cold-outreach-beta",
+        workflowDynastyStatus: "deprecated",
+        status: "deprecated",
+      }),
+    );
+
+    const res = await request
+      .get("/public/workflows/definitions")
+      .set(API_KEY)
+      .query({ featureSlug: "sales-email-cold-outreach" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.featureSlug).toBe("sales-email-cold-outreach");
+    expect(res.body.workflows).toHaveLength(3);
+    const [v1, v2, beta] = res.body.workflows;
+    expect(v1).toMatchObject({ workflowSlug: DEFAULT_WF_SLUG, version: 1, executable: false, description: "v1 desc" });
+    expect(v2).toMatchObject({ workflowSlug: `${DEFAULT_WF_SLUG}-v2`, version: 2, executable: true, status: "active" });
+    expect(beta).toMatchObject({ workflowDynastyStatus: "deprecated", executable: false });
+    expect(v2.dag).toEqual(VALID_LINEAR_DAG);
+    expect(typeof v2.createdAt).toBe("string");
   });
 });
