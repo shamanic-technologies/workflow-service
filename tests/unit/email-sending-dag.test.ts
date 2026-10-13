@@ -4,7 +4,11 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   EMAIL_SENDING_PIPE_ID,
   HAS_EMAIL,
+  NOBODY_DUE,
   NO_EMAIL,
+  OTHER_PERSON,
+  PLAN_CLAIM_CODE,
+  UNCLAIMED,
   PUSHED_EMAIL_MISSING_REASON,
   PUSHED_EMAIL_REFUSED_REASON,
   PUSHED_EMAIL_SENT_REASON,
@@ -75,12 +79,33 @@ describe("email sending DAG", () => {
     }
   });
 
-  it("claims from THIS campaign's own queue; nobody due ends idle and cannot reach a send", () => {
+  it("claims from THIS campaign's own queue only on a run carrying a push; a run carrying none ends idle", () => {
     const claims = dag.nodes.filter((n) => String(n.config?.path ?? "").includes("claim-next"));
     expect(claims.map((n) => n.id)).toEqual(["claim-followup"]);
-    expect(byId.get("claim-followup")?.inputMapping?.["params.campaignId"]).toBe("$ref:flow_input.campaignId");
+    expect(byId.get("claim-followup")?.inputMapping).toEqual({
+      "params.campaignId": "$ref:flow_input.campaignId",
+      skip: "$ref:plan-claim.output.skip",
+    });
+    expect(dag.edges).toContainEqual({ from: "plan-claim", to: "claim-followup" });
+    expect(dag.edges).toContainEqual({ from: "check-claim", to: "end-run-nobody-due", condition: NOBODY_DUE });
+    expect(dag.edges).toContainEqual({ from: "check-claim", to: "end-run-unclaimed", condition: UNCLAIMED });
     expect(descendants(dag, "end-run-nobody-due").size).toBe(0);
     expect(byId.get("end-run-nobody-due")?.config?.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+    expect(byId.get("end-run-unclaimed")?.config?.body).toEqual({ success: false, stopCampaign: false });
+    const notCalled = { ok: false, skipped: true, notCalled: true };
+    expect(holds(NOBODY_DUE, { "plan-claim": { skip: true }, "claim-followup": notCalled })).toBe(true);
+    expect(holds(UNCLAIMED, { "plan-claim": { skip: true }, "claim-followup": notCalled })).toBe(false);
+    expect(holds(UNCLAIMED, { "plan-claim": { skip: false }, "claim-followup": { found: false, reason: "nothing_due" } })).toBe(true);
+    expect(holds(NOBODY_DUE, { "plan-claim": { skip: false }, "claim-followup": { found: false } })).toBe(false);
+  });
+
+  it("regression (DefiniteJobs 2026-10-13): a scheduled run with no trigger never claims the pushed person", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const plan = loadMain(PLAN_CLAIM_CODE);
+    expect(await plan(undefined)).toEqual({ skip: true });
+    expect(await plan("")).toEqual({ skip: true });
+    expect(await plan({ eventId: "ev", person: { email: " " } })).toEqual({ skip: true });
+    expect(await plan(trigger)).toEqual({ skip: false });
   });
 
   it("sends the resolved email verbatim through the broadcast path, keyed on the occurrence", () => {
@@ -103,6 +128,16 @@ describe("email sending DAG", () => {
     expect(dag.nodes.some((n) => (n.config?.body as { kind?: string } | undefined)?.kind === "handed")).toBe(false);
   });
 
+  it("claimed someone the trigger does not name: their row is left alone and the run fails (redelivered)", () => {
+    expect(dag.edges).toContainEqual({ from: "check-email", to: "end-run-other-person", condition: OTHER_PERSON });
+    expect(descendants(dag, "end-run-other-person").size).toBe(0);
+    expect(byId.get("end-run-other-person")?.config?.body).toEqual({ success: false, stopCampaign: false });
+    expect(holds(OTHER_PERSON, { "resolve-email": { ok: false, stopRow: false } })).toBe(true);
+    expect(holds(NO_EMAIL, { "resolve-email": { ok: false, stopRow: false } })).toBe(false);
+    expect(holds(NO_EMAIL, { "resolve-email": { ok: false, stopRow: true } })).toBe(true);
+    expect(holds(OTHER_PERSON, { "resolve-email": { ok: false, stopRow: true } })).toBe(false);
+  });
+
   it("a refused send and a missing email each stop the row with their reason; the missing one fails the run", () => {
     expect(byId.get("record-refused")?.config?.body).toEqual({ kind: "stopped", reason: PUSHED_EMAIL_REFUSED_REASON });
     expect(byId.get("record-missing")?.config?.body).toEqual({ kind: "stopped", reason: PUSHED_EMAIL_MISSING_REASON });
@@ -114,7 +149,7 @@ describe("email sending DAG", () => {
     expect(holds(REFUSED, { ...ok, "send-email": { ok: false, skipped: true, code: "lead_opted_out" } })).toBe(true);
     // On the missing path the send never ran: neither arm.
     for (const c of [SENT, REFUSED]) expect(holds(c, { "resolve-email": { ok: false } })).toBe(false);
-    for (const c of [SENT, REFUSED, HAS_EMAIL, NO_EMAIL]) expect(holds(c, {})).toBe(false);
+    for (const c of [SENT, REFUSED, HAS_EMAIL, NO_EMAIL, OTHER_PERSON]) expect(holds(c, {})).toBe(false);
   });
 });
 
@@ -150,15 +185,15 @@ describe("resolving the pushed email", () => {
   it("never sends another person's email, nor one with no subject, body or event, and says why", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const cases = [
-      [{ ...trigger, person: { email: "someone@else.com" } }, /names someone@else.com/],
-      [{ ...trigger, item: { bodyHtml } }, /no subject/],
-      [{ ...trigger, item: { subject, bodyHtml: "  " } }, /no body/],
-      [{ ...trigger, eventId: undefined }, /no eventId/],
-      [null, /no trigger/],
+      [{ ...trigger, person: { email: "someone@else.com" } }, /names someone@else.com/, false],
+      [{ ...trigger, item: { bodyHtml } }, /no subject/, true],
+      [{ ...trigger, item: { subject, bodyHtml: "  " } }, /no body/, true],
+      [{ ...trigger, eventId: undefined }, /no eventId/, true],
+      [null, /no trigger/, false],
     ] as const;
-    for (const [t, why] of cases) {
+    for (const [t, why, stopRow] of cases) {
       const out = await main(claim, t);
-      expect(out).toMatchObject({ ok: false, rowId: "row-1" });
+      expect(out).toMatchObject({ ok: false, rowId: "row-1", stopRow });
       expect(out.why).toMatch(why);
     }
     expect(spy).toHaveBeenCalledTimes(cases.length);
