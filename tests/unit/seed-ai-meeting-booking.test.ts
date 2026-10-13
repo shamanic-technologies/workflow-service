@@ -4,6 +4,7 @@ import {
   isConversationResponder,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
+  needsOccurrenceSendKey,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 
@@ -45,5 +46,25 @@ describe("seed-ai-meeting-booking only upgrades CONVERSATION responders (WA-RESP
     };
     expect(needsEveryPredecessorClaim(onePredecessor)).toBe(true);
     expect(needsEveryPredecessorClaim(buildFormMeetingBookingDag())).toBe(false);
+  });
+});
+
+describe("seed-ai-meeting-booking upgrades a responder whose sends are not keyed on the occurrence (REDELIVERY-IDEMPOTENCY-1014)", () => {
+  const conversation = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
+
+  it("calls a DAG whose WhatsApp reply or rep alert does not read the trigger stale, the current one current", () => {
+    expect(needsOccurrenceSendKey(conversation)).toBe(false);
+    for (const id of ["finalize-reply", "compose-rep-alert"]) {
+      const before = {
+        ...conversation,
+        nodes: conversation.nodes.map((n) => {
+          if (n.id !== id) return n;
+          const { trigger: _t, ...rest } = n.inputMapping ?? {};
+          return { ...n, inputMapping: rest };
+        }),
+      };
+      expect(needsOccurrenceSendKey(before)).toBe(true);
+    }
+    expect(needsOccurrenceSendKey(buildFormMeetingBookingDag())).toBe(false);
   });
 });
