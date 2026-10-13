@@ -21,6 +21,7 @@ import { SpecWatcher, setSpecWatcher } from "./lib/spec-watcher.js";
 import healthRoutes from "./routes/health.js";
 import workflowsRoutes from "./routes/workflows.js";
 import workflowPromptEditRoutes from "./routes/workflow-prompt-edit.js";
+import workflowForkRoutes from "./routes/workflow-fork.js";
 import workflowRunsRoutes from "./routes/workflow-runs.js";
 import openapiRoutes from "./routes/openapi.js";
 import publicWorkflowsRoutes from "./routes/public-workflows.js";
@@ -50,6 +51,7 @@ app.use(internalRoutes);
 // Identity-gated routes
 app.use(requireIdentity);
 app.use(workflowPromptEditRoutes);
+app.use(workflowForkRoutes);
 app.use(workflowsRoutes);
 app.use(workflowRunsRoutes);
 app.use(figuresRoutes);

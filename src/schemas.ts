@@ -907,6 +907,63 @@ export const PromptEditVariableErrorSchema = z
   })
   .openapi("PromptEditVariableError");
 
+// --- Fork with a stated change (POST /workflows/{id}/fork + dynasty twin) ---
+
+const changePath = z.string().describe(
+  "JSON Pointer into the workflow's DAG (`{nodes, edges}`), e.g. `/nodes/fetch-lead/config/body/acceptedEmails`. " +
+  "Under `/nodes` a non-numeric segment names a node by its `id`; a numeric one is the array index."
+);
+
+export const WorkflowChangeSchema = z
+  .object({
+    op: z.enum(["add", "replace", "remove", "test"]).describe(
+      "JSON Patch (RFC 6902) operation. `add` sets a key (creating it) or inserts into an array; `replace` " +
+      "requires the path to exist; `remove` deletes it; `test` refuses the whole fork unless the path holds `value` " +
+      "(use it to assert the source is what you think before changing it)."
+    ),
+    path: changePath,
+    value: z.unknown().optional().describe("The value to add, replace with, or test against. Required except for `remove`."),
+  })
+  .refine((c) => c.op === "remove" || c.value !== undefined, { message: "value is required for add, replace and test" })
+  .openapi("WorkflowChange");
+
+export const ForkWorkflowRequestSchema = z
+  .object({
+    changes: z.array(WorkflowChangeSchema).min(1).describe(
+      "The stated change, applied in order to a copy of the source DAG. Everything it does not name is copied " +
+      "byte-identical. A change that leaves the DAG identical is refused (400)."
+    ),
+    description: z.string().min(1).optional().describe(
+      "The copy's description. Defaults to the source's. Say what the copy does differently in plain words: " +
+      "features-service judges a workflow's tactics on its DAG and description."
+    ),
+    tags: z.array(z.string()).optional().describe("The copy's tags. Defaults to the source's."),
+  })
+  .strict()
+  .openapi("ForkWorkflowRequest");
+
+export const ForkWorkflowResponseSchema = z
+  .object({
+    workflow: WorkflowResponseSchema.describe(
+      "The NEW workflow: version 1 of a new dynasty, deployed, and serving every pipe its source serves (active at once)."
+    ),
+    sourceWorkflow: z.object({
+      id: z.string().uuid(),
+      workflowSlug: z.string(),
+      workflowDynastySlug: z.string(),
+      version: z.number().int(),
+    }).describe("The version the change was applied to. Never modified."),
+    changesApplied: z.number().int().describe("Number of change operations applied."),
+  })
+  .openapi("ForkWorkflowResponse");
+
+export const ForkWorkflowChangeErrorSchema = z
+  .object({
+    error: z.string().describe("Readable sentence naming the change that cannot apply and why."),
+    changeIndex: z.number().int().describe("Zero-based index in `changes` of the operation that failed."),
+  })
+  .openapi("ForkWorkflowChangeError");
+
 // --- Figures (POST /orgs/figures/read) ---
 
 export const ReadFiguresRequestSchema = z
@@ -1871,6 +1928,68 @@ registry.registerPath({
     },
   },
   responses: promptEditResponses,
+});
+
+const forkResponses = {
+  201: {
+    description: "Created: the copy, a new dynasty, deployed and assigned to every pipe its source serves",
+    content: { "application/json": { schema: ForkWorkflowResponseSchema } },
+  },
+  400: {
+    description: "Invalid body or id, the change leaves the DAG identical, or the changed DAG fails validation",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+  404: {
+    description: "Workflow not found (by id), or the dynasty has no active version (by dynasty slug)",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+  409: {
+    description: "The changed DAG already exists as an active workflow (`existingWorkflowId` names it)",
+    content: { "application/json": { schema: WorkflowConflictResponseSchema } },
+  },
+  422: {
+    description: "A change cannot apply (missing path, unknown node id, failed `test`)",
+    content: { "application/json": { schema: ForkWorkflowChangeErrorSchema } },
+  },
+  502: {
+    description: "The copy was written but its pipe assignment in features-service failed (`reason: leg_assignment_failed`)",
+    content: { "application/json": { schema: ErrorResponseSchema } },
+  },
+};
+
+const forkDescription =
+  "Copies a workflow with a stated change into a NEW dynasty: the change (JSON Patch on the DAG) is applied to a " +
+  "copy of the source DAG, the result is validated like any stored DAG, deployed, and registered on every pipe the " +
+  "source serves (active at once). The source is never modified. The copy belongs to the source's owner org.";
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/{id}/fork",
+  summary: "Fork a workflow version with a stated change",
+  description: forkDescription + " `id` may be any version; the copy branches from exactly that version.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    params: z.object({ id: z.string().uuid() }),
+    body: { required: true, content: { "application/json": { schema: ForkWorkflowRequestSchema } } },
+  },
+  responses: forkResponses,
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/dynasty/{workflowDynastySlug}/fork",
+  summary: "Fork a workflow dynasty with a stated change",
+  description: forkDescription + " The dynasty slug resolves to its currently-active version, which the copy branches from.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    params: z.object({ workflowDynastySlug: z.string().min(1) }),
+    body: { required: true, content: { "application/json": { schema: ForkWorkflowRequestSchema } } },
+  },
+  responses: forkResponses,
 });
 
 registry.registerPath({
