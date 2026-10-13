@@ -121,6 +121,7 @@
  */
 
 import type { DAG } from "./dag-validator.js";
+import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 
 /**
  * The instantly-service read of the conversation being answered.
@@ -306,11 +307,12 @@ export async function main(conversation, timeline) {
 
 /**
  * The WhatsApp form of the answer: the same words as plain text (a chat shows
- * no HTML), and the send's idempotency key, which names the claimed row and its
- * due date so a retried run never writes twice.
+ * no HTML), and the send's idempotency key (`OCCURRENCE_SEND_KEY_FN`): the
+ * occurrence when the run's trigger names the claimed person, so a redelivered
+ * occurrence never writes twice, else the claimed row and its due date.
  */
 export const FINALIZE_REPLY_CODE = `
-export async function main(draft, followup) {
+export async function main(draft, followup, trigger) {
   const html = String(draft?.json?.replyHtml ?? "");
   const text = html
     .replace(/<br\\s*\\/?>/gi, "\\n")
@@ -325,10 +327,12 @@ export async function main(draft, followup) {
   if (!followup?.id) throw new Error("[ai-meeting-booking] finalize-reply: no claimed row");
   return {
     whatsappText: text,
-    whatsappIdempotencyKey: "ai-meeting-booking:" + followup.id + ":" + String(followup.dueAt ?? "") + ":whatsapp",
+    whatsappIdempotencyKey: sendKey("ai-meeting-booking", followup, trigger) + ":whatsapp",
   };
 }
-`.trim();
+
+SEND_KEY_FN
+`.trim().replace("SEND_KEY_FN", OCCURRENCE_SEND_KEY_FN);
 
 /**
  * A conversation on a chat channel that the responder hands over is announced to
@@ -339,7 +343,7 @@ export async function main(draft, followup) {
  * alert, said loudly (the person still shows in "Needs your call").
  */
 export const COMPOSE_REP_ALERT_CODE = `
-export async function main(draft, followup, thread, brand) {
+export async function main(draft, followup, thread, brand, trigger) {
   const repPhone = brand?.brand?.salesRepPhone ?? null;
   const onChat = thread?.replyChannel && thread.replyChannel !== "email";
   if (!onChat) return { skip: true, reason: "email_thread" };
@@ -359,10 +363,12 @@ export async function main(draft, followup, thread, brand) {
     skip: false,
     phone: repPhone,
     text,
-    idempotencyKey: "ai-meeting-booking:" + String(followup?.id) + ":" + String(followup?.dueAt ?? "") + ":rep-alert",
+    idempotencyKey: sendKey("ai-meeting-booking", followup, trigger) + ":rep-alert",
   };
 }
-`.trim();
+
+SEND_KEY_FN
+`.trim().replace("SEND_KEY_FN", OCCURRENCE_SEND_KEY_FN);
 
 /**
  * The campaign every LEAD-FACING hop names. Not `flow_input.campaignId` — that
@@ -2151,6 +2157,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           followup: "$ref:claimed.output.followup",
           thread: "$ref:thread.output",
           brand: "$ref:brand-profile.output",
+          trigger: "$ref:flow_input.trigger",
         },
       },
       {
@@ -2229,6 +2236,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           draft: "$ref:ground-draft.output",
           followup: "$ref:claimed.output.followup",
+          trigger: "$ref:flow_input.trigger",
         },
       },
       // In their existing thread, from the mailbox that contacted them.
