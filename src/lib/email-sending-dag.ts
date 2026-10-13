@@ -12,11 +12,16 @@
  *
  * One run sends EXACTLY ONE email:
  *
- *  - The person is CLAIMED from this campaign's own queue (`claim-next`, atomic, at most one, exactly once), like
- *    every reactive campaign. Nobody due ends the run idle.
- *  - The email is read off `flow_input.trigger`, and ONLY when the trigger names the person claimed (email,
- *    case-folded). A claimed person this run carries no email for is never written to: the row is stopped
- *    (`pushed_email_missing`), named in the log, and the run fails, since there is nothing we may invent for them.
+ *  - Only a run CARRYING a pushed email claims anyone. campaign-service also dispatches reactive campaigns on its own
+ *    schedule, with no trigger; such a run claims nobody and ends idle. (It used to claim the person a push had made
+ *    due two seconds earlier, find no email on itself, and stop them: DefiniteJobs' first push, 2026-10-13.)
+ *  - A run carrying a push CLAIMS from this campaign's own queue (`claim-next`, atomic, at most one, exactly once).
+ *    Nobody claimable FAILS the run (its person was made due right before the dispatch), so campaign-service
+ *    redelivers the occurrence.
+ *  - The email is used ONLY when the trigger names the person claimed (email, case-folded). Claimed someone else:
+ *    nothing is sent, their row is left alone (the claim lapses after an hour, their own occurrence answers them),
+ *    and the run fails so this occurrence is redelivered. The trigger names the person but carries no usable
+ *    subject or body: nothing may be invented, the row is stopped (`pushed_email_missing`) and the run fails.
  *  - Subject and body go to email-gateway's BROADCAST send verbatim, the same path every cold-email workflow uses
  *    (Instantly, our inboxes): deliverability, tracking, the Unibox, threaded replies and stats are unchanged, and
  *    a positive reply fires `positive_reply_received` like any campaign reply. A body pushed as text only gets an
@@ -54,9 +59,20 @@ export const PUSHED_EMAIL_REFUSED_REASON = "pushed_email_refused";
 /** Stored when this run carries no pushed email for the person it claimed: nothing was sent. */
 export const PUSHED_EMAIL_MISSING_REASON = "pushed_email_missing";
 
+/** Whether this run carries a pushed email for someone: a run that does not claims nobody. Pure. */
+export const PLAN_CLAIM_CODE = `
+export async function main(trigger) {
+  const email = trigger && typeof trigger === "object" ? trigger.person?.email : null;
+  const carries = typeof email === "string" && email.trim() !== "";
+  if (!carries) console.log("[email-sending] this run carries no pushed email: nobody is claimed");
+  return { skip: !carries };
+}
+`.trim();
+
 /**
  * The claimed person and the email pushed for them, untouched. Returns `ok: false` (never throws) when the trigger
- * names someone else or carries no usable email, so the row can be stopped rather than handed out again.
+ * names someone else (`stopRow: false`: their row is not ours to touch) or carries no usable email for them
+ * (`stopRow: true`).
  */
 export const RESOLVE_EMAIL_CODE = `
 export async function main(claim, trigger) {
@@ -65,19 +81,19 @@ export async function main(claim, trigger) {
   const fold = (s) => typeof s === "string" ? s.trim().toLowerCase() : null;
   const t = trigger && typeof trigger === "object" ? trigger : null;
   const base = { rowId: f.id, leadId: f.leadId ?? null, email: f.email };
-  const missing = (why) => {
+  const missing = (why, stopRow) => {
     console.error("[email-sending] nothing sent to " + String(f.email) + ": " + why);
-    return { ...base, ok: false, why };
+    return { ...base, ok: false, stopRow, why };
   };
-  if (!t) return missing("this run carries no trigger");
+  if (!t) return missing("this run carries no trigger", false);
   if (fold(t.person?.email) === null || fold(t.person?.email) !== fold(f.email)) {
-    return missing("this run's trigger names " + String(t.person?.email ?? "nobody"));
+    return missing("this run's trigger names " + String(t.person?.email ?? "nobody"), false);
   }
   const item = t.item && typeof t.item === "object" ? t.item : {};
   const filled = (v) => typeof v === "string" && v.trim() !== "";
-  if (!filled(item.subject)) return missing("the pushed email has no subject");
-  if (!filled(item.bodyHtml) && !filled(item.bodyText)) return missing("the pushed email has no body");
-  if (!t.eventId) return missing("the trigger carries no eventId to key the send on");
+  if (!filled(item.subject)) return missing("the pushed email has no subject", true);
+  if (!filled(item.bodyHtml) && !filled(item.bodyText)) return missing("the pushed email has no body", true);
+  if (!t.eventId) return missing("the trigger carries no eventId to key the send on", true);
   const escape = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const bodyHtml = filled(item.bodyHtml) ? item.bodyHtml : escape(item.bodyText).replace(/\\r?\\n/g, "<br>");
   const step = { step: 1, bodyHtml, daysSinceLastStep: 0 };
@@ -108,8 +124,14 @@ const stopRow = (id: string, reason: string) => ({
 
 /** The run has a pushed email for the person it claimed. */
 export const HAS_EMAIL = "results['resolve-email']?.ok == true";
-/** The run claimed someone it carries no pushed email for. */
-export const NO_EMAIL = "results['resolve-email']?.ok == false";
+/** The trigger names the claimed person but carries no usable email: the row is stopped. */
+export const NO_EMAIL = "results['resolve-email']?.ok == false && results['resolve-email']?.stopRow == true";
+/** The run claimed someone its trigger does not name: their row is left alone. */
+export const OTHER_PERSON = "results['resolve-email']?.ok == false && results['resolve-email']?.stopRow != true";
+/** A run carrying no push: it claimed nobody on purpose. */
+export const NOBODY_DUE = "results['claim-followup']?.found != true && results['plan-claim']?.skip == true";
+/** A run carrying a push found nobody claimable: fails, so the occurrence is redelivered. */
+export const UNCLAIMED = "results['claim-followup']?.found != true && results['plan-claim']?.skip != true";
 /** The email went out: the send returned without a refusal. */
 export const SENT = "results['resolve-email']?.ok == true && results['send-email'] != null && results['send-email']?.skipped != true";
 /** email-gateway refused the email for this person. */
@@ -124,13 +146,15 @@ export function buildEmailSendingDag(): DAG {
         config: { service: "campaign", method: "POST", path: "/gate-check", stopAfterIf: "result.allowed == false" },
       },
       { id: "start-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/start-run" } },
+      { id: "plan-claim", type: "script", config: { code: PLAN_CLAIM_CODE }, retries: 0, inputMapping: { trigger: "$ref:flow_input.trigger" } },
       // THIS campaign's own queue: campaign-service made the pushed person due on it right before the dispatch.
+      // Not called at all on a run carrying no push.
       {
         id: "claim-followup",
         type: "http.call",
         config: { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/followups/claim-next" },
         retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
+        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId", skip: "$ref:plan-claim.output.skip" },
       },
       { id: "check-claim", type: "condition" },
       // The person's timezone, so the send lands in their business hours like every cold email.
@@ -186,20 +210,25 @@ export function buildEmailSendingDag(): DAG {
       endRun("end-run", { success: true, stopCampaign: false }),
       endRun("end-run-refused", { success: true, stopCampaign: false }),
       endRun("end-run-missing", { success: false, stopCampaign: false }),
+      endRun("end-run-other-person", { success: false, stopCampaign: false }),
+      endRun("end-run-unclaimed", { success: false, stopCampaign: false }),
       endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
     edges: [
       { from: "gate-check", to: "start-run" },
-      { from: "start-run", to: "claim-followup" },
+      { from: "start-run", to: "plan-claim" },
+      { from: "plan-claim", to: "claim-followup" },
       { from: "claim-followup", to: "check-claim" },
       { from: "check-claim", to: "lead-detail", condition: "results['claim-followup']?.found == true" },
-      { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup']?.found != true" },
+      { from: "check-claim", to: "end-run-nobody-due", condition: NOBODY_DUE },
+      { from: "check-claim", to: "end-run-unclaimed", condition: UNCLAIMED },
       { from: "lead-detail", to: "resolve-email" },
       { from: "resolve-email", to: "check-email" },
       { from: "claim-followup", to: "check-email" },
       { from: "check-email", to: "send-email", condition: HAS_EMAIL },
       { from: "check-email", to: "record-missing", condition: NO_EMAIL },
+      { from: "check-email", to: "end-run-other-person", condition: OTHER_PERSON },
       { from: "record-missing", to: "end-run-missing" },
       { from: "send-email", to: "check-sent" },
       { from: "claim-followup", to: "check-sent" },
