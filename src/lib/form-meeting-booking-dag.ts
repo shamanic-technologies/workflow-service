@@ -30,8 +30,11 @@
  *    The model may decide `no_reply_owed` only for a submission that is plainly not a person asking (a test, spam):
  *    nothing is sent and the row says why.
  *  - The email goes out as a NEW thread through email-gateway's broadcast send (Instantly, our sending infra), so
- *    their answer lands in the Unibox. The send's idempotency key names the queue row and the due date it was made
- *    due at, so a re-claimed run never sends the same answer twice.
+ *    their answer lands in the Unibox. Both sends' idempotency keys name the OCCURRENCE (`trigger.eventId`) when the
+ *    run's trigger names the claimed person: campaign-service redelivers the same occurrence after a run that did
+ *    not complete (sent, then failed later), re-filing the person with a NEW due date, and the redelivered run must
+ *    send nothing new. A new form fill is a new occurrence, so it is answered. A run whose trigger does not name the
+ *    claimed person keys on the queue row and its due date.
  *  - A send email-gateway REFUSES for this person (`lead_opted_out`, `recent_brand_contact`: they asked us to stop,
  *    or the brand is already talking with them) sends nothing on any channel and stops the row with that reason,
  *    named in the log, so the queue never hands them out again for this form.
@@ -198,7 +201,8 @@ export async function main(person, offer, brand, rep, facts, currentDate) {
 /**
  * Holds the model to its contract before anything is sent: an `answer` with an empty subject, body or WhatsApp
  * text is a broken contract (throws), and any em/en dash is rewritten (between digits a hyphen, otherwise a comma).
- * Builds the one-step sequence and the sends' idempotency keys, which name the queue row and its due date.
+ * Builds the one-step sequence and the sends' idempotency keys, which name the OCCURRENCE answered (its eventId,
+ * when the run's trigger names the claimed person), else the queue row and its due date.
  */
 export const FINALIZE_ANSWER_CODE = `
 export async function main(draft, person) {
@@ -221,7 +225,12 @@ export async function main(draft, person) {
   if (subject !== String(json.subject ?? "").trim() || bodyHtml !== String(json.bodyHtml ?? "").trim() || whatsappText !== String(json.whatsappText ?? "").trim()) {
     console.error("[form-meeting-booking] the draft used a dash the person must never read; rewritten before the send");
   }
-  const key = "form-meeting-booking:" + person.rowId + ":" + String(person.dueAt ?? "");
+  // The occurrence this run answers names the send: campaign-service redelivers the SAME eventId after a run
+  // that sent and then failed, re-filing the person with a NEW due date, so a row+due key would answer twice.
+  // A run whose trigger does not name the claimed person (no eventId on resolve-form) keys on the row and its due date.
+  const key = person.eventId
+    ? "form-meeting-booking:event:" + String(person.eventId)
+    : "form-meeting-booking:" + person.rowId + ":" + String(person.dueAt ?? "");
   return {
     decision: "answer",
     subject,
