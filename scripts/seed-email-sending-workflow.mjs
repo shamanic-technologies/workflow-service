@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Ops script: the workflow of the `email-sending|start_to_email_sent` pipe (`src/lib/email-sending-dag.ts`: send an
+ * Ops script: the workflow of the `email-sending|start_to_conversation` pipe (`src/lib/email-sending-dag.ts`: send an
  * email the client pushed through the API, as written), created ON its pipe (`POST /workflows` with `pipeId`
  * registers it in features-service, active at once).
  *
