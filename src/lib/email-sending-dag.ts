@@ -1,5 +1,5 @@
 /**
- * The DAG of the `email-sending|start_to_email_sent` pipe (Start -> Email sent, REACTIVE on the
+ * The DAG of the `email-sending|start_to_conversation` pipe (Start -> Positive reply, REACTIVE on the
  * `email_pushed_via_api` trigger): a client wrote an email themselves and pushed it through the API (their own key,
  * the distribute MCP, or Claude Code). We SEND it exactly as written, from our domains and inboxes; nothing is
  * written, rewritten or judged by a model.
@@ -32,8 +32,11 @@ import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
 
 export const EMAIL_SENDING_FEATURE_SLUG = "email-sending";
 
-/** The leg this pipe performs (features-service catalogue, declared 2026-10-13). */
-export const EMAIL_SENDING_LEG_KEY = "start_to_email_sent";
+/**
+ * The leg this pipe performs (features-service catalogue). Owner 2026-10-13: a campaign always ends at Paid client and
+ * its outcome is a positive reply, like cold email, so the leg is Start -> conversation, never "email sent".
+ */
+export const EMAIL_SENDING_LEG_KEY = "start_to_conversation";
 
 export const EMAIL_SENDING_PIPE_ID = `${EMAIL_SENDING_FEATURE_SLUG}|${EMAIL_SENDING_LEG_KEY}`;
 
