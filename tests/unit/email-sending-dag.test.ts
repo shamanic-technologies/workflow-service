@@ -55,8 +55,8 @@ describe("email sending DAG", () => {
   const dag = buildEmailSendingDag();
   const byId = new Map(dag.nodes.map((n) => [n.id, n]));
 
-  it("lives on the Start -> Email sent pipe of the Email Sending channel", () => {
-    expect(EMAIL_SENDING_PIPE_ID).toBe("email-sending|start_to_email_sent");
+  it("lives on the Start -> Positive reply pipe of the Email Sending channel", () => {
+    expect(EMAIL_SENDING_PIPE_ID).toBe("email-sending|start_to_conversation");
   });
 
   it("is a valid DAG that translates to Windmill with three top-level branchones", () => {
