@@ -50,7 +50,12 @@ async function call(method, path, body) {
 const slug = AI_FOLLOW_UP_EMAIL_FEATURE_SLUG;
 const existing = await call("GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
 if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
-const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
+// ONLY this DAG's own dynasty: the channel also carries other workflows (the prospect follow-up ones, 2026-10-14)
+// that this seed must never overwrite with its DAG.
+const DYNASTY = "ai-follow-up-email-algenib";
+const all = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
+const rows = all.filter((w) => w.workflowDynastySlug === DYNASTY);
+for (const w of all.filter((x) => x.workflowDynastySlug !== DYNASTY)) console.log(`${slug}: ${w.workflowSlug} is another workflow of the channel (left alone)`);
 const current = buildAiFollowUpEmailDag();
 if (rows.length > 0) {
   // A stored DAG behind the current one is upgraded in its own dynasty (same slug lineage, new version).
@@ -68,6 +73,8 @@ if (rows.length > 0) {
     if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
     console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
   }
+} else if (all.length > 0) {
+  throw new Error(`${slug}: no active ${DYNASTY} among ${all.length} active workflows of the channel; resolve by hand`);
 } else {
   const body = { featureSlug: slug, pipeId: AI_FOLLOW_UP_EMAIL_PIPE_ID, description: AI_FOLLOW_UP_EMAIL_DESCRIPTION, dag: current };
   if (!APPLY) {
