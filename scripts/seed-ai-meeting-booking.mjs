@@ -36,6 +36,7 @@ import {
   FEATURE_SLUG,
   buildAiMeetingBookingDag,
   isConversationResponder,
+  needsCallRequest,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
   needsOccurrenceSendKey,
@@ -411,7 +412,8 @@ async function main() {
         needsSeveralOffersTolerance(w.dag) ||
         needsChannelAgnosticReply(w.dag) ||
         needsEveryPredecessorClaim(w.dag) ||
-        needsOccurrenceSendKey(w.dag))
+        needsOccurrenceSendKey(w.dag) ||
+        needsCallRequest(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }

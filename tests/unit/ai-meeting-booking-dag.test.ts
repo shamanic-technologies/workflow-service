@@ -35,6 +35,7 @@ import {
   CRM_WHATSAPP_SEND,
   PERSON_TIMELINE_READ,
   COMPOSE_REP_ALERT_CODE,
+  needsCallRequest,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 
 const DAG_OPTS = { provider: "google", model: "pro" } as const;
@@ -798,8 +799,11 @@ describe("composing the prompt", () => {
     const out = await call({ timezone: "UTC", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] });
     const message = out.message as string;
     expect(message).toContain("This offer has no booking link");
-    expect(message).toContain("do NOT invent a link");
-    // The answer still goes out — the prompt asks for their times instead.
+    expect(message).toContain("Do NOT invent a link");
+    // The answer still goes out, with a time WE propose (AI-BOOKING-GIVES-UP-1014).
+    expect(message).toContain("Propose ONE concrete time for the call yourself");
+    expect(message).toContain("Never ask them to suggest times instead of proposing one");
+    expect(message).not.toContain("Ask them which times suit them");
     expect(message).toContain("ANSWER THE QUESTION THEY ASKED");
   });
 
@@ -1320,7 +1324,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
   });
 
   it("keys the questions and asks nothing of the site", async () => {
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER, playbook: "none" } });
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }, { question: " " }], identity: INSIDER, callRequest: { asked: false, evidence: "" }, playbook: "none" } });
     expect(out.questions).toEqual([{ key: "q1", question: "How does it work?" }]);
     expect(out).not.toHaveProperty("fields");
   });
@@ -1440,7 +1444,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("requires the draft to say where each answer came from", () => {
     expect(REPLY_RESPONSE_SCHEMA.required).toContain("answers");
-    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "booking", "playbook", "none"]);
+    expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.properties.source.enum).toEqual(["exact", "booking", "playbook", "call", "none"]);
     expect(REPLY_RESPONSE_SCHEMA.properties.answers.items.required).toContain("facts");
   });
 
@@ -1626,7 +1630,7 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
     await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [] } }, offer)).rejects.toThrow(/no identity stance/);
     await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "friendly", evidence: "" } } }, offer)).rejects.toThrow(/no identity stance/);
     quiet();
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "external", evidence: "I work with Doc Dinners." }, playbook: "none" } }, offer);
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: { stance: "external", evidence: "I work with Doc Dinners." }, callRequest: { asked: false, evidence: "" }, playbook: "none" } }, offer);
     expect(out.identity).toEqual({ stance: "external", evidence: "I work with Doc Dinners." });
     expect(byId.get("compose-prompt")?.inputMapping?.identity).toBe("$ref:plan-lookups.output.identity");
     expect(byId.get("ground-draft")?.inputMapping).toMatchObject({
@@ -1676,7 +1680,8 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
     expect(t).not.toContain("State every fact in the first person");
     const degraded = text(await composeFor({ stance: "blind", evidence: "" }, { timezone: "UTC", degraded: true, degradedReason: "unreadable", bookingUrl: offer.bookingUrl, slots: [] }));
     expect(degraded).not.toContain(offer.bookingUrl);
-    expect(degraded).toContain("say you will send an invite");
+    expect(degraded).toContain("Say you will send an invite");
+    expect(degraded).toContain("Propose ONE concrete time for the call yourself");
   });
 
   it("unclear: tells the model to escalate rather than guess", async () => {
@@ -1794,7 +1799,7 @@ describe("a thread opened by the acquisition-questions sequence plays its game (
     expect(step1.message as string).toContain("what they would charge per person if we sent them a group");
     await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: blind } }, offer)).rejects.toThrow(/no playbook/);
     quietLogs();
-    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: blind, playbook: "acquisition_questions" } }, offer);
+    const out = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: blind, callRequest: { asked: false, evidence: "" }, playbook: "acquisition_questions" } }, offer);
     expect(out.playbook).toBe("acquisition_questions");
     expect(nodes.get("compose-prompt")?.inputMapping?.playbook).toBe("$ref:plan-lookups.output.playbook");
     expect(nodes.get("ground-draft")?.inputMapping?.playbook).toBe("$ref:plan-lookups.output.playbook");
@@ -2197,5 +2202,94 @@ describe("a chat escalation alerts the brand's sales rep on WhatsApp (owner 2026
     expect(await loadMain(COMPOSE_REP_ALERT_CODE)(draft, followup, chat, { brand: {} })).toEqual({ skip: true, reason: "no_sales_rep_phone" });
     expect(String(err.mock.calls[0]?.[0])).toContain("no sales rep phone");
     err.mockRestore();
+  });
+});
+
+/**
+ * AI-BOOKING-GIVES-UP-1014. Sam (Carter & Co, DefiniteJobs, 2026-10-13) wrote
+ * "A free first listing sounds good. How does it work, and can we have a quick
+ * call this week?" on an offer with no confirmed facts and no booking link. The
+ * run escalated: "how does it work" had no fact, and the grounding guard turns
+ * any such answer into an escalation. A prospect who asks for the call gets it.
+ */
+describe("a prospect who asks for a call gets it, even with a question no fact covers (AI-BOOKING-GIVES-UP-1014)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const quiet = () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  const SAM = "Hi, yes we are hiring two warehouse operatives in Leeds. A free first listing sounds good. How does it work, and can we have a quick call this week? Sam";
+  const noFacts = { questions: [{ key: "q1", question: "How does it work?" }], exact: [], neverGive: [], withheld: [] };
+  const samAsked = { asked: true, evidence: "can we have a quick call this week?" };
+  const notAsked = { asked: false, evidence: "" };
+  const conv = {
+    replyChannel: "email",
+    conversation: { messages: [
+      { direction: "outbound", text: "I noticed Carter & Co has a few open roles in Leeds. DefiniteJobs puts UK vacancies in front of local job seekers. Would a free first listing help?" },
+      { direction: "inbound", text: SAM },
+    ] },
+  };
+  const noLink = { timezone: "Europe/London", degraded: true, degradedReason: "no_booking_url", bookingUrl: null, slots: [] };
+  const compose = (callRequest: unknown, facts: unknown = noFacts) =>
+    composeReply(
+      { followup: { followupCount: 0 } }, { leadDetail: { lead: { firstName: "Sam" } } }, conv, null, noLink,
+      { offerId: "o1", name: "Free first listing", bookingUrl: null }, { brand: { name: "DefiniteJobs" } }, "2026-10-13",
+      facts, { stance: "insider", evidence: "DefiniteJobs puts UK vacancies" }, "none", callRequest,
+    );
+
+  it("step 1 reads whether their last message asks for a call, quoting them", async () => {
+    expect(QUESTIONS_RESPONSE_SCHEMA.required).toContain("callRequest");
+    const step1 = await loadMain(COMPOSE_QUESTIONS_PROMPT_CODE)(conv, { name: "Free first listing" }, { brand: { name: "DefiniteJobs" } });
+    expect(step1.message as string).toContain("Return callRequest.asked true only when they ask for one or agree to one");
+    quiet();
+    const plan = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [{ question: "How does it work?" }], identity: INSIDER, callRequest: samAsked, playbook: "none" } });
+    expect(plan.callRequest).toEqual(samAsked);
+    // An ask with no quoted words is no ask.
+    const unquoted = await loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: INSIDER, callRequest: { asked: true, evidence: " " }, playbook: "none" } });
+    expect(unquoted.callRequest).toEqual({ asked: false, evidence: "" });
+    await expect(loadMain(PLAN_LOOKUPS_CODE)({ json: { questions: [], identity: INSIDER, playbook: "none" } })).rejects.toThrow(/asked for a call/);
+  });
+
+  it("wires the call request into the prompt and the grounding guard", () => {
+    expect(byId.get("compose-prompt")?.inputMapping?.callRequest).toBe("$ref:plan-lookups.output.callRequest");
+    expect(byId.get("ground-draft")?.inputMapping?.callRequest).toBe("$ref:plan-lookups.output.callRequest");
+    expect(needsCallRequest(dag)).toBe(false);
+    const stale = { nodes: dag.nodes.map((n) => (n.id === "ground-draft" ? { ...n, inputMapping: { ...n.inputMapping, callRequest: undefined } } : n)) };
+    expect(needsCallRequest(stale as never)).toBe(true);
+  });
+
+  it("Sam: the prompt takes the uncovered question to the call he asked for and proposes a time", async () => {
+    const t = (await compose(samAsked)).message as string;
+    expect(t).toContain("THEY ASKED FOR A CALL in their last message (\"can we have a quick call this week?\")");
+    expect(t).toContain("does NOT escalate here");
+    expect(t).toContain("state NOTHING of the answer itself");
+    expect(t).not.toContain("If even ONE listed question has no answer in the facts above, set decision to escalate");
+    expect(t).toContain("Propose ONE concrete time for the call yourself");
+    expect(t).toContain("Europe/London");
+  });
+
+  it("Sam: the guard lets the reply go out when the uncovered question is taken to the call", async () => {
+    quiet();
+    const draft = { json: { decision: "answer", question: "How does it work?", reason: "r", replyHtml: "<p>Great to hear, Sam. I will walk you through how it works on the call. Would Thursday 15 October at 10:00 work? I will send an invite.</p>", nextDueAt: "2026-10-16T09:00:00Z", answers: [{ key: "q1", source: "call", facts: [] }] } };
+    const out = await loadMain(GROUND_DRAFT_CODE)(draft, noFacts, INSIDER, { name: "Free first listing" }, { brand: { name: "DefiniteJobs" } }, "none", samAsked);
+    expect(out.overridden).toBe(false);
+    expect((out.json as Record<string, unknown>).decision).toBe("answer");
+  });
+
+  it("control: a factual question with no call asked still escalates, unchanged", async () => {
+    quiet();
+    const cost = { ...noFacts, questions: [{ key: "q1", question: "What does it cost?" }] };
+    const t = (await compose(notAsked, cost)).message as string;
+    expect(t).not.toContain("THEY ASKED FOR A CALL");
+    expect(t).toContain("If even ONE listed question has no answer in the facts above, set decision to escalate");
+    // A draft that claims "call" without their ask is no source: escalated.
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Let us talk on a call.</p>", answers: [{ key: "q1", source: "call", facts: [] }] } };
+    const out = await loadMain(GROUND_DRAFT_CODE)(draft, cost, INSIDER, { name: "Free first listing" }, { brand: { name: "DefiniteJobs" } }, "none", notAsked);
+    expect(out.overridden).toBe(true);
+    expect((out.json as Record<string, unknown>).decision).toBe("escalate");
+    expect((out.json as Record<string, unknown>).question).toBe("What does it cost?");
   });
 });

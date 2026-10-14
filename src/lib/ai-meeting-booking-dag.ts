@@ -106,6 +106,17 @@
  * no hedged middle. Everything downstream reads `ground-draft`, never the raw
  * draft.
  *
+ * A PROSPECT WHO ASKS FOR THE CALL GETS IT (AI-BOOKING-GIVES-UP-1014). Step 1
+ * also reads whether their last message asks us for a call, quoting them. When
+ * it does, a question no fact covers is not escalated: the reply says that
+ * question gets answered on the call they asked for, stating nothing of the
+ * answer (source `call`, which `ground-draft` accepts only then), and moves to
+ * the call. Without their ask, the same question still escalates. And an offer
+ * with no booking link (or no readable availability) gets ONE concrete time we
+ * propose inside their window, never "which times suit you?" and never an
+ * escalation: an interested buyer asking for a call was handed to a person
+ * (Sam, Carter & Co, 2026-10-13).
+ *
  * SOME THREADS ARE A GAME. When step 1 reads that the outreach which opened
  * the thread is one with a playbook (`PLAYBOOKS`), the draft is given that
  * game's STRATEGY (`ACQUISITION_QUESTIONS_PLAYBOOK`) and adapts it; it may then
@@ -839,6 +850,8 @@ export async function main(conversation, offer, brand) {
     "- unclear: there is no message from us on record, or our messages name the client but give no way to tell which of the above, or contradict each other.",
     "Put in identity.evidence the words from our messages that decided it, quoted exactly (empty for unclear when there are none).",
     "",
+    "Then say whether their LAST message asks US for a call or a meeting (\\"can we have a quick call this week?\\", \\"happy to jump on a call\\", \\"let's meet\\"). Return callRequest.asked true only when they ask for one or agree to one, and put in callRequest.evidence their words that do, quoted exactly. Our own proposal of a call, which they did not take up, is not one: asked false, evidence empty.",
+    "",
     "Last, say which outreach opened this thread, from the messages WE sent. Return playbook:",
     "- acquisition_questions: our messages introduced us as working on customer (or patient) acquisition for businesses like theirs, and asked them what they would charge per person if we sent them a group of people for one specific service, and/or what happens today when someone calls them while they are busy (voicemail, a receptionist, an AI).",
     "- none: anything else.",
@@ -888,13 +901,23 @@ export const QUESTIONS_RESPONSE_SCHEMA = {
       },
       required: ["stance", "evidence"],
     },
+    callRequest: {
+      type: "object",
+      additionalProperties: false,
+      description: "Whether their last message asks us for a call or a meeting (or agrees to one).",
+      properties: {
+        asked: { type: "boolean" },
+        evidence: { type: "string", description: "Their words asking for the call, quoted exactly. Empty when asked is false." },
+      },
+      required: ["asked", "evidence"],
+    },
     playbook: {
       type: "string",
       enum: [...PLAYBOOKS],
       description: "Which outreach opened this thread, read off the messages we sent.",
     },
   },
-  required: ["questions", "identity", "playbook"],
+  required: ["questions", "identity", "callRequest", "playbook"],
 } as const;
 
 /**
@@ -929,7 +952,17 @@ export async function main(listed) {
   }
   console.log("[ai-meeting-booking] outreach that opened this thread: " + playbook);
 
-  return { questions, identity, playbook };
+  // Their own ask for a call is what lets a question no fact covers be taken
+  // to that call instead of escalated. It counts only with their words quoted.
+  const asked = listed?.json?.callRequest?.asked;
+  if (typeof asked !== "boolean") {
+    throw new Error("[ai-meeting-booking] the question-listing step did not say whether they asked for a call (" + JSON.stringify(asked) + ")");
+  }
+  const callEvidence = String(listed.json.callRequest.evidence ?? "").trim();
+  const callRequest = { asked: asked && callEvidence.length > 0, evidence: callEvidence };
+  console.log("[ai-meeting-booking] they asked for a call: " + JSON.stringify(callRequest));
+
+  return { questions, identity, playbook, callRequest };
 }
 `.trim()
   .replace("STANCES_LIST", JSON.stringify(STANCES))
@@ -1059,7 +1092,8 @@ export async function main(plan, offerAnswers, offerFields, brandFields) {
  * (`exact` | `booking` | `none`, plus `playbook` in a game thread) and the ids
  * of the facts it used. This script holds the model to it with no reading of
  * anyone's text: a question marked `none`, a question the draft did not account
- * for, any other source (the retired `interpreted` included), or an `exact`
+ * for, any other source (the retired `interpreted` included; `call` unless
+ * their last message asked for the call, quoted by step 1), or an `exact`
  * answer that cites no fact our client stated (a withheld placeholder, an
  * invented id) turns an
  * `answer` into an `escalate` naming exactly those questions, so the client is
@@ -1075,7 +1109,7 @@ export async function main(plan, offerAnswers, offerFields, brandFields) {
  * shape, so every node downstream reads it exactly as it read the draft.
  */
 export const GROUND_DRAFT_CODE = `
-export async function main(draft, facts, identity, offer, brand, playbook) {
+export async function main(draft, facts, identity, offer, brand, playbook, callRequest) {
   const json = { ...(draft?.json ?? {}) };
 
   // No em dash or en dash ever reaches a prospect, whatever the model wrote:
@@ -1132,7 +1166,11 @@ export async function main(draft, facts, identity, offer, brand, playbook) {
     const cited = Array.isArray(a.facts) ? a.facts.map(String) : [];
     // "playbook" answers only exist in a thread that sequence opened (who we
     // are, whether we hold a group of customers): elsewhere it is no source.
-    const sources = playbook === "acquisition_questions" ? ["exact", "booking", "playbook"] : ["exact", "booking"];
+    // "call" (taken to the call they asked for, nothing stated) only exists
+    // when their last message asked for that call, quoted.
+    const sources = ["exact", "booking"];
+    if (playbook === "acquisition_questions") sources.push("playbook");
+    if (callRequest?.asked === true) sources.push("call");
     if (!sources.includes(source)) source = "none";
     if (source === "exact" && !cited.some((id) => exactIds.has(id))) source = "none";
     return { key: q.key, question: q.question, source, facts: cited };
@@ -1203,7 +1241,7 @@ export const PLAYBOOK_QUIET_FOLLOWUPS = 2;
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   const timezone = booking?.timezone ?? "UTC";
 
@@ -1290,7 +1328,14 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const neverGive = facts?.neverGive ?? [];
   const withheldFacts = facts?.withheld ?? [];
   const factLine = (f) => "- " + f.id + " " + f.label + ": " + f.value;
-  const factsSection = asked.length === 0 ? [] : [
+  // THEY asked for the call: a question no fact covers is theirs to hear on it.
+  const callAsked = callRequest?.asked === true;
+  const callLines = !callAsked ? [] : [
+    "THEY ASKED FOR A CALL in their last message (\\"" + String(callRequest?.evidence ?? "") + "\\"). The call is theirs, not a deflection: it is where a question the facts above do not answer gets answered, by the people who can.",
+    "So a listed question with no answer in the facts above does NOT escalate here: tell them plainly, in one sentence, that you will go through it with them on the call, and state NOTHING of the answer itself (no how-it-works, no price, no term, no step our client did not give us). Return it in answers with source call. A question the facts DO answer, answer it from them as usual.",
+    "",
+  ];
+  const factsSection = asked.length === 0 ? callLines : [
     "WHAT THEY ASKED (listed from their last message)",
     ...asked.map((q) => "- " + q.key + ": " + q.question),
     "",
@@ -1307,9 +1352,12 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Open your answer with the facts that bear on the question, numbers exactly as stated.",
     "State every fact in the voice set under WHO WE ARE TO THEM. The facts are what we know, not something we read somewhere: never point to a website, a page, a brochure or to how anyone describes it, and never hedge a fact.",
     "Owning a fact does not license more than it says: no promise, price, guarantee or number our client did not state.",
-    "For EVERY listed question, return it in answers with its key, the source you answered it from (exact, booking, or none), and in facts the ids of the facts you used (E1, E2, ...).",
-    "If even ONE listed question has no answer in the facts above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets their real answer instead of a guess.",
+    "For EVERY listed question, return it in answers with its key, the source you answered it from (exact, booking" + (callAsked ? ", call" : "") + ", or none), and in facts the ids of the facts you used (E1, E2, ...).",
+    callAsked
+      ? "If a listed question has no answer in the facts above, take it to the call they asked for (source call, see below) and set decision to answer: they get a reply now and their answer on the call."
+      : "If even ONE listed question has no answer in the facts above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets their real answer instead of a guess.",
     "",
+    ...callLines,
   ];
   // Never-give binds every message, a question or not.
   const neverGiveSection = neverGive.length === 0 ? [] : [
@@ -1395,15 +1443,18 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     return "- " + (weekday ? weekday + " " : "") + String(s).slice(0, 10) + " " + String(s).slice(11, 16) + " (" + s + ")";
   }).join("\\n");
 
+  // No availability and no link to hand them: we still move to the call by
+  // proposing one concrete time ourselves, never by giving up or escalating.
+  const proposeTime = "Propose ONE concrete time for the call yourself, written out in plain words with its weekday and date, in their timezone (" + timezone + "): a weekday between 09:00 and 17:00 their time, at least one working day after today, and inside any window they gave (\\"this week\\" means a day left this week, else the first working day after it). Say you will send an invite, and that another time works too if that one does not suit them. Never ask them to suggest times instead of proposing one, and never escalate for lack of a link or a calendar.";
   // A blind thread never gives the link: a booking page names who runs it.
   const bookingSection = stance === "blind"
     ? (!booking?.degraded
         ? "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words. Do NOT give any link (a booking page would reveal who our client is): if neither works, ask which times suit them and say you will send an invite. If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and ask which times in their window suit them.\\n" + slotLines
-        : "The availability could not be read (" + booking?.degradedReason + "). Do NOT invent times and do NOT give any link (it would reveal who our client is). Ask them which times suit them and say you will send an invite.")
+        : "The availability could not be read (" + booking?.degradedReason + "). Do NOT give any link (it would reveal who our client is). " + proposeTime)
     : booking?.degraded
     ? (booking?.bookingUrl
         ? "The booking page could not be read (" + booking.degradedReason + "). Do NOT invent times. Give them the booking link and let them pick: " + booking.bookingUrl
-        : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent times and do NOT invent a link. Ask them which times suit them and say you will send an invite.")
+        : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent a link. " + proposeTime)
     : "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
 
   const message = [
@@ -1435,7 +1486,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "If their last message says they booked, scheduled or moved the meeting, the conversation is done and they are owed one short confirmation. Set decision to confirm_booking and write one or two sentences: thank them, and confirm the day or time in their words if they gave one. Nothing else: no question, no pitch, no times, no link, no request for anything. Their follow-ups stop after it.",
     "",
     "WHEN THEY SAY WHEN THEY ARE FREE",
-    "A message about WHEN they can meet (\\"I can't till next week\\", \\"after the 15th\\", \\"Thursday afternoon\\", \\"not until November\\") is a reply owed and one you can always answer: set decision to answer and offer times that fit what they said, from the availability below. If nothing there fits, give them the booking link and ask them to pick a time that suits them. A timing preference is never a reason to escalate.",
+    "A message about WHEN they can meet (\\"I can't till next week\\", \\"after the 15th\\", \\"Thursday afternoon\\", \\"not until November\\") is a reply owed and one you can always answer: set decision to answer and offer times that fit what they said, from the availability below. If nothing there fits, follow BOOKING below (the booking link, or a time you propose inside their window). A timing preference is never a reason to escalate.",
     "",
     "WHAT YOU MUST DO WHEN A REPLY IS OWED",
     "1. ANSWER THE QUESTION THEY ASKED. Read their last message and reply to what is in it. A reply that ignores what they wrote is worse than no reply at all.",
@@ -1446,6 +1497,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Everything you may state is above. If answering what they asked would mean inventing something that is not there (a price, a number of seats, a spec, a reference, a commitment nobody here has made), then you cannot answer it.",
     "In that case set decision to escalate and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
     "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate. When they can meet is not one either: that is answer.",
+    ...(callAsked ? ["They asked for a call themselves, so none of this applies to a question the facts do not cover: you take it to that call (see THEY ASKED FOR A CALL) and answer. Escalate only when something else forces it, never because the facts are thin."] : []),
     "",
     "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said; when you escalate, exactly the question(s) you could not answer). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
     "",
@@ -1467,7 +1519,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You answer what they asked before you ask for anything.",
     "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
-    "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting.",
+    "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting, unless they asked for the call themselves: then the call is where they get that answer.",
     "When their last message needs no answer (a refusal, a request to stop, a goodbye), you send nothing and hand nothing over.",
     "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
     "When you are told which game the thread is in, you play that game.",
@@ -1655,7 +1707,8 @@ export const REPLY_RESPONSE_SCHEMA = {
         "answer: you can answer what they wrote from the facts in front of you. " +
         "escalate: they asked a real question you cannot answer without inventing something: a price, " +
         "a spec, a reference, a commitment nobody here has made. A person takes the thread over. " +
-        "When they can meet is never a reason to escalate: offer times that fit, or the booking link.",
+        "When they can meet is never a reason to escalate: offer times that fit, the booking link, or a time you propose. " +
+        "Nor is a question they asked for a call to hear answered: when their last message asks for the call, take it to that call.",
     },
     question: {
       type: "string",
@@ -1685,13 +1738,14 @@ export const REPLY_RESPONSE_SCHEMA = {
         "One entry per listed question (q1, q2, ...): where its answer came from. exact = a fact our client told us; " +
         "booking = the availability or booking link; " +
         "playbook = answered from THE GAME this thread is in (only when you are told one); " +
+        "call = taken to the call THEY asked for, stating nothing of the answer (only when you are told they asked for one); " +
         "none = nothing in front of you answers it. Empty when no question was listed.",
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
           key: { type: "string", description: "The listed question's key, e.g. q1." },
-          source: { type: "string", enum: ["exact", "booking", "playbook", "none"] },
+          source: { type: "string", enum: ["exact", "booking", "playbook", "call", "none"] },
           facts: {
             type: "array",
             description: "The ids of the facts the answer uses (E1, E2, ...). Empty for booking or none.",
@@ -1752,6 +1806,21 @@ export function needsOccurrenceSendKey(dag: { nodes?: Array<{ id?: string; input
   const keyed = nodes.filter((n) => n?.id === "finalize-reply" || n?.id === "compose-rep-alert");
   if (keyed.length === 0) return false;
   return keyed.some((n) => n.inputMapping?.trigger !== "$ref:flow_input.trigger");
+}
+
+/**
+ * True when a stored DAG escalates a prospect who ASKED for a call because one
+ * of their questions has no client fact, and asks them for times when the offer
+ * has no booking link instead of proposing one (AI-BOOKING-GIVES-UP-1014: Sam,
+ * Carter & Co, "how does it work, and can we have a quick call this week?",
+ * handed to a person). The current DAG reads their call request and takes such a
+ * question to that call. The repair is an upgrade carrying the current DAG.
+ */
+export function needsCallRequest(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, string> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const ground = nodes.find((n) => n?.id === "ground-draft");
+  if (!ground) return false;
+  return ground.inputMapping?.callRequest !== "$ref:plan-lookups.output.callRequest";
 }
 
 /**
@@ -2087,6 +2156,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           facts: "$ref:gather-facts.output",
           identity: "$ref:plan-lookups.output.identity",
           playbook: "$ref:plan-lookups.output.playbook",
+          callRequest: "$ref:plan-lookups.output.callRequest",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -2127,6 +2197,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
           playbook: "$ref:plan-lookups.output.playbook",
+          callRequest: "$ref:plan-lookups.output.callRequest",
         },
       },
       // Can the model answer what they asked, or does a person have to? It
