@@ -40,6 +40,7 @@
  */
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
+import { whoTheyAreNode } from "./person-relationship.js";
 
 export { CRM_WHATSAPP_SEND };
 
@@ -222,7 +223,7 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
  * The strategy is explained to the model, never a script per case (owner rule).
  */
 export const COMPOSE_MESSAGE_PROMPT_CODE = `
-export async function main(person, instruction, offer, brand, rep, facts, history, currentDate) {
+export async function main(person, instruction, offer, brand, rep, facts, history, currentDate, who) {
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-message: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
@@ -231,6 +232,9 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   if (person?.kind !== "first" && person?.kind !== "followup") throw new Error("compose-message: no person to write to");
   if (!Array.isArray(history?.threadLines) || !Array.isArray(history?.voiceLines) || history.voiceLines.length === 0) {
     throw new Error("compose-message: no thread or no owner's voice was read; nothing is written blind");
+  }
+  if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
+    throw new Error("compose-message: who this person is to the brand was not read; nothing is written blind");
   }
 
   const present = (v) => typeof v === "string" ? v.trim() !== "" : v !== null && v !== undefined;
@@ -262,14 +266,20 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
     "WHERE THE CONVERSATION STANDS: THE THREAD below is every message ever exchanged with this person, on every channel (email, WhatsApp, LinkedIn), oldest first, plus a few events (signup, visits).",
     talked
       ? "They ALREADY talked with us. This is NOT a first contact: never introduce yourself, never say who you are or what " + brandName + " is, never thank them for signing up as if it were news. Pick the conversation back up from where it stopped, like a friend reopening a chat: answer anything they asked that was left unanswered, follow up on the last thing that was still alive, or bring a new angle that fits what they told us. Refer to what was actually said."
-      : "Nobody from " + brandName + " ever exchanged a message with them. This is a FIRST message: say who you are in a few words and why you write to them, personally.",
+      : who.state === "known"
+        ? "No message with them is on record, but the brand ALREADY KNOWS them (WHO THEY ARE TO US below). This is NOT a cold first contact: write as " + owner + " writing to someone he knows, never an introduction."
+        : who.state === "possibly_known"
+          ? "No message with them is on record, and nobody confirmed yet whether " + owner + " knows them. Write so it reads right either way: a light word on who you are is fine, never a pitch to a stranger, never claim you never met."
+          : "Nobody from " + brandName + " ever exchanged a message with them. This is a FIRST message: say who you are in a few words and why you write to them, personally.",
+    "",
+    who.strategy,
     "Lines marked [automated ...] or [AI Copilot] were sent by our software, not typed by " + owner + ": the person saw them, so they are part of the history, but they are NEVER a model of how " + owner + " writes. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it.",
     followup
       ? "Our last automated message to them, " + "${FOLLOW_UP_AFTER_DAYS}" + " days ago, got no answer. This is the ONE follow-up: do not repeat it and do not guilt them. Give them a different, lighter reason to answer, or a short tip, and make it easy to say no. There will be no other message after this one."
       : "",
     "",
     "HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people). Copy his length, his tone, his greeting habits (or the lack of them), his punctuation and capitalisation, his emoji use (none if he uses none), whether he signs. If he writes several short lines, you may too (separate them with a line break). Write in the language he uses with THIS person in the thread; with no thread, write in English.",
-    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over his voice. It was written for the whole campaign without knowing this person: where it assumes something THE THREAD contradicts (that you never talked, that they just signed up, which language to use), THE THREAD wins.",
+    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over his voice. It was written for the whole campaign without knowing this person: where it assumes something THE THREAD or WHO THEY ARE TO US contradicts (that you never talked, that they are a stranger, that they just signed up, which language to use), THE THREAD and WHO THEY ARE TO US win.",
     "Keep it as short as he would, never more than 60 words. No sales pitch, no links unless the instruction gives one, no filler, no \\"I hope this finds you well\\".",
     "State only what the THREAD, the INSTRUCTION or the FACTS say. Never invent a figure, a price, a promise, a result or a customer.",
     "Never use an em dash or an en dash. Use a comma or a period.",
@@ -284,6 +294,9 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
     "",
     "WHO WE WRITE TO:",
     ...(personLines.length ? personLines : ["(nothing beyond their contact)"]),
+    "",
+    "WHO THEY ARE TO US:",
+    ...who.lines,
     "",
     "WHO WE ARE: " + brandName + ", offer \\"" + offerName + "\\".",
     "",
@@ -558,6 +571,12 @@ export function buildColdWhatsappOutreachDag(): DAG {
           ),
         },
       },
+      // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
+      whoTheyAreNode({
+        leadRead: "$ref:lead-detail.output",
+        served: "$ref:serve-lead.output",
+        timeline: "$ref:person-thread.output",
+      }),
       {
         id: "compose-message",
         type: "script",
@@ -571,6 +590,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
           rep: "$ref:sales-rep.output",
           facts: "$ref:gather-facts.output",
           history: "$ref:read-history.output",
+          who: "$ref:who-they-are.output",
           currentDate: "$ref:flow_input.currentDate",
         },
       },
@@ -700,7 +720,8 @@ export function buildColdWhatsappOutreachDag(): DAG {
         { from: `voice-thread-${n}`, to: `voice-sends-${n}` },
         { from: `voice-sends-${n}`, to: n < VOICE_SAMPLE_PEOPLE ? `voice-thread-${n + 1}` : "read-history" },
       ]),
-      { from: "read-history", to: "compose-message" },
+      { from: "read-history", to: "who-they-are" },
+      { from: "who-they-are", to: "compose-message" },
       { from: "compose-message", to: "draft-message" },
       { from: "draft-message", to: "finalize-message" },
       { from: "finalize-message", to: "send-whatsapp" },

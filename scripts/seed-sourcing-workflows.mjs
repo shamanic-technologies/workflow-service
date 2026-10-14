@@ -6,13 +6,26 @@
  * Idempotent: creates when a channel has no active workflow; upgrades an active one whose stored DAG is behind
  * `buildSourcingDag()` in its OWN dynasty (`POST /workflows/upgrade`: new version, predecessor deprecated, the
  * dynasty slug units store resolves forward to it); a current one is skipped.
+ * A channel in BUSINESS_ONLY_SOURCING_CHANNELS also gets its "business contacts only" dynasty (RELATIONSHIP-TAGS-1014):
+ * a FORK of the default (`POST /workflows/dynasty/{slug}/fork`, the serve asks `relationships: "business_only"`), so
+ * the default dynasty stays the default play and features-service judges the tactic on the fork. Each row is compared
+ * against its OWN variant: the business-only dynasty is never "upgraded" back to the default DAG.
  * Usage, from inside the workflow-service container:
  *   node seed-sourcing-workflows.mjs            # dry run
  *   node seed-sourcing-workflows.mjs --apply
  * Env: WORKFLOW_SERVICE_API_KEY (required), BASE_URL (default localhost:8080), ORG_ID, USER_ID, RUN_ID (a REAL
  * staff run: runs-service rejects an unknown parent run).
  */
-import { SOURCING_CHANNEL_SLUGS, SOURCING_DESCRIPTION, buildSourcingDag, sourcingPipeIdOf } from "../dist/lib/sourcing-dag.js";
+import {
+  BUSINESS_ONLY_CHANGES,
+  BUSINESS_ONLY_SOURCING_CHANNELS,
+  BUSINESS_ONLY_SOURCING_DESCRIPTION,
+  SOURCING_CHANNEL_SLUGS,
+  SOURCING_DESCRIPTION,
+  buildSourcingDag,
+  servesBusinessOnly,
+  sourcingPipeIdOf,
+} from "../dist/lib/sourcing-dag.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -49,7 +62,11 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-const current = buildSourcingDag();
+const variants = {
+  default: { dag: buildSourcingDag(), description: SOURCING_DESCRIPTION },
+  businessOnly: { dag: buildSourcingDag({ businessOnly: true }), description: BUSINESS_ONLY_SOURCING_DESCRIPTION },
+};
+const variantOf = (dag) => (servesBusinessOnly(dag) ? variants.businessOnly : variants.default);
 
 for (const slug of SOURCING_CHANNEL_SLUGS) {
   const existing = await call("GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
@@ -57,6 +74,7 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
   if (rows.length > 0) {
     for (const w of rows) {
+      const { dag: current, description } = variantOf(w.dag);
       if (canonical(w.dag) === canonical(current)) {
         console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
         continue;
@@ -65,13 +83,27 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
         console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (${w.workflowSlug}: stored DAG is behind the current one)`);
         continue;
       }
-      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description: SOURCING_DESCRIPTION });
+      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description });
       if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
       console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflow?.workflowSlug} v${up.payload.workflow?.version} (${up.status})`);
     }
+    if (BUSINESS_ONLY_SOURCING_CHANNELS.includes(slug) && !rows.some((w) => servesBusinessOnly(w.dag))) {
+      const source = rows.find((w) => !servesBusinessOnly(w.dag));
+      if (!source) throw new Error(`${slug}: no default workflow to fork the business-only one from`);
+      if (!APPLY) {
+        console.log(`${slug}: WOULD fork ${source.workflowDynastySlug} into a business-only dynasty`);
+        continue;
+      }
+      const fork = await call("POST", `/workflows/dynasty/${encodeURIComponent(source.workflowDynastySlug)}/fork`, {
+        changes: BUSINESS_ONLY_CHANGES,
+        description: BUSINESS_ONLY_SOURCING_DESCRIPTION,
+      });
+      if (fork.status !== 201) throw new Error(`fork ${source.workflowDynastySlug}: ${fork.status} ${JSON.stringify(fork.payload)}`);
+      console.log(`${slug}: forked ${source.workflowDynastySlug} -> business-only dynasty ${fork.payload.workflow?.workflowDynastySlug}`);
+    }
     continue;
   }
-  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: current };
+  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: variants.default.dag };
   if (!APPLY) {
     console.log(`${slug}: WOULD create on pipe ${body.pipeId}`);
     continue;

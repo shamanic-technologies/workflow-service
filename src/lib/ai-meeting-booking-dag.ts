@@ -133,6 +133,7 @@
 
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import { whoTheyAreNode } from "./person-relationship.js";
 
 /**
  * The instantly-service read of the conversation being answered.
@@ -1241,8 +1242,11 @@ export const PLAYBOOK_QUIET_FOLLOWUPS = 2;
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest, who) {
   const person = leadDetail?.leadDetail?.lead ?? {};
+  if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
+    throw new Error("[ai-meeting-booking] who this person is to the brand was not read; refusing to draft blind");
+  }
   const timezone = booking?.timezone ?? "UTC";
 
   // WHO WE SAID WE WERE. The voice of the reply follows the identity our own
@@ -1466,6 +1470,10 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "",
     "WHO THEY ARE",
     ...personLines,
+    "",
+    "WHO THEY ARE TO US",
+    ...who.lines,
+    who.strategy,
     "",
     ...(companyLines.length ? ["THEIR COMPANY", ...companyLines, ""] : []),
     "WHAT WE SELL THEM",
@@ -2024,6 +2032,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           timeline: "$ref:person-timeline.output",
         },
       },
+      // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
+      whoTheyAreNode({ leadRead: "$ref:lead-detail.output", timeline: "$ref:person-timeline.output" }),
       {
         id: "prior-generation",
         type: "http.call",
@@ -2157,6 +2167,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           identity: "$ref:plan-lookups.output.identity",
           playbook: "$ref:plan-lookups.output.playbook",
           callRequest: "$ref:plan-lookups.output.callRequest",
+          who: "$ref:who-they-are.output",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -2569,7 +2580,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "person-timeline" },
       { from: "person-timeline", to: "thread" },
-      { from: "thread", to: "prior-generation" },
+      { from: "thread", to: "who-they-are" },
+      { from: "who-they-are", to: "prior-generation" },
       { from: "prior-generation", to: "compose-questions-prompt" },
       { from: "compose-questions-prompt", to: "list-questions" },
       { from: "list-questions", to: "plan-lookups" },

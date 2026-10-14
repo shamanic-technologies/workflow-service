@@ -41,6 +41,7 @@ import {
   needsEveryPredecessorClaim,
   needsOccurrenceSendKey,
 } from "../dist/lib/ai-meeting-booking-dag.js";
+import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -413,7 +414,8 @@ async function main() {
         needsChannelAgnosticReply(w.dag) ||
         needsEveryPredecessorClaim(w.dag) ||
         needsOccurrenceSendKey(w.dag) ||
-        needsCallRequest(w.dag))
+        needsCallRequest(w.dag) ||
+        needsPersonRelationship(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
