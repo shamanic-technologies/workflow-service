@@ -69,6 +69,7 @@ export const PROSPECT_FOLLOW_UP_LLM = { provider: "anthropic", model: "opus" } a
 /** Queue-row reasons on the reactive campaign (stopped, never handed: the next date makes them due again). */
 export const PROSPECT_FOLLOW_UP_SENT_REASON = "prospect_follow_up_sent";
 export const PROSPECT_FOLLOW_UP_NOT_OWED_REASON = "prospect_follow_up_not_owed";
+export const PROSPECT_FOLLOW_UP_NOT_YET_REASON = "prospect_follow_up_not_yet";
 export const PROSPECT_FOLLOW_UP_STOPPED_REASON = "prospect_follow_up_stopped";
 export const PROSPECT_FOLLOW_UP_REFUSED_REASON = "prospect_follow_up_refused";
 
@@ -125,6 +126,7 @@ export async function main(served, campaignId) {
     timezone: s.data?.timezone ?? null,
     sendKey,
     nextKey: sendKey + ":next",
+    retryKey: sendKey + ":not-yet",
   };
 }
 `.trim();
@@ -170,24 +172,39 @@ export async function main(claim, detail, trigger) {
     timezone: lead.timezone ?? null,
     sendKey,
     nextKey: sendKey + ":next",
+    retryKey: sendKey + ":not-yet",
   };
 }
 `.trim();
 
 /**
- * lead-service's verdict, held to its contract: `owed` must be a boolean (an absent answer is never a yes), a "no"
- * names its reason. Fails loud on anything else.
+ * lead-service's verdict, held to its contract. `kind` is `owed` (write now), `stop` (a stop condition: the chain
+ * ends, no next date) or `not_yet` (a passing state: their cold sequence still runs, they are mid-conversation, their
+ * relationship is not judged yet), which carries `retryAfter`, the date worth asking again: the chain is NOT ended,
+ * its next date is re-recorded there and nothing is written (owner: never a dead end). Anything else fails loud: an
+ * absent answer is never a yes and never a stop.
  */
 export const READ_VERDICT_CODE = `
 export async function main(verdict) {
-  if (typeof verdict?.owed !== "boolean") {
-    throw new Error("prospect-verdict: lead-service answered no owed verdict: " + JSON.stringify(verdict).slice(0, 300));
+  const kind = verdict?.kind;
+  if (kind !== "owed" && kind !== "stop" && kind !== "not_yet") {
+    throw new Error("prospect-verdict: lead-service answered no verdict kind: " + JSON.stringify(verdict).slice(0, 300));
   }
-  if (!verdict.owed) {
-    console.log("[prospect-follow-up] no follow-up owed: " + String(verdict.reason ?? "no reason given"));
-    return { owed: false, reason: String(verdict.reason ?? "not_owed") };
+  if (kind === "owed" && verdict.owed !== true) throw new Error("prospect-verdict: kind owed with owed " + JSON.stringify(verdict.owed));
+  const reason = String(verdict.reason ?? kind);
+  if (kind === "not_yet") {
+    const at = Date.parse(String(verdict.retryAfter ?? ""));
+    if (!Number.isFinite(at)) throw new Error("prospect-verdict: not_yet without a retryAfter date: " + JSON.stringify(verdict).slice(0, 300));
+    // A date already past fires at once: ask again in an hour rather than in a loop.
+    const retryAfter = new Date(Math.max(at, Date.now() + 3600000)).toISOString();
+    console.log("[prospect-follow-up] not yet (" + reason + "): asked again at " + retryAfter + ", nothing written");
+    return { owed: false, kind, reason, retryAfter };
   }
-  return { owed: true, reason: null };
+  if (kind === "stop") {
+    console.log("[prospect-follow-up] stop (" + reason + "): no follow-up, no next date");
+    return { owed: false, kind, reason, retryAfter: null };
+  }
+  return { owed: true, kind, reason: null, retryAfter: null };
 }
 `.trim();
 
@@ -279,7 +296,7 @@ export async function main(person, offer, brand, facts, history, instruction, cu
     "You state only what the FACTS our client told us say. Never invent a figure, a price, a result, a customer, a date or a promise. A number appears only if it is written in the facts, exactly as written.",
     who.strategy,
     "THE NEXT DATE. There is no fixed schedule. Decide nextFollowUpAt from the history: how many times we already wrote and how recently, whether they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many emails (wait longer, weeks or months), and anything they said about timing (honour it exactly). Pick a working day and a working hour in their timezone when you know it. It must be strictly after NOW. Say why in nextFollowUpWhy.",
-    "STOP only on the person's OWN words: they said no, not interested, asked us to stop or not to write again, said they are the wrong person or left the company. Then set decision to stop, leave subject, bodyHtml and nextFollowUpAt empty, and quote their words in reason. Silence is never a reason to stop.",
+    "STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again (an opt out), or they show they are not a fit at all (the wrong person, they left the company, they do not run anything like what we offer). Then set decision to stop, leave subject, bodyHtml and nextFollowUpAt empty, and quote their words in reason. A plain \\"no thanks\\" or \\"not now\\" is NOT a stop: keep following up, wait much longer, and make the next email lighter. Silence is never a reason to stop.",
     "Write like a person: short, plain, warm, one idea per sentence, under 120 words. Greet them by first name when you have it. No filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
     "Do not sign off with a name or a signature block: ours is added below your text. End with your last sentence.",
@@ -381,8 +398,10 @@ const stopRow = (id: string, reason: string): DAGNode => ({
 
 /** The person resolved and owed a follow-up: the writer runs. */
 export const OWED = "results['resolve-person']?.ok == true && results['read-verdict']?.owed == true";
-/** The person resolved and NOT owed one: nothing is written, no next date. */
-export const NOT_OWED = "results['resolve-person']?.ok == true && results['read-verdict']?.owed == false";
+/** A stop condition: nothing is written, no next date. */
+export const NOT_OWED = "results['resolve-person']?.ok == true && results['read-verdict']?.kind == 'stop'";
+/** A passing state: nothing is written now, the next date is re-recorded at lead-service's retryAfter. */
+export const NOT_YET = "results['resolve-person']?.ok == true && results['read-verdict']?.kind == 'not_yet'";
 export const WRITE = "results['finalize-email']?.decision == 'write'";
 export const STOP = "results['finalize-email']?.decision == 'stop'";
 /** Sent, or refused only because the brand talks to them right now: the chain goes on, the next date is recorded. */
@@ -566,6 +585,7 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
     },
     endRun("end-run", { success: true, stopCampaign: false }),
     endRun("end-run-not-owed", { success: true, stopCampaign: false }),
+    endRun("end-run-not-yet", { success: true, stopCampaign: false }),
     endRun("end-run-stopped", { success: true, stopCampaign: false }),
     endRun("end-run-opted-out", { success: true, stopCampaign: false }),
   ];
@@ -599,12 +619,33 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
   ];
   if (reactive) {
     nodes.push(
+      // Not yet: the same chain, its date moved to when lead-service says it is worth asking again. Keyed on the
+      // occurrence, so a redelivered run never records it twice.
+      {
+        id: "schedule-retry",
+        type: "http.call",
+        config: { service: "campaign", method: "POST", path: SCHEDULE_NEXT_PATH, body: { triggerId: PROSPECT_FOLLOW_UP_TRIGGER_ID } },
+        retries: 2,
+        inputMapping: {
+          "body.brandId": `${P}.brandId`,
+          "body.offerId": "$ref:start-run.output.offerId",
+          "body.leadId": `${P}.leadId`,
+          "body.dueAt": "$ref:read-verdict.output.retryAfter",
+          "body.person.email": `${P}.email`,
+          "body.idempotencyKey": `${P}.retryKey`,
+          "body.requestedByCampaignId": "$ref:flow_input.campaignId",
+        },
+      },
+      stopRow("record-not-yet", PROSPECT_FOLLOW_UP_NOT_YET_REASON),
       stopRow("record-not-owed", PROSPECT_FOLLOW_UP_NOT_OWED_REASON),
       stopRow("record-stopped", PROSPECT_FOLLOW_UP_STOPPED_REASON),
       stopRow("record-sent", PROSPECT_FOLLOW_UP_SENT_REASON),
       stopRow("record-opted-out", PROSPECT_FOLLOW_UP_REFUSED_REASON),
     );
     edges.push(
+      { from: "check-owed", to: "schedule-retry", condition: NOT_YET },
+      { from: "schedule-retry", to: "record-not-yet" },
+      { from: "record-not-yet", to: "end-run-not-yet" },
       { from: "check-owed", to: "record-not-owed", condition: NOT_OWED },
       { from: "record-not-owed", to: "end-run-not-owed" },
       { from: "check-decision", to: "record-stopped", condition: STOP },
@@ -616,6 +657,8 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
     );
   } else {
     edges.push(
+      // Not yet on a served person: lead-service released them and its source finds them again later.
+      { from: "check-owed", to: "end-run-not-yet", condition: NOT_YET },
       { from: "check-owed", to: "end-run-not-owed", condition: NOT_OWED },
       { from: "check-decision", to: "end-run-stopped", condition: STOP },
       { from: "schedule-next", to: "end-run" },

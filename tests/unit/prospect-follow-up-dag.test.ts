@@ -6,6 +6,7 @@ import {
   CONTINUE,
   FINALIZE_PROSPECT_EMAIL_CODE,
   NOT_OWED,
+  NOT_YET,
   OPTED_OUT,
   OWED,
   PERSON_HISTORY_CODE,
@@ -139,13 +140,32 @@ describe("resolve-person", () => {
 });
 
 describe("verdict", () => {
-  it("fails loud on an answer that is not a boolean, never reads it as owed", async () => {
-    const run = loadMain(READ_VERDICT_CODE);
-    await expect(run({})).rejects.toThrow(/no owed verdict/);
+  const run = loadMain(READ_VERDICT_CODE);
+  it("fails loud on an answer with no kind, never reads it as owed or as a stop", async () => {
+    await expect(run({ owed: true })).rejects.toThrow(/no verdict kind/);
+    await expect(run({ kind: "not_yet", owed: false, reason: "sequence_running" })).rejects.toThrow(/without a retryAfter/);
+  });
+  it("a stop ends the chain; a not-yet keeps it, at lead-service's date", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await run({ owed: false, reason: "positive_reply" })).toEqual({ owed: false, reason: "positive_reply" });
-    expect(holds(NOT_OWED, { "resolve-person": { ok: true }, "read-verdict": { owed: false } })).toBe(true);
-    expect(holds(OWED, { "resolve-person": { ok: true }, "read-verdict": { owed: false } })).toBe(false);
+    const stop = await run({ kind: "stop", owed: false, reason: "positive_reply", retryAfter: null });
+    expect(stop).toMatchObject({ owed: false, kind: "stop", reason: "positive_reply" });
+    const later = new Date(Date.now() + 72 * 3600_000).toISOString();
+    const notYet = await run({ kind: "not_yet", owed: false, reason: "sequence_running", retryAfter: later });
+    expect(notYet).toMatchObject({ kind: "not_yet", retryAfter: later });
+    const past = await run({ kind: "not_yet", owed: false, reason: "in_conversation", retryAfter: "2020-01-01T00:00:00Z" });
+    expect(Date.parse(String(past.retryAfter))).toBeGreaterThan(Date.now() + 3500_000);
+    expect(holds(NOT_OWED, { "resolve-person": { ok: true }, "read-verdict": stop })).toBe(true);
+    expect(holds(NOT_YET, { "resolve-person": { ok: true }, "read-verdict": stop })).toBe(false);
+    expect(holds(NOT_YET, { "resolve-person": { ok: true }, "read-verdict": notYet })).toBe(true);
+    expect(holds(OWED, { "resolve-person": { ok: true }, "read-verdict": notYet })).toBe(false);
+  });
+  it("reactive: a not-yet re-records the same chain at retryAfter, keyed on the occurrence", () => {
+    const dag = buildProspectFollowUpReactiveDag();
+    expect(dag.edges).toContainEqual({ from: "check-owed", to: "schedule-retry", condition: NOT_YET });
+    expect(dag.nodes.find((n) => n.id === "schedule-retry")?.inputMapping).toMatchObject({
+      "body.dueAt": "$ref:read-verdict.output.retryAfter",
+      "body.idempotencyKey": "$ref:resolve-person.output.retryKey",
+    });
   });
 });
 
