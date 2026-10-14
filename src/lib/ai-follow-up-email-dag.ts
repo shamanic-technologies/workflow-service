@@ -15,8 +15,9 @@
  *    OPTIONAL when the run answers a trigger OCCURRENCE (FACT-NOT-FOLLOWED-1014: "signed up, still not paid 30
  *    minutes later"): the fact itself is why we write. The trigger TYPE is read from features-service
  *    (`occurrence-fact.ts`) and put in front of the model as WHY WE WRITE NOW, with the person's state (their
- *    thread and recent events). A run with neither an instruction nor an occurrence has nothing to say: it names
- *    it and fails (`success: false`) before claiming anyone, rather than writing an email from nothing.
+ *    thread and recent events). A run with neither an instruction nor an occurrence has nothing to say (the
+ *    scheduler's cadence run of a reactive funnel unit): it names it and ends IDLE (`noWorkAvailable`, never a
+ *    failure, which would back the unit off and skip its next real occurrence) before claiming anyone.
  *  - The person is claimed from THIS campaign's own queue (`claim-next`, atomic, at most one, exactly once). Unlike
  *    `ai-meeting-booking` there is no predecessor: this campaign names its person itself. Nobody due ends the run
  *    as idle (`noWorkAvailable`).
@@ -81,7 +82,7 @@ export const HAS_SOMETHING_TO_SAY =
 /** States, in the log, that this run has nothing to say; `/end-run` has no reason field. */
 export const NAME_MISSING_INSTRUCTION_CODE = `
 export async function main(campaignId) {
-  console.error("[ai-follow-up-email] campaign " + String(campaignId) +
+  console.log("[ai-follow-up-email] campaign " + String(campaignId) +
     " carries no instruction and this run answers no trigger occurrence; there is nothing to write, nobody was claimed and nothing was sent");
   return { outcome: "no_instruction", campaignId: campaignId ?? null };
 }
@@ -458,7 +459,9 @@ export function buildAiFollowUpEmailDag(): DAG {
       endRun("end-run", { success: true, stopCampaign: false }),
       endRun("end-run-unwritable", { success: false, stopCampaign: false }),
       endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
-      endRun("end-run-no-instruction", { success: false, stopCampaign: false }),
+      // Nothing to say is NOTHING TO DO, never a failure: campaign-service's scheduler runs every funnel unit on its
+      // cadence with no trigger, and a failure here would back the unit off and skip its next real occurrence.
+      endRun("end-run-no-instruction", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
     edges: [
