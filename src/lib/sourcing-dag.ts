@@ -125,3 +125,22 @@ export function buildSourcingDag(opts: { businessOnly?: boolean } = {}): DAG {
     onError: "end-run-error",
   };
 }
+
+/**
+ * PURE: what the seed should store for an existing row of a sourcing channel: the current DAG, carrying over the
+ * static body the row's OWN lead-serving node states. A copy differs from the generic workflow by exactly that body
+ * (`reachableBy`, `acceptedEmails`: src/lib/reachable-by-copy.ts, a catch-all fork), so upgrading it to the bare
+ * current DAG would silently turn it back into the generic one. Returns `stated: false` for the generic row.
+ */
+export function sourcingTargetOf(storedDag: DAG, current: DAG = buildSourcingDag()): { dag: DAG; stated: boolean } {
+  const storedServe = storedDag.nodes.find(
+    (n) => n.type === "http.call" && (n.config as { path?: string } | undefined)?.path === "/orgs/buffer/next",
+  );
+  const body = (storedServe?.config as { body?: Record<string, unknown> } | undefined)?.body;
+  if (body === undefined || Object.keys(body).length === 0) return { dag: current, stated: false };
+  const dag = structuredClone(current);
+  const serve = dag.nodes.find((n) => n.id === "serve-lead");
+  if (!serve) throw new Error("current sourcing DAG has no serve-lead node");
+  (serve.config as Record<string, unknown>).body = structuredClone(body);
+  return { dag, stated: true };
+}

@@ -4,13 +4,12 @@
  * pipe (`pipeId`), so `POST /workflows` registers it through features-service's register route, active at once.
  *
  * Idempotent: creates when a channel has no active workflow; upgrades an active one whose stored DAG is behind
- * `buildSourcingDag()` in its OWN dynasty (a copy stating who it finds, `src/lib/reachable-by-copy.ts`, is compared
- * against the current DAG plus ITS `reachableBy`, so the seed never flattens a copy back to the generic one) (`POST /workflows/upgrade`: new version, predecessor deprecated, the
+ * `buildSourcingDag()` in its OWN dynasty (a copy, e.g. a reachableBy or catch-all fork, is compared against the
+ * current DAG plus the serve body IT states, `sourcingTargetOf`, so the seed never flattens a copy back) (`POST /workflows/upgrade`: new version, predecessor deprecated, the
  * dynasty slug units store resolves forward to it); a current one is skipped.
  * A channel in BUSINESS_ONLY_SOURCING_CHANNELS also gets its "business contacts only" dynasty (RELATIONSHIP-TAGS-1014):
- * a FORK of the default (`POST /workflows/dynasty/{slug}/fork`, the serve asks `relationships: "business_only"`), so
- * the default dynasty stays the default play and features-service judges the tactic on the fork. Each row is compared
- * against its OWN variant: the business-only dynasty is never "upgraded" back to the default DAG.
+ * a FORK of the generic one (`POST /workflows/dynasty/{slug}/fork`, the serve asks `relationships: "business_only"`),
+ * so the generic dynasty stays the default play and features-service judges the tactic on the fork.
  * Usage, from inside the workflow-service container:
  *   node seed-sourcing-workflows.mjs            # dry run
  *   node seed-sourcing-workflows.mjs --apply
@@ -26,8 +25,8 @@ import {
   buildSourcingDag,
   servesBusinessOnly,
   sourcingPipeIdOf,
+  sourcingTargetOf,
 } from "../dist/lib/sourcing-dag.js";
-import { isReachableByCopy, reachableByOf, withReachableBy, reachableByDescription } from "../dist/lib/reachable-by-copy.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -64,11 +63,7 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-const variants = {
-  default: { dag: buildSourcingDag(), description: SOURCING_DESCRIPTION },
-  businessOnly: { dag: buildSourcingDag({ businessOnly: true }), description: BUSINESS_ONLY_SOURCING_DESCRIPTION },
-};
-const variantOf = (dag) => (servesBusinessOnly(dag) ? variants.businessOnly : variants.default);
+const current = buildSourcingDag();
 
 for (const slug of SOURCING_CHANNEL_SLUGS) {
   const existing = await call("GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
@@ -76,11 +71,9 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
   if (rows.length > 0) {
     for (const w of rows) {
-      const { dag: current, description: base } = variantOf(w.dag);
-      const methods = isReachableByCopy(w.description) ? reachableByOf(w.dag) : null;
-      if (isReachableByCopy(w.description) && !methods) throw new Error(`${w.workflowSlug}: a reachable-by copy whose DAG states no reachableBy`);
-      const target = methods ? withReachableBy(current, methods) : current;
-      const description = methods ? reachableByDescription(base, methods) : base;
+      // A copy (reachableBy, catch-all) keeps the serve body it states and its own description.
+      const { dag: target, stated } = sourcingTargetOf(w.dag, current);
+      const description = stated ? w.description : SOURCING_DESCRIPTION;
       if (canonical(w.dag) === canonical(target)) {
         console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
         continue;
@@ -94,8 +87,9 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
       console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflow?.workflowSlug} v${up.payload.workflow?.version} (${up.status})`);
     }
     if (BUSINESS_ONLY_SOURCING_CHANNELS.includes(slug) && !rows.some((w) => servesBusinessOnly(w.dag))) {
-      const source = rows.find((w) => !servesBusinessOnly(w.dag) && !isReachableByCopy(w.description));
-      if (!source) throw new Error(`${slug}: no default workflow to fork the business-only one from`);
+      // Forked from the GENERIC row (its serve states no body), never from another copy.
+      const source = rows.find((w) => !sourcingTargetOf(w.dag, current).stated);
+      if (!source) throw new Error(`${slug}: no generic workflow to fork the business-only one from`);
       if (!APPLY) {
         console.log(`${slug}: WOULD fork ${source.workflowDynastySlug} into a business-only dynasty`);
         continue;
@@ -109,7 +103,7 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
     }
     continue;
   }
-  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: variants.default.dag };
+  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: current };
   if (!APPLY) {
     console.log(`${slug}: WOULD create on pipe ${body.pipeId}`);
     continue;
