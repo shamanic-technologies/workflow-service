@@ -52,11 +52,12 @@ export async function deprecateStaleWorkflows(
     return { deprecatedCount: 0, keptByCampaign: 0, skippedNoCampaignService: false };
   }
 
-  // 3. Find which of these have at least one run
+  // 3. Find which active workflows have at least one run (all of them, not only the old ones: step 6 asks whether
+  // ANY workflow on a candidate's pipe ever ran).
   const runRows = await database
     .select({ workflowId: workflowRuns.workflowId })
     .from(workflowRuns)
-    .where(inArray(workflowRuns.workflowId, oldEnough.map((w) => w.id)));
+    .where(inArray(workflowRuns.workflowId, activeWorkflows.map((w) => w.id)));
 
   const hasRuns = new Set(runRows.map((r) => r.workflowId));
 
@@ -110,6 +111,19 @@ export async function deprecateStaleWorkflows(
     }
     return null;
   };
+  // A pipe on which NO live workflow ever ran was bought by nobody yet: "zero runs" compares nothing there, so it is
+  // no evidence this one is stale (LEAK-1012: the CRM contacts sourcing pipe carries the generic workflow and two
+  // copies stating who they find, `reachableBy`; none runs until a funnel buys the pipe, and all must still be there).
+  const ranDynasties = new Set(activeWorkflows.filter((wf) => hasRuns.has(wf.id)).map((wf) => wf.workflowDynastySlug));
+  /** A pipe this workflow serves on which no live workflow ever ran, or null. */
+  const pipeNobodyRan = (wf: (typeof candidates)[number]): string | null => {
+    const rows = (assignmentsBySlug.get(wf.featureSlug) ?? []).filter((a) => a.state === "active");
+    for (const leg of rows.filter((a) => a.workflowDynastySlug === wf.workflowDynastySlug)) {
+      const onPipe = rows.filter((a) => a.legKey === leg.legKey && liveDynasties.has(a.workflowDynastySlug));
+      if (!onPipe.some((a) => ranDynasties.has(a.workflowDynastySlug))) return `${wf.featureSlug}|${leg.legKey}`;
+    }
+    return null;
+  };
 
   // 7. Deprecate candidates not used by an active campaign — but NEVER the last active workflow of a channel: a
   // channel with no active workflow can no longer be launched (campaign-service 409 `no_workflow`). A pipe that
@@ -140,6 +154,11 @@ export async function deprecateStaleWorkflows(
     const pipe = soleWorkflowOfPipe(wf);
     if (pipe) {
       console.log(`[workflow-service] Keeping stale workflow "${wf.workflowSlug}" — the last active workflow of pipe ${pipe}`);
+      continue;
+    }
+    const unbought = pipeNobodyRan(wf);
+    if (unbought) {
+      console.log(`[workflow-service] Keeping stale workflow "${wf.workflowSlug}" — no workflow ever ran on pipe ${unbought}`);
       continue;
     }
     remaining.set(wf.featureSlug, (remaining.get(wf.featureSlug) ?? 0) - 1);
