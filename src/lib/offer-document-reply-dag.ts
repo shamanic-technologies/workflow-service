@@ -18,15 +18,22 @@
  *    and description against the prospect's last message). Never the writer model, never a rule. Skipped (not
  *    called, nothing billed) when `plan-document` says no document can ride.
  *  - `pick-document`: keeps the winner only when Jev gives it at least `ATTACH_MIN_PROBABILITY`, and adds ONE
- *    section to the writer's prompt naming the file, so the reply mentions it in one short sentence.
+ *    section to the writer's prompt naming the file, so the reply mentions it in one short sentence. A question the
+ *    file answers takes the answer source `document` (writer schema + `ground-draft`, both only on a run carrying a
+ *    file), or the grounding guard would escalate "can you share a case study?" for want of a client fact.
  *
- * With nothing picked the writer's prompt is the parent's, unchanged, and `send-reply` carries no `attachments`
- * key (an `undefined` mapping drops out of the JSON body): the run IS the parent's run.
+ * With nothing picked the writer's prompt and schema are the parent's, unchanged, `ground-draft` accepts exactly
+ * the parent's sources, and `send-reply` carries no `attachments` key (an `undefined` mapping drops out of the JSON body): the run IS the parent's run.
  *
  * Spend: Jev is declared by chat-service on this run, the send by instantly-service. Nothing here spends.
  */
 import type { DAG, DAGNode } from "./dag-validator.js";
-import { buildAiMeetingBookingDag, type AiMeetingBookingDagOptions } from "./ai-meeting-booking-dag.js";
+import {
+  GROUND_DRAFT_CODE,
+  REPLY_RESPONSE_SCHEMA,
+  buildAiMeetingBookingDag,
+  type AiMeetingBookingDagOptions,
+} from "./ai-meeting-booking-dag.js";
 
 /** brand-service's list of an offer's documents. Wired against its served contract. */
 export const OFFER_DOCUMENTS_READ = {
@@ -43,6 +50,39 @@ export const ATTACH_MIN_PROBABILITY = 0.5;
 
 /** Jev takes at most 255 options; an offer with more is judged on its first ones, in brand-service's order. */
 export const MAX_JUDGED_DOCUMENTS = 50;
+
+/**
+ * The answer source of a question the attached document answers ("can you share a case study?"). Without it the
+ * parent's grounding guard counts such a question as unanswered (no client fact covers it) and escalates, so the
+ * file would never be sent (staff AC run, 2026-10-14). The writer is offered it, and `ground-draft` accepts it,
+ * ONLY on a run that carries a file: with none, both are the parent's byte for byte.
+ */
+export const DOCUMENT_ANSWER_SOURCE = "document";
+
+/** The writer's schema on a run that carries a file: the parent's, plus the `document` answer source. */
+export const REPLY_RESPONSE_SCHEMA_WITH_DOCUMENT = (() => {
+  const schema = JSON.parse(JSON.stringify(REPLY_RESPONSE_SCHEMA));
+  const answers = schema.properties.answers;
+  answers.items.properties.source.enum = [...answers.items.properties.source.enum.filter((v: string) => v !== "none"), DOCUMENT_ANSWER_SOURCE, "none"];
+  answers.description = answers.description.replace(
+    "none = nothing in front of you answers it.",
+    "document = answered by the document this reply carries (only when you are told one rides on it); none = nothing in front of you answers it.",
+  );
+  return schema;
+})();
+
+/** The parent's grounding guard, also accepting `document` when (and only when) a file rides on the reply. */
+export const GROUND_DRAFT_WITH_DOCUMENT_CODE = (() => {
+  const signature = "export async function main(draft, facts, identity, offer, brand, playbook, callRequest) {";
+  const callSource = 'if (callRequest?.asked === true) sources.push("call");';
+  if (!GROUND_DRAFT_CODE.includes(signature) || !GROUND_DRAFT_CODE.includes(callSource)) {
+    throw new Error("offer-document-reply: the parent ground-draft code changed shape; re-derive the document source");
+  }
+  return GROUND_DRAFT_CODE.replace(signature, signature.replace("callRequest)", "callRequest, attachedDocument)")).replace(
+    callSource,
+    callSource + "\n    if (attachedDocument) sources.push(" + JSON.stringify(DOCUMENT_ANSWER_SOURCE) + ");",
+  );
+})();
 
 /** The marker the parent seed reads to leave this workflow alone. */
 export const DOCUMENT_NODE_ID = "offer-documents";
@@ -111,7 +151,7 @@ export async function main(documents, thread, conversation, prompt) {
 export const PICK_DOCUMENT_CODE = `
 export async function main(plan, judge, prompt) {
   const NONE = NONE_OPTION;
-  const bare = { message: prompt.message, systemPrompt: prompt.systemPrompt, attachments: undefined, document: null };
+  const bare = { message: prompt.message, systemPrompt: prompt.systemPrompt, responseSchema: PARENT_SCHEMA, attachments: undefined, document: null };
   if (plan?.skip !== false) return bare;
   const answer = judge?.answers?.document;
   if (!answer || answer.type !== "choice") {
@@ -129,10 +169,12 @@ export async function main(plan, judge, prompt) {
     "THE FILE THIS REPLY CARRIES",
     "This reply goes out with one document attached: \\"" + doc.name + "\\"" + (doc.description ? " (" + doc.description + ")" : "") + ".",
     "If you write a reply, mention the attachment once, in one short plain sentence where it fits (for example that you attached it). No hype, and say nothing about its content beyond what is written here.",
+    "A question this file answers (they asked for it, or for what it is) is answered by attaching it: give that question the answer source document. Every other question keeps its usual sources.",
   ].join("\\n");
   return {
     message: prompt.message + "\\n" + section,
     systemPrompt: prompt.systemPrompt,
+    responseSchema: DOCUMENT_SCHEMA,
     attachments: [{ document_id: doc.id }],
     document: { id: doc.id, name: doc.name, probability: p },
   };
@@ -140,7 +182,9 @@ export async function main(plan, judge, prompt) {
 `
   .trim()
   .replace("NONE_OPTION", JSON.stringify(NO_DOCUMENT_OPTION))
-  .replace("MIN_P", String(ATTACH_MIN_PROBABILITY));
+  .replace("MIN_P", String(ATTACH_MIN_PROBABILITY))
+  .replace("PARENT_SCHEMA", JSON.stringify(REPLY_RESPONSE_SCHEMA))
+  .replace("DOCUMENT_SCHEMA", JSON.stringify(REPLY_RESPONSE_SCHEMA_WITH_DOCUMENT));
 
 /** True when a stored DAG is THIS workflow (the parent seed must never upgrade it with the parent DAG). */
 export function isOfferDocumentResponder(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
@@ -196,13 +240,22 @@ export function buildOfferDocumentReplyDag(opts: AiMeetingBookingDagOptions): DA
   for (const node of parent.nodes) {
     if (node.id === "draft-reply") {
       nodes.push(...added);
+      const { responseSchema: _parentSchema, ...body } = (node.config?.body ?? {}) as Record<string, unknown>;
       nodes.push({
         ...node,
+        config: { ...node.config, body },
         inputMapping: {
           ...node.inputMapping,
           "body.message": "$ref:pick-document.output.message",
           "body.systemPrompt": "$ref:pick-document.output.systemPrompt",
+          "body.responseSchema": "$ref:pick-document.output.responseSchema",
         },
+      });
+    } else if (node.id === "ground-draft") {
+      nodes.push({
+        ...node,
+        config: { ...node.config, code: GROUND_DRAFT_WITH_DOCUMENT_CODE },
+        inputMapping: { ...node.inputMapping, attachedDocument: "$ref:pick-document.output.document" },
       });
     } else if (node.id === "send-reply") {
       nodes.push({ ...node, inputMapping: { ...node.inputMapping, "body.attachments": "$ref:pick-document.output.attachments" } });
