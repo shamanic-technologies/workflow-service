@@ -24,7 +24,9 @@
  *    file), or the grounding guard would escalate "can you share a case study?" for want of a client fact.
  *
  * With nothing picked the writer's prompt and schema are the parent's, unchanged, `ground-draft` accepts exactly
- * the parent's sources, and `send-reply` carries no `attachments` key (an `undefined` mapping drops out of the JSON body): the run IS the parent's run.
+ * the parent's sources, and `send-reply` carries `attachments: []`, which instantly-service treats exactly as absent:
+ * the run IS the parent's run. Never `undefined`: Windmill hands an absent script field to the next node as `null`, and
+ * instantly-service refuses `attachments: null` with a 400, so the no-file reply was never sent (staff AC run, 2026-10-14).
  *
  * Spend: Jev is declared by chat-service on this run, the send by instantly-service. Nothing here spends.
  */
@@ -152,7 +154,7 @@ export async function main(documents, thread, conversation, prompt) {
 export const PICK_DOCUMENT_CODE = `
 export async function main(plan, judge, prompt) {
   const NONE = NONE_OPTION;
-  const bare = { message: prompt.message, systemPrompt: prompt.systemPrompt, responseSchema: PARENT_SCHEMA, attachments: undefined, document: null };
+  const bare = { message: prompt.message, systemPrompt: prompt.systemPrompt, responseSchema: PARENT_SCHEMA, attachments: [], document: null };
   if (plan?.skip !== false) return bare;
   // Jev could not judge (vendor down, out of credits): the reply still goes out, without a file, as the parent's
   // would. Loud, never silent: an unanswered prospect is worse than an answer with no attachment.
