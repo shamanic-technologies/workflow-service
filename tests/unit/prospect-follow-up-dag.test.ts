@@ -102,7 +102,7 @@ describe.each([
       body: { type: "broadcast", followUp: true },
     });
     expect([...(byId.get("send-email")?.config?.skipOnRefusalCodes as string[])].sort()).toEqual(
-      ["brand_sequence_queued", "lead_not_a_prospect", "lead_opted_out", "recent_brand_contact"],
+      ["brand_sequence_queued", "google_send_permission_missing", "lead_not_a_prospect", "lead_opted_out", "recent_brand_contact"],
     );
   });
 });
