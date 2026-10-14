@@ -133,7 +133,7 @@
 
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
-import { whoTheyAreNode } from "./person-relationship.js";
+import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 /**
  * The instantly-service read of the conversation being answered.
@@ -2033,7 +2033,11 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         },
       },
       // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
-      whoTheyAreNode({ leadRead: "$ref:lead-detail.output", timeline: "$ref:person-timeline.output" }),
+      relationshipReadNode({
+        leadRowId: "$ref:claimed.output.followup.id",
+        brandId: "$ref:claimed.output.followup.brandId",
+      }),
+      whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-timeline.output" }),
       {
         id: "prior-generation",
         type: "http.call",
@@ -2580,7 +2584,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "person-timeline" },
       { from: "person-timeline", to: "thread" },
-      { from: "thread", to: "who-they-are" },
+      { from: "thread", to: "relationship-read" },
+      { from: "relationship-read", to: "who-they-are" },
       { from: "who-they-are", to: "prior-generation" },
       { from: "prior-generation", to: "compose-questions-prompt" },
       { from: "compose-questions-prompt", to: "list-questions" },

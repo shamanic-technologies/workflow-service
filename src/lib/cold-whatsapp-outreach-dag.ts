@@ -40,7 +40,7 @@
  */
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
-import { whoTheyAreNode } from "./person-relationship.js";
+import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 export { CRM_WHATSAPP_SEND };
 
@@ -441,6 +441,10 @@ export function buildColdWhatsappOutreachDag(): DAG {
           "query.campaignId": "$ref:flow_input.campaignId",
         },
       },
+      relationshipReadNode({
+        leadRowId: "$ref:claim-followup.output.followup.id",
+        brandId: "$ref:claim-followup.output.followup.brandId",
+      }),
       // Nobody due: the next person.
       { id: "serve-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/orgs/buffer/next" }, retries: 0 },
       // Converges (edge from claim-followup, outside check-due's branches) so it is top level.
@@ -573,7 +577,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
       },
       // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
       whoTheyAreNode({
-        leadRead: "$ref:lead-detail.output",
+        relationshipRead: "$ref:relationship-read.output",
         served: "$ref:serve-lead.output",
         timeline: "$ref:person-thread.output",
       }),
@@ -699,7 +703,8 @@ export function buildColdWhatsappOutreachDag(): DAG {
       { from: "claim-followup", to: "check-due" },
       { from: "check-due", to: "lead-detail", condition: "results['claim-followup']?.found == true" },
       { from: "check-due", to: "serve-lead", condition: "results['claim-followup']?.found != true" },
-      { from: "lead-detail", to: "pick-person" },
+      { from: "lead-detail", to: "relationship-read" },
+      { from: "relationship-read", to: "pick-person" },
       { from: "serve-lead", to: "pick-person" },
       { from: "claim-followup", to: "pick-person" },
       { from: "pick-person", to: "check-person" },

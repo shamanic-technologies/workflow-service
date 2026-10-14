@@ -8,8 +8,8 @@
  *
  * lead-service owns who a person is to the brand: the `relationship` block (tags Personal / Customer / Prospect /
  * Team / Investor / Advisor / Supplier / Partner / Other professional, each yes / unsure, judged on the person's
- * whole merged thread) served on `GET /orgs/leads/{id}` (`leadDetail.relationship`) and on the lead handed by
- * `POST /orgs/buffer/next` (`lead.data.relationship`). crm-service owns the person's whole merged thread
+ * whole merged thread) served on `GET /orgs/leads/{id}/relationship` (`relationship`, same id as the lead detail,
+ * which itself carries none) and on the lead handed by `POST /orgs/buffer/next` (`lead.data.relationship`). crm-service owns the person's whole merged thread
  * (`GET /orgs/people/timeline`, every channel).
  *
  * This module is the ONE shared step every writer runs before writing (cold WhatsApp outreach, the conversation
@@ -57,15 +57,16 @@ export const PERSON_RELATIONSHIP_STRATEGY = [
 ].join(" ");
 
 /**
- * Shared step: `main(leadRead, served, timeline)`.
- * - `leadRead`: lead-service `GET /orgs/leads/{id}` output (`leadDetail.relationship`), or nothing.
+ * Shared step: `main(relationshipRead, served, timeline)`.
+ * - `relationshipRead`: lead-service `GET /orgs/leads/{id}/relationship` output (or its tolerated failure: 404 = no
+ *   relationship known, the person is possibly known; anything else throws), or nothing.
  * - `served`: lead-service `POST /orgs/buffer/next` output (`lead.data.relationship`), or nothing.
  * - `timeline`: crm-service `GET /orgs/people/timeline` output (or its tolerated failure). A 404 is "no thread";
  *   any other failure, or a message source that could not be read, throws: nothing is written blind.
  * Returns null when there is no person (a serve that found nobody), else the relationship and the thread.
  */
 export const WHO_THEY_ARE_CODE = `
-export async function main(leadRead, served, timeline) {
+export async function main(relationshipRead, served, timeline) {
   const KNOWN = ${JSON.stringify(KNOWN_RELATIONSHIP_TAGS)};
   const LABEL = {
     personal: "a personal contact of the owner (a friend, someone he knows outside work)",
@@ -78,11 +79,14 @@ export async function main(leadRead, served, timeline) {
     partner: "a partner",
     other_professional: "someone the owner knows professionally",
   };
-  const fromRead = leadRead && leadRead.ok !== false && leadRead.leadDetail ? leadRead.leadDetail : null;
+  if (relationshipRead && relationshipRead.ok === false && relationshipRead.notCalled !== true && relationshipRead.status !== 404) {
+    throw new Error("who-they-are: who the person is to the brand could not be read (" + String(relationshipRead.status ?? "no status") + " " + String(relationshipRead.error ?? "").slice(0, 200) + "); nothing is written blind");
+  }
+  const fromRead = relationshipRead && relationshipRead.ok !== false ? relationshipRead : null;
   const fromServe = served && served.found === true && served.lead ? served.lead : null;
   if (!fromRead && !fromServe && (served?.found === false || served?.ok === false)) return null;
 
-  const rel = fromRead ? fromRead.relationship ?? null : fromServe ? fromServe.data?.relationship ?? null : null;
+  const rel = fromRead?.relationship ?? fromServe?.data?.relationship ?? null;
   const tags = Array.isArray(rel?.tags) ? rel.tags.filter((t) => typeof t === "string") : [];
   const unsureTags = Array.isArray(rel?.unsureTags) ? rel.unsureTags.filter((t) => typeof t === "string") : [];
   const judged = typeof rel?.judgedAt === "string" && rel.judgedAt !== "";
@@ -162,15 +166,30 @@ export async function main(leadRead, served, timeline) {
 /** The node id of the shared step in every writer DAG. */
 export const WHO_THEY_ARE_NODE_ID = "who-they-are";
 
+export const RELATIONSHIP_READ_NODE_ID = "relationship-read";
+
+/**
+ * lead-service's read of who the person of ONE lead row is to its brand (`{id}` = the lead row id the lead detail
+ * reads). Tolerated so `WHO_THEY_ARE_CODE` reads a 404 as "nothing known" and throws on anything else.
+ */
+export function relationshipReadNode(refs: { leadRowId: string; brandId: string }): DAGNode {
+  return {
+    id: RELATIONSHIP_READ_NODE_ID,
+    type: "http.call",
+    config: { service: "lead", method: "GET", path: "/orgs/leads/{id}/relationship", tolerateFailure: true },
+    inputMapping: { "params.id": refs.leadRowId, "query.brandId": refs.brandId },
+  };
+}
+
 /** The shared step as a DAG node. Each ref names a whole node output (`$ref:<node>.output`) or is omitted. */
-export function whoTheyAreNode(refs: { leadRead?: string; served?: string; timeline: string }): DAGNode {
+export function whoTheyAreNode(refs: { relationshipRead?: string; served?: string; timeline: string }): DAGNode {
   return {
     id: WHO_THEY_ARE_NODE_ID,
     type: "script",
     config: { code: WHO_THEY_ARE_CODE },
     retries: 0,
     inputMapping: {
-      ...(refs.leadRead ? { leadRead: refs.leadRead } : {}),
+      ...(refs.relationshipRead ? { relationshipRead: refs.relationshipRead } : {}),
       ...(refs.served ? { served: refs.served } : {}),
       timeline: refs.timeline,
     },

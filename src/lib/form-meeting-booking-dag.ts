@@ -49,7 +49,7 @@
  */
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
-import { personThreadNodes, whoTheyAreNode } from "./person-relationship.js";
+import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { CRM_WHATSAPP_SEND, WHATSAPP_REFUSAL_CODES } from "./cold-whatsapp-outreach-dag.js";
 import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
 
@@ -370,7 +370,11 @@ export function buildFormMeetingBookingDag(): DAG {
       // Who this person is to the brand (lead-service tags) and their whole merged thread (crm-service): the
       // shared step every writer runs before writing.
       ...personThreadNodes({ email: "$ref:resolve-form.output.email", brandId: "$ref:resolve-form.output.brandId" }),
-      whoTheyAreNode({ leadRead: "$ref:lead-detail.output", timeline: "$ref:person-thread.output" }),
+      relationshipReadNode({
+        leadRowId: "$ref:claim-followup.output.followup.id",
+        brandId: "$ref:claim-followup.output.followup.brandId",
+      }),
+      whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-thread.output" }),
       {
         id: "compose-answer",
         type: "script",
@@ -515,7 +519,8 @@ export function buildFormMeetingBookingDag(): DAG {
       { from: "brand-user-fields", to: "gather-facts" },
       { from: "gather-facts", to: "person-thread-query" },
       { from: "person-thread-query", to: "person-thread" },
-      { from: "person-thread", to: "who-they-are" },
+      { from: "person-thread", to: "relationship-read" },
+      { from: "relationship-read", to: "who-they-are" },
       { from: "who-they-are", to: "compose-answer" },
       { from: "compose-answer", to: "draft-answer" },
       { from: "draft-answer", to: "finalize-answer" },

@@ -40,7 +40,7 @@
  */
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
-import { personThreadNodes, whoTheyAreNode } from "./person-relationship.js";
+import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 export const AI_FOLLOW_UP_EMAIL_FEATURE_SLUG = "ai-follow-up-email";
 
@@ -328,7 +328,11 @@ export function buildAiFollowUpEmailDag(): DAG {
         email: "$ref:claim-followup.output.followup.email",
         brandId: "$ref:claim-followup.output.followup.brandId",
       }),
-      whoTheyAreNode({ leadRead: "$ref:lead-detail.output", timeline: "$ref:person-thread.output" }),
+      relationshipReadNode({
+        leadRowId: "$ref:claim-followup.output.followup.id",
+        brandId: "$ref:claim-followup.output.followup.brandId",
+      }),
+      whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-thread.output" }),
       {
         id: "compose-email",
         type: "script",
@@ -452,7 +456,8 @@ export function buildAiFollowUpEmailDag(): DAG {
       { from: "gather-facts", to: "read-figures" },
       { from: "read-figures", to: "person-thread-query" },
       { from: "person-thread-query", to: "person-thread" },
-      { from: "person-thread", to: "who-they-are" },
+      { from: "person-thread", to: "relationship-read" },
+      { from: "relationship-read", to: "who-they-are" },
       { from: "who-they-are", to: "compose-email" },
       { from: "compose-email", to: "draft-email" },
       { from: "draft-email", to: "finalize-email" },

@@ -44,7 +44,8 @@ function relationship(over: Record<string, unknown> = {}) {
   };
 }
 
-const leadRead = (rel: unknown) => ({ leadDetail: { lead: { firstName: "Yuliia" }, relationship: rel } });
+/** lead-service `GET /orgs/leads/{id}/relationship`. */
+const leadRead = (rel: unknown) => ({ leadId: "l-1", brandId: "b-1", relationship: rel });
 
 const timeline = (items: unknown[] = []) => ({
   person: { personId: "p-1" },
@@ -93,8 +94,10 @@ describe("who this person is to the brand (shared step)", () => {
     const unjudged = await who(leadRead(relationship({ judgedAt: null })), undefined, timeline());
     expect(unjudged?.state).toBe("possibly_known");
     expect((unjudged?.lines as string[]).join(" ")).toContain("treat them as possibly known");
-    const noBlock = await who({ leadDetail: { lead: {} } }, undefined, timeline());
+    const noBlock = await who(leadRead(null), undefined, timeline());
     expect(noBlock?.state).toBe("possibly_known");
+    const notFound = await who({ ok: false, status: 404, error: "Lead not found" }, undefined, timeline());
+    expect(notFound?.state).toBe("possibly_known");
   });
 
   it("an unsure known tag, or any message on record, is possibly known", async () => {
@@ -115,6 +118,10 @@ describe("who this person is to the brand (shared step)", () => {
 
   it("a serve that found nobody has nobody to describe", async () => {
     expect(await who(undefined, { found: false, reason: "audience_exhausted" }, { ok: false, skipped: true, notCalled: true })).toBeNull();
+  });
+
+  it("a relationship read that broke writes nothing blind", async () => {
+    await expect(who({ ok: false, status: 500, error: "boom" }, undefined, timeline())).rejects.toThrow(/nothing is written blind/);
   });
 
   it("crm-service knowing nobody (404) is no thread; any other failure writes nothing blind", async () => {
@@ -188,6 +195,12 @@ describe("every writer runs the shared step before writing, the same way", () =>
       expect(step?.inputMapping?.timeline).toMatch(/^\$ref:person-(thread|timeline)\.output$/);
       const thread = w.dag.nodes.find((n) => `$ref:${n.id}.output` === step?.inputMapping?.timeline);
       expect(thread?.config).toMatchObject({ service: "crm", method: "GET", path: "/orgs/people/timeline" });
+      expect(step?.inputMapping?.relationshipRead).toBe("$ref:relationship-read.output");
+      const read = w.dag.nodes.find((n) => n.id === "relationship-read");
+      expect(read?.config).toMatchObject({ service: "lead", method: "GET", path: "/orgs/leads/{id}/relationship", tolerateFailure: true });
+      // Same lead row the writer's lead detail reads.
+      expect(read?.inputMapping?.["params.id"]).toBe(w.dag.nodes.find((n) => n.id === "lead-detail")?.inputMapping?.["params.id"]);
+      expect(descendants(w.dag, "relationship-read").has("who-they-are")).toBe(true);
       expect(descendants(w.dag, "who-they-are").has(w.compose)).toBe(true);
       expect(w.dag.nodes.find((n) => n.id === w.compose)?.inputMapping?.who).toBe("$ref:who-they-are.output");
       const flow = dagToOpenFlow(w.dag, w.name);
