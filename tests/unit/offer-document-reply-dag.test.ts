@@ -97,7 +97,7 @@ describe("the offer-document responder DAG", () => {
     expect(judge.inputMapping?.skip).toBe("$ref:plan-document.output.skip");
   });
 
-  it("drops the attachments key from the send body when nothing is picked (undefined is not serialized)", () => {
+  it("maps the send's attachments from pick-document (an empty list when nothing rides: Windmill turns undefined into null, which instantly refuses)", () => {
     const flow = JSON.stringify(dagToOpenFlow(dag, "offer-document-reply-test"));
     expect(flow).toContain("results.pick_document?.attachments");
   });
@@ -183,7 +183,7 @@ describe("picking the document", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const planned = await plan(docs, emailThread, smtpConversation, prompt);
     const out = await pick(planned, judge, prompt);
-    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", responseSchema: REPLY_RESPONSE_SCHEMA, attachments: undefined, document: null });
+    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", responseSchema: REPLY_RESPONSE_SCHEMA, attachments: [], document: null });
   });
 
   it("with no documents, never reads Jev and leaves the parent's prompt as is", async () => {
@@ -191,7 +191,7 @@ describe("picking the document", () => {
     const planned = await plan({ documents: [] }, emailThread, smtpConversation, prompt);
     const out = await pick(planned, { ok: false, skipped: true, notCalled: true }, prompt);
     expect(out.message).toBe("PARENT MESSAGE");
-    expect(out.attachments).toBeUndefined();
+    expect(out.attachments).toEqual([]);
   });
 
   it("replies without a file, loudly, when Jev could not judge (the prospect is still answered)", async () => {
@@ -199,7 +199,7 @@ describe("picking the document", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const planned = await plan(docs, emailThread, smtpConversation, prompt);
     const out = await pick(planned, { ok: false, status: 502, error: "Judgment failed" }, prompt);
-    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", responseSchema: REPLY_RESPONSE_SCHEMA, attachments: undefined, document: null });
+    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", responseSchema: REPLY_RESPONSE_SCHEMA, attachments: [], document: null });
     expect(err.mock.calls[0]?.[0]).toContain("Jev could not judge");
     expect(dag.nodes.find((n) => n.id === "judge-document")!.config).toMatchObject({ tolerateFailure: true });
   });
