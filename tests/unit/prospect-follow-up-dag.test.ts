@@ -1,0 +1,235 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
+import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
+import {
+  COMPOSE_PROSPECT_EMAIL_CODE,
+  CONTINUE,
+  FINALIZE_PROSPECT_EMAIL_CODE,
+  NOT_OWED,
+  OPTED_OUT,
+  OWED,
+  PERSON_HISTORY_CODE,
+  PLAN_CLAIM_CODE,
+  PROSPECT_EMAIL_RESPONSE_SCHEMA,
+  PROSPECT_FOLLOW_UP_TRIGGER_ID,
+  READ_VERDICT_CODE,
+  RESOLVE_CLAIMED_PERSON_CODE,
+  RESOLVE_SERVED_PERSON_CODE,
+  STOP,
+  WRITE,
+  buildProspectFollowUpProactiveDag,
+  buildProspectFollowUpReactiveDag,
+} from "../../src/lib/prospect-follow-up-dag.js";
+
+function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, unknown>> {
+  const body = code.replace(/^export async function main/m, "async function main") + "\nreturn main;";
+  return new Function(body)() as (...args: unknown[]) => Promise<Record<string, unknown>>;
+}
+
+function holds(condition: string, results: Record<string, unknown>): boolean {
+  return new Function("results", `return (${condition});`)(results) as boolean;
+}
+
+function descendants(dag: DAG, start: string): Set<string> {
+  const out = new Set<string>();
+  const queue = [start];
+  while (queue.length) {
+    const id = queue.shift() as string;
+    for (const e of dag.edges) {
+      if (e.from === id && !out.has(e.to)) {
+        out.add(e.to);
+        queue.push(e.to);
+      }
+    }
+  }
+  return out;
+}
+
+type Module = { id: string; value: { type: string; branches?: Array<{ modules: Module[] }>; default?: Module[] } };
+
+afterEach(() => vi.restoreAllMocks());
+
+const who = { lines: ["Judged: nothing shows the brand knows this person yet."], threadLines: [], eventLines: [], strategy: "WHO THIS PERSON IS TO US decides." };
+
+describe.each([
+  ["proactive", buildProspectFollowUpProactiveDag, "serve-lead", 4],
+  ["reactive", buildProspectFollowUpReactiveDag, "claim-followup", 5],
+] as const)("prospect follow-up %s DAG", (_name, build, anchor, branchones) => {
+  const dag = build();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+
+  it("is a valid DAG whose conditions are all top-level branchones (none nested in a branch)", () => {
+    expect(validateDAG(dag).errors).toEqual([]);
+    const flow = dagToOpenFlow(dag, "prospect-follow-up-test");
+    const top = (flow.value.modules as Module[]).filter((m) => m.value.type === "branchone");
+    expect(top).toHaveLength(branchones);
+    for (const id of ["check-owed", "check-decision", "check-sent"]) {
+      expect(dag.edges.filter((e) => e.to === id).map((e) => e.from)).toContain(anchor);
+    }
+  });
+
+  it("reads the stop verdict before any model spend, and the model only when owed", () => {
+    const beforeVerdict = new Set(dag.nodes.map((n) => n.id).filter((id) => descendants(dag, id).has("prospect-verdict")));
+    for (const id of beforeVerdict) expect(byId.get(id)?.config?.service).not.toBe("chat");
+    expect(dag.edges).toContainEqual({ from: "check-owed", to: "offer-economics", condition: OWED });
+  });
+
+  it("records the next date strictly after the send, as one dated occurrence of the follow-up trigger", () => {
+    expect(descendants(dag, "send-email").has("schedule-next")).toBe(true);
+    const next = byId.get("schedule-next");
+    expect(next?.config).toMatchObject({ service: "campaign", method: "POST", path: "/internal/trigger-events", body: { triggerId: PROSPECT_FOLLOW_UP_TRIGGER_ID } });
+    expect(next?.inputMapping).toMatchObject({
+      "body.dueAt": "$ref:finalize-email.output.nextFollowUpAt",
+      "body.person.email": "$ref:resolve-person.output.email",
+      "body.idempotencyKey": "$ref:resolve-person.output.nextKey",
+    });
+    expect(dag.edges).toContainEqual({ from: "check-sent", to: "schedule-next", condition: CONTINUE });
+  });
+
+  it("writes with Opus through chat-service and states no fixed cadence anywhere", () => {
+    expect(byId.get("draft-email")?.config?.body).toMatchObject({ provider: "anthropic", model: "opus", responseSchema: PROSPECT_EMAIL_RESPONSE_SCHEMA });
+    expect(JSON.stringify(dag)).not.toMatch(/\b(3|7|21|60|180)\s*days\b/);
+  });
+
+  it("sends from our sending infra, a refusal read as an outcome", () => {
+    expect(byId.get("send-email")?.config).toMatchObject({
+      service: "email-gateway",
+      path: "/orgs/send",
+      skipOnRefusalCodes: ["recent_brand_contact", "lead_opted_out"],
+    });
+  });
+});
+
+describe("reactive queue records", () => {
+  const dag = buildProspectFollowUpReactiveDag();
+  it("stops the row (never handed) after the next date is recorded, and on every stop path", () => {
+    expect(dag.edges).toContainEqual({ from: "schedule-next", to: "record-sent" });
+    for (const id of ["record-sent", "record-not-owed", "record-stopped", "record-opted-out"]) {
+      expect(dag.nodes.find((n) => n.id === id)?.config?.body).toMatchObject({ kind: "stopped" });
+    }
+  });
+  it("only a run carrying an occurrence claims anyone", async () => {
+    const plan = loadMain(PLAN_CLAIM_CODE);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await plan(null)).toEqual({ skip: true });
+    expect(await plan({ person: { email: "a@b.co" } })).toEqual({ skip: false });
+  });
+});
+
+describe("resolve-person", () => {
+  it("proactive: keys the send on the campaign and the served row, the next date on the send", async () => {
+    const r = await loadMain(RESOLVE_SERVED_PERSON_CODE)(
+      { found: true, lead: { leadCampaignId: "row-1", leadId: "lead-1", email: "jo@x.co", brandIds: ["b-1"], data: { firstName: "Jo", timezone: "Europe/Paris" } } },
+      "camp-1",
+    );
+    expect(r).toMatchObject({ ok: true, kind: "first", rowId: "row-1", brandId: "b-1", timezone: "Europe/Paris", sendKey: "prospect-follow-up:camp-1:row-1", nextKey: "prospect-follow-up:camp-1:row-1:next" });
+  });
+  it("reactive: uses the person only when the occurrence names them, keyed on the occurrence", async () => {
+    const run = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const claim = { found: true, followup: { id: "row-2", leadId: "lead-2", email: "Jo@X.co", brandId: "b-1" } };
+    const detail = { leadDetail: { lead: { firstName: "Jo", timezone: "UTC" } } };
+    expect(await run(claim, detail, { eventId: "ev-9", person: { email: "jo@x.co" } })).toMatchObject({
+      ok: true,
+      kind: "next",
+      sendKey: "prospect-follow-up:event:ev-9",
+    });
+    expect(await run(claim, detail, { eventId: "ev-9", person: { email: "someone@else.co" } })).toMatchObject({ ok: false });
+  });
+});
+
+describe("verdict", () => {
+  it("fails loud on an answer that is not a boolean, never reads it as owed", async () => {
+    const run = loadMain(READ_VERDICT_CODE);
+    await expect(run({})).rejects.toThrow(/no owed verdict/);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await run({ owed: false, reason: "positive_reply" })).toEqual({ owed: false, reason: "positive_reply" });
+    expect(holds(NOT_OWED, { "resolve-person": { ok: true }, "read-verdict": { owed: false } })).toBe(true);
+    expect(holds(OWED, { "resolve-person": { ok: true }, "read-verdict": { owed: false } })).toBe(false);
+  });
+});
+
+describe("person history", () => {
+  const run = loadMain(PERSON_HISTORY_CODE);
+  it("lists our emails with dates, their words and what they did", async () => {
+    const h = await run({
+      sources: [{ source: "outreach", status: "ok" }, { source: "mailbox", status: "unavailable" }],
+      events: [
+        { type: "message", at: "2026-09-01T09:00:00Z", direction: "outbound", subject: "Hi", bodyStatus: "ok", bodyText: "first" },
+        { type: "delivery", at: "2026-09-02T10:00:00Z", milestone: "clicked" },
+        { type: "conversion", at: "2026-09-03T10:00:00Z", event: "signup", observedBy: "tracker" },
+      ],
+    });
+    expect(h.ourEmails).toBe(1);
+    expect(h.lastOursAt).toBe("2026-09-01T09:00:00Z");
+    expect((h.lines as string[]).join("\n")).toMatch(/US: \[Hi\] first[\s\S]*email clicked[\s\S]*signup/);
+    expect(h.unreadable).toEqual(["mailbox"]);
+  });
+  it("never decides blind: what we sent or what they did unreadable throws", async () => {
+    await expect(run({ sources: [{ source: "delivery", status: "unavailable", reason: "down" }], events: [] })).rejects.toThrow(/never decided blind/);
+  });
+});
+
+describe("compose", () => {
+  it("tells the game, the date rule and the stop rule, with no dash in the prompt", async () => {
+    const out = await loadMain(COMPOSE_PROSPECT_EMAIL_CODE)(
+      { kind: "next", email: "jo@x.co", lead: { firstName: "Jo" }, timezone: "Europe/Paris" },
+      { name: "Product-led" },
+      { brand: { name: "Acme" } },
+      { exact: [{ id: "E1", label: "Price", value: "$99" }], neverGive: [] },
+      { lines: ["2026-09-01 09:00 UTC | email | US: hi"], omitted: 0, ourEmails: 1, lastOursAt: "2026-09-01", lastTheirsAt: null, unreadable: [] },
+      null,
+      "2026-10-14",
+      "2026-10-14T10:00:00.000Z",
+      who,
+    );
+    const all = String(out.systemPrompt) + String(out.message);
+    expect(all).not.toMatch(/[–—]/);
+    expect(out.systemPrompt).toMatch(/There is no fixed schedule/);
+    expect(out.systemPrompt).toMatch(/Silence is never a reason to stop/);
+    expect(out.message).toMatch(/E1\. Price: \$99/);
+    expect(out.message).toMatch(/NOW: 2026-10-14T10:00:00.000Z/);
+  });
+  it("refuses to write blind", async () => {
+    await expect(loadMain(COMPOSE_PROSPECT_EMAIL_CODE)({}, { name: "x" }, { brand: { name: "y" } }, {}, { lines: [] }, null, null, "now", null)).rejects.toThrow(/written blind/);
+  });
+});
+
+describe("finalize", () => {
+  const run = loadMain(FINALIZE_PROSPECT_EMAIL_CODE);
+  const person = { sendKey: "k1" };
+  const future = new Date(Date.now() + 5 * 86400_000).toISOString();
+  it("rewrites dashes and keeps the model's date", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await run({ json: { decision: "write", subject: "A — B", bodyHtml: "<p>2–3 days — maybe</p>", nextFollowUpAt: future, nextFollowUpWhy: "w", reason: "r" } }, person);
+    expect(r).toMatchObject({ decision: "write", subject: "A, B", idempotencyKey: "k1", nextFollowUpAt: new Date(future).toISOString() });
+    expect(JSON.stringify(r.sequence)).toContain("2-3 days, maybe");
+  });
+  it("throws before the send on a next date that is missing or not in the future", async () => {
+    await expect(run({ json: { decision: "write", subject: "s", bodyHtml: "<p>b</p>", nextFollowUpAt: "" } }, person)).rejects.toThrow(/not a date/);
+    await expect(run({ json: { decision: "write", subject: "s", bodyHtml: "<p>b</p>", nextFollowUpAt: "2020-01-01T00:00:00Z" } }, person)).rejects.toThrow(/not in the future/);
+  });
+  it("a stop on the person's own words sends nothing", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await run({ json: { decision: "stop", reason: "\"please stop\"" } }, person)).toMatchObject({ decision: "stop" });
+    expect(holds(STOP, { "finalize-email": { decision: "stop" } })).toBe(true);
+    expect(holds(WRITE, { "finalize-email": { decision: "stop" } })).toBe(false);
+  });
+});
+
+describe("after the send", () => {
+  const write = { "finalize-email": { decision: "write" } };
+  it("continues the chain when sent, or refused only because the brand talks to them now", () => {
+    expect(holds(CONTINUE, { ...write, "send-email": { success: true } })).toBe(true);
+    expect(holds(CONTINUE, { ...write, "send-email": { skipped: true, code: "recent_brand_contact" } })).toBe(true);
+    expect(holds(OPTED_OUT, { ...write, "send-email": { skipped: true, code: "recent_brand_contact" } })).toBe(false);
+  });
+  it("ends the chain when refused because they opted out", () => {
+    expect(holds(CONTINUE, { ...write, "send-email": { skipped: true, code: "lead_opted_out" } })).toBe(false);
+    expect(holds(OPTED_OUT, { ...write, "send-email": { skipped: true, code: "lead_opted_out" } })).toBe(true);
+  });
+  it("does nothing on a path where nothing was written", () => {
+    expect(holds(CONTINUE, { "finalize-email": { decision: "stop" } })).toBe(false);
+    expect(holds(OPTED_OUT, {})).toBe(false);
+  });
+});
