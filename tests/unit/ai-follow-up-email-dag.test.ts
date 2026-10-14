@@ -68,7 +68,7 @@ describe("ai-follow-up-email DAG", () => {
 
   it("reads the instruction off /start-run at run time; claims nobody with neither an instruction nor an occurrence", async () => {
     expect(byId.get("compose-email")?.inputMapping?.instruction).toBe("$ref:start-run.output.instruction");
-    expect(byId.get("occurrence")?.inputMapping).toEqual({ trigger: "$ref:flow_input.trigger", instruction: "$ref:start-run.output.instruction" });
+    expect(byId.get("occurrence")?.inputMapping).toEqual({ trigger: "$ref:flow_input.trigger", instruction: "$ref:start-run.output.instruction", reactive: "$ref:start-run.output.reactive" });
     const toClaim = dag.edges.find((e) => e.from === "check-instruction" && e.to === "claim-followup");
     expect(toClaim?.condition).toBe(HAS_SOMETHING_TO_SAY);
     const none = dag.edges.find((e) => e.from === "check-instruction" && e.to === "name-missing-instruction");

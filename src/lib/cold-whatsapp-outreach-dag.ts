@@ -17,6 +17,9 @@
  *  - Nobody due: the NEXT person is served by lead-service (`POST /orgs/buffer/next`, the same serve every
  *    outreach workflow calls; for the CRM pipe it hands out the brand's own people). Nobody left ends the run on
  *    the no-lead end-run, which the converter turns into "exhausted" only on lead-service's `audience_exhausted`.
+ *    ONLY a unit `/start-run` states proactive (`reactive: false`) is served a new person: a reactive unit, or one
+ *    whose leg is unknown (`null`, or a campaign-service that does not say), ends idle (`noWorkAvailable`) with
+ *    nobody due, never cold-messaging a stranger (owner rule, la-paz 2026-10-14).
  *  - The message is written by the model through chat-service `/complete` (which owns the model, the key and the
  *    cost declaration), from the campaign's own `instruction` (read off `/start-run` at THIS run, so an edit is
  *    what the next run writes from), what the CLIENT told us about the offer (`GATHER_FACTS_CODE`, never the
@@ -121,7 +124,8 @@ export async function main(claim, detail, served, occurrence) {
     }
     return { kind: "followup", step: 2, skipSends: false, rowId: f.id, leadId: f.leadId ?? null, email: f.email, brandId: f.brandId ?? null, lead };
   }
-  if (answering) return { kind: "nobody_due", skipSends: true, reason: claim?.reason ?? null };
+  // Nobody due, and this run may not buy a stranger (it answers an occurrence, or the unit is reactive or unknown).
+  if (answering || occurrence?.serveNewLead !== true) return { kind: "nobody_due", skipSends: true, reason: claim?.reason ?? null };
   if (served?.found === true) {
     const s = served.lead ?? {};
     if (!s.email) throw new Error("pick-person: a served lead carries no email");
@@ -837,7 +841,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
       {
         from: "check-due",
         to: "serve-lead",
-        condition: "results['claim-followup']?.found != true && results['occurrence']?.answering != true",
+        condition: "results['claim-followup']?.found != true && results['occurrence']?.serveNewLead == true",
       },
       { from: "lead-detail", to: "relationship-read" },
       { from: "relationship-read", to: "pick-person" },
