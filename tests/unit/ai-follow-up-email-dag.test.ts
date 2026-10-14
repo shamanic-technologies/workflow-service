@@ -9,11 +9,12 @@ import {
   FINALIZE_EMAIL_CODE,
   FOLLOW_UP_SENT_REASON,
   GATHER_CLIENT_FACTS_CODE,
-  HAS_INSTRUCTION,
+  HAS_SOMETHING_TO_SAY,
   INSTRUCTION_NOT_WRITABLE_REASON,
   NAME_MISSING_INSTRUCTION_CODE,
   buildAiFollowUpEmailDag,
 } from "../../src/lib/ai-follow-up-email-dag.js";
+import { OCCURRENCE_PLAN_CODE } from "../../src/lib/occurrence-fact.js";
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, unknown>> {
   const body = code.replace(/^export async function main/m, "async function main") + "\nreturn main;";
@@ -65,20 +66,40 @@ describe("ai-follow-up-email DAG", () => {
     expect(top).toHaveLength(3);
   });
 
-  it("reads the instruction off /start-run at run time, and refuses to claim anyone without one", () => {
+  it("reads the instruction off /start-run at run time; claims nobody with neither an instruction nor an occurrence", async () => {
     expect(byId.get("compose-email")?.inputMapping?.instruction).toBe("$ref:start-run.output.instruction");
+    expect(byId.get("occurrence")?.inputMapping).toEqual({ trigger: "$ref:flow_input.trigger", instruction: "$ref:start-run.output.instruction" });
     const toClaim = dag.edges.find((e) => e.from === "check-instruction" && e.to === "claim-followup");
-    expect(toClaim?.condition).toBe(HAS_INSTRUCTION);
+    expect(toClaim?.condition).toBe(HAS_SOMETHING_TO_SAY);
     const none = dag.edges.find((e) => e.from === "check-instruction" && e.to === "name-missing-instruction");
     expect(descendants(dag, none!.to)).toEqual(new Set(["end-run-no-instruction"]));
     expect(byId.get("end-run-no-instruction")?.config?.body).toEqual({ success: false, stopCampaign: false });
 
+    const plan = loadMain(OCCURRENCE_PLAN_CODE);
+    const trigger = { eventId: "ev-1", triggerId: "signed_up_not_paid_30m", leadId: "l-1", item: null, person: { email: "Kevin@Distribute.you", name: "Kevin", phone: null, crmContact: null } };
     for (const instruction of [null, undefined, "", "   "]) {
-      expect(holds(toClaim!.condition!, { "start-run": { instruction } })).toBe(false);
-      expect(holds(none!.condition!, { "start-run": { instruction } })).toBe(true);
+      const results = { occurrence: await plan(undefined, instruction) };
+      expect(holds(toClaim!.condition!, results)).toBe(false);
+      expect(holds(none!.condition!, results)).toBe(true);
+      // The fact alone is reason enough to write.
+      const answering = { occurrence: await plan(trigger, instruction) };
+      expect(holds(toClaim!.condition!, answering)).toBe(true);
+      expect(holds(none!.condition!, answering)).toBe(false);
     }
-    expect(holds(toClaim!.condition!, { "start-run": { instruction: "Tell Marie her cost" } })).toBe(true);
-    expect(holds(none!.condition!, { "start-run": { instruction: "Tell Marie her cost" } })).toBe(false);
+    const instructed = { occurrence: await plan(null, "Tell Marie her cost") };
+    expect(holds(toClaim!.condition!, instructed)).toBe(true);
+    expect(holds(none!.condition!, instructed)).toBe(false);
+  });
+
+  it("reads the trigger type the run answers from features-service, and not at all when it answers none", async () => {
+    expect(byId.get("trigger-type")?.config).toEqual({ service: "features", method: "GET", path: "/internal/catalogue/triggers/{id}" });
+    expect(byId.get("trigger-type")?.inputMapping).toEqual({ "params.id": "$ref:occurrence.output.triggerId", skip: "$ref:occurrence.output.skipTriggerRead" });
+    expect(byId.get("compose-email")?.inputMapping).toMatchObject({ occurrence: "$ref:occurrence.output", triggerType: "$ref:trigger-type.output" });
+    expect(descendants(dag, "trigger-type").has("claim-followup")).toBe(true);
+    const plan = loadMain(OCCURRENCE_PLAN_CODE);
+    expect(await plan(undefined, "x")).toMatchObject({ answering: false, triggerId: null, skipTriggerRead: true, skipFigures: false });
+    expect(await plan({ eventId: "ev-1", triggerId: "t-1", person: { email: " A@X.com ", phone: "+33 6 12" } }, null))
+      .toMatchObject({ answering: true, eventId: "ev-1", triggerId: "t-1", skipTriggerRead: false, skipFigures: true, person: { email: "a@x.com", phone: "+33 6 12" } });
   });
 
   it("claims from THIS campaign's own queue, once, and never from a predecessor", () => {
@@ -129,6 +150,7 @@ describe("ai-follow-up-email DAG", () => {
     expect(read?.inputMapping).toEqual({
       "body.question": "$ref:start-run.output.instruction",
       "body.recipientEmail": "$ref:claim-followup.output.followup.email",
+      skip: "$ref:occurrence.output.skipFigures",
     });
     expect(descendants(dag, "read-figures").has("compose-email")).toBe(true);
     expect(byId.get("compose-email")?.inputMapping?.figures).toBe("$ref:read-figures.output");
@@ -175,7 +197,7 @@ describe("composing the email", () => {
       figures: [{ label: "Cost per booked meeting", value: "$38.20", source: "/v1/offers/o-1/revenue" }],
       missing: "The estimate source could not be read.",
     };
-    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8)(
+    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10)(
       "Give Marie her exact cost per booked meeting and compare it to the $42 estimate.",
       followup, leadDetail, offer, brand, facts, figures, "2026-10-11",
     );
@@ -184,12 +206,12 @@ describe("composing the email", () => {
     expect(message).toContain("NOT READABLE: The estimate source could not be read.");
     expect(out.systemPrompt as string).toContain("FIGURES");
     expect(out.systemPrompt as string).toContain("never change its value");
-    await expect(withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8)("x", followup, leadDetail, offer, brand, facts, {}, "2026-10-11"))
+    await expect(withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10)("x", followup, leadDetail, offer, brand, facts, {}, "2026-10-11"))
       .rejects.toThrow(/figures list/);
   });
 
   it("puts the instruction verbatim, the person, and the client's facts in front of the model", async () => {
-    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8)(
+    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10)(
       "Give Marie her exact cost per booked meeting: $37. Compare it to the $42 estimate.",
       followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11",
     );
@@ -205,11 +227,83 @@ describe("composing the email", () => {
     expect(system + message).not.toMatch(/[–—]/);
   });
 
-  it("refuses to compose without an instruction, an offer name or a brand name", async () => {
-    const main = withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8);
-    await expect(main("  ", followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/instruction/);
+  it("refuses to compose with neither an instruction nor an occurrence, or without an offer name or a brand name", async () => {
+    const main = withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10);
+    await expect(main("  ", followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/no instruction/);
     await expect(main("x", followup, leadDetail, {}, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/offer/);
     await expect(main("x", followup, leadDetail, offer, { brand: {} }, facts, noFigures, "2026-10-11")).rejects.toThrow(/brand/);
+  });
+});
+
+describe("composing the email for a trigger occurrence, with no instruction", () => {
+  const person = { email: "kevin@distribute.you", name: "Kevin", phone: null, crmContact: null };
+  const trigger = { eventId: "ev-1", triggerId: "signed_up_not_paid_30m", leadId: "l-1", item: null, person };
+  const followup = { followup: { id: "row-1", leadId: "l-1", email: "Kevin@distribute.you", brandId: "b-1" } };
+  const leadDetail = { leadDetail: { lead: { firstName: "Kevin" } } };
+  const offer = { name: "Revenue made easy" };
+  const brand = { brand: { name: "distribute.you" } };
+  const facts = { exact: [{ id: "E1", label: "pricing", value: "The platform is free" }], neverGive: [] };
+  const triggerType = {
+    object: "trigger", id: "signed_up_not_paid_30m", name: "Signup Not Paid", line: "Signed up, still not a paid client 30 minutes later.",
+    fromStep: "signup", fromStepName: "Signup", kind: "delay", params: { afterStep: "signup", minutes: 30, unlessStep: "paid_client" },
+  };
+  const compose = withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10);
+
+  it("writes from the fact and the person's state: why we write now, their thread and events, what the brand sells", async () => {
+    const occurrence = await loadMain(OCCURRENCE_PLAN_CODE)(trigger, null);
+    const who = { state: "possibly_known", lines: ["Never judged."], threadLines: [], olderMessagesOmitted: 0, eventLines: ["2026-10-14 09:00 | web | EVENT: signup (clerk)"], strategy: "STRATEGY" };
+    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10, who)(
+      null, followup, leadDetail, offer, brand, facts, { ok: false, skipped: true, notCalled: true }, "2026-10-14", occurrence, triggerType,
+    );
+    const message = out.message as string;
+    const system = out.systemPrompt as string;
+    expect(message).toContain("INSTRUCTION:\n(none: write from WHY WE WRITE NOW and where this person stands)");
+    expect(message).toContain("WHY WE WRITE NOW:\nTrigger: Signup Not Paid: Signed up, still not a paid client 30 minutes later.");
+    expect(message).toContain("It starts when the person reaches: Signup");
+    expect(message).toContain("Its settings: afterStep = signup, minutes = 30, unlessStep = paid_client");
+    expect(message).toContain("It fired for THIS person just now");
+    expect(message).toContain("EVENT: signup (clerk)");
+    expect(message).toContain("WHO WE ARE: distribute.you, offer \"Revenue made easy\".");
+    expect(message).toContain("FIGURES read for this email (from their own account, or public):\n(none)");
+    expect(system).toContain("There is no INSTRUCTION");
+    expect(system).toContain("Make the next step easy");
+    expect(system).toContain("Never say we watched, tracked or noticed them");
+    expect(system + message).not.toMatch(/[–—]/);
+  });
+
+  it("an instruction still leads when the campaign carries one, beside the fact", async () => {
+    const occurrence = await loadMain(OCCURRENCE_PLAN_CODE)(trigger, "Offer a 15 minute setup call.");
+    const out = await compose("Offer a 15 minute setup call.", followup, leadDetail, offer, brand, facts, { figures: [], missing: null }, "2026-10-14", occurrence, triggerType);
+    expect(out.systemPrompt as string).toContain("You follow the INSTRUCTION below");
+    expect(out.message as string).toContain("Offer a 15 minute setup call.");
+    expect(out.message as string).toContain("WHY WE WRITE NOW:");
+  });
+
+  it("a person the occurrence does not name is still owed the campaign's fact, never told it fired for them", async () => {
+    const occurrence = await loadMain(OCCURRENCE_PLAN_CODE)({ ...trigger, person: { email: "someone@else.com" } }, null);
+    const out = await compose(null, followup, leadDetail, offer, brand, facts, { ok: false, skipped: true, notCalled: true }, "2026-10-14", occurrence, triggerType);
+    expect(out.message as string).toContain("This person is owed a message because of this same trigger.");
+    expect(out.message as string).not.toContain("fired for THIS person");
+  });
+
+  it("never writes blind when the trigger type could not be read", async () => {
+    const occurrence = await loadMain(OCCURRENCE_PLAN_CODE)(trigger, null);
+    await expect(compose(null, followup, leadDetail, offer, brand, facts, { notCalled: true }, "2026-10-14", occurrence, { ok: false, skipped: true, notCalled: true }))
+      .rejects.toThrow(/was not read/);
+  });
+});
+
+describe("a redelivered occurrence sends nothing more", () => {
+  it("re-filing re-dues the SAME queue row, so the send key is identical, and the handed row is never claimed again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const main = loadMain(FINALIZE_EMAIL_CODE);
+    const draft = { json: { decision: "write", subject: "s", bodyHtml: "<p>b</p>", reason: "r" } };
+    const first = await main(draft, { followup: { id: "row-1", dueAt: "2026-10-14T10:00:00Z" } });
+    const redelivered = await main(draft, { followup: { id: "row-1", dueAt: "2026-10-14T10:02:00Z" } });
+    expect(redelivered.idempotencyKey).toBe(first.idempotencyKey);
+    const dag = buildAiFollowUpEmailDag();
+    expect(dag.edges).toContainEqual({ from: "send-email", to: "record-sent" });
+    expect(dag.nodes.find((n) => n.id === "record-sent")?.config?.body).toEqual({ kind: "handed", reason: FOLLOW_UP_SENT_REASON });
   });
 });
 
