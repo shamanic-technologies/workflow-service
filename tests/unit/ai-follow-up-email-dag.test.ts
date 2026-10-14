@@ -7,11 +7,13 @@ import {
   COMPOSE_EMAIL_PROMPT_CODE,
   EMAIL_RESPONSE_SCHEMA,
   FINALIZE_EMAIL_CODE,
-  FOLLOW_UP_SENT_REASON,
+  DEFERRED,
+  FOLLOW_UP_REFUSED_REASON,
+  FOLLOW_UP_STOPPED_REASON,
   GATHER_CLIENT_FACTS_CODE,
-  HAS_SOMETHING_TO_SAY,
   INSTRUCTION_NOT_WRITABLE_REASON,
-  NAME_MISSING_INSTRUCTION_CODE,
+  REFUSED,
+  SENT,
   buildAiFollowUpEmailDag,
 } from "../../src/lib/ai-follow-up-email-dag.js";
 import { OCCURRENCE_PLAN_CODE } from "../../src/lib/occurrence-fact.js";
@@ -66,31 +68,13 @@ describe("ai-follow-up-email DAG", () => {
     expect(top).toHaveLength(3);
   });
 
-  it("reads the instruction off /start-run at run time; claims nobody with neither an instruction nor an occurrence", async () => {
+  it("reads the instruction off /start-run at run time; every run asks its own queue", async () => {
     expect(byId.get("compose-email")?.inputMapping?.instruction).toBe("$ref:start-run.output.instruction");
     expect(byId.get("occurrence")?.inputMapping).toEqual({ trigger: "$ref:flow_input.trigger", instruction: "$ref:start-run.output.instruction", reactive: "$ref:start-run.output.reactive" });
-    const toClaim = dag.edges.find((e) => e.from === "check-instruction" && e.to === "claim-followup");
-    expect(toClaim?.condition).toBe(HAS_SOMETHING_TO_SAY);
-    const none = dag.edges.find((e) => e.from === "check-instruction" && e.to === "name-missing-instruction");
-    expect(descendants(dag, none!.to)).toEqual(new Set(["end-run-no-instruction"]));
-    // The scheduler's cadence run of a funnel unit (no trigger, no instruction) is idle, never a failure:
-    // 7 failed runs on prod unit 30b1d192 backed it off and skipped a real occurrence (failure_backoff).
-    expect(byId.get("end-run-no-instruction")?.config?.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
-
-    const plan = loadMain(OCCURRENCE_PLAN_CODE);
-    const trigger = { eventId: "ev-1", triggerId: "signed_up_not_paid_30m", leadId: "l-1", item: null, person: { email: "Kevin@Distribute.you", name: "Kevin", phone: null, crmContact: null } };
-    for (const instruction of [null, undefined, "", "   "]) {
-      const results = { occurrence: await plan(undefined, instruction) };
-      expect(holds(toClaim!.condition!, results)).toBe(false);
-      expect(holds(none!.condition!, results)).toBe(true);
-      // The fact alone is reason enough to write.
-      const answering = { occurrence: await plan(trigger, instruction) };
-      expect(holds(toClaim!.condition!, answering)).toBe(true);
-      expect(holds(none!.condition!, answering)).toBe(false);
-    }
-    const instructed = { occurrence: await plan(null, "Tell Marie her cost") };
-    expect(holds(toClaim!.condition!, instructed)).toBe(true);
-    expect(holds(none!.condition!, instructed)).toBe(false);
+    // A person is due because an occurrence filed them, an instruction named them, or the date WE set is reached:
+    // the queue is asked every run, and nobody due is idle (never a failure, which backs the unit off).
+    expect(dag.edges).toContainEqual({ from: "trigger-type", to: "claim-followup" });
+    expect(dag.nodes.some((n) => n.id === "check-instruction")).toBe(false);
   });
 
   it("reads the trigger type the run answers from features-service, and not at all when it answers none", async () => {
@@ -119,30 +103,63 @@ describe("ai-follow-up-email DAG", () => {
     for (const e of dag.edges.filter((x) => x.from === "check-claim")) {
       expect(e.condition).toContain("results['claim-followup']?.");
     }
-    expect(dag.edges.filter((e) => e.to === "check-claim").map((e) => e.from)).toContain("start-run");
   });
 
-  it("sends ONE email as a new thread through the broadcast send, keyed on the person's queue row", () => {
+  it("sends ONE email as a reply in their last thread through the broadcast send, refusals read as outcomes", () => {
     const sends = dag.nodes.filter((n) => n.config?.service === "email-gateway");
     expect(sends.map((n) => n.id)).toEqual(["send-email"]);
     const send = byId.get("send-email")!;
-    expect(send.config).toMatchObject({ method: "POST", path: "/orgs/send", body: { type: "broadcast" } });
+    expect(send.config).toMatchObject({ method: "POST", path: "/orgs/send", body: { type: "broadcast", followUp: true } });
+    expect(send.config?.skipOnRefusalCodes).toEqual(expect.arrayContaining(["lead_opted_out", "lead_not_a_prospect", "recent_brand_contact", "brand_sequence_queued"]));
     expect(send.inputMapping).toMatchObject({
       "body.to": "$ref:claim-followup.output.followup.email",
       "body.sequence": "$ref:finalize-email.output.sequence",
       "body.idempotencyKey": "$ref:finalize-email.output.idempotencyKey",
       "body.campaignId": "$ref:flow_input.campaignId",
     });
+    expect(byId.get("finalize-email")?.inputMapping?.trigger).toBe("$ref:flow_input.trigger");
     expect(dag.nodes.some((n) => n.config?.path === "/orgs/replies")).toBe(false);
     expect(dag.nodes.some((n) => n.type === "for-each")).toBe(false);
   });
 
-  it("marks the person handed strictly AFTER the send, so they are never written to twice", () => {
-    expect(byId.get("record-sent")?.config?.body).toEqual({ kind: "handed", reason: FOLLOW_UP_SENT_REASON });
-    expect(dag.edges).toContainEqual({ from: "send-email", to: "record-sent" });
+  // RIGHT-MOMENT-OR-LATER-1014: a client was emailed a second time about something the owner had already answered.
+  it("records the next date strictly AFTER the send, never hands the person over (only their own words end it)", () => {
+    expect(byId.get("record-sent")?.config?.body).toEqual({ kind: "acted" });
+    expect(byId.get("record-sent")?.inputMapping?.["body.nextDueAt"]).toBe("$ref:finalize-email.output.nextFollowUpAt");
+    expect(dag.edges).toContainEqual({ from: "send-email", to: "check-sent" });
+    expect(dag.edges.find((e) => e.from === "check-sent" && e.to === "record-sent")?.condition).toBe(SENT);
     expect(descendants(dag, "record-sent").has("send-email")).toBe(false);
-    const handed = dag.nodes.filter((n) => (n.config?.body as { kind?: string } | undefined)?.kind === "handed");
-    expect(handed.map((n) => n.id)).toEqual(["record-sent"]);
+    expect(dag.nodes.some((n) => (n.config?.body as { kind?: string } | undefined)?.kind === "handed")).toBe(false);
+    // check-sent converges, never nested in check-writable's branch.
+    expect(dag.edges.filter((e) => e.to === "check-sent").map((e) => e.from)).toContain("claim-followup");
+  });
+
+  it("not the right moment sends nothing and makes the person due again at the model's later date", () => {
+    const edge = dag.edges.find((e) => e.from === "check-writable" && e.to === "record-later");
+    expect(edge?.condition).toContain("'later'");
+    expect(descendants(dag, "record-later")).toEqual(new Set(["end-run-later"]));
+    expect(byId.get("record-later")?.config?.body).toEqual({ kind: "scheduled" });
+    expect(byId.get("record-later")?.inputMapping?.["body.dueAt"]).toBe("$ref:finalize-email.output.nextFollowUpAt");
+    expect(byId.get("end-run-later")?.config?.body).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("a stop on the person's own words sends nothing and stops the row; an opt-out refusal stops it too", () => {
+    const stop = dag.edges.find((e) => e.from === "check-writable" && e.to === "record-stopped");
+    expect(stop?.condition).toContain("'stop'");
+    expect(descendants(dag, "record-stopped").has("send-email")).toBe(false);
+    expect(byId.get("record-stopped")?.config?.body).toEqual({ kind: "stopped", reason: FOLLOW_UP_STOPPED_REASON });
+    expect(byId.get("record-refused")?.config?.body).toEqual({ kind: "stopped", reason: FOLLOW_UP_REFUSED_REASON });
+    const write = { "finalize-email": { decision: "write" } };
+    const sent = { ...write, "send-email": { ok: true } };
+    const queued = { ...write, "send-email": { skipped: true, code: "brand_sequence_queued" } };
+    const optedOut = { ...write, "send-email": { skipped: true, code: "lead_opted_out" } };
+    expect([holds(SENT, sent), holds(DEFERRED, sent), holds(REFUSED, sent)]).toEqual([true, false, false]);
+    expect([holds(SENT, queued), holds(DEFERRED, queued), holds(REFUSED, queued)]).toEqual([false, true, false]);
+    expect([holds(SENT, optedOut), holds(DEFERRED, optedOut), holds(REFUSED, optedOut)]).toEqual([false, false, true]);
+    // A passing refusal keeps the person followed up at the model's date.
+    expect(byId.get("record-deferred")?.config?.body).toEqual({ kind: "scheduled" });
+    // Nothing written: no arm fires.
+    for (const c of [SENT, DEFERRED, REFUSED]) expect(holds(c, { "finalize-email": { decision: "later" } })).toBe(false);
   });
 
   it("reads the figures the instruction needs for the PERSON written to, before the email is composed", () => {
@@ -229,9 +246,22 @@ describe("composing the email", () => {
     expect(system + message).not.toMatch(/[–—]/);
   });
 
-  it("refuses to compose with neither an instruction nor an occurrence, or without an offer name or a brand name", async () => {
+  it("tells the right-moment game and the next-date rule, dash-free", async () => {
+    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10)("x", followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11");
+    const system = out.systemPrompt as string;
+    expect(system).toContain("THE RIGHT MOMENT");
+    expect(system).toContain("a person of our team writing by hand counts exactly like an automated email");
+    expect(system).toContain("set decision to later");
+    expect(system).toContain("THE NEXT DATE");
+    expect(system).toContain("reply in the thread they wrote in last");
+    expect(system).toContain("us having already answered them, is never a reason to stop");
+    expect(system + (out.message as string)).not.toMatch(/[–—]/);
+  });
+
+  it("with neither an instruction nor an occurrence, writes from the date we set; refuses without an offer or a brand name", async () => {
     const main = withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 10);
-    await expect(main("  ", followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/no instruction/);
+    const due = await main("  ", followup, leadDetail, offer, brand, facts, { notCalled: true }, "2026-10-11");
+    expect(due.message as string).toContain("The follow-up date we set at our last look at this person is reached.");
     await expect(main("x", followup, leadDetail, {}, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/offer/);
     await expect(main("x", followup, leadDetail, offer, { brand: {} }, facts, noFigures, "2026-10-11")).rejects.toThrow(/brand/);
   });
@@ -296,32 +326,58 @@ describe("composing the email for a trigger occurrence, with no instruction", ()
 });
 
 describe("a redelivered occurrence sends nothing more", () => {
-  it("re-filing re-dues the SAME queue row, so the send key is identical, and the handed row is never claimed again", async () => {
+  it("re-filing re-dues the SAME queue row for the SAME event: the send key names the event, so it is identical", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const main = loadMain(FINALIZE_EMAIL_CODE);
-    const draft = { json: { decision: "write", subject: "s", bodyHtml: "<p>b</p>", reason: "r" } };
-    const first = await main(draft, { followup: { id: "row-1", dueAt: "2026-10-14T10:00:00Z" } });
-    const redelivered = await main(draft, { followup: { id: "row-1", dueAt: "2026-10-14T10:02:00Z" } });
+    const draft = { json: { decision: "write", subject: "s", bodyHtml: "<p>b</p>", nextFollowUpAt: "2099-01-01T09:00:00Z", reason: "r" } };
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2098-06-01T00:00:00Z"));
+    const trigger = { eventId: "ev-9", person: { email: "Marie@x.com" } };
+    const first = await main(draft, { followup: { id: "row-1", email: "marie@x.com", dueAt: "2026-10-14T10:00:00Z" } }, trigger);
+    const redelivered = await main(draft, { followup: { id: "row-1", email: "marie@x.com", dueAt: "2026-10-14T10:02:00Z" } }, trigger);
+    expect(first.idempotencyKey).toBe("ai-follow-up-email:event:ev-9");
     expect(redelivered.idempotencyKey).toBe(first.idempotencyKey);
-    const dag = buildAiFollowUpEmailDag();
-    expect(dag.edges).toContainEqual({ from: "send-email", to: "record-sent" });
-    expect(dag.nodes.find((n) => n.id === "record-sent")?.config?.body).toEqual({ kind: "handed", reason: FOLLOW_UP_SENT_REASON });
+    // The NEXT follow-up of the same person (our own date, no occurrence) is its own send.
+    const next = await main(draft, { followup: { id: "row-1", email: "marie@x.com", dueAt: "2026-11-02T09:00:00Z" } }, null);
+    expect(next.idempotencyKey).toBe("ai-follow-up-email:row-1:2026-11-02T09:00:00Z");
   });
 });
 
 describe("finalizing the email", () => {
   const followup = { followup: { id: "row-1" } };
+  const inTenDays = new Date(Date.now() + 10 * 86400000).toISOString();
   const main = loadMain(FINALIZE_EMAIL_CODE);
 
-  it("builds a one-step sequence and an idempotency key on the queue row, with every dash rewritten", async () => {
+  it("builds a one-step sequence, a key on the row, the next date, with every dash rewritten", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const out = await main({ json: { decision: "write", subject: "Your cost — exact", bodyHtml: "<p>Hi Marie — it was $37 (Oct 1–7).</p>", reason: "r" } }, followup);
+    const out = await main({ json: { decision: "write", subject: "Your cost — exact", bodyHtml: "<p>Hi Marie — it was $37 (Oct 1–7).</p>", nextFollowUpAt: inTenDays, nextFollowUpWhy: "w", reason: "r" } }, { followup: { id: "row-1", dueAt: "d" } }, null);
     expect(out).toEqual({
       decision: "write",
       subject: "Your cost, exact",
       sequence: [{ step: 1, bodyHtml: "<p>Hi Marie, it was $37 (Oct 1-7).</p>", daysSinceLastStep: 0 }],
-      idempotencyKey: "ai-follow-up-email:row-1",
+      idempotencyKey: "ai-follow-up-email:row-1:d",
+      nextFollowUpAt: inTenDays,
+      nextFollowUpWhy: "w",
     });
+  });
+
+  it("later sends nothing and keeps the model's date; stop passes the person's words through", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const later = await main({ json: { decision: "later", subject: "", bodyHtml: "", nextFollowUpAt: inTenDays, nextFollowUpWhy: "we just answered", reason: "already answered" } }, followup);
+    expect(later).toEqual({ decision: "later", nextFollowUpAt: inTenDays, nextFollowUpWhy: "we just answered", reason: "already answered" });
+    expect(later.sequence).toBeUndefined();
+    const stop = await main({ json: { decision: "stop", subject: "", bodyHtml: "", nextFollowUpAt: "", nextFollowUpWhy: "", reason: "\"please remove me\"" } }, followup);
+    expect(stop).toEqual({ decision: "stop", reason: "\"please remove me\"" });
+  });
+
+  it("throws before anything is sent or recorded on a next date missing, past, or over a year out", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const body = { subject: "s", bodyHtml: "<p>b</p>" };
+    for (const decision of ["write", "later"]) {
+      await expect(main({ json: { decision, ...body, nextFollowUpAt: "" } }, followup)).rejects.toThrow(/not a date/);
+      await expect(main({ json: { decision, ...body, nextFollowUpAt: "2001-01-01T00:00:00Z" } }, followup)).rejects.toThrow(/not in the future/);
+      const far = new Date(Date.now() + 400 * 86400000).toISOString();
+      await expect(main({ json: { decision, ...body, nextFollowUpAt: far } }, followup)).rejects.toThrow(/365 days/);
+    }
   });
 
   it("passes cannot_write through without a sequence", async () => {
@@ -368,12 +424,5 @@ describe("the client's facts", () => {
     const main = loadMain(GATHER_CLIENT_FACTS_CODE);
     await expect(main({ answers: [] }, { fields: {} }, { ok: false, status: 500, error: "boom" })).rejects.toThrow(/500/);
     await expect(main({ answers: [] }, { fields: {} }, { ok: false, status: 409, error: "other" })).rejects.toThrow(/409/);
-  });
-
-  it("names a missing instruction in the log", async () => {
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const out = await loadMain(NAME_MISSING_INSTRUCTION_CODE)("camp-1");
-    expect(out).toEqual({ outcome: "no_instruction", campaignId: "camp-1" });
-    expect(spy.mock.calls[0]?.[0]).toContain("camp-1");
   });
 });

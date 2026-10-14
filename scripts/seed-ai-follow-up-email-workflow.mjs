@@ -69,7 +69,7 @@ if (rows.length > 0) {
       console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
       continue;
     }
-    const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current });
+    const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description: AI_FOLLOW_UP_EMAIL_DESCRIPTION });
     if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
     console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
   }
