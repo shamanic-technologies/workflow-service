@@ -32,7 +32,10 @@ const app = express();
 const PORT = process.env.PORT ?? 3000;
 
 app.use(cors());
-app.use(express.json());
+// A workflow write carries its whole DAG. The ai-meeting-booking responders are ~100 KB of DAG (prompt and guard
+// code live in script nodes), past Express's 100 KB default: the offer-document responder's upgrade was refused
+// with a 413 (2026-10-14) and the parent sat at 93 KB. Keep this well above the largest stored DAG.
+app.use(express.json({ limit: "2mb" }));
 
 // Static routes — reachable before migrations have been applied.
 app.use(healthRoutes);
