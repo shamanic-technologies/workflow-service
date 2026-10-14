@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
-import { buildAiMeetingBookingDag, isConversationResponder } from "../../src/lib/ai-meeting-booking-dag.js";
+import {
+  GROUND_DRAFT_CODE,
+  REPLY_RESPONSE_SCHEMA,
+  buildAiMeetingBookingDag,
+  isConversationResponder,
+} from "../../src/lib/ai-meeting-booking-dag.js";
 import {
   DESCRIPTION,
+  GROUND_DRAFT_WITH_DOCUMENT_CODE,
   NO_DOCUMENT_OPTION,
   OFFER_DOCUMENTS_READ,
   PICK_DOCUMENT_CODE,
@@ -55,15 +61,21 @@ describe("the offer-document responder DAG", () => {
     ]);
   });
 
-  it("changes nothing of the parent but the writer's prompt source and the send's optional attachments", () => {
+  it("changes nothing of the parent but the writer's prompt + schema source, the grounding guard and the send's optional attachments", () => {
     for (const n of parent.nodes) {
       const mine = dag.nodes.find((m) => m.id === n.id)!;
       if (n.id === "draft-reply") {
-        expect(mine.config).toEqual(n.config);
+        const { responseSchema, ...rest } = (n.config!.body as Record<string, unknown>);
+        expect(responseSchema).toEqual(REPLY_RESPONSE_SCHEMA);
+        expect(mine.config).toEqual({ ...n.config, body: rest });
         expect(mine.inputMapping).toEqual({
           "body.message": "$ref:pick-document.output.message",
           "body.systemPrompt": "$ref:pick-document.output.systemPrompt",
+          "body.responseSchema": "$ref:pick-document.output.responseSchema",
         });
+      } else if (n.id === "ground-draft") {
+        expect(mine.config).toEqual({ ...n.config, code: GROUND_DRAFT_WITH_DOCUMENT_CODE });
+        expect(mine.inputMapping).toEqual({ ...n.inputMapping, attachedDocument: "$ref:pick-document.output.document" });
       } else if (n.id === "send-reply") {
         expect(mine.config).toEqual(n.config);
         expect(mine.inputMapping).toEqual({ ...n.inputMapping, "body.attachments": "$ref:pick-document.output.attachments" });
@@ -154,6 +166,9 @@ describe("picking the document", () => {
     const planned = await plan(docs, emailThread, smtpConversation, prompt);
     const out = await pick(planned, judged("doc_1", 0.93), prompt);
     expect(out.attachments).toEqual([{ document_id: "d-1" }]);
+    const sources = (out.responseSchema as typeof REPLY_RESPONSE_SCHEMA).properties.answers.items.properties.source.enum;
+    expect(sources).toContain("document");
+    expect(out.message as string).toContain("answer source document");
     expect(out.systemPrompt).toBe("PARENT SYSTEM");
     expect(out.message as string).toMatch(/^PARENT MESSAGE\n/);
     expect(out.message as string).toContain("\"fda-510k-case-study.pdf\"");
@@ -168,7 +183,7 @@ describe("picking the document", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const planned = await plan(docs, emailThread, smtpConversation, prompt);
     const out = await pick(planned, judge, prompt);
-    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", attachments: undefined, document: null });
+    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", responseSchema: REPLY_RESPONSE_SCHEMA, attachments: undefined, document: null });
   });
 
   it("with no documents, never reads Jev and leaves the parent's prompt as is", async () => {
@@ -183,5 +198,32 @@ describe("picking the document", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const planned = await plan(docs, emailThread, smtpConversation, prompt);
     await expect(pick(planned, { answers: {} }, prompt)).rejects.toThrow(/no document choice/);
+  });
+});
+
+describe("grounding a reply that answers with the attached document", () => {
+  const facts = { questions: [{ key: "q1", question: "Can you share a case study on 510(k)?" }], exact: [] };
+  const draft = {
+    json: { decision: "answer", question: "Can you share a case study on 510(k)?", reason: "attached", replyHtml: "<p>I attached our 510(k) case study.</p>", answers: [{ key: "q1", source: "document", facts: [] }] },
+  };
+  const args = [draft, facts, { stance: "insider" }, { name: "Audits" }, { brand: { name: "Acme" } }, "none", { asked: false }];
+  const quiet = () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  };
+
+  it("sends it when a file rides on the reply (the parent would escalate: no client fact covers it)", async () => {
+    quiet();
+    const out = await loadMain(GROUND_DRAFT_WITH_DOCUMENT_CODE)(...args, { id: "d-1", name: "case.pdf" });
+    expect(out.overridden).toBe(false);
+    expect((out.json as { decision: string }).decision).toBe("answer");
+    const parentOut = await loadMain(GROUND_DRAFT_CODE)(...args);
+    expect((parentOut.json as { decision: string }).decision).toBe("escalate");
+  });
+
+  it("escalates a document answer when no file rides, exactly like the parent", async () => {
+    quiet();
+    const out = await loadMain(GROUND_DRAFT_WITH_DOCUMENT_CODE)(...args, null);
+    expect((out.json as { decision: string }).decision).toBe("escalate");
   });
 });
