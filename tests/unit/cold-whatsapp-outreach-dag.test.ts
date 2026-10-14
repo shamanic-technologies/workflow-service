@@ -86,7 +86,8 @@ describe("cold-whatsapp-outreach DAG", () => {
     const fresh = dag.edges.find((e) => e.from === "check-due" && e.to === "serve-lead")!;
     expect(holds(due.condition!, { "claim-followup": { found: true } })).toBe(true);
     expect(holds(fresh.condition!, { "claim-followup": { found: true } })).toBe(false);
-    expect(holds(fresh.condition!, { "claim-followup": { found: false, reason: "nothing_due" } })).toBe(true);
+    const proactive = { serveNewLead: true };
+    expect(holds(fresh.condition!, { "claim-followup": { found: false, reason: "nothing_due" }, occurrence: proactive })).toBe(true);
     expect(byId.get("claim-followup")?.inputMapping?.["params.campaignId"]).toBe("$ref:flow_input.campaignId");
     expect(byId.get("serve-lead")?.config).toMatchObject({ service: "lead", path: "/orgs/buffer/next" });
   });
@@ -149,12 +150,13 @@ describe("picking the person", () => {
       { found: false, reason: "nothing_due" },
       undefined,
       { found: true, lead: { leadId: "l-2", email: "b@x.com", brandIds: ["b-2"], data: { firstName: "Ben" } } },
+      { serveNewLead: true },
     );
     expect(out).toMatchObject({ kind: "first", step: 1, rowId: null, email: "b@x.com", brandId: "b-2", lead: { firstName: "Ben" } });
   });
 
   it("nobody, with lead-service's reason", async () => {
-    const out = await pick({ found: false, reason: "nothing_due" }, undefined, { found: false, reason: "audience_exhausted" });
+    const out = await pick({ found: false, reason: "nothing_due" }, undefined, { found: false, reason: "audience_exhausted" }, { serveNewLead: true });
     expect(out).toEqual({ kind: "nobody", skipSends: true, reason: "audience_exhausted" });
   });
 });
@@ -388,7 +390,7 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
     const answering = await plan(trigger, null);
     const fresh = dag.edges.find((e) => e.from === "check-due" && e.to === "serve-lead")!;
     expect(holds(fresh.condition!, { "claim-followup": { found: false }, occurrence: answering })).toBe(false);
-    expect(holds(fresh.condition!, { "claim-followup": { found: false }, occurrence: await plan(undefined, null) })).toBe(true);
+    expect(holds(fresh.condition!, { "claim-followup": { found: false }, occurrence: await plan(undefined, null, false) })).toBe(true);
     const out = await pick({ found: false, reason: "nothing_due" }, undefined, undefined, answering);
     expect(out).toEqual({ kind: "nobody_due", skipSends: true, reason: "nothing_due" });
     const idle = dag.edges.find((e) => e.from === "check-person" && e.to === "end-run-nobody-due")!;
@@ -543,5 +545,38 @@ describe("a person this campaign already wrote to is never read or written again
 
   it("an unreadable sends answer fails loud rather than writing blind", async () => {
     await expect(prior(first, { ok: false }, campaignId)).rejects.toThrow(/no sends list/);
+  });
+});
+
+describe("a reactive (or unknown) unit never buys a stranger", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const plan = loadMain(OCCURRENCE_PLAN_CODE);
+  const pick = loadMain(PICK_PERSON_CODE);
+  const fresh = dag.edges.find((e) => e.from === "check-due" && e.to === "serve-lead")!;
+  const idle = dag.edges.find((e) => e.from === "check-person" && e.to === "end-run-nobody-due")!;
+
+  it("reads campaign-service's verdict off /start-run", () => {
+    expect(dag.nodes.find((n) => n.id === "occurrence")?.inputMapping?.reactive).toBe("$ref:start-run.output.reactive");
+  });
+
+  it("only reactive === false serves a new person; true, null or absent end idle with nobody due", async () => {
+    for (const [reactive, serves] of [[false, true], [true, false], [null, false], [undefined, false]] as const) {
+      const occurrence = await plan(undefined, null, reactive);
+      expect(occurrence.serveNewLead).toBe(serves);
+      expect(holds(fresh.condition!, { "claim-followup": { found: false, reason: "nothing_due" }, occurrence })).toBe(serves);
+      if (!serves) {
+        const out = await pick({ found: false, reason: "nothing_due" }, undefined, undefined, occurrence);
+        expect(out).toEqual({ kind: "nobody_due", skipSends: true, reason: "nothing_due" });
+        expect(holds(idle.condition!, { "pick-person": out })).toBe(true);
+      }
+    }
+    expect(dag.nodes.find((n) => n.id === "end-run-nobody-due")?.config?.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+  });
+
+  it("a person due on the unit's own queue is still answered, reactive or not", async () => {
+    const due = dag.edges.find((e) => e.from === "check-due" && e.to === "lead-detail")!;
+    expect(holds(due.condition!, { "claim-followup": { found: true } })).toBe(true);
+    const out = await pick({ found: true, followup: { id: "r", email: "a@x.com" } }, { leadDetail: { lead: {} } }, undefined, await plan(undefined, null, true));
+    expect(out).toMatchObject({ kind: "followup" });
   });
 });
