@@ -73,7 +73,9 @@ describe("ai-follow-up-email DAG", () => {
     expect(toClaim?.condition).toBe(HAS_SOMETHING_TO_SAY);
     const none = dag.edges.find((e) => e.from === "check-instruction" && e.to === "name-missing-instruction");
     expect(descendants(dag, none!.to)).toEqual(new Set(["end-run-no-instruction"]));
-    expect(byId.get("end-run-no-instruction")?.config?.body).toEqual({ success: false, stopCampaign: false });
+    // The scheduler's cadence run of a funnel unit (no trigger, no instruction) is idle, never a failure:
+    // 7 failed runs on prod unit 30b1d192 backed it off and skipped a real occurrence (failure_backoff).
+    expect(byId.get("end-run-no-instruction")?.config?.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
 
     const plan = loadMain(OCCURRENCE_PLAN_CODE);
     const trigger = { eventId: "ev-1", triggerId: "signed_up_not_paid_30m", leadId: "l-1", item: null, person: { email: "Kevin@Distribute.you", name: "Kevin", phone: null, crmContact: null } };
@@ -369,7 +371,7 @@ describe("the client's facts", () => {
   });
 
   it("names a missing instruction in the log", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     const out = await loadMain(NAME_MISSING_INSTRUCTION_CODE)("camp-1");
     expect(out).toEqual({ outcome: "no_instruction", campaignId: "camp-1" });
     expect(spy.mock.calls[0]?.[0]).toContain("camp-1");
