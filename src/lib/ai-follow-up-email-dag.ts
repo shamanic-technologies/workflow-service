@@ -40,6 +40,7 @@
  */
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
+import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 export const AI_FOLLOW_UP_EMAIL_FEATURE_SLUG = "ai-follow-up-email";
 
@@ -93,7 +94,10 @@ export const EMAIL_RESPONSE_SCHEMA = {
  * interpolation happens in the flow; this is also what makes the prompt readable in the stored DAG.
  */
 export const COMPOSE_EMAIL_PROMPT_CODE = `
-export async function main(instruction, followup, leadDetail, offer, brand, facts, figures, currentDate) {
+export async function main(instruction, followup, leadDetail, offer, brand, facts, figures, currentDate, who) {
+  if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
+    throw new Error("compose-email: who this person is to the brand was not read; nothing is written blind");
+  }
   const text = typeof instruction === "string" ? instruction.trim() : "";
   if (!text) throw new Error("compose-email: the campaign carries no instruction");
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
@@ -124,6 +128,7 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
     "You state only what the INSTRUCTION, the FIGURES or the FACTS say. Never invent a figure, a date, a price, a promise or a result. A number appears in the email only if it is written in the instruction, the figures or the facts, exactly as written there.",
     "The FIGURES were read for this email from this person's own account or from public data. Use them as given. You may say a figure in a plainer unit (731 cents is $7.31), never change its value.",
     "If the instruction asks you to tell them something none of those contain (for example a figure that could not be read), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
+    who.strategy,
     "Write like a person who knows them: short, plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
     "Do not sign off with a name or a signature block: ours is added below your text. End with your last sentence.",
@@ -138,6 +143,14 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
     "",
     "WHO WE WRITE TO:",
     ...(personLines.length ? personLines : ["(nothing beyond their email)"]),
+    "",
+    "WHO THEY ARE TO US:",
+    ...who.lines,
+    "",
+    "THE THREAD with this person, every channel, oldest first:",
+    ...(who.olderMessagesOmitted > 0 ? ["(" + who.olderMessagesOmitted + " older messages not shown)"] : []),
+    ...(who.threadLines.length ? who.threadLines : ["(no message ever exchanged)"]),
+    ...(who.eventLines?.length ? ["", "RECENT EVENTS:", ...who.eventLines] : []),
     "",
     "WHO WE ARE: " + brandName + ", offer \\"" + offerName + "\\".",
     "",
@@ -309,6 +322,17 @@ export function buildAiFollowUpEmailDag(): DAG {
           "body.recipientEmail": "$ref:claim-followup.output.followup.email",
         },
       },
+      // Who this person is to the brand (lead-service tags) and their whole merged thread (crm-service): the
+      // shared step every writer runs before writing.
+      ...personThreadNodes({
+        email: "$ref:claim-followup.output.followup.email",
+        brandId: "$ref:claim-followup.output.followup.brandId",
+      }),
+      relationshipReadNode({
+        leadRowId: "$ref:claim-followup.output.followup.id",
+        brandId: "$ref:claim-followup.output.followup.brandId",
+      }),
+      whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-thread.output" }),
       {
         id: "compose-email",
         type: "script",
@@ -322,6 +346,7 @@ export function buildAiFollowUpEmailDag(): DAG {
           brand: "$ref:brand-profile.output",
           facts: "$ref:gather-facts.output",
           figures: "$ref:read-figures.output",
+          who: "$ref:who-they-are.output",
           currentDate: "$ref:flow_input.currentDate",
         },
       },
@@ -429,7 +454,11 @@ export function buildAiFollowUpEmailDag(): DAG {
       { from: "offer-user-fields", to: "brand-user-fields" },
       { from: "brand-user-fields", to: "gather-facts" },
       { from: "gather-facts", to: "read-figures" },
-      { from: "read-figures", to: "compose-email" },
+      { from: "read-figures", to: "person-thread-query" },
+      { from: "person-thread-query", to: "person-thread" },
+      { from: "person-thread", to: "relationship-read" },
+      { from: "relationship-read", to: "who-they-are" },
+      { from: "who-they-are", to: "compose-email" },
       { from: "compose-email", to: "draft-email" },
       { from: "draft-email", to: "finalize-email" },
       { from: "finalize-email", to: "check-writable" },

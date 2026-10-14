@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
@@ -129,7 +130,7 @@ describe("ai-follow-up-email DAG", () => {
       "body.question": "$ref:start-run.output.instruction",
       "body.recipientEmail": "$ref:claim-followup.output.followup.email",
     });
-    expect(dag.edges).toContainEqual({ from: "read-figures", to: "compose-email" });
+    expect(descendants(dag, "read-figures").has("compose-email")).toBe(true);
     expect(byId.get("compose-email")?.inputMapping?.figures).toBe("$ref:read-figures.output");
     expect(descendants(dag, "read-figures").has("send-email")).toBe(true);
   });
@@ -174,7 +175,7 @@ describe("composing the email", () => {
       figures: [{ label: "Cost per booked meeting", value: "$38.20", source: "/v1/offers/o-1/revenue" }],
       missing: "The estimate source could not be read.",
     };
-    const out = await loadMain(COMPOSE_EMAIL_PROMPT_CODE)(
+    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8)(
       "Give Marie her exact cost per booked meeting and compare it to the $42 estimate.",
       followup, leadDetail, offer, brand, facts, figures, "2026-10-11",
     );
@@ -183,12 +184,12 @@ describe("composing the email", () => {
     expect(message).toContain("NOT READABLE: The estimate source could not be read.");
     expect(out.systemPrompt as string).toContain("FIGURES");
     expect(out.systemPrompt as string).toContain("never change its value");
-    await expect(loadMain(COMPOSE_EMAIL_PROMPT_CODE)("x", followup, leadDetail, offer, brand, facts, {}, "2026-10-11"))
+    await expect(withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8)("x", followup, leadDetail, offer, brand, facts, {}, "2026-10-11"))
       .rejects.toThrow(/figures list/);
   });
 
   it("puts the instruction verbatim, the person, and the client's facts in front of the model", async () => {
-    const out = await loadMain(COMPOSE_EMAIL_PROMPT_CODE)(
+    const out = await withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8)(
       "Give Marie her exact cost per booked meeting: $37. Compare it to the $42 estimate.",
       followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11",
     );
@@ -205,7 +206,7 @@ describe("composing the email", () => {
   });
 
   it("refuses to compose without an instruction, an offer name or a brand name", async () => {
-    const main = loadMain(COMPOSE_EMAIL_PROMPT_CODE);
+    const main = withWho(loadMain(COMPOSE_EMAIL_PROMPT_CODE), 8);
     await expect(main("  ", followup, leadDetail, offer, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/instruction/);
     await expect(main("x", followup, leadDetail, {}, brand, facts, noFigures, "2026-10-11")).rejects.toThrow(/offer/);
     await expect(main("x", followup, leadDetail, offer, { brand: {} }, facts, noFigures, "2026-10-11")).rejects.toThrow(/brand/);

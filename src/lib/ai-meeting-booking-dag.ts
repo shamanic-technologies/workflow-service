@@ -133,6 +133,7 @@
 
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 /**
  * The instantly-service read of the conversation being answered.
@@ -1241,8 +1242,11 @@ export const PLAYBOOK_QUIET_FOLLOWUPS = 2;
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest, who) {
   const person = leadDetail?.leadDetail?.lead ?? {};
+  if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
+    throw new Error("[ai-meeting-booking] who this person is to the brand was not read; refusing to draft blind");
+  }
   const timezone = booking?.timezone ?? "UTC";
 
   // WHO WE SAID WE WERE. The voice of the reply follows the identity our own
@@ -1466,6 +1470,10 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "",
     "WHO THEY ARE",
     ...personLines,
+    "",
+    "WHO THEY ARE TO US",
+    ...who.lines,
+    who.strategy,
     "",
     ...(companyLines.length ? ["THEIR COMPANY", ...companyLines, ""] : []),
     "WHAT WE SELL THEM",
@@ -1841,10 +1849,13 @@ export function needsChannelAgnosticReply(dag: { nodes?: Array<{ id?: string; co
  * (`conversation`). The feature also holds the form responder
  * (`seed-form-meeting-booking-workflow.mjs`, pipe form_submitted_to_meeting_booked),
  * whose DAG this script must never touch: upgrading it with this one would turn
- * the form workflow into a conversation one.
+ * the form workflow into a conversation one. Same for the responder that attaches an
+ * offer document (`offer-document-reply-dag.ts`, marked by its `offer-documents`
+ * node): it has its own seed, and this one would strip its documents.
  */
 export function isConversationResponder(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
-  return (dag?.nodes ?? []).some((n) => n?.id === "conversation");
+  const nodes = dag?.nodes ?? [];
+  return nodes.some((n) => n?.id === "conversation") && !nodes.some((n) => n?.id === "offer-documents");
 }
 
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
@@ -2024,6 +2035,12 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           timeline: "$ref:person-timeline.output",
         },
       },
+      // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
+      relationshipReadNode({
+        leadRowId: "$ref:claimed.output.followup.id",
+        brandId: "$ref:claimed.output.followup.brandId",
+      }),
+      whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-timeline.output" }),
       {
         id: "prior-generation",
         type: "http.call",
@@ -2157,6 +2174,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           identity: "$ref:plan-lookups.output.identity",
           playbook: "$ref:plan-lookups.output.playbook",
           callRequest: "$ref:plan-lookups.output.callRequest",
+          who: "$ref:who-they-are.output",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -2569,7 +2587,9 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "person-timeline" },
       { from: "person-timeline", to: "thread" },
-      { from: "thread", to: "prior-generation" },
+      { from: "thread", to: "relationship-read" },
+      { from: "relationship-read", to: "who-they-are" },
+      { from: "who-they-are", to: "prior-generation" },
       { from: "prior-generation", to: "compose-questions-prompt" },
       { from: "compose-questions-prompt", to: "list-questions" },
       { from: "list-questions", to: "plan-lookups" },
