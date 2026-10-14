@@ -404,14 +404,30 @@ export const NOT_OWED = "results['resolve-person']?.ok == true && results['read-
 export const NOT_YET = "results['resolve-person']?.ok == true && results['read-verdict']?.kind == 'not_yet'";
 export const WRITE = "results['finalize-email']?.decision == 'write'";
 export const STOP = "results['finalize-email']?.decision == 'stop'";
-/** Sent, or refused only because the brand talks to them right now: the chain goes on, the next date is recorded. */
+/**
+ * Refusals that are NOT a stop: a step of the brand's sequence to them is still queued (two of our emails would race),
+ * or the brand is in a thread with them right now. Nothing was sent; the chain goes on at the model's date.
+ */
+export const PASSING_REFUSAL_CODES = ["brand_sequence_queued", "recent_brand_contact"] as const;
+/** Every per-person refusal the send reads as an outcome: the passing ones, and the stops (opted out, not a prospect). */
+export const PROSPECT_SEND_REFUSAL_CODES = [...new Set([...REFUSAL_SKIP_CODES, ...PASSING_REFUSAL_CODES, "lead_not_a_prospect"])];
+const PASSING = PASSING_REFUSAL_CODES.map((c) => `results['send-email']?.code == '${c}'`).join(" || ");
+/** Sent, or refused for a passing reason: the chain goes on, the next date is recorded. */
 export const CONTINUE =
   "results['finalize-email']?.decision == 'write' && results['send-email'] != null && " +
-  "(results['send-email']?.skipped != true || results['send-email']?.code == 'recent_brand_contact')";
-/** Refused because they opted out: the chain ends, no next date. */
+  `(results['send-email']?.skipped != true || ${PASSING})`;
+/** Refused for a stop (opted out, not a prospect): the chain ends, no next date. */
 export const OPTED_OUT =
   "results['finalize-email']?.decision == 'write' && results['send-email']?.skipped == true && " +
-  "results['send-email']?.code != 'recent_brand_contact'";
+  `!(${PASSING})`;
+
+/** The reactive row's record after the send: what actually happened, never "sent" for a refusal. */
+export const SEND_OUTCOME_CODE = `
+export async function main(send) {
+  if (send?.skipped === true) return { reason: "prospect_follow_up_deferred_" + String(send.code ?? "refused") };
+  return { reason: "${PROSPECT_FOLLOW_UP_SENT_REASON}" };
+}
+`.trim();
 
 /**
  * Everything after "who is this run for": verdict, reads, write, send, next date. `anchor` is a node OUTSIDE every
@@ -543,10 +559,14 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
         service: "email-gateway",
         method: "POST",
         path: "/orgs/send",
-        body: { type: "broadcast", tag: "prospect-follow-up" },
+        // `followUp: true`: a follow-up of the brand's own outreach to this person, so instantly-service does not
+        // apply its 3-month re-contact window (which refused every one of these sends) and threads it on the
+        // brand's latest thread with them. Keyed on the run's x-run-id there.
+        body: { type: "broadcast", tag: "prospect-follow-up", followUp: true },
         validateResponse: { field: "success", equals: true },
-        // Read, not thrown: an opted-out person, or one the brand talks to right now, is an outcome (check-sent).
-        skipOnRefusalCodes: [...REFUSAL_SKIP_CODES],
+        // Read, not thrown: an opted-out person, a step of their sequence still queued, or one the brand talks to
+        // right now, is an outcome (check-sent).
+        skipOnRefusalCodes: [...PROSPECT_SEND_REFUSAL_CODES],
       },
       retries: 0,
       inputMapping: {
@@ -639,7 +659,11 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       stopRow("record-not-yet", PROSPECT_FOLLOW_UP_NOT_YET_REASON),
       stopRow("record-not-owed", PROSPECT_FOLLOW_UP_NOT_OWED_REASON),
       stopRow("record-stopped", PROSPECT_FOLLOW_UP_STOPPED_REASON),
-      stopRow("record-sent", PROSPECT_FOLLOW_UP_SENT_REASON),
+      { id: "send-outcome", type: "script", config: { code: SEND_OUTCOME_CODE }, retries: 0, inputMapping: { send: "$ref:send-email.output" } },
+      {
+        ...stopRow("record-sent", PROSPECT_FOLLOW_UP_SENT_REASON),
+        inputMapping: { "params.id": "$ref:resolve-person.output.rowId", "body.reason": "$ref:send-outcome.output.reason" },
+      },
       stopRow("record-opted-out", PROSPECT_FOLLOW_UP_REFUSED_REASON),
     );
     edges.push(
@@ -650,7 +674,8 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       { from: "record-not-owed", to: "end-run-not-owed" },
       { from: "check-decision", to: "record-stopped", condition: STOP },
       { from: "record-stopped", to: "end-run-stopped" },
-      { from: "schedule-next", to: "record-sent" },
+      { from: "schedule-next", to: "send-outcome" },
+      { from: "send-outcome", to: "record-sent" },
       { from: "record-sent", to: "end-run" },
       { from: "check-sent", to: "record-opted-out", condition: OPTED_OUT },
       { from: "record-opted-out", to: "end-run-opted-out" },

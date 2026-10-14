@@ -16,6 +16,7 @@ import {
   READ_VERDICT_CODE,
   RESOLVE_CLAIMED_PERSON_CODE,
   RESOLVE_SERVED_PERSON_CODE,
+  SEND_OUTCOME_CODE,
   STOP,
   WRITE,
   buildProspectFollowUpProactiveDag,
@@ -96,15 +97,19 @@ describe.each([
     expect(byId.get("send-email")?.config).toMatchObject({
       service: "email-gateway",
       path: "/orgs/send",
-      skipOnRefusalCodes: ["recent_brand_contact", "lead_opted_out"],
+      body: { type: "broadcast", followUp: true },
     });
+    expect([...(byId.get("send-email")?.config?.skipOnRefusalCodes as string[])].sort()).toEqual(
+      ["brand_sequence_queued", "lead_not_a_prospect", "lead_opted_out", "recent_brand_contact"],
+    );
   });
 });
 
 describe("reactive queue records", () => {
   const dag = buildProspectFollowUpReactiveDag();
   it("stops the row (never handed) after the next date is recorded, and on every stop path", () => {
-    expect(dag.edges).toContainEqual({ from: "schedule-next", to: "record-sent" });
+    expect(dag.edges).toContainEqual({ from: "schedule-next", to: "send-outcome" });
+    expect(dag.edges).toContainEqual({ from: "send-outcome", to: "record-sent" });
     for (const id of ["record-sent", "record-not-owed", "record-stopped", "record-opted-out"]) {
       expect(dag.nodes.find((n) => n.id === id)?.config?.body).toMatchObject({ kind: "stopped" });
     }
@@ -243,6 +248,18 @@ describe("after the send", () => {
     expect(holds(CONTINUE, { ...write, "send-email": { success: true } })).toBe(true);
     expect(holds(CONTINUE, { ...write, "send-email": { skipped: true, code: "recent_brand_contact" } })).toBe(true);
     expect(holds(OPTED_OUT, { ...write, "send-email": { skipped: true, code: "recent_brand_contact" } })).toBe(false);
+  });
+  it("a queued step of their sequence is a passing refusal: the chain goes on", () => {
+    expect(holds(CONTINUE, { ...write, "send-email": { skipped: true, code: "brand_sequence_queued" } })).toBe(true);
+    expect(holds(OPTED_OUT, { ...write, "send-email": { skipped: true, code: "brand_sequence_queued" } })).toBe(false);
+    expect(holds(OPTED_OUT, { ...write, "send-email": { skipped: true, code: "lead_not_a_prospect" } })).toBe(true);
+  });
+  it("the reactive row records what happened, never 'sent' for a refusal", async () => {
+    const outcome = loadMain(SEND_OUTCOME_CODE);
+    expect(await outcome({ success: true })).toEqual({ reason: "prospect_follow_up_sent" });
+    expect(await outcome({ skipped: true, code: "brand_sequence_queued" })).toEqual({ reason: "prospect_follow_up_deferred_brand_sequence_queued" });
+    const dag = buildProspectFollowUpReactiveDag();
+    expect(dag.nodes.find((n) => n.id === "record-sent")?.inputMapping).toMatchObject({ "body.reason": "$ref:send-outcome.output.reason" });
   });
   it("ends the chain when refused because they opted out", () => {
     expect(holds(CONTINUE, { ...write, "send-email": { skipped: true, code: "lead_opted_out" } })).toBe(false);
