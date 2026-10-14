@@ -194,6 +194,16 @@ describe("picking the document", () => {
     expect(out.attachments).toBeUndefined();
   });
 
+  it("replies without a file, loudly, when Jev could not judge (the prospect is still answered)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const planned = await plan(docs, emailThread, smtpConversation, prompt);
+    const out = await pick(planned, { ok: false, status: 502, error: "Judgment failed" }, prompt);
+    expect(out).toEqual({ message: "PARENT MESSAGE", systemPrompt: "PARENT SYSTEM", responseSchema: REPLY_RESPONSE_SCHEMA, attachments: undefined, document: null });
+    expect(err.mock.calls[0]?.[0]).toContain("Jev could not judge");
+    expect(dag.nodes.find((n) => n.id === "judge-document")!.config).toMatchObject({ tolerateFailure: true });
+  });
+
   it("fails loud on a Jev answer with no document choice", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const planned = await plan(docs, emailThread, smtpConversation, prompt);
