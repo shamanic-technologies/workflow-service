@@ -16,6 +16,7 @@ import {
   BUSINESS_ONLY_CHANGES,
   buildSourcingDag,
   servesBusinessOnly,
+  sourcingTargetOf,
 } from "../../src/lib/sourcing-dag.js";
 import { applyDagPatch, type DagPatchOperation } from "../../src/lib/dag-patch.js";
 
@@ -343,6 +344,8 @@ describe("the business-contacts-only sourcing play (CRM contacts pipe)", () => {
     expect(forked).toEqual(buildSourcingDag({ businessOnly: true }));
     expect(servesBusinessOnly(forked)).toBe(true);
     expect(servesBusinessOnly(buildSourcingDag())).toBe(false);
+    // The seed never flattens it back to the default play on upgrade.
+    expect(sourcingTargetOf(forked)).toEqual({ dag: forked, stated: true });
     expect(forked.nodes.find((n) => n.id === "serve-lead")?.config).toEqual({
       service: "lead",
       method: "POST",
