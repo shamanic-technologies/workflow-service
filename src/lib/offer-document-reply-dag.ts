@@ -16,7 +16,8 @@
  *  - `judge-document`: "is one of these documents useful here, and which?" is a classification, so Jev answers
  *    it (chat-service `/orgs/judgments`, a `choice` over the documents + `none`, judged on each document's name
  *    and description against the prospect's last message). Never the writer model, never a rule. Skipped (not
- *    called, nothing billed) when `plan-document` says no document can ride.
+ *    called, nothing billed) when `plan-document` says no document can ride. `tolerateFailure`: a judgment that
+ *    fails (TypeSafe out of credits, 2026-10-14) means no file, logged loudly, and the reply still goes out.
  *  - `pick-document`: keeps the winner only when Jev gives it at least `ATTACH_MIN_PROBABILITY`, and adds ONE
  *    section to the writer's prompt naming the file, so the reply mentions it in one short sentence. A question the
  *    file answers takes the answer source `document` (writer schema + `ground-draft`, both only on a run carrying a
@@ -153,6 +154,12 @@ export async function main(plan, judge, prompt) {
   const NONE = NONE_OPTION;
   const bare = { message: prompt.message, systemPrompt: prompt.systemPrompt, responseSchema: PARENT_SCHEMA, attachments: undefined, document: null };
   if (plan?.skip !== false) return bare;
+  // Jev could not judge (vendor down, out of credits): the reply still goes out, without a file, as the parent's
+  // would. Loud, never silent: an unanswered prospect is worse than an answer with no attachment.
+  if (judge?.ok === false) {
+    console.error("[offer-document-reply] Jev could not judge the documents (" + String(judge.status) + "): " + String(judge.error ?? "").slice(0, 300) + "; replying without a file");
+    return bare;
+  }
   const answer = judge?.answers?.document;
   if (!answer || answer.type !== "choice") {
     throw new Error("[offer-document-reply] Jev returned no document choice: " + JSON.stringify(judge).slice(0, 300));
@@ -215,7 +222,8 @@ export function buildOfferDocumentReplyDag(opts: AiMeetingBookingDagOptions): DA
     {
       id: "judge-document",
       type: "http.call",
-      config: { service: "chat", method: "POST", path: "/orgs/judgments" },
+      // A failed judgment is an OUTCOME (no file), not a reason to leave the prospect unanswered.
+      config: { service: "chat", method: "POST", path: "/orgs/judgments", tolerateFailure: true },
       retries: 1,
       inputMapping: {
         "body.state": "$ref:plan-document.output.state",
