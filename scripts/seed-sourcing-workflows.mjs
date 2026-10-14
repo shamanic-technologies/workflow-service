@@ -7,9 +7,10 @@
  * `buildSourcingDag()` in its OWN dynasty (a copy, e.g. a reachableBy or catch-all fork, is compared against the
  * current DAG plus the serve body IT states, `sourcingTargetOf`, so the seed never flattens a copy back) (`POST /workflows/upgrade`: new version, predecessor deprecated, the
  * dynasty slug units store resolves forward to it); a current one is skipped.
- * A channel in BUSINESS_ONLY_SOURCING_CHANNELS also gets its "business contacts only" dynasty (RELATIONSHIP-TAGS-1014):
- * a FORK of the generic one (`POST /workflows/dynasty/{slug}/fork`, the serve asks `relationships: "business_only"`),
- * so the generic dynasty stays the default play and features-service judges the tactic on the fork.
+ * Every play in SOURCING_FORK_PLAYS gets its OWN dynasty on its channels: a FORK of the generic one
+ * (`POST /workflows/dynasty/{slug}/fork` with the play's one serve-body change: "business contacts only"
+ * RELATIONSHIP-TAGS-1014, "contacted pure prospects" NEVER-NO-FOLLOWUP-1014), so the generic dynasty stays the default
+ * play and features-service judges the tactic on the fork.
  * Usage, from inside the workflow-service container:
  *   node seed-sourcing-workflows.mjs            # dry run
  *   node seed-sourcing-workflows.mjs --apply
@@ -17,13 +18,10 @@
  * staff run: runs-service rejects an unknown parent run).
  */
 import {
-  BUSINESS_ONLY_CHANGES,
-  BUSINESS_ONLY_SOURCING_CHANNELS,
-  BUSINESS_ONLY_SOURCING_DESCRIPTION,
   SOURCING_CHANNEL_SLUGS,
   SOURCING_DESCRIPTION,
+  SOURCING_FORK_PLAYS,
   buildSourcingDag,
-  servesBusinessOnly,
   sourcingPipeIdOf,
   sourcingTargetOf,
 } from "../dist/lib/sourcing-dag.js";
@@ -86,20 +84,21 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
       if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
       console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflow?.workflowSlug} v${up.payload.workflow?.version} (${up.status})`);
     }
-    if (BUSINESS_ONLY_SOURCING_CHANNELS.includes(slug) && !rows.some((w) => servesBusinessOnly(w.dag))) {
+    for (const play of SOURCING_FORK_PLAYS) {
+      if (!play.channels.includes(slug) || rows.some((w) => play.serves(w.dag))) continue;
       // Forked from the GENERIC row (its serve states no body), never from another copy.
       const source = rows.find((w) => !sourcingTargetOf(w.dag, current).stated);
-      if (!source) throw new Error(`${slug}: no generic workflow to fork the business-only one from`);
+      if (!source) throw new Error(`${slug}: no generic workflow to fork the ${play.name} one from`);
       if (!APPLY) {
-        console.log(`${slug}: WOULD fork ${source.workflowDynastySlug} into a business-only dynasty`);
+        console.log(`${slug}: WOULD fork ${source.workflowDynastySlug} into a ${play.name} dynasty`);
         continue;
       }
       const fork = await call("POST", `/workflows/dynasty/${encodeURIComponent(source.workflowDynastySlug)}/fork`, {
-        changes: BUSINESS_ONLY_CHANGES,
-        description: BUSINESS_ONLY_SOURCING_DESCRIPTION,
+        changes: play.changes,
+        description: play.description,
       });
       if (fork.status !== 201) throw new Error(`fork ${source.workflowDynastySlug}: ${fork.status} ${JSON.stringify(fork.payload)}`);
-      console.log(`${slug}: forked ${source.workflowDynastySlug} -> business-only dynasty ${fork.payload.workflow?.workflowDynastySlug}`);
+      console.log(`${slug}: forked ${source.workflowDynastySlug} -> ${play.name} dynasty ${fork.payload.workflow?.workflowDynastySlug}`);
     }
     continue;
   }

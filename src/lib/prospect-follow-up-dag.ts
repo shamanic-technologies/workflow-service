@@ -51,7 +51,7 @@ export const PROSPECT_FOLLOW_UP_PROACTIVE_PIPE_ID = `${PROSPECT_FOLLOW_UP_FEATUR
 export const PROSPECT_FOLLOW_UP_REACTIVE_PIPE_ID = `${PROSPECT_FOLLOW_UP_FEATURE_SLUG}|${PROSPECT_FOLLOW_UP_REACTIVE_LEG_KEY}`;
 
 /** features-service's trigger "this person's follow-up date is reached" (kind reported, reported by this flow). */
-export const PROSPECT_FOLLOW_UP_TRIGGER_ID = "prospect_follow_up_due";
+export const PROSPECT_FOLLOW_UP_TRIGGER_ID = "follow_up_date_reached";
 
 export const PROSPECT_FOLLOW_UP_PROACTIVE_DESCRIPTION =
   "Follows up the prospects the brand already contacted: takes one contacted pure prospect at a time, reads " +
@@ -75,7 +75,7 @@ export const PROSPECT_FOLLOW_UP_REFUSED_REASON = "prospect_follow_up_refused";
 /** lead-service's "is this person still owed a prospect follow-up by this brand?" read (NEVER-NO-FOLLOWUP-1014). */
 export const PROSPECT_VERDICT = {
   method: "GET",
-  path: "/orgs/leads/{id}/prospect-follow-up",
+  path: "/orgs/leads/{id}/prospect-followup",
 } as const;
 
 /** The trigger door of campaign-service: one dated occurrence = the next follow-up. */

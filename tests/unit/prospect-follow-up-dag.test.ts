@@ -233,3 +233,17 @@ describe("after the send", () => {
     expect(holds(OPTED_OUT, {})).toBe(false);
   });
 });
+
+describe("the contacted-pure-prospects sourcing play (Lead Sourcing pipe)", () => {
+  it("is the default sourcing DAG plus ONE stated change on the serve, kept on upgrade", async () => {
+    const { applyDagPatch } = await import("../../src/lib/dag-patch.js");
+    const sourcing = await import("../../src/lib/sourcing-dag.js");
+    const forked = applyDagPatch(sourcing.buildSourcingDag(), sourcing.CONTACTED_PROSPECTS_CHANGES as never);
+    expect(sourcing.servesContactedProspects(forked)).toBe(true);
+    expect(sourcing.servesContactedProspects(sourcing.buildSourcingDag())).toBe(false);
+    expect(sourcing.sourcingTargetOf(forked)).toEqual({ dag: forked, stated: true });
+    expect(forked.nodes.find((n) => n.id === "serve-lead")?.config?.body).toEqual({ population: "contacted_pure_prospects" });
+    const play = sourcing.SOURCING_FORK_PLAYS.find((p) => p.name === "contacted-pure-prospects");
+    expect(play?.channels).toEqual(["lead-sourcing"]);
+  });
+});
