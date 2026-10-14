@@ -192,6 +192,11 @@ describe("composing the answer", () => {
     expect(message).toContain("E1. Group size: 8 to 40 guests");
     expect(system).toContain("https://cal.example.com/doc");
     expect(system).toContain("THE GAME");
+    // FORM-ANSWER-NOBODY-DUE-1014: the answer opens on what the person did, so they link it to their form.
+    expect(system).toContain("OPEN WITH WHAT THEY DID");
+    expect(system).toContain("answers the form they just filled in to reach");
+    expect(system).toContain("The WhatsApp text opens the same way.");
+    expect(system).toContain("A name that differs from the email address, or a request outside the offer, is NOT a reason");
     expect(system).toContain("End it with Joe");
     expect(system).not.toMatch(/agency(?! or a third party)/i);
     expect(system + message).not.toMatch(/[–—]/);
