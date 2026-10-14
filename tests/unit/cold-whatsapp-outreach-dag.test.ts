@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
@@ -263,7 +264,7 @@ describe("composing the message", () => {
     olderMessagesOmitted: 12,
     voiceLines: ["to this person, whatsapp: T'as dépensé combien ?"],
   };
-  const compose = loadMain(COMPOSE_MESSAGE_PROMPT_CODE);
+  const compose = withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 8);
 
   it("explains the strategy, follows the instruction verbatim, and writes as the brand's rep", async () => {
     const out = await compose(first, "Ask what they tried to grow signups.", offer, brand, rep, facts, fresh, "2026-10-12");

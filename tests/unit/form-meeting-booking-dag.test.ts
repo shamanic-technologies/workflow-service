@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
@@ -182,7 +183,7 @@ describe("composing the answer", () => {
 
   it("puts the form, the booking link and the client's facts in front of the model, dash-free", async () => {
     const person = await loadMain(RESOLVE_FORM_CODE)(claim, trigger, { leadDetail: { lead: {} } });
-    const out = await loadMain(COMPOSE_ANSWER_PROMPT_CODE)(person, offer, brand, rep, facts, "2026-10-12");
+    const out = await withWho(loadMain(COMPOSE_ANSWER_PROMPT_CODE), 6)(person, offer, brand, rep, facts, "2026-10-12");
     const message = out.message as string;
     const system = out.systemPrompt as string;
     expect(message).toContain("THEIR FORM (\"Private dinner request\")");
@@ -197,7 +198,7 @@ describe("composing the answer", () => {
   });
 
   it("with no booking link, asks them to reply with a time", async () => {
-    const out = await loadMain(COMPOSE_ANSWER_PROMPT_CODE)(
+    const out = await withWho(loadMain(COMPOSE_ANSWER_PROMPT_CODE), 6)(
       { email: "jo@example.com", form: null }, { name: "Private dinners", bookingUrl: null }, brand, {}, facts, "2026-10-12",
     );
     expect(out.systemPrompt as string).toContain("There is no booking link");
@@ -205,7 +206,7 @@ describe("composing the answer", () => {
   });
 
   it("refuses to compose without an offer name or a brand name", async () => {
-    const main = loadMain(COMPOSE_ANSWER_PROMPT_CODE);
+    const main = withWho(loadMain(COMPOSE_ANSWER_PROMPT_CODE), 6);
     await expect(main({ email: "a@b.c" }, {}, brand, rep, facts, "d")).rejects.toThrow(/offer/);
     await expect(main({ email: "a@b.c" }, offer, { brand: {} }, rep, facts, "d")).rejects.toThrow(/brand/);
   });

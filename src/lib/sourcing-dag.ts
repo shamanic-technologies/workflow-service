@@ -59,8 +59,38 @@ function endRun(id: string, body: { success: boolean; stopCampaign: boolean }) {
   };
 }
 
+/**
+ * The pipe's "business contacts only" play (RELATIONSHIP-TAGS-1014, owner 2026-10-14: who a campaign skips is the
+ * PIPE's strategy, never a campaign rule). lead-service `POST /orgs/buffer/next` with `relationships: "business_only"`
+ * hands out nobody tagged personal, investor, supplier, team, partner or advisor, and nobody whose thread was never
+ * judged. It runs as its OWN dynasty, forked from the channel's default (`scripts/seed-sourcing-workflows.mjs`):
+ * features-service judges the tactic "Business contacts only" on this DAG and a campaign picks it through the
+ * strategy that requires it, while the default dynasty stays the default play. Only the CRM contacts channel has one
+ * (`BUSINESS_ONLY_SOURCING_CHANNELS`): the other origins serve people the brand never met.
+ */
+export const BUSINESS_ONLY_RELATIONSHIPS = "business_only";
+
+export const BUSINESS_ONLY_SOURCING_CHANNELS = ["sourcing-crm-contacts"] as const;
+
+export const BUSINESS_ONLY_SOURCING_DESCRIPTION =
+  SOURCING_DESCRIPTION +
+  " Business contacts only: never serves a person the brand knows personally or as a team member, investor, " +
+  "advisor, partner or supplier, nor anyone whose relationship to the brand was never judged.";
+
+/** The serve's body change that makes a sourcing DAG business-only, as a JSON Patch on the default DAG. */
+export const BUSINESS_ONLY_CHANGES = [
+  { op: "add", path: "/nodes/serve-lead/config/body", value: { relationships: BUSINESS_ONLY_RELATIONSHIPS } },
+] as const;
+
+/** True when a stored sourcing DAG serves business contacts only. */
+export function servesBusinessOnly(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const serve = (dag?.nodes ?? []).find((n) => n?.id === "serve-lead");
+  const body = serve?.config?.body as { relationships?: unknown } | undefined;
+  return body?.relationships === BUSINESS_ONLY_RELATIONSHIPS;
+}
+
 /** The DAG of every sourcing pipe: a campaign run whose only work is the find. */
-export function buildSourcingDag(): DAG {
+export function buildSourcingDag(opts: { businessOnly?: boolean } = {}): DAG {
   return {
     nodes: [
       {
@@ -72,7 +102,12 @@ export function buildSourcingDag(): DAG {
       {
         id: "serve-lead",
         type: "http.call",
-        config: { service: "lead", method: "POST", path: "/orgs/buffer/next" },
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/buffer/next",
+          ...(opts.businessOnly ? { body: { relationships: BUSINESS_ONLY_RELATIONSHIPS } } : {}),
+        },
         retries: 0,
       },
       { id: "check-lead", type: "condition" },

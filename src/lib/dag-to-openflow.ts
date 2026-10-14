@@ -1,4 +1,11 @@
 import type { DAG, DAGNode, DAGEdge } from "./dag-validator.js";
+import {
+  PERSON_THREAD_NODE_ID,
+  PERSON_THREAD_QUERY_NODE_ID,
+  WHO_THEY_ARE_NODE_ID,
+  personThreadNodes,
+  whoTheyAreNode,
+} from "./person-relationship.js";
 import { getScriptPath, isNativeNode } from "./node-type-registry.js";
 import { buildInputTransforms, type InputTransform } from "./input-mapping.js";
 
@@ -144,7 +151,8 @@ export interface OpenFlow {
   schema?: Record<string, unknown>;
 }
 
-export function dagToOpenFlow(dag: DAG, name: string): OpenFlow {
+export function dagToOpenFlow(storedDag: DAG, name: string): OpenFlow {
+  const dag = withPersonRelationshipStep(storedDag);
   const orderedNodes = topologicalSort(dag.nodes, dag.edges);
   // Exclude the onError node from the main module list — it becomes the failure_module
   const mainNodes = dag.onError
@@ -703,6 +711,60 @@ function getServedLeadScope(dag: DAG): ServedLeadScope {
 }
 
 /**
+ * The content-generation variable WHO THIS PERSON IS TO THE BRAND rides in (RELATIONSHIP-TAGS-1014).
+ *
+ * Every writer reads the person's relationship tags (lead-service) and their whole merged thread (crm-service)
+ * before writing, through ONE shared step (`src/lib/person-relationship.ts`): a friend, a customer or an investor
+ * is never written to as a stranger. The writers built here run the step in their own DAG; a cold email written by
+ * content-generation runs it too, added HERE at conversion time, like the offer and the buying signal, so every
+ * active cold-email flow carries it on the next boot sync with no stored DAG rewritten. The step's output
+ * (`{ state, tags, lines, threadLines, strategy, ... }`) reaches every `/generate` downstream of the served lead as
+ * `body.variables.leadRelationship`; null (the serve found nobody) drops the key, byte-identical to before.
+ */
+export const RELATIONSHIP_VARIABLE = "leadRelationship";
+
+/**
+ * The stored DAG plus the shared "who this person is to us" step, when the DAG writes with content-generation
+ * about the ONE lead it serves (`getServedLeadScope`): `person-thread-query` -> `person-thread` -> `who-they-are`
+ * spliced right after the served-lead fetch, every edge the fetch had now leaving `who-they-are`. Any other DAG
+ * (no served lead, no generation downstream of it, a generation inside a loop, or a DAG that already names one of
+ * the step's node ids, i.e. a writer that runs the step itself) is returned as is.
+ */
+export function withPersonRelationshipStep(dag: DAG): DAG {
+  const lead = getServedLeadScope(dag);
+  if (!lead.leadModuleId) return dag;
+  const ids = new Set(dag.nodes.map((n) => n.id));
+  if (ids.has(WHO_THEY_ARE_NODE_ID) || ids.has(PERSON_THREAD_NODE_ID) || ids.has(PERSON_THREAD_QUERY_NODE_ID)) return dag;
+  const fetch = dag.nodes.find((n) => isServedLeadFetch(n))!;
+  const loopReach = new Set<string>();
+  for (const n of dag.nodes) {
+    if (n.type !== "for-each") continue;
+    for (const id of descendantModuleIds(dag, n.id)) loopReach.add(id);
+  }
+  const writes = dag.nodes.some((n) => {
+    const moduleId = n.id.replace(/-/g, "_");
+    return callsContentGeneration(n) && lead.descendants.has(moduleId) && !loopReach.has(moduleId);
+  });
+  if (!writes) return dag;
+
+  const served = `$ref:${fetch.id}.output`;
+  return {
+    ...dag,
+    nodes: [
+      ...dag.nodes,
+      ...personThreadNodes({ served }),
+      whoTheyAreNode({ served, timeline: `$ref:${PERSON_THREAD_NODE_ID}.output` }),
+    ],
+    edges: [
+      ...dag.edges.map((e) => (e.from === fetch.id ? { ...e, from: WHO_THEY_ARE_NODE_ID } : e)),
+      { from: fetch.id, to: PERSON_THREAD_QUERY_NODE_ID },
+      { from: PERSON_THREAD_QUERY_NODE_ID, to: PERSON_THREAD_NODE_ID },
+      { from: PERSON_THREAD_NODE_ID, to: WHO_THEY_ARE_NODE_ID },
+    ],
+  };
+}
+
+/**
  * True when the node's own DAG already decides what `body.variables` holds for
  * the variable — an explicit mapping of it, a static value for it, or a mapping
  * of the WHOLE body / variables object (which an added key would replace).
@@ -1025,6 +1087,17 @@ function nodeToModule(
       extraTransforms[`body.variables.${ctx.variable}`] = {
         type: "javascript",
         expr: ctx.expr(servedLead.leadModuleId),
+      };
+    }
+    const whoModuleId = WHO_THEY_ARE_NODE_ID.replace(/-/g, "_");
+    if (
+      loopBodyIds === null &&
+      servedLead.descendants.has(whoModuleId) &&
+      !statesVariableAlready(RELATIONSHIP_VARIABLE, scriptConfig, resolvedInputMapping)
+    ) {
+      extraTransforms[`body.variables.${RELATIONSHIP_VARIABLE}`] = {
+        type: "javascript",
+        expr: `results.${whoModuleId} ?? undefined`,
       };
     }
   }

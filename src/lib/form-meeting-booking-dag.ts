@@ -49,6 +49,7 @@
  */
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
+import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { CRM_WHATSAPP_SEND, WHATSAPP_REFUSAL_CODES } from "./cold-whatsapp-outreach-dag.js";
 import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
 
@@ -140,7 +141,10 @@ export async function main(claim, trigger, leadDetail) {
  * The strategy is explained to the model, never a script per case (owner rule).
  */
 export const COMPOSE_ANSWER_PROMPT_CODE = `
-export async function main(person, offer, brand, rep, facts, currentDate) {
+export async function main(person, offer, brand, rep, facts, currentDate, who) {
+  if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
+    throw new Error("compose-answer: who this person is to the brand was not read; nothing is written blind");
+  }
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-answer: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
@@ -161,7 +165,8 @@ export async function main(person, offer, brand, rep, facts, currentDate) {
   };
 
   const systemPrompt = [
-    "You answer ONE person who just filled a form to reach " + brandName + ". Nobody has written to them yet: this is the first thing they get back from us, a few minutes after they asked.",
+    "You answer ONE person who just filled a form to reach " + brandName + ". This is the first thing they get back from us about this form, a few minutes after they asked. THE THREAD below shows whether we already talked with them before, on any channel: if we did, they are not new, so pick that relationship up rather than greeting them like a stranger.",
+    who.strategy,
     "THE GAME: they raised their hand. Most people who fill a form and hear nothing for a day go elsewhere; the ones answered within minutes, by a person who read what they wrote, book. So: answer what they asked or said in the form, directly and in their own words where you can, show you read it, then invite them to book a meeting so the team can help them properly. One clear next step, never several.",
     bookingUrl
       ? "The booking link is " + bookingUrl + ". Give it once, plainly, as the way to pick a time."
@@ -186,6 +191,14 @@ export async function main(person, offer, brand, rep, facts, currentDate) {
       ? "THEIR FORM" + (form.formName ? " (\\"" + form.formName + "\\")" : "") + (form.submittedAt ? ", sent " + String(form.submittedAt) : "") + ":"
       : "THEIR FORM: (their answers are not available to us; answer their request to " + brandName + " in general and invite them to book)",
     ...(form ? (form.answers.length ? form.answers.map(answerLine) : ["(no answers beyond their contact details)"]) : []),
+    "",
+    "WHO THEY ARE TO US:",
+    ...who.lines,
+    "",
+    "THE THREAD with this person before this form, every channel, oldest first:",
+    ...(who.olderMessagesOmitted > 0 ? ["(" + who.olderMessagesOmitted + " older messages not shown)"] : []),
+    ...(who.threadLines.length ? who.threadLines : ["(no message ever exchanged)"]),
+    ...(who.eventLines?.length ? ["", "RECENT EVENTS:", ...who.eventLines] : []),
     "",
     "WHO WE ARE: " + brandName + ", offer \\"" + offerName + "\\".",
     "",
@@ -354,6 +367,14 @@ export function buildFormMeetingBookingDag(): DAG {
           brandFields: "$ref:brand-user-fields.output",
         },
       },
+      // Who this person is to the brand (lead-service tags) and their whole merged thread (crm-service): the
+      // shared step every writer runs before writing.
+      ...personThreadNodes({ email: "$ref:resolve-form.output.email", brandId: "$ref:resolve-form.output.brandId" }),
+      relationshipReadNode({
+        leadRowId: "$ref:claim-followup.output.followup.id",
+        brandId: "$ref:claim-followup.output.followup.brandId",
+      }),
+      whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-thread.output" }),
       {
         id: "compose-answer",
         type: "script",
@@ -365,6 +386,7 @@ export function buildFormMeetingBookingDag(): DAG {
           brand: "$ref:brand-profile.output",
           rep: "$ref:sales-rep.output",
           facts: "$ref:gather-facts.output",
+          who: "$ref:who-they-are.output",
           currentDate: "$ref:flow_input.currentDate",
         },
       },
@@ -495,7 +517,11 @@ export function buildFormMeetingBookingDag(): DAG {
       { from: "offer-answers", to: "offer-user-fields" },
       { from: "offer-user-fields", to: "brand-user-fields" },
       { from: "brand-user-fields", to: "gather-facts" },
-      { from: "gather-facts", to: "compose-answer" },
+      { from: "gather-facts", to: "person-thread-query" },
+      { from: "person-thread-query", to: "person-thread" },
+      { from: "person-thread", to: "relationship-read" },
+      { from: "relationship-read", to: "who-they-are" },
+      { from: "who-they-are", to: "compose-answer" },
       { from: "compose-answer", to: "draft-answer" },
       { from: "draft-answer", to: "finalize-answer" },
       { from: "finalize-answer", to: "check-decision" },

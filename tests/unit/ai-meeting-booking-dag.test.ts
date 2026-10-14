@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { WHO_NOT_KNOWN } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
@@ -58,6 +59,8 @@ function composeReply(...args: unknown[]): Promise<Record<string, unknown>> {
   while (a.length < 9) a.push(undefined);
   if (a.length < 10) a.push(INSIDER);
   if (a.length < 11) a.push("none");
+  while (a.length < 12) a.push(undefined);
+  if (a.length < 13) a.push(WHO_NOT_KNOWN);
   return loadMain(COMPOSE_REPLY_PROMPT_CODE)(...a);
 }
 
