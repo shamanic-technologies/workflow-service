@@ -4,7 +4,8 @@
  * pipe (`pipeId`), so `POST /workflows` registers it through features-service's register route, active at once.
  *
  * Idempotent: creates when a channel has no active workflow; upgrades an active one whose stored DAG is behind
- * `buildSourcingDag()` in its OWN dynasty (`POST /workflows/upgrade`: new version, predecessor deprecated, the
+ * `buildSourcingDag()` in its OWN dynasty (a copy stating who it finds, `src/lib/reachable-by-copy.ts`, is compared
+ * against the current DAG plus ITS `reachableBy`, so the seed never flattens a copy back to the generic one) (`POST /workflows/upgrade`: new version, predecessor deprecated, the
  * dynasty slug units store resolves forward to it); a current one is skipped.
  * A channel in BUSINESS_ONLY_SOURCING_CHANNELS also gets its "business contacts only" dynasty (RELATIONSHIP-TAGS-1014):
  * a FORK of the default (`POST /workflows/dynasty/{slug}/fork`, the serve asks `relationships: "business_only"`), so
@@ -26,6 +27,7 @@ import {
   servesBusinessOnly,
   sourcingPipeIdOf,
 } from "../dist/lib/sourcing-dag.js";
+import { isReachableByCopy, reachableByOf, withReachableBy, reachableByDescription } from "../dist/lib/reachable-by-copy.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -74,8 +76,12 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
   if (rows.length > 0) {
     for (const w of rows) {
-      const { dag: current, description } = variantOf(w.dag);
-      if (canonical(w.dag) === canonical(current)) {
+      const { dag: current, description: base } = variantOf(w.dag);
+      const methods = isReachableByCopy(w.description) ? reachableByOf(w.dag) : null;
+      if (isReachableByCopy(w.description) && !methods) throw new Error(`${w.workflowSlug}: a reachable-by copy whose DAG states no reachableBy`);
+      const target = methods ? withReachableBy(current, methods) : current;
+      const description = methods ? reachableByDescription(base, methods) : base;
+      if (canonical(w.dag) === canonical(target)) {
         console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
         continue;
       }
@@ -83,12 +89,12 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
         console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (${w.workflowSlug}: stored DAG is behind the current one)`);
         continue;
       }
-      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description });
+      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: target, description });
       if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
       console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflow?.workflowSlug} v${up.payload.workflow?.version} (${up.status})`);
     }
     if (BUSINESS_ONLY_SOURCING_CHANNELS.includes(slug) && !rows.some((w) => servesBusinessOnly(w.dag))) {
-      const source = rows.find((w) => !servesBusinessOnly(w.dag));
+      const source = rows.find((w) => !servesBusinessOnly(w.dag) && !isReachableByCopy(w.description));
       if (!source) throw new Error(`${slug}: no default workflow to fork the business-only one from`);
       if (!APPLY) {
         console.log(`${slug}: WOULD fork ${source.workflowDynastySlug} into a business-only dynasty`);
