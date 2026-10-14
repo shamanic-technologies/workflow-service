@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
@@ -12,12 +12,15 @@ import {
   READ_HISTORY_CODE,
   VOICE_SAMPLE_PEOPLE,
   PICK_PERSON_CODE,
+  REACH_PLAN_CODE,
   RECORD_PLAN_CODE,
   WHATSAPP_FOLLOW_UP_SENT_REASON,
+  WHATSAPP_OCCURRENCE_SENT_REASON,
   WHATSAPP_REFUSAL_CODES,
   buildColdWhatsappOutreachDag,
   coldWhatsappPipeIdOf,
 } from "../../src/lib/cold-whatsapp-outreach-dag.js";
+import { OCCURRENCE_PLAN_CODE } from "../../src/lib/occurrence-fact.js";
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, unknown>> {
   const body = code.replace(/^export async function main/m, "async function main") + "\nreturn main;";
@@ -103,9 +106,9 @@ describe("cold-whatsapp-outreach DAG", () => {
     expect(send.value.input_transforms?.skipOnRefusalCodes).toEqual({ type: "static", value: [...WHATSAPP_REFUSAL_CODES] });
     expect(byId.get("send-whatsapp")?.retries).toBe(0);
     expect(byId.get("send-whatsapp")?.config).toMatchObject({ service: "crm", method: "POST", path: "/orgs/whatsapp/messages" });
-    expect(byId.get("send-whatsapp")?.inputMapping).toMatchObject({
-      "body.email": "$ref:pick-person.output.email",
-      "body.skipIfReplied": "$ref:finalize-message.output.skipIfReplied",
+    expect(byId.get("send-whatsapp")?.inputMapping).toEqual({
+      body: "$ref:finalize-message.output.sendBody",
+      skip: "$ref:reach-plan.output.skip",
     });
   });
 
@@ -264,7 +267,7 @@ describe("composing the message", () => {
     olderMessagesOmitted: 12,
     voiceLines: ["to this person, whatsapp: T'as dépensé combien ?"],
   };
-  const compose = withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 8);
+  const compose = withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 10);
 
   it("explains the strategy, follows the instruction verbatim, and writes as the brand's rep", async () => {
     const out = await compose(first, "Ask what they tried to grow signups.", offer, brand, rep, facts, fresh, "2026-10-12");
@@ -365,5 +368,109 @@ describe("finalizing and recording", () => {
     expect(sent).toMatchObject({ action: "record", body: { kind: "handed", reason: WHATSAPP_FOLLOW_UP_SENT_REASON } });
     const replied = await plan({ kind: "followup", rowId: "r" }, { skipped: true, code: "person_replied" }, "x");
     expect(replied).toMatchObject({ action: "record", body: { kind: "handed", reason: "whatsapp_person_replied" } });
+  });
+});
+
+describe("answering a trigger occurrence (signed up, still not paid 24 hours later)", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const person = { email: "kevin@distribute.you", name: "Kevin", phone: "+33600000000", crmContact: null };
+  const trigger = { eventId: "ev-1", triggerId: "signed_up_not_paid_24h", leadId: "l-1", item: null, person };
+  const claim = { found: true, followup: { id: "row-1", leadId: "l-1", email: "Kevin@distribute.you", brandId: "b-1", dueAt: "2026-10-14T10:00:00Z" } };
+  const detail = { leadDetail: { lead: { firstName: "Kevin" } } };
+  const plan = loadMain(OCCURRENCE_PLAN_CODE);
+  const pick = loadMain(PICK_PERSON_CODE);
+
+  it("an occurrence run never serves a new lead: nobody due ends idle", async () => {
+    const answering = await plan(trigger, null);
+    const fresh = dag.edges.find((e) => e.from === "check-due" && e.to === "serve-lead")!;
+    expect(holds(fresh.condition!, { "claim-followup": { found: false }, occurrence: answering })).toBe(false);
+    expect(holds(fresh.condition!, { "claim-followup": { found: false }, occurrence: await plan(undefined, null) })).toBe(true);
+    const out = await pick({ found: false, reason: "nothing_due" }, undefined, undefined, answering);
+    expect(out).toEqual({ kind: "nobody_due", reason: "nothing_due" });
+    const idle = dag.edges.find((e) => e.from === "check-person" && e.to === "end-run-nobody-due")!;
+    expect(holds(idle.condition!, { "pick-person": out })).toBe(true);
+    expect(byId.get("end-run-nobody-due")?.config?.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+  });
+
+  it("the claimed person is owed ONE message, never treated as a follow-up, with the phone the occurrence names", async () => {
+    const out = await pick(claim, detail, undefined, await plan(trigger, null));
+    expect(out).toMatchObject({ kind: "occurrence", step: 1, rowId: "row-1", email: "Kevin@distribute.you", phone: "+33600000000", dueAt: "2026-10-14T10:00:00Z" });
+    const write = dag.edges.find((e) => e.from === "check-person" && e.to === "offer-economics")!;
+    expect(holds(write.condition!, { "pick-person": out })).toBe(true);
+    // The occurrence names someone else: no phone carried over.
+    const other = await pick(claim, detail, undefined, await plan({ ...trigger, person: { email: "x@y.com", phone: "+1" } }, null));
+    expect(other).toMatchObject({ kind: "occurrence", phone: null });
+  });
+
+  it("writes from the fact, says it is the only message, and keys the send on the occurrence", async () => {
+    const triggerType = { name: "Signup Not Paid", line: "Signed up, still not a paid client 24 hours later.", fromStepName: "Signup", params: { afterStep: "signup", minutes: 1440, unlessStep: "paid_client" } };
+    const p = await pick(claim, detail, undefined, await plan(trigger, null));
+    const fresh = { hasHistory: false, threadLines: [], eventLines: [], lastMessage: null, olderMessagesOmitted: 0, voiceLines: ["to someone else, whatsapp: yo"] };
+    const out = await withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 10)(
+      p, null, { name: "Revenue made easy" }, { brand: { name: "Distribute.you" } }, { salesRepFirstName: "Kevin" }, { exact: [], neverGive: [] }, fresh, "2026-10-14", await plan(trigger, null), triggerType,
+    );
+    expect(out.message as string).toContain("WHY WE WRITE NOW:\nTrigger: Signup Not Paid");
+    expect(out.message as string).toContain("minutes = 1440");
+    expect(out.systemPrompt as string).toContain("This is the ONE message this fact gets");
+    expect(out.systemPrompt as string).not.toContain("This is the ONE follow-up");
+    expect((out.systemPrompt as string) + (out.message as string)).not.toMatch(/[–—]/);
+
+    const fin = loadMain(FINALIZE_MESSAGE_CODE);
+    const sent = await fin({ json: { message: "Hi Kevin" } }, p, "c-1", { skip: false }, trigger);
+    expect(sent.idempotencyKey).toBe("cold-whatsapp-outreach:event:ev-1");
+    expect(sent.skipIfReplied).toBe(false);
+    expect(sent.sendBody).toEqual({ email: "Kevin@distribute.you", brandId: "b-1", text: "Hi Kevin", idempotencyKey: "cold-whatsapp-outreach:event:ev-1", skipIfReplied: false, phone: "+33600000000" });
+    // A redelivery re-files the person with a new due date: same occurrence, same key, nothing sent twice.
+    const again = await fin({ json: { message: "Hi Kevin again" } }, { ...p, dueAt: "2026-10-14T10:02:00Z" }, "c-1", { skip: false }, trigger);
+    expect(again.idempotencyKey).toBe(sent.idempotencyKey);
+    // No phone named: the body carries none (crm-service refuses a null), crm-service reads the CRM's.
+    const noPhone = await fin({ json: { message: "Hi" } }, { ...p, phone: null }, "c-1", { skip: false }, trigger);
+    expect(noPhone.sendBody).not.toHaveProperty("phone");
+  });
+
+  it("is handed for good once sent; refused, it is stopped (a later occurrence may reach them) and the run ends normally", async () => {
+    const record = loadMain(RECORD_PLAN_CODE);
+    const p = { kind: "occurrence", rowId: "row-1", email: "kevin@distribute.you" };
+    expect(await record(p, { ok: true }, "x", { skip: false })).toEqual({ action: "record", outcome: "sent", body: { kind: "handed", reason: WHATSAPP_OCCURRENCE_SENT_REASON } });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await record(p, { ok: false, skipped: true, code: "not_on_whatsapp" }, "x", { skip: false }))
+      .toEqual({ action: "record", outcome: "unreachable", code: "not_on_whatsapp", body: { kind: "stopped", reason: "whatsapp_not_on_whatsapp" } });
+    spy.mockRestore();
+    expect(dag.edges).toContainEqual({ from: "record-followup", to: "end-run-followup" });
+  });
+});
+
+describe("no phone known: nothing is drafted, nothing is sent", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const reach = loadMain(REACH_PLAN_CODE);
+
+  it("decides before the model writes, from the occurrence's phone or the CRM person's", async () => {
+    expect(descendants(dag, "reach-plan").has("draft-message")).toBe(true);
+    expect(byId.get("draft-message")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
+    expect(byId.get("send-whatsapp")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
+    expect(byId.get("reach-plan")?.inputMapping).toEqual({ person: "$ref:pick-person.output", thread: "$ref:person-thread.output" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await reach({ email: "a@x.com" }, { person: { phones: [] } })).toEqual({ skip: true, code: "no_phone_known" });
+    expect(spy.mock.calls[0]?.[0]).toContain("no_phone_known");
+    spy.mockRestore();
+    expect(await reach({ email: "a@x.com", phone: "+33600000000" }, { person: { phones: [] } })).toEqual({ skip: false, code: null });
+    expect(await reach({ email: "a@x.com" }, { person: { phones: ["+33600000000"] } })).toEqual({ skip: false, code: null });
+    // A thread read stating no phone list decides nothing: crm-service answers.
+    expect(await reach({ email: "a@x.com" }, { person: {} })).toEqual({ skip: false, code: null });
+  });
+
+  it("records exactly what crm-service's own refusal would: a first message releases the person, an occurrence stops the row", async () => {
+    const notCalled = { ok: false, skipped: true, notCalled: true };
+    const fin = await loadMain(FINALIZE_MESSAGE_CODE)({ ok: false, skipped: true, notCalled: true }, { kind: "first", leadId: "l-1", step: 1 }, "c-1", { skip: true, code: "no_phone_known" });
+    expect(fin).toMatchObject({ skipped: true, sendBody: null });
+    const record = loadMain(RECORD_PLAN_CODE);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await record({ kind: "first", email: "a@x.com" }, notCalled, "x", { skip: true, code: "no_phone_known" }))
+      .toEqual({ action: "release", outcome: "unreachable", code: "no_phone_known", email: "a@x.com" });
+    expect(await record({ kind: "occurrence", rowId: "r", email: "a@x.com" }, notCalled, "x", { skip: true, code: "no_phone_known" }))
+      .toMatchObject({ action: "record", body: { kind: "stopped", reason: "whatsapp_no_phone_known" } });
+    spy.mockRestore();
   });
 });

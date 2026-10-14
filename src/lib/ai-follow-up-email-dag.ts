@@ -11,13 +11,16 @@
  *
  * One run writes to EXACTLY ONE person:
  *
- *  - The instruction is read off `/start-run` at THIS run, never cached, so an edit is what the next run uses. A
- *    campaign with no instruction has nothing to say: the run names it and fails (`success: false`) before
- *    claiming anyone, rather than writing an email from nothing.
+ *  - The instruction is read off `/start-run` at THIS run, never cached, so an edit is what the next run uses. It is
+ *    OPTIONAL when the run answers a trigger OCCURRENCE (FACT-NOT-FOLLOWED-1014: "signed up, still not paid 30
+ *    minutes later"): the fact itself is why we write. The trigger TYPE is read from features-service
+ *    (`occurrence-fact.ts`) and put in front of the model as WHY WE WRITE NOW, with the person's state (their
+ *    thread and recent events). A run with neither an instruction nor an occurrence has nothing to say: it names
+ *    it and fails (`success: false`) before claiming anyone, rather than writing an email from nothing.
  *  - The person is claimed from THIS campaign's own queue (`claim-next`, atomic, at most one, exactly once). Unlike
  *    `ai-meeting-booking` there is no predecessor: this campaign names its person itself. Nobody due ends the run
  *    as idle (`noWorkAvailable`).
- *  - Before writing, the figures the instruction needs are READ (`read-figures`, this service's own
+ *  - Before writing, the figures the instruction needs are READ (not called when there is no instruction) (`read-figures`, this service's own
  *    `POST /orgs/figures/read`, a capability any workflow can call): public figures, and the figures of the
  *    organization(s) the PERSON belongs to, read as that person and never another customer's. So "give Marie her
  *    exact cost per booked meeting" needs no number in the instruction.
@@ -29,7 +32,9 @@
  *    edited instruction plus a new report can try again), and the run fails, named in the log.
  *  - The email goes out as a NEW thread through email-gateway's broadcast send (Instantly, our sending infra), so
  *    it lands in the Unibox like any outreach and the reply is threaded there. The send carries an idempotency key
- *    on the person's queue row.
+ *    on the person's queue row: campaign-service redelivers an occurrence whose run did not complete by re-filing
+ *    the SAME row (new due date, same id), so a redelivered run sends under the same key and email-gateway
+ *    answers the first send; once the row is `handed` it is never due again, so a redelivery claims nobody.
  *  - Strictly AFTER the send, the person's row is marked `handed` (reason `follow_up_sent`) on lead-service:
  *    permanent, so no automated responder ever claims them again on this campaign, and a second `follow_up_due`
  *    report schedules nothing (lead-service leaves the due date NULL on a handed row). That is what makes "the
@@ -41,6 +46,7 @@
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
+import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 
 export const AI_FOLLOW_UP_EMAIL_FEATURE_SLUG = "ai-follow-up-email";
 
@@ -51,7 +57,8 @@ export const AI_FOLLOW_UP_EMAIL_PIPE_ID = `${AI_FOLLOW_UP_EMAIL_FEATURE_SLUG}|${
 
 export const AI_FOLLOW_UP_EMAIL_DESCRIPTION =
   "Writes ONE email to ONE named person when their follow-up is due: claims them from the campaign's own " +
-  "follow-up queue, writes the email from the campaign's instruction and what the client told us, sends it as a " +
+  "follow-up queue, writes the email from the campaign's instruction or the fact that made it due (signed up, " +
+  "still not paid) and what the client told us, sends it as a " +
   "new thread from our sending infra so it lands in the Unibox, and then marks the person as handed so they are " +
   "never written to twice.";
 
@@ -64,15 +71,18 @@ export const FOLLOW_UP_SENT_REASON = "follow_up_sent";
 /** Stored when the model could not write what the instruction asks: stopped, so a later report can retry. */
 export const INSTRUCTION_NOT_WRITABLE_REASON = "instruction_not_writable";
 
-/** The condition the instruction is present under. Its exact negation is the other arm. */
-export const HAS_INSTRUCTION =
-  "typeof results['start-run']?.instruction == 'string' && results['start-run'].instruction.trim() != ''";
+/**
+ * The condition the run has something to say under: the campaign carries an instruction, or the run answers a
+ * trigger occurrence (the fact is the reason). Its exact negation is the other arm.
+ */
+export const HAS_SOMETHING_TO_SAY =
+  "results['occurrence']?.hasInstruction == true || results['occurrence']?.answering == true";
 
-/** States, in the log, that this campaign carries no instruction; `/end-run` has no reason field. */
+/** States, in the log, that this run has nothing to say; `/end-run` has no reason field. */
 export const NAME_MISSING_INSTRUCTION_CODE = `
 export async function main(campaignId) {
   console.error("[ai-follow-up-email] campaign " + String(campaignId) +
-    " carries no instruction; there is nothing to write, nobody was claimed and nothing was sent");
+    " carries no instruction and this run answers no trigger occurrence; there is nothing to write, nobody was claimed and nothing was sent");
   return { outcome: "no_instruction", campaignId: campaignId ?? null };
 }
 `.trim();
@@ -94,12 +104,13 @@ export const EMAIL_RESPONSE_SCHEMA = {
  * interpolation happens in the flow; this is also what makes the prompt readable in the stored DAG.
  */
 export const COMPOSE_EMAIL_PROMPT_CODE = `
-export async function main(instruction, followup, leadDetail, offer, brand, facts, figures, currentDate, who) {
+export async function main(instruction, followup, leadDetail, offer, brand, facts, figures, currentDate, occurrence, triggerType, who) {
   if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
     throw new Error("compose-email: who this person is to the brand was not read; nothing is written blind");
   }
   const text = typeof instruction === "string" ? instruction.trim() : "";
-  if (!text) throw new Error("compose-email: the campaign carries no instruction");
+  const whyNow = whyNowLines(occurrence, triggerType, followup?.followup?.email, new Date().toISOString());
+  if (!text && whyNow.length === 0) throw new Error("compose-email: the campaign carries no instruction and the run answers no trigger occurrence");
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-email: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
@@ -118,16 +129,21 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
 
   const exact = facts?.exact ?? [];
   const neverGive = facts?.neverGive ?? [];
-  if (!figures || !Array.isArray(figures.figures)) throw new Error("compose-email: the figure read returned no figures list");
-  const read = figures.figures;
-  const notRead = typeof figures.missing === "string" && figures.missing.trim() ? figures.missing.trim() : null;
+  // Not called (no instruction to read figures for): no figures, nothing missing.
+  const skipped = figures?.notCalled === true;
+  if (!skipped && (!figures || !Array.isArray(figures.figures))) throw new Error("compose-email: the figure read returned no figures list");
+  const read = skipped ? [] : figures.figures;
+  const notRead = !skipped && typeof figures.missing === "string" && figures.missing.trim() ? figures.missing.trim() : null;
 
   const systemPrompt = [
     "You write ONE email from the team at " + brandName + " to one person who already knows us. It starts a new thread.",
-    "You follow the INSTRUCTION below. It says why we write and what the email must say. Do what it asks, nothing more.",
+    text
+      ? "You follow the INSTRUCTION below. It says why we write and what the email must say. Do what it asks, nothing more."
+      : "There is no INSTRUCTION: why we write is WHY WE WRITE NOW below, and what the email says comes from where this person stands.",
+    ...(whyNow.length ? [${JSON.stringify(WHY_NOW_STRATEGY)}] : []),
     "You state only what the INSTRUCTION, the FIGURES or the FACTS say. Never invent a figure, a date, a price, a promise or a result. A number appears in the email only if it is written in the instruction, the figures or the facts, exactly as written there.",
     "The FIGURES were read for this email from this person's own account or from public data. Use them as given. You may say a figure in a plainer unit (731 cents is $7.31), never change its value.",
-    "If the instruction asks you to tell them something none of those contain (for example a figure that could not be read), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
+    "If the email would have to tell them something none of those contain (for example a figure that could not be read), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
     who.strategy,
     "Write like a person who knows them: short, plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
@@ -139,8 +155,9 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
     "TODAY: " + String(currentDate ?? new Date().toISOString().slice(0, 10)),
     "",
     "INSTRUCTION:",
-    text,
+    text || "(none: write from WHY WE WRITE NOW and where this person stands)",
     "",
+    ...(whyNow.length ? ["WHY WE WRITE NOW:", ...whyNow, ""] : []),
     "WHO WE WRITE TO:",
     ...(personLines.length ? personLines : ["(nothing beyond their email)"]),
     "",
@@ -165,6 +182,8 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
 
   return { systemPrompt, message };
 }
+
+${WHY_NOW_FN}
 `.trim();
 
 /**
@@ -232,6 +251,9 @@ export function buildAiFollowUpEmailDag(): DAG {
         config: { service: "campaign", method: "POST", path: "/gate-check", stopAfterIf: "result.allowed == false" },
       },
       { id: "start-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/start-run" } },
+      // What the run answers (a trigger occurrence, or nothing), and the trigger type's declaration.
+      occurrencePlanNode(),
+      triggerTypeNode(),
       { id: "check-instruction", type: "condition" },
       {
         id: "name-missing-instruction",
@@ -320,6 +342,8 @@ export function buildAiFollowUpEmailDag(): DAG {
         inputMapping: {
           "body.question": "$ref:start-run.output.instruction",
           "body.recipientEmail": "$ref:claim-followup.output.followup.email",
+          // No instruction (a run answering an occurrence alone): no question to read figures for.
+          skip: "$ref:occurrence.output.skipFigures",
         },
       },
       // Who this person is to the brand (lead-service tags) and their whole merged thread (crm-service): the
@@ -348,6 +372,8 @@ export function buildAiFollowUpEmailDag(): DAG {
           figures: "$ref:read-figures.output",
           who: "$ref:who-they-are.output",
           currentDate: "$ref:flow_input.currentDate",
+          occurrence: "$ref:occurrence.output",
+          triggerType: "$ref:trigger-type.output",
         },
       },
       {
@@ -437,9 +463,11 @@ export function buildAiFollowUpEmailDag(): DAG {
     ],
     edges: [
       { from: "gate-check", to: "start-run" },
-      { from: "start-run", to: "check-instruction" },
-      { from: "check-instruction", to: "claim-followup", condition: HAS_INSTRUCTION },
-      { from: "check-instruction", to: "name-missing-instruction", condition: `!(${HAS_INSTRUCTION})` },
+      { from: "start-run", to: "occurrence" },
+      { from: "occurrence", to: "trigger-type" },
+      { from: "trigger-type", to: "check-instruction" },
+      { from: "check-instruction", to: "claim-followup", condition: HAS_SOMETHING_TO_SAY },
+      { from: "check-instruction", to: "name-missing-instruction", condition: `!(${HAS_SOMETHING_TO_SAY})` },
       { from: "name-missing-instruction", to: "end-run-no-instruction" },
       { from: "claim-followup", to: "check-claim" },
       // Converges rather than nesting inside check-instruction's branch; `?.` because on the
