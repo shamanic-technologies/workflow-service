@@ -15,9 +15,9 @@
  *    OPTIONAL when the run answers a trigger OCCURRENCE (FACT-NOT-FOLLOWED-1014: "signed up, still not paid 30
  *    minutes later"): the fact itself is why we write. The trigger TYPE is read from features-service
  *    (`occurrence-fact.ts`) and put in front of the model as WHY WE WRITE NOW, with the person's state (their
- *    thread and recent events). A run with neither an instruction nor an occurrence has nothing to say (the
- *    scheduler's cadence run of a reactive funnel unit): it names it and ends IDLE (`noWorkAvailable`, never a
- *    failure, which would back the unit off and skip its next real occurrence) before claiming anyone.
+ *    thread and recent events). A run with neither still asks the queue: a person due there is due because of the
+ *    follow-up date WE set at our last look (below); nobody due ends IDLE (`noWorkAvailable`, never a failure,
+ *    which would back the unit off and skip its next real occurrence).
  *  - The person is claimed from THIS campaign's own queue (`claim-next`, atomic, at most one, exactly once). Unlike
  *    `ai-meeting-booking` there is no predecessor: this campaign names its person itself. Nobody due ends the run
  *    as idle (`noWorkAvailable`).
@@ -31,15 +31,19 @@
  *    `cannot_write` when the instruction asks for something none of those hold (a figure that could not be read,
  *    e.g. another organization's). Then nothing is sent, the person's claim is released as `stopped` (so an
  *    edited instruction plus a new report can try again), and the run fails, named in the log.
- *  - The email goes out as a NEW thread through email-gateway's broadcast send (Instantly, our sending infra), so
- *    it lands in the Unibox like any outreach and the reply is threaded there. The send carries an idempotency key
- *    on the person's queue row: campaign-service redelivers an occurrence whose run did not complete by re-filing
- *    the SAME row (new due date, same id), so a redelivered run sends under the same key and email-gateway
- *    answers the first send; once the row is `handed` it is never due again, so a redelivery claims nobody.
- *  - Strictly AFTER the send, the person's row is marked `handed` (reason `follow_up_sent`) on lead-service:
- *    permanent, so no automated responder ever claims them again on this campaign, and a second `follow_up_due`
- *    report schedules nothing (lead-service leaves the due date NULL on a handed row). That is what makes "the
- *    same debt is never answered twice" structural rather than a hope; their reply belongs to a person.
+ *  - THE RIGHT MOMENT OR LATER (`right-moment.ts`, RIGHT-MOMENT-OR-LATER-1014, owner 2026-10-14 after a client was
+ *    emailed a second time about something he had already answered by hand in the Unibox): the model first decides,
+ *    from the whole thread and the events, whether NOW is the right moment. `later` sends nothing and makes the row
+ *    due again at the model's date (`scheduled`); `stop` only on the person's own words (`stopped`); "already
+ *    answered" never closes them.
+ *  - `write`: the email goes out through email-gateway's broadcast send with `followUp: true`, so the sender
+ *    replies in the brand's thread with them (same mailbox, `Re:` its subject; a new thread only when we never
+ *    emailed them) and it lands in the Unibox. The idempotency key names the occurrence when the run's trigger names
+ *    this person (a redelivery re-dues the same row, same event: `OCCURRENCE_SEND_KEY_FN`), else the row and its due
+ *    date, so each follow-up of the same person is its own send. Strictly AFTER the send the row is `acted` with
+ *    the model's next date: the queue row is the date's ONLY store, so the person is never without a next look. A
+ *    passing refusal (a step of their sequence still queued, a live thread) sends nothing and keeps the date; an
+ *    opt-out / not-a-prospect refusal stops the row.
  *
  * No em dash or en dash ever reaches the person: the prompt bans them and `finalize-email` rewrites any that slip
  * through, before the send.
@@ -48,6 +52,15 @@ import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
+import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import {
+  FOLLOW_UP_SEND_REFUSAL_CODES,
+  NEXT_DATE_FN,
+  NEXT_DATE_SCHEMA_PROPERTIES,
+  NEXT_DATE_STRATEGY,
+  RIGHT_MOMENT_STRATEGY,
+  passingRefusal,
+} from "./right-moment.js";
 
 export const AI_FOLLOW_UP_EMAIL_FEATURE_SLUG = "ai-follow-up-email";
 
@@ -57,47 +70,39 @@ export const AI_FOLLOW_UP_EMAIL_LEG_KEY = "signup_to_paid_client";
 export const AI_FOLLOW_UP_EMAIL_PIPE_ID = `${AI_FOLLOW_UP_EMAIL_FEATURE_SLUG}|${AI_FOLLOW_UP_EMAIL_LEG_KEY}`;
 
 export const AI_FOLLOW_UP_EMAIL_DESCRIPTION =
-  "Writes ONE email to ONE named person when their follow-up is due: claims them from the campaign's own " +
-  "follow-up queue, writes the email from the campaign's instruction or the fact that made it due (signed up, " +
-  "still not paid) and what the client told us, sends it as a " +
-  "new thread from our sending infra so it lands in the Unibox, and then marks the person as handed so they are " +
-  "never written to twice.";
+  "Follows up ONE named person when their follow-up is due: claims them from the campaign's own follow-up queue, " +
+  "reads the whole thread and what they did, and first decides whether now is the right moment to write. If we " +
+  "already answered them or the point was already made, it sends nothing and sets a later follow-up date. " +
+  "Otherwise it writes from the campaign's instruction or the fact that made it due (signed up, still not paid) and " +
+  "what the client told us, replies in the thread they wrote in last, and sets the next follow-up date. Only their " +
+  "own words asking to stop or showing they are not a fit end the follow-ups.";
 
 /** The model the email is written with, through chat-service. Always-thinking: no temperature. */
 export const AI_FOLLOW_UP_EMAIL_LLM = { provider: "anthropic", model: "opus" } as const;
 
-/** Stored on the person's queue row once the email went out: handed, permanent. */
-export const FOLLOW_UP_SENT_REASON = "follow_up_sent";
+/** Stored on the person's queue row when the send was refused for good (opted out, not a prospect): stopped. */
+export const FOLLOW_UP_REFUSED_REASON = "follow_up_refused";
+
+/** Stored when the person's own words end the follow-ups (they asked us to stop, they are not a fit): stopped. */
+export const FOLLOW_UP_STOPPED_REASON = "follow_up_stopped";
 
 /** Stored when the model could not write what the instruction asks: stopped, so a later report can retry. */
 export const INSTRUCTION_NOT_WRITABLE_REASON = "instruction_not_writable";
-
-/**
- * The condition the run has something to say under: the campaign carries an instruction, or the run answers a
- * trigger occurrence (the fact is the reason). Its exact negation is the other arm.
- */
-export const HAS_SOMETHING_TO_SAY =
-  "results['occurrence']?.hasInstruction == true || results['occurrence']?.answering == true";
-
-/** States, in the log, that this run has nothing to say; `/end-run` has no reason field. */
-export const NAME_MISSING_INSTRUCTION_CODE = `
-export async function main(campaignId) {
-  console.log("[ai-follow-up-email] campaign " + String(campaignId) +
-    " carries no instruction and this run answers no trigger occurrence; there is nothing to write, nobody was claimed and nothing was sent");
-  return { outcome: "no_instruction", campaignId: campaignId ?? null };
-}
-`.trim();
 
 export const EMAIL_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    decision: { type: "string", enum: ["write", "cannot_write"] },
-    subject: { type: "string", description: "The subject line. Empty when decision is cannot_write." },
-    bodyHtml: { type: "string", description: "The email body as simple HTML paragraphs. Empty when decision is cannot_write." },
-    reason: { type: "string", description: "One sentence: what the email does, or what is missing to write it." },
+    decision: { type: "string", enum: ["write", "later", "stop", "cannot_write"] },
+    subject: { type: "string", description: "The subject line. Empty unless decision is write." },
+    bodyHtml: { type: "string", description: "The email body as simple HTML paragraphs. Empty unless decision is write." },
+    ...NEXT_DATE_SCHEMA_PROPERTIES,
+    reason: {
+      type: "string",
+      description: "One sentence: what the email does, why now is not the moment, (stop) the person's own words that end the follow-ups, or what is missing to write it.",
+    },
   },
-  required: ["decision", "subject", "bodyHtml", "reason"],
+  required: ["decision", "subject", "bodyHtml", "nextFollowUpAt", "nextFollowUpWhy", "reason"],
 } as const;
 
 /**
@@ -110,8 +115,11 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
     throw new Error("compose-email: who this person is to the brand was not read; nothing is written blind");
   }
   const text = typeof instruction === "string" ? instruction.trim() : "";
-  const whyNow = whyNowLines(occurrence, triggerType, followup?.followup?.email, new Date().toISOString());
-  if (!text && whyNow.length === 0) throw new Error("compose-email: the campaign carries no instruction and the run answers no trigger occurrence");
+  const factLines = whyNowLines(occurrence, triggerType, followup?.followup?.email, new Date().toISOString());
+  // Neither an instruction nor an occurrence: the person is due because of the follow-up date WE set at our last look.
+  const whyNow = factLines.length || text ? factLines : [
+    "The follow-up date we set at our last look at this person is reached. THE THREAD and the events say what we told them and what they did since.",
+  ];
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-email: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
@@ -137,15 +145,18 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
   const notRead = !skipped && typeof figures.missing === "string" && figures.missing.trim() ? figures.missing.trim() : null;
 
   const systemPrompt = [
-    "You write ONE email from the team at " + brandName + " to one person who already knows us. It starts a new thread.",
+    "You follow up ONE person who already knows us, for the team at " + brandName + ": you decide whether to write now, and if so you write ONE email, a reply in the thread they wrote in last (a new thread only when we never exchanged an email).",
     text
       ? "You follow the INSTRUCTION below. It says why we write and what the email must say. Do what it asks, nothing more."
       : "There is no INSTRUCTION: why we write is WHY WE WRITE NOW below, and what the email says comes from where this person stands.",
-    ...(whyNow.length ? [${JSON.stringify(WHY_NOW_STRATEGY)}] : []),
+    ...(factLines.length ? [${JSON.stringify(WHY_NOW_STRATEGY)}] : []),
     "You state only what the INSTRUCTION, the FIGURES or the FACTS say. Never invent a figure, a date, a price, a promise or a result. A number appears in the email only if it is written in the instruction, the figures or the facts, exactly as written there.",
     "The FIGURES were read for this email from this person's own account or from public data. Use them as given. You may say a figure in a plainer unit (731 cents is $7.31), never change its value.",
     "If the email would have to tell them something none of those contain (for example a figure that could not be read), do not write around it: set decision to cannot_write, leave subject and bodyHtml empty, and say in reason exactly what is missing.",
     who.strategy,
+    ${JSON.stringify(RIGHT_MOMENT_STRATEGY)},
+    ${JSON.stringify(NEXT_DATE_STRATEGY)},
+    "STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again, or they show they are not a fit at all (the wrong person, they left the company). Then set decision to stop, leave subject, bodyHtml and nextFollowUpAt empty, and quote their words in reason. A plain \\"no thanks\\" or \\"not now\\" is not a stop: choose later, much later. Silence, or us having already answered them, is never a reason to stop.",
     "Write like a person who knows them: short, plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
     "Do not sign off with a name or a signature block: ours is added below your text. End with your last sentence.",
@@ -153,6 +164,7 @@ export async function main(instruction, followup, leadDetail, offer, brand, fact
   ].join("\\n");
 
   const message = [
+    "NOW: " + new Date().toISOString(),
     "TODAY: " + String(currentDate ?? new Date().toISOString().slice(0, 10)),
     "",
     "INSTRUCTION:",
@@ -193,7 +205,7 @@ ${WHY_NOW_FN}
  * one-step sequence and the send's idempotency key, which names the person's queue row.
  */
 export const FINALIZE_EMAIL_CODE = `
-export async function main(draft, followup) {
+export async function main(draft, followup, trigger) {
   const json = draft?.json ?? {};
   const rowId = followup?.followup?.id;
   if (!rowId) throw new Error("finalize-email: no claimed queue row");
@@ -201,6 +213,15 @@ export async function main(draft, followup) {
     console.error("[ai-follow-up-email] the instruction cannot be written from what we hold; nothing is sent. Missing: " +
       JSON.stringify(json.reason ?? null));
     return { decision: "cannot_write", reason: json.reason ?? null };
+  }
+  if (json.decision === "stop") {
+    console.log("[ai-follow-up-email] the person's own words end the follow-ups: " + JSON.stringify(json.reason ?? null));
+    return { decision: "stop", reason: String(json.reason ?? "") };
+  }
+  if (json.decision === "later") {
+    const later = nextDate(json, "finalize-email");
+    console.log("[ai-follow-up-email] not the right moment, nothing is sent; next look at " + later.nextFollowUpAt + ": " + later.nextFollowUpWhy);
+    return { decision: "later", ...later, reason: String(json.reason ?? "") };
   }
   if (json.decision !== "write") throw new Error("finalize-email: unknown decision " + JSON.stringify(json.decision));
   const undash = (s) => String(s ?? "")
@@ -218,9 +239,16 @@ export async function main(draft, followup) {
     decision: "write",
     subject,
     sequence: [{ step: 1, bodyHtml, daysSinceLastStep: 0 }],
-    idempotencyKey: "ai-follow-up-email:" + rowId,
+    // The occurrence when the run's trigger names this person (a redelivery re-dues the row, same event), else
+    // the row and its due date: each follow-up of the same person is its own send.
+    idempotencyKey: sendKey("ai-follow-up-email", followup.followup, trigger),
+    ...nextDate(json, "finalize-email"),
   };
 }
+
+${OCCURRENCE_SEND_KEY_FN}
+
+${NEXT_DATE_FN}
 `.trim();
 
 const GATHER_FACTS_SIGNATURE = "export async function main(plan, offerAnswers, offerFields, brandFields)";
@@ -243,6 +271,35 @@ const endRun = (id: string, body: Record<string, unknown>) => ({
   config: { service: "campaign", method: "POST", path: "/end-run", body },
 });
 
+/** The claimed row, due again at the model's date with nothing sent (`scheduled`: not an action, the count stays). */
+const scheduleAt = (id: string) => ({
+  id,
+  type: "http.call" as const,
+  config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", body: { kind: "scheduled" } },
+  retries: 0,
+  inputMapping: {
+    "params.id": "$ref:claim-followup.output.followup.id",
+    "body.dueAt": "$ref:finalize-email.output.nextFollowUpAt",
+  },
+});
+
+/** The claimed row, stopped (not a tombstone: a fresh occurrence re-enters them). */
+const stopRow = (id: string, reason: string) => ({
+  id,
+  type: "http.call" as const,
+  config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", body: { kind: "stopped", reason } },
+  retries: 0,
+  inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+});
+
+const WROTE = "results['finalize-email']?.decision == 'write' && results['send-email'] != null";
+/** The email went out. */
+export const SENT = `${WROTE} && results['send-email']?.skipped != true`;
+/** Refused for a passing reason (a queued step of their sequence, a live thread): nothing sent, still followed up. */
+export const DEFERRED = `${WROTE} && results['send-email']?.skipped == true && (${passingRefusal("send-email")})`;
+/** Refused for good (opted out, not a prospect): the follow-ups end. */
+export const REFUSED = `${WROTE} && results['send-email']?.skipped == true && !(${passingRefusal("send-email")})`;
+
 export function buildAiFollowUpEmailDag(): DAG {
   return {
     nodes: [
@@ -255,15 +312,8 @@ export function buildAiFollowUpEmailDag(): DAG {
       // What the run answers (a trigger occurrence, or nothing), and the trigger type's declaration.
       occurrencePlanNode(),
       triggerTypeNode(),
-      { id: "check-instruction", type: "condition" },
-      {
-        id: "name-missing-instruction",
-        type: "script",
-        config: { code: NAME_MISSING_INSTRUCTION_CODE },
-        retries: 0,
-        inputMapping: { campaignId: "$ref:flow_input.campaignId" },
-      },
-      // THIS campaign's own queue: it names its person, there is no predecessor.
+      // THIS campaign's own queue: it names its person, there is no predecessor. Every run asks it: a person is due
+      // because an occurrence filed them, an instruction named them, or the follow-up date we set is reached.
       {
         id: "claim-followup",
         type: "http.call",
@@ -403,11 +453,16 @@ export function buildAiFollowUpEmailDag(): DAG {
         type: "script",
         config: { code: FINALIZE_EMAIL_CODE },
         retries: 0,
-        inputMapping: { draft: "$ref:draft-email.output", followup: "$ref:claim-followup.output" },
+        inputMapping: {
+          draft: "$ref:draft-email.output",
+          followup: "$ref:claim-followup.output",
+          trigger: "$ref:flow_input.trigger",
+        },
       },
       // Converges (edge from claim-followup, outside check-claim's branch) so it is a top-level branchone.
       { id: "check-writable", type: "condition" },
-      // A NEW thread from our sending infra: lands in the Unibox, the reply is threaded there.
+      // A reply in the thread they wrote in last (`followUp: true`: the sender continues the brand's thread with
+      // them, same mailbox, `Re:` its subject; a new thread only when we never emailed them). Lands in the Unibox.
       {
         id: "send-email",
         type: "http.call",
@@ -415,8 +470,11 @@ export function buildAiFollowUpEmailDag(): DAG {
           service: "email-gateway",
           method: "POST",
           path: "/orgs/send",
-          body: { type: "broadcast", tag: "ai-follow-up-email" },
+          body: { type: "broadcast", tag: "ai-follow-up-email", followUp: true },
           validateResponse: { field: "success", equals: true },
+          // Read, not thrown: an opted-out person, a step of their sequence still queued, or one the brand talks to
+          // right now, is an outcome (check-sent).
+          skipOnRefusalCodes: [...FOLLOW_UP_SEND_REFUSAL_CODES],
         },
         retries: 0,
         inputMapping: {
@@ -430,19 +488,24 @@ export function buildAiFollowUpEmailDag(): DAG {
           "body.timezone": "$ref:lead-detail.output.leadDetail.lead.timezone",
         },
       },
-      // Strictly AFTER the send. Handed is permanent: never claimed again, a second report schedules nothing.
+      { id: "check-sent", type: "condition" },
+      // Strictly AFTER the send: acted, due again at the model's date (the queue row is the date's only store).
       {
         id: "record-sent",
         type: "http.call",
-        config: {
-          service: "lead",
-          method: "POST",
-          path: "/orgs/leads/{id}/followups",
-          body: { kind: "handed", reason: FOLLOW_UP_SENT_REASON },
-        },
+        config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", body: { kind: "acted" } },
         retries: 0,
-        inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
+        inputMapping: {
+          "params.id": "$ref:claim-followup.output.followup.id",
+          "body.nextDueAt": "$ref:finalize-email.output.nextFollowUpAt",
+        },
       },
+      // Refused for a passing reason (nothing sent): still followed up at the model's date.
+      scheduleAt("record-deferred"),
+      // Not the right moment (we already answered them, the point was made): nothing sent, due again later.
+      scheduleAt("record-later"),
+      stopRow("record-refused", FOLLOW_UP_REFUSED_REASON),
+      stopRow("record-stopped", FOLLOW_UP_STOPPED_REASON),
       // Not writable: release the claim as stopped (not a tombstone), so an edited instruction can retry.
       {
         id: "release-unwritable",
@@ -457,25 +520,21 @@ export function buildAiFollowUpEmailDag(): DAG {
         inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
       },
       endRun("end-run", { success: true, stopCampaign: false }),
+      endRun("end-run-later", { success: true, stopCampaign: false }),
+      endRun("end-run-stopped", { success: true, stopCampaign: false }),
+      endRun("end-run-refused", { success: true, stopCampaign: false }),
       endRun("end-run-unwritable", { success: false, stopCampaign: false }),
-      endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
-      // Nothing to say is NOTHING TO DO, never a failure: campaign-service's scheduler runs every funnel unit on its
+      // Nobody due is NOTHING TO DO, never a failure: campaign-service's scheduler runs every funnel unit on its
       // cadence with no trigger, and a failure here would back the unit off and skip its next real occurrence.
-      endRun("end-run-no-instruction", { success: true, stopCampaign: false, noWorkAvailable: true }),
+      endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
     edges: [
       { from: "gate-check", to: "start-run" },
       { from: "start-run", to: "occurrence" },
       { from: "occurrence", to: "trigger-type" },
-      { from: "trigger-type", to: "check-instruction" },
-      { from: "check-instruction", to: "claim-followup", condition: HAS_SOMETHING_TO_SAY },
-      { from: "check-instruction", to: "name-missing-instruction", condition: `!(${HAS_SOMETHING_TO_SAY})` },
-      { from: "name-missing-instruction", to: "end-run-no-instruction" },
+      { from: "trigger-type", to: "claim-followup" },
       { from: "claim-followup", to: "check-claim" },
-      // Converges rather than nesting inside check-instruction's branch; `?.` because on the
-      // no-instruction path the claim never ran.
-      { from: "start-run", to: "check-claim" },
       { from: "check-claim", to: "offer-economics", condition: "results['claim-followup']?.found == true" },
       { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup']?.found == false" },
       { from: "offer-economics", to: "brand-profile" },
@@ -495,9 +554,20 @@ export function buildAiFollowUpEmailDag(): DAG {
       { from: "finalize-email", to: "check-writable" },
       { from: "claim-followup", to: "check-writable" },
       { from: "check-writable", to: "send-email", condition: "results['finalize-email']?.decision == 'write'" },
+      { from: "check-writable", to: "record-later", condition: "results['finalize-email']?.decision == 'later'" },
+      { from: "check-writable", to: "record-stopped", condition: "results['finalize-email']?.decision == 'stop'" },
       { from: "check-writable", to: "release-unwritable", condition: "results['finalize-email']?.decision == 'cannot_write'" },
-      { from: "send-email", to: "record-sent" },
+      { from: "record-later", to: "end-run-later" },
+      { from: "record-stopped", to: "end-run-stopped" },
+      { from: "send-email", to: "check-sent" },
+      // Converges (edge from claim-followup) so it is a top-level branchone; every arm reads with `?.`.
+      { from: "claim-followup", to: "check-sent" },
+      { from: "check-sent", to: "record-sent", condition: SENT },
+      { from: "check-sent", to: "record-deferred", condition: DEFERRED },
+      { from: "check-sent", to: "record-refused", condition: REFUSED },
       { from: "record-sent", to: "end-run" },
+      { from: "record-deferred", to: "end-run" },
+      { from: "record-refused", to: "end-run-refused" },
       { from: "release-unwritable", to: "end-run-unwritable" },
     ],
     onError: "end-run-error",

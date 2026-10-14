@@ -5,6 +5,8 @@ import {
   COMPOSE_PROSPECT_EMAIL_CODE,
   CONTINUE,
   FINALIZE_PROSPECT_EMAIL_CODE,
+  LATER,
+  PROSPECT_FOLLOW_UP_LATER_REASON,
   NOT_OWED,
   NOT_YET,
   OPTED_OUT,
@@ -239,6 +241,49 @@ describe("finalize", () => {
     expect(await run({ json: { decision: "stop", reason: "\"please stop\"" } }, person)).toMatchObject({ decision: "stop" });
     expect(holds(STOP, { "finalize-email": { decision: "stop" } })).toBe(true);
     expect(holds(WRITE, { "finalize-email": { decision: "stop" } })).toBe(false);
+  });
+});
+
+// RIGHT-MOMENT-OR-LATER-1014: a client was emailed a second time about something the owner had already answered.
+describe("the right moment or later", () => {
+  const future = new Date(Date.now() + 5 * 86400_000).toISOString();
+  it("the prompt asks whether now is the right moment, a hand-written answer of ours counting like an automated one", async () => {
+    const out = await loadMain(COMPOSE_PROSPECT_EMAIL_CODE)(
+      { kind: "next", email: "jo@x.co", lead: {}, timezone: null },
+      { name: "Product-led" },
+      { brand: { name: "Acme" } },
+      { exact: [], neverGive: [] },
+      { lines: [], omitted: 0, ourEmails: 1, lastOursAt: null, lastTheirsAt: null, unreadable: [] },
+      null, "2026-10-14", "2026-10-14T10:00:00.000Z", who,
+    );
+    expect(out.systemPrompt).toMatch(/THE RIGHT MOMENT/);
+    expect(out.systemPrompt).toMatch(/a person of our team writing by hand counts exactly like an automated email/);
+    expect(out.systemPrompt).toMatch(/later is never the end/);
+    expect(PROSPECT_EMAIL_RESPONSE_SCHEMA.properties.decision.enum).toEqual(["write", "later", "stop"]);
+  });
+  it("later sends nothing and keeps the model's date; a missing date throws", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const run = loadMain(FINALIZE_PROSPECT_EMAIL_CODE);
+    const r = await run({ json: { decision: "later", subject: "", bodyHtml: "", nextFollowUpAt: future, nextFollowUpWhy: "we just answered", reason: "r" } }, { sendKey: "k1" });
+    expect(r).toEqual({ decision: "later", nextFollowUpAt: new Date(future).toISOString(), nextFollowUpWhy: "we just answered", reason: "r" });
+    await expect(run({ json: { decision: "later", nextFollowUpAt: "" } }, { sendKey: "k1" })).rejects.toThrow(/not a date/);
+    expect(holds(LATER, { "finalize-email": { decision: "later" } })).toBe(true);
+    expect(holds(WRITE, { "finalize-email": { decision: "later" } })).toBe(false);
+  });
+  it.each([
+    ["proactive", buildProspectFollowUpProactiveDag, ["end-run-later"]],
+    ["reactive", buildProspectFollowUpReactiveDag, ["record-later", "end-run-later"]],
+  ] as const)("%s: later records the same chain at the model's date, never sends", (_n, build, after) => {
+    const dag = build();
+    expect(dag.edges.find((e) => e.from === "check-decision" && e.to === "schedule-later")?.condition).toBe(LATER);
+    const node = dag.nodes.find((n) => n.id === "schedule-later");
+    expect(node?.config).toMatchObject({ service: "campaign", method: "POST", path: "/internal/trigger-events", body: { triggerId: PROSPECT_FOLLOW_UP_TRIGGER_ID } });
+    expect(node?.inputMapping).toMatchObject({ "body.dueAt": "$ref:finalize-email.output.nextFollowUpAt", "body.idempotencyKey": "$ref:resolve-person.output.laterKey" });
+    expect(descendants(dag, "schedule-later")).toEqual(new Set(after));
+    expect(dag.nodes.find((n) => n.id === "end-run-later")?.config?.body).toEqual({ success: true, stopCampaign: false });
+    if (after.includes("record-later")) {
+      expect(dag.nodes.find((n) => n.id === "record-later")?.config?.body).toEqual({ kind: "stopped", reason: PROSPECT_FOLLOW_UP_LATER_REASON });
+    }
   });
 });
 
