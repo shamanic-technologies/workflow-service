@@ -1133,6 +1133,52 @@ const DynastyStatsSchema = z.object({
   stats: z.record(z.unknown()).describe("Aggregated stats for the dynasty (costs, email metrics, completed runs)."),
 });
 
+const WorkflowSummarySchema = z.object({
+  id: z.string().uuid(),
+  workflowSlug: z.string().describe("Versioned slug of this version."),
+  workflowName: z.string(),
+  workflowDynastySlug: z.string().describe("Stable lineage slug (constant across versions)."),
+  workflowDynastyName: z.string(),
+  featureSlug: z.string(),
+  description: z.string().nullable().describe("What this workflow does, in plain words."),
+  status: z.string().describe("Per-version lifecycle: active (latest of its dynasty) or deprecated."),
+  workflowDynastyStatus: z.string().describe("Whole-lineage status: deprecated = retired, never runs."),
+  version: z.number().int(),
+  tags: z.array(z.string()),
+  contentModel: z.string().nullable().describe("Model of the content-generation call, derived from the DAG; null when it states none."),
+  contentPromptType: z.string().nullable().describe("Prompt template of the content-generation call, derived from the DAG; null when it states none."),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+}).openapi("WorkflowSummary");
+
+registry.registerPath({
+  method: "get",
+  path: "/workflows/summaries",
+  summary: "List what each workflow of a feature does, without its DAG",
+  description:
+    "A light listing for readers that need to know which workflow does what (an agent choosing a workflow, a " +
+    "catalogue page): slug, names, description, status, version, tags and the content model/template, never the " +
+    "DAG (GET /workflows returns every DAG, hundreds of KB per feature). Read one DAG on demand with " +
+    "GET /workflows/{id}. `status` has the GET /workflows semantics: default active = EXECUTABLE (version active " +
+    "AND dynasty not retired), deprecated = either axis retired, all = both. Sorted by dynasty, newest version first.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    query: z.object({
+      featureSlug: z.string().optional().describe("Exact match on the feature slug (e.g. ai-meeting-booking)."),
+      workflowDynastySlug: z.string().optional().describe("One lineage, every version (the unversioned slug)."),
+      status: z.string().optional().describe("active (default, executable) | deprecated | all."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "The workflows, without DAGs",
+      content: { "application/json": { schema: z.object({ workflows: z.array(WorkflowSummarySchema) }) } },
+    },
+  },
+});
+
 registry.registerPath({
   method: "get",
   path: "/workflows/dynasties",

@@ -2180,3 +2180,47 @@ describe("GET /workflows/dynasties — resolving a superseded slug to its dynast
     expect(res.status).toBe(401);
   });
 });
+
+describe("GET /workflows/summaries — what each workflow does, without its DAG", () => {
+  const row = (workflowSlug: string, version: number, status = "active") => ({
+    id: crypto.randomUUID(),
+    workflowSlug,
+    workflowName: workflowSlug,
+    workflowDynastySlug: "ai-meeting-booking-torcular",
+    workflowDynastyName: "Ai Meeting Booking Torcular",
+    featureSlug: "ai-meeting-booking",
+    description: "Attaches the most relevant offer document to the email reply.",
+    status,
+    workflowDynastyStatus: "active",
+    version,
+    tags: ["offer-document"],
+    dag: { nodes: [{ id: "big", type: "script", config: { code: "x".repeat(50_000) } }], edges: [] },
+    createdAt: new Date("2026-10-14T08:00:00Z"),
+    updatedAt: new Date("2026-10-14T08:00:00Z"),
+  });
+
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
+  });
+
+  it("lists slug, description, status and version, newest first, and never a DAG", async () => {
+    mockSelectResponses.push([row("ai-meeting-booking-torcular", 1, "deprecated"), row("ai-meeting-booking-torcular-v2", 2)]);
+
+    const res = await request.get("/workflows/summaries?featureSlug=ai-meeting-booking&status=all").set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows.map((w: { workflowSlug: string }) => w.workflowSlug)).toEqual([
+      "ai-meeting-booking-torcular-v2",
+      "ai-meeting-booking-torcular",
+    ]);
+    expect(res.body.workflows[0]).toMatchObject({
+      description: "Attaches the most relevant offer document to the email reply.",
+      status: "active",
+      version: 2,
+      featureSlug: "ai-meeting-booking",
+    });
+    expect(res.body.workflows[0]).not.toHaveProperty("dag");
+    expect(JSON.stringify(res.body).length).toBeLessThan(5_000);
+  });
+});

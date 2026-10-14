@@ -62,6 +62,7 @@ import { invalidateSpecWatcherCache } from "../lib/spec-watcher.js";
 import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
+import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
 import { formatWorkflow } from "../lib/format-workflow.js";
 import {
@@ -753,6 +754,58 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
 // gets that one dynasty — the whole payload, rather than a needle it has to
 // find in 90KB of other codenames. An unknown slug is an empty list, not a 404:
 // this is a listing, and every filter on it narrows rather than addresses.
+// GET /workflows/summaries — what each workflow of a feature IS, without its DAG.
+// `GET /workflows` returns every DAG (hundreds of KB per feature: 327k chars for one pipe's workflows), which an
+// agent reading the catalogue cannot afford just to learn which workflow does what. The DAG stays on demand on
+// `GET /workflows/{id}`. Same status semantics as the listing (`resolveStatusFilter`: active = executable).
+router.get("/workflows/summaries", requireApiKey, async (req, res) => {
+  try {
+    const { featureSlug, workflowDynastySlug, status } = req.query;
+    const conditions: ReturnType<typeof eq>[] = [];
+    const statusFilter = resolveStatusFilter(typeof status === "string" ? status : undefined);
+    if (statusFilter.kind === "executable") {
+      conditions.push(eq(workflows.status, "active"));
+      conditions.push(eq(workflows.workflowDynastyStatus, "active"));
+    } else if (statusFilter.kind === "retired") {
+      conditions.push(or(eq(workflows.status, "deprecated"), eq(workflows.workflowDynastyStatus, "deprecated"))!);
+    } else if (statusFilter.kind === "versionStatus") {
+      conditions.push(eq(workflows.status, statusFilter.value));
+    }
+    if (featureSlug && typeof featureSlug === "string") conditions.push(eq(workflows.featureSlug, featureSlug));
+    if (workflowDynastySlug && typeof workflowDynastySlug === "string") {
+      conditions.push(eq(workflows.workflowDynastySlug, workflowDynastySlug));
+    }
+
+    const rows = conditions.length > 0
+      ? await db.select().from(workflows).where(and(...conditions))
+      : await db.select().from(workflows);
+
+    const summaries = rows
+      .map((w) => ({
+        id: w.id,
+        workflowSlug: w.workflowSlug,
+        workflowName: w.workflowName,
+        workflowDynastySlug: w.workflowDynastySlug,
+        workflowDynastyName: w.workflowDynastyName,
+        featureSlug: w.featureSlug,
+        description: w.description ?? null,
+        status: w.status,
+        workflowDynastyStatus: w.workflowDynastyStatus,
+        version: w.version,
+        tags: w.tags ?? [],
+        ...summarizeContentGeneration(w.dag as DAG | null),
+        createdAt: w.createdAt?.toISOString() ?? null,
+        updatedAt: w.updatedAt?.toISOString() ?? null,
+      }))
+      .sort((a, b) => a.workflowDynastySlug.localeCompare(b.workflowDynastySlug) || b.version - a.version);
+
+    res.json({ workflows: summaries });
+  } catch (err) {
+    console.error("[workflow-service] GET /workflows/summaries error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.get("/workflows/dynasties", requireApiKey, async (req, res) => {
   try {
     const { featureSlug, workflowSlug } = req.query;
