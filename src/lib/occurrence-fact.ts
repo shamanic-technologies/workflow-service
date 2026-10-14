@@ -22,7 +22,7 @@ import type { DAGNode } from "./dag-validator.js";
 
 /** Reads the run's trigger (and the campaign's instruction, which decides whether figures are read at all). */
 export const OCCURRENCE_PLAN_CODE = `
-export async function main(trigger, instruction) {
+export async function main(trigger, instruction, reactive) {
   const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
   const t = trigger && typeof trigger === "object" ? trigger : null;
   const eventId = s(t?.eventId);
@@ -36,6 +36,10 @@ export async function main(trigger, instruction) {
     skipTriggerRead: triggerId === null,
     hasInstruction,
     skipFigures: !hasInstruction,
+    // Only a unit campaign-service SAYS is proactive (\`/start-run\` \`reactive: false\`) may be served a new lead.
+    // Reactive, or unknown (null: no leg, catalogue unreadable; absent: an older campaign-service), never buys a
+    // stranger: a reactive unit answers the people its trigger made due, nobody else.
+    serveNewLead: eventId === null && reactive === false,
     person: p ? { email: s(p.email)?.toLowerCase() ?? null, name: s(p.name), phone: s(p.phone) } : null,
   };
 }
@@ -46,7 +50,11 @@ export const occurrencePlanNode = (): DAGNode => ({
   type: "script",
   config: { code: OCCURRENCE_PLAN_CODE },
   retries: 0,
-  inputMapping: { trigger: "$ref:flow_input.trigger", instruction: "$ref:start-run.output.instruction" },
+  inputMapping: {
+    trigger: "$ref:flow_input.trigger",
+    instruction: "$ref:start-run.output.instruction",
+    reactive: "$ref:start-run.output.reactive",
+  },
 });
 
 /** features-service's declaration of the trigger type the run answers; not called when the run carries none. */
