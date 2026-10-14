@@ -23,10 +23,12 @@ import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
 
 /**
  * Send refusals that are NOT a stop: a step of the brand's sequence to them is still queued (two of our emails would
- * race), or the brand is in a thread with them right now. Nothing was sent; the person stays followed up at the
+ * race), the brand is in a thread with them right now, or their latest thread is in a connected Gmail mailbox whose
+ * Google grant lacks send access (`google_send_permission_missing`: the org owner must reconnect Google; failing the
+ * run instead would re-claim and re-draft them every hour). Nothing was sent; the person stays followed up at the
  * model's date.
  */
-export const PASSING_REFUSAL_CODES = ["brand_sequence_queued", "recent_brand_contact"] as const;
+export const PASSING_REFUSAL_CODES = ["brand_sequence_queued", "recent_brand_contact", "google_send_permission_missing"] as const;
 
 /** Every per-person refusal a follow-up send reads as an outcome: the passing ones, and the stops (opted out, not a prospect). */
 export const FOLLOW_UP_SEND_REFUSAL_CODES = [...new Set([...REFUSAL_SKIP_CODES, ...PASSING_REFUSAL_CODES, "lead_not_a_prospect"])];

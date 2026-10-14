@@ -156,6 +156,9 @@ describe("ai-follow-up-email DAG", () => {
     expect([holds(SENT, sent), holds(DEFERRED, sent), holds(REFUSED, sent)]).toEqual([true, false, false]);
     expect([holds(SENT, queued), holds(DEFERRED, queued), holds(REFUSED, queued)]).toEqual([false, true, false]);
     expect([holds(SENT, optedOut), holds(DEFERRED, optedOut), holds(REFUSED, optedOut)]).toEqual([false, false, true]);
+    // A Gmail thread whose Google grant lacks send access: nothing sent, the person keeps their date.
+    const noGmailSend = { ...write, "send-email": { skipped: true, code: "google_send_permission_missing" } };
+    expect([holds(SENT, noGmailSend), holds(DEFERRED, noGmailSend), holds(REFUSED, noGmailSend)]).toEqual([false, true, false]);
     // A passing refusal keeps the person followed up at the model's date.
     expect(byId.get("record-deferred")?.config?.body).toEqual({ kind: "scheduled" });
     // Nothing written: no arm fires.
