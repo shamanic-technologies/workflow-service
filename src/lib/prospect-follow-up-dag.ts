@@ -22,6 +22,10 @@
  * its date, everything the person wrote, and what they did (opens, clicks, visits, signups, conversions) and picks
  * the date from that (owner: « laisser l'AI décider de la prochaine date de followup accordingly »).
  *
+ * The model first decides whether NOW is the right moment (`right-moment.ts`, RIGHT-MOMENT-OR-LATER-1014): `later`
+ * (we already answered them, the point was made) sends nothing and records the same chain at its later date; `write`
+ * replies in the thread they wrote in last (`followUp: true`) and records the next date after the send.
+ *
  * Stop conditions end the chain BEFORE any model spend: lead-service's verdict (opted out / unsubscribed, bounced,
  * disqualified, a positive reply, a meeting or a sale, any relationship but prospect) is read first; a "no" sends
  * nothing and records no next date. The model may also stop on the person's OWN words (they said no, asked us to
@@ -35,8 +39,16 @@
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS } from "./ai-meeting-booking-dag.js";
 import { GATHER_CLIENT_FACTS_CODE } from "./ai-follow-up-email-dag.js";
-import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
+import {
+  FOLLOW_UP_SEND_REFUSAL_CODES,
+  NEXT_DATE_FN,
+  NEXT_DATE_SCHEMA_PROPERTIES,
+  NEXT_DATE_STRATEGY,
+  PASSING_REFUSAL_CODES,
+  RIGHT_MOMENT_STRATEGY,
+  passingRefusal,
+} from "./right-moment.js";
 
 /** features-service's channel of both pipes (an AI writes ONE email to ONE person). */
 export const PROSPECT_FOLLOW_UP_FEATURE_SLUG = "ai-follow-up-email";
@@ -55,13 +67,17 @@ export const PROSPECT_FOLLOW_UP_TRIGGER_ID = "follow_up_date_reached";
 
 export const PROSPECT_FOLLOW_UP_PROACTIVE_DESCRIPTION =
   "Follows up the prospects the brand already contacted: takes one contacted pure prospect at a time, reads " +
-  "everything we sent them and everything they did, writes one follow-up email from what the client told us, " +
-  "sends it from our sending infra, and decides when the next follow-up is due.";
+  "everything we sent them and everything they did, and first decides whether now is the right moment. If we " +
+  "already answered them or the point was already made, it sends nothing and sets a later date. Otherwise it writes " +
+  "one follow-up email from what the client told us, replies in the thread they wrote in last, and decides when the " +
+  "next follow-up is due.";
 
 export const PROSPECT_FOLLOW_UP_REACTIVE_DESCRIPTION =
   "Runs when a prospect's follow-up date is reached: checks they are still a pure prospect who never said yes, no " +
-  "or stop, reads everything we sent them and everything they did since, writes the next follow-up email from " +
-  "what the client told us, sends it, and decides when the next one is due.";
+  "or stop, reads everything we sent them and everything they did since, and first decides whether now is the " +
+  "right moment. If we already answered them or the point was already made, it sends nothing and sets a later date. " +
+  "Otherwise it writes the next follow-up email from what the client told us, replies in the thread they wrote in " +
+  "last, and decides when the next one is due.";
 
 /** The model the email and the date are written with, through chat-service. Always-thinking: no temperature. */
 export const PROSPECT_FOLLOW_UP_LLM = { provider: "anthropic", model: "opus" } as const;
@@ -72,6 +88,8 @@ export const PROSPECT_FOLLOW_UP_NOT_OWED_REASON = "prospect_follow_up_not_owed";
 export const PROSPECT_FOLLOW_UP_NOT_YET_REASON = "prospect_follow_up_not_yet";
 export const PROSPECT_FOLLOW_UP_STOPPED_REASON = "prospect_follow_up_stopped";
 export const PROSPECT_FOLLOW_UP_REFUSED_REASON = "prospect_follow_up_refused";
+/** Not the right moment (RIGHT-MOMENT-OR-LATER-1014): nothing sent, the chain goes on at the model's later date. */
+export const PROSPECT_FOLLOW_UP_LATER_REASON = "prospect_follow_up_later";
 
 /** lead-service's "is this person still owed a prospect follow-up by this brand?" read (NEVER-NO-FOLLOWUP-1014). */
 export const PROSPECT_VERDICT = {
@@ -87,14 +105,10 @@ export const PROSPECT_EMAIL_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    decision: { type: "string", enum: ["write", "stop"] },
-    subject: { type: "string", description: "The subject line. Empty when decision is stop." },
-    bodyHtml: { type: "string", description: "The email body as simple HTML paragraphs. Empty when decision is stop." },
-    nextFollowUpAt: {
-      type: "string",
-      description: "When the NEXT follow-up is due, ISO 8601 date-time in UTC, strictly after now. Empty when decision is stop.",
-    },
-    nextFollowUpWhy: { type: "string", description: "One sentence: why that date, from the history." },
+    decision: { type: "string", enum: ["write", "later", "stop"] },
+    subject: { type: "string", description: "The subject line. Empty when decision is later or stop." },
+    bodyHtml: { type: "string", description: "The email body as simple HTML paragraphs. Empty when decision is later or stop." },
+    ...NEXT_DATE_SCHEMA_PROPERTIES,
     reason: { type: "string", description: "One sentence: what this email does, or (stop) the person's own words that end the follow-ups." },
   },
   required: ["decision", "subject", "bodyHtml", "nextFollowUpAt", "nextFollowUpWhy", "reason"],
@@ -126,6 +140,7 @@ export async function main(served, campaignId) {
     timezone: s.data?.timezone ?? null,
     sendKey,
     nextKey: sendKey + ":next",
+    laterKey: sendKey + ":later",
     retryKey: sendKey + ":not-yet",
   };
 }
@@ -172,6 +187,7 @@ export async function main(claim, detail, trigger) {
     timezone: lead.timezone ?? null,
     sendKey,
     nextKey: sendKey + ":next",
+    laterKey: sendKey + ":later",
     retryKey: sendKey + ":not-yet",
   };
 }
@@ -295,7 +311,8 @@ export async function main(person, offer, brand, facts, history, instruction, cu
     "What they did is for choosing what to say and when, never something to say: never write that you saw them open, click, visit or sign up.",
     "You state only what the FACTS our client told us say. Never invent a figure, a price, a result, a customer, a date or a promise. A number appears only if it is written in the facts, exactly as written.",
     who.strategy,
-    "THE NEXT DATE. There is no fixed schedule. Decide nextFollowUpAt from the history: how many times we already wrote and how recently, whether they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many emails (wait longer, weeks or months), and anything they said about timing (honour it exactly). Pick a working day and a working hour in their timezone when you know it. It must be strictly after NOW. Say why in nextFollowUpWhy.",
+    ${JSON.stringify(RIGHT_MOMENT_STRATEGY)},
+    ${JSON.stringify(NEXT_DATE_STRATEGY)},
     "STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again (an opt out), or they show they are not a fit at all (the wrong person, they left the company, they do not run anything like what we offer). Then set decision to stop, leave subject, bodyHtml and nextFollowUpAt empty, and quote their words in reason. A plain \\"no thanks\\" or \\"not now\\" is NOT a stop: keep following up, wait much longer, and make the next email lighter. Silence is never a reason to stop.",
     "Write like a person: short, plain, warm, one idea per sentence, under 120 words. Greet them by first name when you have it. No filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
@@ -349,6 +366,11 @@ export async function main(draft, person) {
     console.log("[prospect-follow-up] the person's own words end the follow-ups: " + JSON.stringify(json.reason ?? null));
     return { decision: "stop", reason: String(json.reason ?? "") };
   }
+  if (json.decision === "later") {
+    const later = nextDate(json, "finalize-email");
+    console.log("[prospect-follow-up] not the right moment, nothing is sent; next look at " + later.nextFollowUpAt + ": " + later.nextFollowUpWhy);
+    return { decision: "later", ...later, reason: String(json.reason ?? "") };
+  }
   if (json.decision !== "write") throw new Error("finalize-email: unknown decision " + JSON.stringify(json.decision));
   const undash = (s) => String(s ?? "")
     .replace(/&(mdash|ndash);|&#(8212|8211|x2014|x2013);/gi, (m) => (/mdash|8212|2014/i.test(m) ? "\\u2014" : "\\u2013"))
@@ -361,18 +383,16 @@ export async function main(draft, person) {
   if (subject !== String(json.subject ?? "").trim() || bodyHtml !== String(json.bodyHtml ?? "").trim()) {
     console.error("[prospect-follow-up] the draft used a dash the person must never read; rewritten before the send");
   }
-  const at = Date.parse(String(json.nextFollowUpAt ?? ""));
-  if (!Number.isFinite(at)) throw new Error("finalize-email: the next follow-up date is not a date: " + JSON.stringify(json.nextFollowUpAt));
-  if (at <= Date.now()) throw new Error("finalize-email: the next follow-up date is not in the future: " + JSON.stringify(json.nextFollowUpAt));
   return {
     decision: "write",
     subject,
     sequence: [{ step: 1, bodyHtml, daysSinceLastStep: 0 }],
     idempotencyKey: person.sendKey,
-    nextFollowUpAt: new Date(at).toISOString(),
-    nextFollowUpWhy: String(json.nextFollowUpWhy ?? ""),
+    ...nextDate(json, "finalize-email"),
   };
 }
+
+${NEXT_DATE_FN}
 `.trim();
 
 /** The run's "now", read once so the prompt and the bound agree. */
@@ -404,14 +424,16 @@ export const NOT_OWED = "results['resolve-person']?.ok == true && results['read-
 export const NOT_YET = "results['resolve-person']?.ok == true && results['read-verdict']?.kind == 'not_yet'";
 export const WRITE = "results['finalize-email']?.decision == 'write'";
 export const STOP = "results['finalize-email']?.decision == 'stop'";
+/** Not the right moment: nothing is sent, the chain goes on at the model's later date. */
+export const LATER = "results['finalize-email']?.decision == 'later'";
 /**
  * Refusals that are NOT a stop: a step of the brand's sequence to them is still queued (two of our emails would race),
  * or the brand is in a thread with them right now. Nothing was sent; the chain goes on at the model's date.
  */
-export const PASSING_REFUSAL_CODES = ["brand_sequence_queued", "recent_brand_contact"] as const;
+export { PASSING_REFUSAL_CODES };
 /** Every per-person refusal the send reads as an outcome: the passing ones, and the stops (opted out, not a prospect). */
-export const PROSPECT_SEND_REFUSAL_CODES = [...new Set([...REFUSAL_SKIP_CODES, ...PASSING_REFUSAL_CODES, "lead_not_a_prospect"])];
-const PASSING = PASSING_REFUSAL_CODES.map((c) => `results['send-email']?.code == '${c}'`).join(" || ");
+export const PROSPECT_SEND_REFUSAL_CODES = FOLLOW_UP_SEND_REFUSAL_CODES;
+const PASSING = passingRefusal("send-email");
 /** Sent, or refused for a passing reason: the chain goes on, the next date is recorded. */
 export const CONTINUE =
   "results['finalize-email']?.decision == 'write' && results['send-email'] != null && " +
@@ -551,7 +573,8 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       inputMapping: { draft: "$ref:draft-email.output", person: P },
     },
     { id: "check-decision", type: "condition" },
-    // A NEW thread from our sending infra: lands in the Unibox, a reply fires positive_reply_received like any campaign.
+    // A reply in the thread they wrote in last (`followUp: true`), from our sending infra: lands in the Unibox, a reply
+    // fires positive_reply_received like any campaign.
     {
       id: "send-email",
       type: "http.call",
@@ -603,7 +626,25 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
         "body.requestedByCampaignId": "$ref:flow_input.campaignId",
       },
     },
+    // Not the right moment: nothing sent, the same chain recorded at the model's later date. Keyed on the run's
+    // person, so a redelivered run never records it twice.
+    {
+      id: "schedule-later",
+      type: "http.call",
+      config: { service: "campaign", method: "POST", path: SCHEDULE_NEXT_PATH, body: { triggerId: PROSPECT_FOLLOW_UP_TRIGGER_ID } },
+      retries: 2,
+      inputMapping: {
+        "body.brandId": `${P}.brandId`,
+        "body.offerId": "$ref:start-run.output.offerId",
+        "body.leadId": `${P}.leadId`,
+        "body.dueAt": "$ref:finalize-email.output.nextFollowUpAt",
+        "body.person.email": `${P}.email`,
+        "body.idempotencyKey": `${P}.laterKey`,
+        "body.requestedByCampaignId": "$ref:flow_input.campaignId",
+      },
+    },
     endRun("end-run", { success: true, stopCampaign: false }),
+    endRun("end-run-later", { success: true, stopCampaign: false }),
     endRun("end-run-not-owed", { success: true, stopCampaign: false }),
     endRun("end-run-not-yet", { success: true, stopCampaign: false }),
     endRun("end-run-stopped", { success: true, stopCampaign: false }),
@@ -633,6 +674,7 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
     { from: "finalize-email", to: "check-decision" },
     { from: anchor, to: "check-decision" },
     { from: "check-decision", to: "send-email", condition: WRITE },
+    { from: "check-decision", to: "schedule-later", condition: LATER },
     { from: "send-email", to: "check-sent" },
     { from: anchor, to: "check-sent" },
     { from: "check-sent", to: "schedule-next", condition: CONTINUE },
@@ -659,6 +701,7 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       stopRow("record-not-yet", PROSPECT_FOLLOW_UP_NOT_YET_REASON),
       stopRow("record-not-owed", PROSPECT_FOLLOW_UP_NOT_OWED_REASON),
       stopRow("record-stopped", PROSPECT_FOLLOW_UP_STOPPED_REASON),
+      stopRow("record-later", PROSPECT_FOLLOW_UP_LATER_REASON),
       { id: "send-outcome", type: "script", config: { code: SEND_OUTCOME_CODE }, retries: 0, inputMapping: { send: "$ref:send-email.output" } },
       {
         ...stopRow("record-sent", PROSPECT_FOLLOW_UP_SENT_REASON),
@@ -674,6 +717,8 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       { from: "record-not-owed", to: "end-run-not-owed" },
       { from: "check-decision", to: "record-stopped", condition: STOP },
       { from: "record-stopped", to: "end-run-stopped" },
+      { from: "schedule-later", to: "record-later" },
+      { from: "record-later", to: "end-run-later" },
       { from: "schedule-next", to: "send-outcome" },
       { from: "send-outcome", to: "record-sent" },
       { from: "record-sent", to: "end-run" },
@@ -686,6 +731,7 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       { from: "check-owed", to: "end-run-not-yet", condition: NOT_YET },
       { from: "check-owed", to: "end-run-not-owed", condition: NOT_OWED },
       { from: "check-decision", to: "end-run-stopped", condition: STOP },
+      { from: "schedule-later", to: "end-run-later" },
       { from: "schedule-next", to: "end-run" },
       { from: "check-sent", to: "end-run-opted-out", condition: OPTED_OUT },
     );

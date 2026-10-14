@@ -97,7 +97,7 @@ for (const p of PIPES) {
     } else if (!APPLY) {
       console.log(`${p.pipeId}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
     } else {
-      const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: p.dag });
+      const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: p.dag, description: p.description });
       if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
       console.log(`${p.pipeId}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
     }
