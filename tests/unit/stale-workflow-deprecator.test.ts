@@ -212,6 +212,37 @@ describe("deprecateStaleWorkflows", () => {
     expect(mockListLegAssignments).toHaveBeenCalledWith("ai-meeting-booking");
   });
 
+  // Regression (LEAK-1012): the CRM contacts sourcing pipe carries the generic workflow plus two reachableBy copies;
+  // no funnel bought the pipe yet, so none ran. "Zero runs" compares nothing there: all three stay.
+  it("keeps every workflow of a pipe on which NO workflow ever ran", async () => {
+    const wfs = [
+      makeWorkflow({ id: "wf-gen", workflowSlug: "crm-gen", featureSlug: "sourcing-crm-contacts", createdAt: new Date(Date.now() - 30 * 24 * 3600_000).toISOString() }),
+      makeWorkflow({ id: "wf-phone", workflowSlug: "crm-phone", featureSlug: "sourcing-crm-contacts" }),
+      makeWorkflow({ id: "wf-email", workflowSlug: "crm-email", featureSlug: "sourcing-crm-contacts" }),
+    ];
+    const assign = (workflowDynastySlug: string) => ({
+      featureSlug: "sourcing-crm-contacts", legKey: "start_to_lead_found", workflowDynastySlug, state: "active", decidedBy: "x", decidedAt: "x", note: null,
+    });
+    mockListLegAssignments.mockResolvedValue([assign("crm-gen"), assign("crm-phone"), assign("crm-email")]);
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+    const result = await deprecateStaleWorkflows(createMockDb(wfs, []) as any);
+    expect(result.deprecatedCount).toBe(0);
+  });
+
+  it("still deprecates a zero-run workflow on a pipe where another workflow ran", async () => {
+    const wfs = [
+      makeWorkflow({ id: "wf-gen", workflowSlug: "crm-gen", featureSlug: "sourcing-crm-contacts" }),
+      makeWorkflow({ id: "wf-phone", workflowSlug: "crm-phone", featureSlug: "sourcing-crm-contacts" }),
+    ];
+    const assign = (workflowDynastySlug: string) => ({
+      featureSlug: "sourcing-crm-contacts", legKey: "start_to_lead_found", workflowDynastySlug, state: "active", decidedBy: "x", decidedAt: "x", note: null,
+    });
+    mockListLegAssignments.mockResolvedValue([assign("crm-gen"), assign("crm-phone")]);
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+    const result = await deprecateStaleWorkflows(createMockDb(wfs, ["wf-gen"]) as any);
+    expect(result.deprecatedCount).toBe(1);
+  });
+
   it("deprecates nothing when the pipe assignments cannot be read", async () => {
     const wfs = [makeWorkflow({ id: "wf-1", workflowSlug: "slug-1" }), makeWorkflow({ id: "wf-2", workflowSlug: "slug-2" })];
     mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());

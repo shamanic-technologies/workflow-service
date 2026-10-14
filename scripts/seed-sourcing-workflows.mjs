@@ -4,7 +4,8 @@
  * pipe (`pipeId`), so `POST /workflows` registers it through features-service's register route, active at once.
  *
  * Idempotent: creates when a channel has no active workflow; upgrades an active one whose stored DAG is behind
- * `buildSourcingDag()` in its OWN dynasty (`POST /workflows/upgrade`: new version, predecessor deprecated, the
+ * `buildSourcingDag()` in its OWN dynasty (a copy, e.g. a reachableBy or catch-all fork, is compared against the
+ * current DAG plus the serve body IT states, `sourcingTargetOf`, so the seed never flattens a copy back) (`POST /workflows/upgrade`: new version, predecessor deprecated, the
  * dynasty slug units store resolves forward to it); a current one is skipped.
  * Usage, from inside the workflow-service container:
  *   node seed-sourcing-workflows.mjs            # dry run
@@ -12,7 +13,7 @@
  * Env: WORKFLOW_SERVICE_API_KEY (required), BASE_URL (default localhost:8080), ORG_ID, USER_ID, RUN_ID (a REAL
  * staff run: runs-service rejects an unknown parent run).
  */
-import { SOURCING_CHANNEL_SLUGS, SOURCING_DESCRIPTION, buildSourcingDag, sourcingPipeIdOf } from "../dist/lib/sourcing-dag.js";
+import { SOURCING_CHANNEL_SLUGS, SOURCING_DESCRIPTION, buildSourcingDag, sourcingPipeIdOf, sourcingTargetOf } from "../dist/lib/sourcing-dag.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -57,7 +58,10 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
   if (rows.length > 0) {
     for (const w of rows) {
-      if (canonical(w.dag) === canonical(current)) {
+      // A copy (reachableBy, catch-all) keeps the serve body it states and its own description.
+      const { dag: target, stated } = sourcingTargetOf(w.dag, current);
+      const description = stated ? w.description : SOURCING_DESCRIPTION;
+      if (canonical(w.dag) === canonical(target)) {
         console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
         continue;
       }
@@ -65,7 +69,7 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
         console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (${w.workflowSlug}: stored DAG is behind the current one)`);
         continue;
       }
-      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description: SOURCING_DESCRIPTION });
+      const up = await call("POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: target, description });
       if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
       console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflow?.workflowSlug} v${up.payload.workflow?.version} (${up.status})`);
     }
