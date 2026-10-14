@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { validateDAG } from "../../src/lib/dag-validator.js";
-import { SOURCING_CHANNEL_SLUGS, buildSourcingDag, sourcingPipeIdOf } from "../../src/lib/sourcing-dag.js";
+import { SOURCING_CHANNEL_SLUGS, buildSourcingDag, sourcingPipeIdOf, sourcingTargetOf } from "../../src/lib/sourcing-dag.js";
 
 describe("the workflow of a sourcing pipe (owner 2026-10-11: every pipe runs a workflow)", () => {
   it("one per sourcing channel, Lead Sourcing included, each on its Start -> Lead found pipe", () => {
@@ -61,5 +61,25 @@ describe("a pipe from Start (features-service fromStep: null)", () => {
     });
     expect(pipe.fromStep).toBeNull();
     expect(START_STEP.id).toBe("start");
+  });
+});
+
+describe("sourcingTargetOf (the seed never flattens a copy)", () => {
+  it("the generic row upgrades to the bare current DAG", () => {
+    const r = sourcingTargetOf(buildSourcingDag());
+    expect(r.stated).toBe(false);
+    expect(r.dag).toEqual(buildSourcingDag());
+  });
+
+  it("a copy keeps the serve body it states (catch-all, reachableBy), nothing else carried", () => {
+    const stored = buildSourcingDag();
+    const serve = stored.nodes.find((n) => n.id === "serve-lead")!;
+    (serve.config as Record<string, unknown>).body = { acceptedEmails: "valid_and_catch_all", reachableBy: ["phone"] };
+    stored.nodes.push({ id: "stale-extra", type: "http.call", config: { service: "lead", method: "GET", path: "/x" } });
+    const r = sourcingTargetOf(stored);
+    expect(r.stated).toBe(true);
+    expect(r.dag.nodes.find((n) => n.id === "serve-lead")!.config).toMatchObject({ body: { acceptedEmails: "valid_and_catch_all", reachableBy: ["phone"] } });
+    expect(r.dag.nodes.map((n) => n.id)).toEqual(buildSourcingDag().nodes.map((n) => n.id));
+    expect(buildSourcingDag().nodes.find((n) => n.id === "serve-lead")!.config).not.toHaveProperty("body");
   });
 });
