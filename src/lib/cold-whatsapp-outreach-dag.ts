@@ -89,14 +89,37 @@ export async function main(claim, detail, served) {
     const lead = detail?.leadDetail?.lead ?? null;
     if (!f.id || !f.email) throw new Error("pick-person: a claimed follow-up carries no row id or email");
     if (!lead) throw new Error("pick-person: the claimed person's lead read returned no lead");
-    return { kind: "followup", step: 2, rowId: f.id, leadId: f.leadId ?? null, email: f.email, brandId: f.brandId ?? null, lead };
+    return { kind: "followup", step: 2, skipSends: false, rowId: f.id, leadId: f.leadId ?? null, email: f.email, brandId: f.brandId ?? null, lead };
   }
   if (served?.found === true) {
     const s = served.lead ?? {};
     if (!s.email) throw new Error("pick-person: a served lead carries no email");
-    return { kind: "first", step: 1, rowId: null, leadId: s.leadId ?? null, email: s.email, brandId: (s.brandIds ?? [])[0] ?? null, lead: s.data ?? {} };
+    return { kind: "first", step: 1, skipSends: false, rowId: null, leadId: s.leadId ?? null, email: s.email, brandId: (s.brandIds ?? [])[0] ?? null, lead: s.data ?? {} };
   }
-  return { kind: "nobody", reason: served?.reason ?? claim?.reason ?? null };
+  return { kind: "nobody", skipSends: true, reason: served?.reason ?? claim?.reason ?? null };
+}
+`.trim();
+
+/** crm-service send statuses that mean the message is out (or going out): writing it again sends nothing. */
+export const WRITTEN_SEND_STATUSES = ["sent", "sending"] as const;
+
+/**
+ * Has THIS campaign already written to this person on WhatsApp? Read off crm-service, the sender, BEFORE anything is
+ * read or paid for. A first message to someone this campaign already wrote to is a RE-SERVE: crm-service would answer
+ * the send as a duplicate (same idempotency key) and nothing would go out, after a full read and an Opus draft.
+ * WA-SPENT-NOTHING-SENT-1014: lead-service re-served the same 8 people 16 to 18 times each on campaign 4af21454,
+ * 147 drafts for 8 real messages. Stopping the re-serve is lead-service's; not paying for one is this flow's.
+ * A follow-up is never a re-serve here: its first message is exactly what makes it due.
+ */
+export const PRIOR_CONTACT_CODE = `
+export async function main(person, sends, campaignId) {
+  if (person?.kind !== "first") return { alreadyWritten: false };
+  if (!Array.isArray(sends?.sends)) throw new Error("prior-contact: crm-service answered no sends list for " + String(person.email));
+  const mine = sends.sends.find((x) => x?.campaignId === campaignId && ${JSON.stringify(WRITTEN_SEND_STATUSES)}.includes(x?.status));
+  if (!mine) return { alreadyWritten: false };
+  console.error("[cold-whatsapp-outreach] " + String(person.email) + " was served again, but this campaign already wrote to them on WhatsApp (send " +
+    String(mine.sendId) + ", " + String(mine.status) + " " + String(mine.sentAt ?? mine.createdAt) + "): nothing is read, written or sent. Re-serving is lead-service's to stop.");
+  return { alreadyWritten: true, sendId: mine.sendId ?? null, sentAt: mine.sentAt ?? null };
 }
 `.trim();
 
@@ -407,6 +430,7 @@ export const WHATSAPP_REFUSAL_CODES = [
 ] as const;
 
 const PERSON = "results['pick-person']";
+const WRITTEN = "results['prior-contact']?.alreadyWritten";
 const VOICE_SLOTS = Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => i + 1);
 const endRun = (id: string, body: Record<string, unknown>) => ({
   id,
@@ -457,6 +481,29 @@ export function buildColdWhatsappOutreachDag(): DAG {
           claim: "$ref:claim-followup.output",
           detail: "$ref:lead-detail.output",
           served: "$ref:serve-lead.output",
+        },
+      },
+      // What this campaign already sent them, read BEFORE anything is paid for (and reused as the writer's history).
+      {
+        id: "prior-sends",
+        type: "http.call",
+        config: { service: "crm", method: "GET", path: "/orgs/whatsapp/messages" },
+        retries: 0,
+        inputMapping: {
+          "query.brandId": "$ref:pick-person.output.brandId",
+          "query.email": "$ref:pick-person.output.email",
+          skip: "$ref:pick-person.output.skipSends",
+        },
+      },
+      {
+        id: "prior-contact",
+        type: "script",
+        config: { code: PRIOR_CONTACT_CODE },
+        retries: 0,
+        inputMapping: {
+          person: "$ref:pick-person.output",
+          sends: "$ref:prior-sends.output",
+          campaignId: "$ref:flow_input.campaignId",
         },
       },
       { id: "check-person", type: "condition" },
@@ -538,12 +585,6 @@ export function buildColdWhatsappOutreachDag(): DAG {
         config: { service: "crm", method: "GET", path: "/orgs/people/timeline" },
         inputMapping: { query: "$ref:history-plan.output.thread" },
       },
-      {
-        id: "person-sends",
-        type: "http.call",
-        config: { service: "crm", method: "GET", path: "/orgs/whatsapp/messages" },
-        inputMapping: { query: "$ref:history-plan.output.sends" },
-      },
       ...VOICE_SLOTS.flatMap((n) => [
         {
           id: `voice-thread-${n}`,
@@ -566,7 +607,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
         retries: 0,
         inputMapping: {
           thread: "$ref:person-thread.output",
-          sends: "$ref:person-sends.output",
+          sends: "$ref:prior-sends.output",
           ...Object.fromEntries(
             VOICE_SLOTS.flatMap((n) => [
               [`v${n}`, `$ref:voice-thread-${n}.output`],
@@ -694,6 +735,8 @@ export function buildColdWhatsappOutreachDag(): DAG {
       endRun("end-run", { success: true, stopCampaign: false }),
       endRun("end-run-followup", { success: true, stopCampaign: false }),
       endRun("end-run-unreachable", { success: true, stopCampaign: false }),
+      // A re-served person this campaign already wrote to: nothing to do this run.
+      endRun("end-run-already-written", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-no-lead", { success: true, stopCampaign: true }),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
@@ -707,9 +750,16 @@ export function buildColdWhatsappOutreachDag(): DAG {
       { from: "relationship-read", to: "pick-person" },
       { from: "serve-lead", to: "pick-person" },
       { from: "claim-followup", to: "pick-person" },
-      { from: "pick-person", to: "check-person" },
+      { from: "pick-person", to: "prior-sends" },
+      { from: "prior-sends", to: "prior-contact" },
+      { from: "prior-contact", to: "check-person" },
       { from: "check-person", to: "end-run-no-lead", condition: `${PERSON}?.kind == 'nobody'` },
-      { from: "check-person", to: "offer-economics", condition: `${PERSON}?.kind == 'first' || ${PERSON}?.kind == 'followup'` },
+      { from: "check-person", to: "end-run-already-written", condition: `${WRITTEN} == true` },
+      {
+        from: "check-person",
+        to: "offer-economics",
+        condition: `(${PERSON}?.kind == 'first' || ${PERSON}?.kind == 'followup') && ${WRITTEN} != true`,
+      },
       { from: "offer-economics", to: "brand-profile" },
       { from: "brand-profile", to: "sales-rep" },
       { from: "sales-rep", to: "offer-answers" },
@@ -719,8 +769,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
       { from: "gather-facts", to: "voice-people" },
       { from: "voice-people", to: "history-plan" },
       { from: "history-plan", to: "person-thread" },
-      { from: "person-thread", to: "person-sends" },
-      { from: "person-sends", to: "voice-thread-1" },
+      { from: "person-thread", to: "voice-thread-1" },
       ...VOICE_SLOTS.flatMap((n) => [
         { from: `voice-thread-${n}`, to: `voice-sends-${n}` },
         { from: `voice-sends-${n}`, to: n < VOICE_SAMPLE_PEOPLE ? `voice-thread-${n + 1}` : "read-history" },
