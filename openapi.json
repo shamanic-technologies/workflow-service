@@ -586,6 +586,89 @@
           "dag"
         ]
       },
+      "WorkflowSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workflowSlug": {
+            "type": "string",
+            "description": "Versioned slug of this version."
+          },
+          "workflowName": {
+            "type": "string"
+          },
+          "workflowDynastySlug": {
+            "type": "string",
+            "description": "Stable lineage slug (constant across versions)."
+          },
+          "workflowDynastyName": {
+            "type": "string"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "What this workflow does, in plain words."
+          },
+          "status": {
+            "type": "string",
+            "description": "Per-version lifecycle: active (latest of its dynasty) or deprecated."
+          },
+          "workflowDynastyStatus": {
+            "type": "string",
+            "description": "Whole-lineage status: deprecated = retired, never runs."
+          },
+          "version": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "contentModel": {
+            "type": "string",
+            "nullable": true,
+            "description": "Model of the content-generation call, derived from the DAG; null when it states none."
+          },
+          "contentPromptType": {
+            "type": "string",
+            "nullable": true,
+            "description": "Prompt template of the content-generation call, derived from the DAG; null when it states none."
+          },
+          "createdAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "workflowSlug",
+          "workflowName",
+          "workflowDynastySlug",
+          "workflowDynastyName",
+          "featureSlug",
+          "description",
+          "status",
+          "workflowDynastyStatus",
+          "version",
+          "tags",
+          "contentModel",
+          "contentPromptType",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
       "DynastyStatusResponse": {
         "type": "object",
         "properties": {
@@ -2788,6 +2871,145 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/summaries": {
+      "get": {
+        "summary": "List what each workflow of a feature does, without its DAG",
+        "description": "A light listing for readers that need to know which workflow does what (an agent choosing a workflow, a catalogue page): slug, names, description, status, version, tags and the content model/template, never the DAG (GET /workflows returns every DAG, hundreds of KB per feature). Read one DAG on demand with GET /workflows/{id}. `status` has the GET /workflows semantics: default active = EXECUTABLE (version active AND dynasty not retired), deprecated = either axis retired, all = both. Sorted by dynasty, newest version first.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Exact match on the feature slug (e.g. ai-meeting-booking)."
+            },
+            "required": false,
+            "description": "Exact match on the feature slug (e.g. ai-meeting-booking).",
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "One lineage, every version (the unversioned slug)."
+            },
+            "required": false,
+            "description": "One lineage, every version (the unversioned slug).",
+            "name": "workflowDynastySlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "active (default, executable) | deprecated | all."
+            },
+            "required": false,
+            "description": "active (default, executable) | deprecated | all.",
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workflows, without DAGs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workflows": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WorkflowSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "workflows"
+                  ]
                 }
               }
             }
