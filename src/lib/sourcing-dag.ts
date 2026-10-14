@@ -89,6 +89,56 @@ export function servesBusinessOnly(dag: { nodes?: Array<{ id?: string; config?: 
   return body?.relationships === BUSINESS_ONLY_RELATIONSHIPS;
 }
 
+/**
+ * The Lead Sourcing pipe's "contacted pure prospects" play (NEVER-NO-FOLLOWUP-1014, owner 2026-10-14): the people the
+ * brand ALREADY contacted who are still pure prospects (no relationship tag but prospect, not opted out, never
+ * disqualified, no positive reply, meeting or sale). lead-service serves that population when the source run states
+ * it on `POST /orgs/buffer/next`; the follow-up pipe fed by this source writes them their first follow-up
+ * (`prospect-follow-up-dag.ts`). Its OWN dynasty, a fork of the channel's generic workflow like the business-only one:
+ * features-service judges the tactic "Contacted pure prospects" on this DAG and the strategy of that name requires it.
+ */
+export const CONTACTED_PURE_PROSPECTS_POPULATION = "contacted_pure_prospects";
+
+export const CONTACTED_PROSPECTS_SOURCING_CHANNELS = ["lead-sourcing"] as const;
+
+export const CONTACTED_PROSPECTS_SOURCING_DESCRIPTION =
+  "Finds, one per run, inside its campaign's caps, a person the brand ALREADY contacted who is still a pure " +
+  "prospect: no relationship to the brand but prospect, never opted out or unsubscribed, never disqualified, never " +
+  "replied positively, booked or bought, and never handed to this population before. Buys nobody new and emails " +
+  "nobody: hands them to Lead found, where the follow-up pipe writes to them.";
+
+export const CONTACTED_PROSPECTS_CHANGES = [
+  { op: "add", path: "/nodes/serve-lead/config/body", value: { population: CONTACTED_PURE_PROSPECTS_POPULATION } },
+] as const;
+
+/** True when a stored sourcing DAG serves the contacted pure prospects. */
+export function servesContactedProspects(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const serve = (dag?.nodes ?? []).find((n) => n?.id === "serve-lead");
+  const body = serve?.config?.body as { population?: unknown } | undefined;
+  return body?.population === CONTACTED_PURE_PROSPECTS_POPULATION;
+}
+
+/**
+ * Every play a sourcing channel runs as a FORK of its generic workflow (one stated serve-body change each). The seed
+ * forks the missing ones; a new play = one more entry, never a branch in the seed.
+ */
+export const SOURCING_FORK_PLAYS = [
+  {
+    name: "business-only",
+    channels: BUSINESS_ONLY_SOURCING_CHANNELS as readonly string[],
+    changes: BUSINESS_ONLY_CHANGES,
+    description: BUSINESS_ONLY_SOURCING_DESCRIPTION,
+    serves: servesBusinessOnly,
+  },
+  {
+    name: "contacted-pure-prospects",
+    channels: CONTACTED_PROSPECTS_SOURCING_CHANNELS as readonly string[],
+    changes: CONTACTED_PROSPECTS_CHANGES,
+    description: CONTACTED_PROSPECTS_SOURCING_DESCRIPTION,
+    serves: servesContactedProspects,
+  },
+] as const;
+
 /** The DAG of every sourcing pipe: a campaign run whose only work is the find. */
 export function buildSourcingDag(opts: { businessOnly?: boolean } = {}): DAG {
   return {
