@@ -1841,10 +1841,13 @@ export function needsChannelAgnosticReply(dag: { nodes?: Array<{ id?: string; co
  * (`conversation`). The feature also holds the form responder
  * (`seed-form-meeting-booking-workflow.mjs`, pipe form_submitted_to_meeting_booked),
  * whose DAG this script must never touch: upgrading it with this one would turn
- * the form workflow into a conversation one.
+ * the form workflow into a conversation one. Same for the responder that attaches an
+ * offer document (`offer-document-reply-dag.ts`, marked by its `offer-documents`
+ * node): it has its own seed, and this one would strip its documents.
  */
 export function isConversationResponder(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
-  return (dag?.nodes ?? []).some((n) => n?.id === "conversation");
+  const nodes = dag?.nodes ?? [];
+  return nodes.some((n) => n?.id === "conversation") && !nodes.some((n) => n?.id === "offer-documents");
 }
 
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
