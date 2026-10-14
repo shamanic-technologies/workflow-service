@@ -10,7 +10,10 @@ import {
   KEEP_SOLID_CODE,
   PLAN_DAY_CODE,
   PUBLISH_WAIT_DELAY_SECONDS,
+  OWNER_TELEGRAM,
+  REPORT_NOTIFY_CODE,
   buildIndustryUpdateVideoDag,
+  composeNotifyCode,
 } from "../../src/lib/industry-update-video-dag.js";
 import { PICK_RESPONSE_SCHEMA, WRITE_RESPONSE_SCHEMA } from "../../src/lib/industry-update-editorial.js";
 
@@ -240,5 +243,67 @@ describe("build-bulletin", () => {
     long.json.stories[0].headline = "a".repeat(141);
     await expect(build(solid, long, pickInput, day, plan)).rejects.toThrow(/headline is 141 characters/);
     await expect(build(solid, copy({ stories: [] }), pickInput, day, plan)).rejects.toThrow(/no copy for story 1/);
+  });
+});
+
+const DELIVERED_ANSWER = { outcome: "sent", target: "owner", telegramMessageId: 7 };
+const NOT_REACHABLE_ANSWER = { outcome: "not_reachable", reason: "This org's owner has not linked a Telegram chat." };
+
+describe("owner Telegram line once a post is published (POST-PUBLISHED-TELEGRAM-1014)", () => {
+  const dag = buildIndustryUpdateVideoDag();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const mods = allModules(dagToOpenFlow(dag, "industry-update-test").value.modules as Mod[]);
+  const mod = (id: string) => mods.find((m) => m.id === id.replace(/-/g, "_"))!;
+
+  it("sends one line per post right after THAT post is published, then ends the run", () => {
+    const next = (from: string) => dag.edges.filter((e) => e.from === from).map((e) => e.to);
+    expect(next("wait-x")).toEqual(["compose-notify-x"]);
+    expect(next("compose-notify-x")).toEqual(["notify-x"]);
+    expect(next("notify-x")).toEqual(["wait-linkedin"]);
+    expect(next("wait-linkedin")).toEqual(["compose-notify-linkedin"]);
+    expect(next("compose-notify-linkedin")).toEqual(["notify-linkedin"]);
+    expect(next("notify-linkedin")).toEqual(["report-notify"]);
+    expect(next("report-notify")).toEqual(["end-run"]);
+  });
+
+  it("asks client-service for the org owner's Telegram and never fails the run on it", () => {
+    for (const n of ["x", "linkedin"]) {
+      const node = byId.get(`notify-${n}`)!;
+      expect(node.config).toMatchObject({ ...OWNER_TELEGRAM, tolerateFailure: true });
+      expect(node.retries).toBe(0);
+      expect(node.inputMapping?.["params.orgId"]).toBe("$ref:flow_input.orgId");
+      expect(node.inputMapping?.["body.text"]).toBe(`$ref:compose-notify-${n}.output.text`);
+      expect(mod(`notify-${n}`).value.input_transforms?.tolerateFailure).toEqual({ type: "static", value: true });
+    }
+  });
+
+  it("says where, the link, and the first line of what the post says", async () => {
+    const compose = loadMain(composeNotifyCode("x"));
+    const out = await compose({ post: { id: "p1", status: "published", postUrl: "https://x.com/KevinLourd/status/1", text: "  \nThree things moved in AI sales today.\nMore below\nhttps://x.com/a/status/2" } });
+    expect(out).toEqual({ network: "x", postId: "p1", postUrl: "https://x.com/KevinLourd/status/1", text: "Posted on X: https://x.com/KevinLourd/status/1\nThree things moved in AI sales today." });
+    const li = await loadMain(composeNotifyCode("linkedin"))({ post: { id: "p2", status: "published", postUrl: "https://www.linkedin.com/feed/update/u", text: "y".repeat(400) } });
+    expect(li.text.split("\n")[0]).toBe("Posted on LinkedIn: https://www.linkedin.com/feed/update/u");
+    expect(li.text.split("\n")[1]).toHaveLength(160);
+    expect(li.text).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it("logs loudly a line that was not delivered, and never throws", async () => {
+    const report = loadMain(REPORT_NOTIFY_CODE);
+    const errors: string[] = [];
+    const orig = console.error;
+    console.error = (m: string) => errors.push(String(m));
+    try {
+      const x = { network: "x", postUrl: "https://x.com/1" };
+      const li = { network: "linkedin", postUrl: "https://li/1" };
+      const out = await report(x, li, DELIVERED_ANSWER, { ok: false, status: 502, error: "boom" });
+      expect(out.notified.map((n: any) => n.delivered)).toEqual([true, false]);
+      const unreachable = await report(x, li, NOT_REACHABLE_ANSWER, DELIVERED_ANSWER);
+      expect(unreachable.notified.map((n: any) => n.delivered)).toEqual([false, true]);
+    } finally {
+      console.error = orig;
+    }
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toMatch(/NOT delivered for linkedin post https:\/\/li\/1/);
+    expect(errors[1]).toMatch(/NOT delivered for x post https:\/\/x.com\/1/);
   });
 });

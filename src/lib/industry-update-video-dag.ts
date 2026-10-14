@@ -21,7 +21,10 @@
  *  - The model WRITES the screens and the two posts, then content-generation renders the 4:5 bulletin
  *    (`/industry-debrief-videos`, async: POST then a long-poll GET, idempotent per day and story set).
  *  - social-service publishes once per network (`/internal/social-posts`, idempotency key per campaign, day and
- *    network, every named person and company tagged), and the flow waits until each post is published. The people
+ *    network, every named person and company tagged), and the flow waits until each post is published. As soon as a
+ *    post is published, the owner of the org the run acts for gets ONE Telegram line about it (where, the link, its
+ *    first line) through client-service; a line not delivered is logged loudly, never failing the run
+ *    (POST-PUBLISHED-TELEGRAM-1014). The people
  *    who engage are synced by social-service itself every 6 h onto the step `industry_update_video` and this
  *    campaign.
  *
@@ -377,6 +380,64 @@ export async function main(render, bulletin) {
 }
 `.trim();
 
+/**
+ * POST-PUBLISHED-TELEGRAM-1014 (owner 2026-10-14: "Tu peux me notifier d'un message sur Telegram quand c'est
+ * posté ? (Inclus ça dans le workflow of course)"): once a post is PUBLISHED, the owner of the org the run acts for
+ * gets ONE short Telegram line per post (where, the link, one line of what it says) through client-service, which
+ * owns who an org's owner is and whether their Telegram is reachable. The line is a side note: the call tolerates
+ * failure (never fails the run that published), and `report-notify` logs loudly anything but a delivered line.
+ */
+export const OWNER_TELEGRAM = { service: "client", method: "POST", path: "/internal/orgs/{orgId}/owner-telegram/messages" } as const;
+
+const NETWORK_LABEL = { x: "X", linkedin: "LinkedIn" } as const;
+
+/** Longest "what it says" line. */
+export const NOTIFY_LINE_MAX = 160;
+
+/**
+ * One post's Telegram line: where, the link, the first line of what it says (never a bare link line). Never throws:
+ * `wait-<network>` already proved the post published, and a throw here would fail a run that published.
+ */
+export const composeNotifyCode = (network: "x" | "linkedin"): string => `
+export async function main(published) {
+  const post = published?.post;
+  const line = String(post?.text ?? "").split("\\n").map((l) => l.trim()).find((l) => l && !/^https?:\\/\\//.test(l)) ?? "";
+  const said = line.length > ${NOTIFY_LINE_MAX} ? line.slice(0, ${NOTIFY_LINE_MAX - 3}).trimEnd() + "..." : line;
+  const text = ["Posted on ${NETWORK_LABEL[network]}: " + (post?.postUrl ?? "no link returned"), said].filter(Boolean).join("\\n");
+  return { network: "${network}", postId: post?.id ?? null, postUrl: post?.postUrl ?? null, text };
+}
+`.trim();
+
+export const REPORT_NOTIFY_CODE = `
+export async function main(x, linkedin, notifyX, notifyLinkedin) {
+  const outcome = (compose, sent) => {
+    const delivered = sent?.outcome === "sent";
+    if (!delivered) console.error("[industry-update] owner Telegram line NOT delivered for " + compose?.network + " post " + compose?.postUrl + ": " + JSON.stringify(sent));
+    return { network: compose?.network, postUrl: compose?.postUrl ?? null, delivered, answer: sent ?? null };
+  };
+  return { published: true, notified: [outcome(x, notifyX), outcome(linkedin, notifyLinkedin)] };
+}
+`.trim();
+
+const composeNotify = (network: "x" | "linkedin") => ({
+  id: `compose-notify-${network}`,
+  type: "script" as const,
+  config: { code: composeNotifyCode(network) },
+  retries: 0,
+  inputMapping: { published: `$ref:wait-${network}.output` },
+});
+
+const notifyOwner = (network: "x" | "linkedin") => ({
+  id: `notify-${network}`,
+  type: "http.call" as const,
+  config: { ...OWNER_TELEGRAM, tolerateFailure: true },
+  retries: 0,
+  inputMapping: {
+    "params.orgId": "$ref:flow_input.orgId",
+    "body.text": `$ref:compose-notify-${network}.output.text`,
+  },
+});
+
 const END_RUN_SKIP_ON_DRY = "flow_input.dryRun === true || flow_input.dryRun === 'true'";
 
 const endRun = (id: string, body: Record<string, unknown>) => ({
@@ -606,7 +667,23 @@ export function buildIndustryUpdateVideoDag(): DAG {
       publish("publish-x", "x"),
       publish("publish-linkedin", "linkedin"),
       waitPublished("wait-x", "publish-x"),
+      composeNotify("x"),
+      notifyOwner("x"),
       waitPublished("wait-linkedin", "publish-linkedin"),
+      composeNotify("linkedin"),
+      notifyOwner("linkedin"),
+      {
+        id: "report-notify",
+        type: "script",
+        config: { code: REPORT_NOTIFY_CODE },
+        retries: 0,
+        inputMapping: {
+          x: "$ref:compose-notify-x.output",
+          linkedin: "$ref:compose-notify-linkedin.output",
+          notifyX: "$ref:notify-x.output",
+          notifyLinkedin: "$ref:notify-linkedin.output",
+        },
+      },
       endRun("end-run", { success: true, stopCampaign: false }),
       {
         id: "end-run-error",
@@ -645,8 +722,14 @@ export function buildIndustryUpdateVideoDag(): DAG {
       { from: "render-media", to: "publish-x" },
       { from: "publish-x", to: "publish-linkedin" },
       { from: "publish-linkedin", to: "wait-x" },
-      { from: "wait-x", to: "wait-linkedin" },
-      { from: "wait-linkedin", to: "end-run" },
+      // Each post's owner line goes out as soon as THAT post is published (an X line is not held by LinkedIn).
+      { from: "wait-x", to: "compose-notify-x" },
+      { from: "compose-notify-x", to: "notify-x" },
+      { from: "notify-x", to: "wait-linkedin" },
+      { from: "wait-linkedin", to: "compose-notify-linkedin" },
+      { from: "compose-notify-linkedin", to: "notify-linkedin" },
+      { from: "notify-linkedin", to: "report-notify" },
+      { from: "report-notify", to: "end-run" },
     ],
     onError: "end-run-error",
   };
