@@ -13,6 +13,7 @@ import {
   VOICE_SAMPLE_PEOPLE,
   PICK_PERSON_CODE,
   RECORD_PLAN_CODE,
+  PRIOR_CONTACT_CODE,
   WHATSAPP_FOLLOW_UP_SENT_REASON,
   WHATSAPP_REFUSAL_CODES,
   buildColdWhatsappOutreachDag,
@@ -151,7 +152,7 @@ describe("picking the person", () => {
 
   it("nobody, with lead-service's reason", async () => {
     const out = await pick({ found: false, reason: "nothing_due" }, undefined, { found: false, reason: "audience_exhausted" });
-    expect(out).toEqual({ kind: "nobody", reason: "audience_exhausted" });
+    expect(out).toEqual({ kind: "nobody", skipSends: true, reason: "audience_exhausted" });
   });
 });
 
@@ -163,14 +164,16 @@ describe("reading the history before writing", () => {
 
   it("reads the person's thread, our sends to them, and the owner's other conversations BEFORE the writer, inside the person branch", () => {
     const before = [...descendants(dag, "gather-facts")];
-    for (const id of ["voice-people", "history-plan", "person-thread", "person-sends", "read-history"]) expect(before).toContain(id);
+    for (const id of ["voice-people", "history-plan", "person-thread", "read-history"]) expect(before).toContain(id);
+    // What we already sent them is read once, before anything is paid for, and reused as the writer's history.
+    expect(byId.get("read-history")?.inputMapping?.sends).toBe("$ref:prior-sends.output");
     expect(descendants(dag, "read-history").has("compose-message")).toBe(true);
     expect(descendants(dag, "compose-message").has("read-history")).toBe(false);
     expect(byId.get("compose-message")?.inputMapping?.history).toBe("$ref:read-history.output");
     expect(byId.get("person-thread")?.config).toMatchObject({ service: "crm", method: "GET", path: "/orgs/people/timeline" });
     // The person's own thread is never tolerated: unreadable = the person fails loud.
     expect(byId.get("person-thread")?.config?.tolerateFailure).toBeUndefined();
-    expect(byId.get("person-sends")?.config?.tolerateFailure).toBeUndefined();
+    expect(byId.get("prior-sends")?.config?.tolerateFailure).toBeUndefined();
     for (let n = 1; n <= VOICE_SAMPLE_PEOPLE; n++) {
       expect(byId.get(`voice-thread-${n}`)?.config).toMatchObject({ path: "/orgs/people/timeline", tolerateFailure: true });
       expect(byId.get("read-history")?.inputMapping?.[`v${n}`]).toBe(`$ref:voice-thread-${n}.output`);
@@ -365,5 +368,73 @@ describe("finalizing and recording", () => {
     expect(sent).toMatchObject({ action: "record", body: { kind: "handed", reason: WHATSAPP_FOLLOW_UP_SENT_REASON } });
     const replied = await plan({ kind: "followup", rowId: "r" }, { skipped: true, code: "person_replied" }, "x");
     expect(replied).toMatchObject({ action: "record", body: { kind: "handed", reason: "whatsapp_person_replied" } });
+  });
+});
+
+// WA-SPENT-NOTHING-SENT-1014: lead-service re-served the same 8 people 16 to 18 times each on campaign 4af21454 and
+// every re-serve paid a full read + an Opus draft that crm-service then answered as a duplicate: 147 drafts, 8 messages.
+describe("a person this campaign already wrote to is never read or written again", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const campaignId = "4af21454-ae93-4d62-8528-cc95081145ac";
+  const prior = loadMain(PRIOR_CONTACT_CODE);
+  const first = { kind: "first", step: 1, email: "imenez@gmail.com", brandId: "b" };
+  const sent = { sendId: "s1", status: "sent", campaignId, sentAt: "2026-10-12T14:43:32.913Z" };
+
+  it("reads crm-service's sends right after the person is picked, before anything paid", () => {
+    expect(byId.get("prior-sends")?.config).toMatchObject({ service: "crm", method: "GET", path: "/orgs/whatsapp/messages" });
+    expect(byId.get("prior-sends")?.inputMapping).toMatchObject({
+      "query.brandId": "$ref:pick-person.output.brandId",
+      "query.email": "$ref:pick-person.output.email",
+      skip: "$ref:pick-person.output.skipSends",
+    });
+    expect(dag.edges).toContainEqual({ from: "pick-person", to: "prior-sends" });
+    expect(dag.edges).toContainEqual({ from: "prior-contact", to: "check-person" });
+    const paid = descendants(dag, "offer-economics");
+    expect(paid.has("draft-message")).toBe(true);
+    expect(descendants(dag, "prior-contact").has("draft-message")).toBe(true);
+    expect(validateDAG(dag).valid).toBe(true);
+  });
+
+  it("a first message to someone this campaign already wrote to (sent or sending) ends the run idle, nothing drafted", async () => {
+    for (const status of ["sent", "sending"]) {
+      expect(await prior(first, { sends: [{ ...sent, status }] }, campaignId)).toMatchObject({ alreadyWritten: true, sendId: "s1" });
+    }
+    const results = { "pick-person": first, "prior-contact": { alreadyWritten: true } };
+    const arms = dag.edges.filter((e) => e.from === "check-person");
+    expect(arms.filter((e) => holds(e.condition!, results)).map((e) => e.to)).toEqual(["end-run-already-written"]);
+    const end = byId.get("end-run-already-written")?.config?.body;
+    expect(end).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+  });
+
+  it("writes when the only sends are another campaign's, refused or failed, or none", async () => {
+    const other = [
+      { ...sent, campaignId: "other" },
+      { ...sent, status: "refused" },
+      { ...sent, status: "failed" },
+    ];
+    expect(await prior(first, { sends: other }, campaignId)).toEqual({ alreadyWritten: false });
+    expect(await prior(first, { sends: [] }, campaignId)).toEqual({ alreadyWritten: false });
+    const results = { "pick-person": first, "prior-contact": { alreadyWritten: false } };
+    const arms = dag.edges.filter((e) => e.from === "check-person");
+    expect(arms.filter((e) => holds(e.condition!, results)).map((e) => e.to)).toEqual(["offer-economics"]);
+  });
+
+  it("a follow-up is never a re-serve: its own first message is what made it due", async () => {
+    const followup = { ...first, kind: "followup", step: 2 };
+    expect(await prior(followup, { sends: [sent] }, campaignId)).toEqual({ alreadyWritten: false });
+    const arms = dag.edges.filter((e) => e.from === "check-person");
+    const results = { "pick-person": followup, "prior-contact": { alreadyWritten: false } };
+    expect(arms.filter((e) => holds(e.condition!, results)).map((e) => e.to)).toEqual(["offer-economics"]);
+  });
+
+  it("nobody served: the sends read is skipped and the run ends on the no-lead end-run", () => {
+    const results = { "pick-person": { kind: "nobody", skipSends: true }, "prior-contact": { alreadyWritten: false } };
+    const arms = dag.edges.filter((e) => e.from === "check-person");
+    expect(arms.filter((e) => holds(e.condition!, results)).map((e) => e.to)).toEqual(["end-run-no-lead"]);
+  });
+
+  it("an unreadable sends answer fails loud rather than writing blind", async () => {
+    await expect(prior(first, { ok: false }, campaignId)).rejects.toThrow(/no sends list/);
   });
 });
