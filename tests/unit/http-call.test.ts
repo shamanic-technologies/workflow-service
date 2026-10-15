@@ -609,4 +609,86 @@ describe("http-call script", () => {
       expect(options.headers["x-api-key"]).toBe("k");
     });
   });
+  describe("pollWhile (AIC-COMMON-1015: Apollo's phone reveal arrives after the first answer)", () => {
+    const POSITION = 28;
+    const call = (pollWhile: unknown, tolerate?: boolean) => {
+      const args = new Array(POSITION + 1).fill(undefined);
+      ["apollo", "GET", "/people/{apolloPersonId}/phone-reveal", undefined, undefined, { APOLLO_SERVICE_URL: "https://apollo", APOLLO_SERVICE_API_KEY: "k" }]
+        .forEach((v, i) => { args[i] = v; });
+      args[11] = { apolloPersonId: "p1" };
+      if (tolerate) args[24] = true;
+      args[POSITION] = pollWhile;
+      return (main as (...a: unknown[]) => Promise<Record<string, unknown>>)(...args);
+    };
+
+    it("asks again while the field still equals the value, and returns the settled answer", async () => {
+      vi.useFakeTimers();
+      try {
+        mockFetch
+          .mockResolvedValueOnce(jsonResponse({ status: "pending" }))
+          .mockResolvedValueOnce(jsonResponse({ status: "pending" }))
+          .mockResolvedValueOnce(jsonResponse({ status: "found", mobilePhone: "+15550001111" }));
+        const p = call({ field: "status", equals: "pending", intervalSeconds: 5, timeoutSeconds: 90 });
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await p;
+        expect(result).toEqual({ status: "found", mobilePhone: "+15550001111" });
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops at the bound and returns the last answer, marked pollTimedOut, without throwing", async () => {
+      vi.useFakeTimers();
+      try {
+        mockFetch.mockImplementation(async () => jsonResponse({ status: "pending" }));
+        const p = call({ field: "status", equals: "pending", intervalSeconds: 5, timeoutSeconds: 12 });
+        await vi.advanceTimersByTimeAsync(60_000);
+        const result = await p;
+        expect(result).toEqual({ status: "pending", pollTimedOut: true });
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+        mockFetch.mockReset();
+      }
+    });
+
+    it("never waits past 300 seconds, whatever the node states", async () => {
+      vi.useFakeTimers();
+      try {
+        mockFetch.mockImplementation(async () => jsonResponse({ status: "pending" }));
+        const p = call({ field: "status", equals: "pending", intervalSeconds: 60, timeoutSeconds: 99_999 });
+        await vi.advanceTimersByTimeAsync(400_000);
+        const result = await p;
+        expect(result.pollTimedOut).toBe(true);
+        expect(mockFetch).toHaveBeenCalledTimes(6);
+      } finally {
+        vi.useRealTimers();
+        mockFetch.mockReset();
+      }
+    });
+
+    it("a failed request during the wait behaves as without it (tolerated here)", async () => {
+      vi.useFakeTimers();
+      try {
+        mockFetch
+          .mockResolvedValueOnce(jsonResponse({ status: "pending" }))
+          .mockResolvedValueOnce(jsonResponse({ error: "boom" }, 500));
+        const p = call({ field: "status", equals: "pending", intervalSeconds: 5, timeoutSeconds: 90 }, true);
+        await vi.advanceTimersByTimeAsync(10_000);
+        const result = await p;
+        expect(result.ok).toBe(false);
+        expect(result.status).toBe(500);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an answer already settled is returned at once, one request", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ status: "not_found" }));
+      const result = await call({ field: "status", equals: "pending", intervalSeconds: 5, timeoutSeconds: 90 });
+      expect(result).toEqual({ status: "not_found" });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
 });
