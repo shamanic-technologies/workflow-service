@@ -48,6 +48,15 @@ export const AI_INSTANT_CALL_LEG_KEY = "conversation_to_booking_call";
 
 export const AI_INSTANT_CALL_PIPE_ID = `${AI_INSTANT_CALL_FEATURE_SLUG}|${AI_INSTANT_CALL_LEG_KEY}`;
 
+/** The leg a form fill rings the rep on (Form submitted -> Booking call, features-service catalogue 2026-10-15). */
+export const AI_INSTANT_CALL_FORM_LEG_KEY = "form_submitted_to_booking_call";
+
+/** Every pipe the one AI Instant Call workflow serves: a positive reply and a form fill ring the rep the same way. */
+export const AI_INSTANT_CALL_PIPE_IDS = [
+  AI_INSTANT_CALL_PIPE_ID,
+  `${AI_INSTANT_CALL_FEATURE_SLUG}|${AI_INSTANT_CALL_FORM_LEG_KEY}`,
+] as const;
+
 export const AI_INSTANT_CALL_DESCRIPTION =
   "Rings the brand's sales rep the moment a prospect replies with interest or fills in a form: says who it is and " +
   "what they wrote or answered, and connects the rep to them on a keypress when we have their number (the phone " +
