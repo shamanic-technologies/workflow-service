@@ -84,8 +84,18 @@ export { CRM_WHATSAPP_SEND };
 
 export const COLD_WHATSAPP_OUTREACH_FEATURE_SLUG = "cold-whatsapp-outreach";
 
-/** The legs the channel's pipes perform (features-service catalogue, 2026-10-12). */
-export const COLD_WHATSAPP_OUTREACH_LEG_KEYS = ["lead_found_to_conversation", "lead_found_to_website_visit"] as const;
+/**
+ * The legs the channel's pipes perform (features-service catalogue). The two proactive ones (2026-10-12), then the two
+ * REACTIVE ones, where a trigger occurrence makes ONE person due and the run writes them ONE message: Signup -> Paid
+ * client (FACT-NOT-FOLLOWED-1014) and Start -> Signup on `whatsapp_number_given` (WA-WELCOME-WORKFLOW-1015: a person
+ * who just gave their WhatsApp number, often known only by that phone, is greeted once).
+ */
+export const COLD_WHATSAPP_OUTREACH_LEG_KEYS = [
+  "lead_found_to_conversation",
+  "lead_found_to_website_visit",
+  "signup_to_paid_client",
+  "start_to_signup",
+] as const;
 
 export const coldWhatsappPipeIdOf = (legKey: string): string => `${COLD_WHATSAPP_OUTREACH_FEATURE_SLUG}|${legKey}`;
 
@@ -94,7 +104,10 @@ export const COLD_WHATSAPP_OUTREACH_DESCRIPTION =
   "conversation: a short first message written from the campaign's instruction, then follow-ups in the same " +
   "conversation until they answer, each at a moment the model judges right from the whole thread (it may also wait, " +
   "or stop on their own words), with no fixed count and no fixed delay. The brand's team takes over as soon as they " +
-  "answer, on any channel. A person we cannot reach on WhatsApp is named and left to the email path.";
+  "answer, on any channel. A person we cannot reach on WhatsApp is named and left to the email path. On a run that " +
+  "answers a trigger occurrence (a person just gave their WhatsApp number, a signup not followed by a payment), it " +
+  "writes that person ONE message and never follows up: a person known only by their phone is written to by phone, " +
+  "greeted by the first name they gave.";
 
 /** The model the message is written with, through chat-service. Always-thinking: no temperature. */
 export const COLD_WHATSAPP_LLM = { provider: "anthropic", model: "opus" } as const;
@@ -139,28 +152,42 @@ export const MESSAGE_RESPONSE_SCHEMA = {
  * names is carried only when the occurrence names THIS person.
  */
 export const PICK_PERSON_CODE = `
-export async function main(claim, detail, served, occurrence) {
+export async function main(claim, detail, served, occurrence, trigger) {
   const answering = occurrence?.answering === true;
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const digits = (v) => (s(v) && /^\\s*(\\+|00)/.test(v) ? v.replace(/^\\s*(\\+|00)/, "").replace(/\\D/g, "") : "");
   if (claim?.found === true) {
     const f = claim.followup ?? {};
     const lead = detail?.leadDetail?.lead ?? null;
-    if (!f.id || !f.email) throw new Error("pick-person: a claimed follow-up carries no row id or email");
+    const email = s(f.email);
+    // A person known only by phone (a WhatsApp number given, REPLY-PHONE-ONLY-1015): the claim's phone names them.
+    const claimPhone = email ? null : s(f.phone);
+    if (!f.id || (!email && !claimPhone)) throw new Error("pick-person: a claimed follow-up carries no row id, or neither an email nor a phone");
     if (!lead) throw new Error("pick-person: the claimed person's lead read returned no lead");
+    const base = { skipSends: false, rowId: f.id, leadId: f.leadId ?? null, email, brandId: f.brandId ?? null, lead, dueAt: f.dueAt ?? null };
+    const sendsQuery = email ? { brandId: base.brandId, email } : { brandId: base.brandId, phone: claimPhone };
     if (answering) {
-      const named = typeof occurrence.person?.email === "string" && occurrence.person.email === String(f.email).trim().toLowerCase();
+      const named = email
+        ? s(occurrence.person?.email) === email.toLowerCase()
+        : digits(claimPhone).length >= 8 && digits(occurrence.person?.phone) === digits(claimPhone);
+      // The first name the occurrence states (a number given with a name), else the first word of its person's name.
+      const item = trigger?.item && typeof trigger.item === "object" ? trigger.item : {};
+      const firstName = named ? (s(item.firstName) ?? s(occurrence.person?.name)?.split(/\\s+/)[0] ?? null) : null;
+      const lastName = named ? s(item.lastName) : null;
       return {
-        kind: "occurrence", step: 1, skipSends: false, rowId: f.id, leadId: f.leadId ?? null, email: f.email, brandId: f.brandId ?? null, lead,
-        dueAt: f.dueAt ?? null, phone: named ? (occurrence.person.phone ?? null) : null,
+        kind: "occurrence", step: 1, ...base, sendsQuery, firstName, lastName,
+        phone: named ? (s(occurrence.person.phone) ?? claimPhone) : claimPhone,
       };
     }
-    return { kind: "followup", step: 2, skipSends: false, rowId: f.id, leadId: f.leadId ?? null, email: f.email, brandId: f.brandId ?? null, lead, dueAt: f.dueAt ?? null };
+    return { kind: "followup", step: 2, ...base, sendsQuery, phone: claimPhone };
   }
   // Nobody due, and this run may not buy a stranger (it answers an occurrence, or the unit is reactive or unknown).
   if (answering || occurrence?.serveNewLead !== true) return { kind: "nobody_due", skipSends: true, reason: claim?.reason ?? null };
   if (served?.found === true) {
-    const s = served.lead ?? {};
-    if (!s.email) throw new Error("pick-person: a served lead carries no email");
-    return { kind: "first", step: 1, skipSends: false, rowId: null, leadId: s.leadId ?? null, email: s.email, brandId: (s.brandIds ?? [])[0] ?? null, lead: s.data ?? {} };
+    const l = served.lead ?? {};
+    if (!l.email) throw new Error("pick-person: a served lead carries no email");
+    const brandId = (l.brandIds ?? [])[0] ?? null;
+    return { kind: "first", step: 1, skipSends: false, rowId: null, leadId: l.leadId ?? null, email: l.email, brandId, lead: l.data ?? {}, sendsQuery: { brandId, email: l.email } };
   }
   return { kind: "nobody", skipSends: true, reason: served?.reason ?? claim?.reason ?? null };
 }
@@ -205,15 +232,22 @@ export const VOICE_SAMPLE_MIN_OUTBOUND = 5;
 export const HISTORY_PLAN_CODE = `
 export async function main(person, recent) {
   const email = typeof person?.email === "string" ? person.email.trim().toLowerCase() : "";
+  // A person known only by phone (REPLY-PHONE-ONLY-1015): their thread is keyed phone:+<digits>.
+  const phoneDigits = !email && typeof person?.phone === "string" && /^\\s*(\\+|00)/.test(person.phone) ? person.phone.replace(/^\\s*(\\+|00)/, "").replace(/\\D/g, "") : "";
   const brandId = person?.brandId;
-  if (!email) throw new Error("history-plan: the person carries no email to find their thread by");
+  if (!email && phoneDigits.length < 8) throw new Error("history-plan: the person carries neither an email nor a phone to find their thread by");
   if (!brandId) throw new Error("history-plan: the person carries no brand");
   if (!Array.isArray(recent?.people)) throw new Error("history-plan: the brand's people index answered no people list");
-  const self = { personId: null, timelineQuery: { brandId, personKey: "email:" + email }, sendsQuery: { brandId, email } };
+  const self = email
+    ? { personId: null, timelineQuery: { brandId, personKey: "email:" + email }, sendsQuery: { brandId, email } }
+    : { personId: null, timelineQuery: { brandId, personKey: "phone:+" + phoneDigits }, sendsQuery: { brandId, phone: "+" + phoneDigits } };
+  const isSelf = (p) => email
+    ? (p.emails ?? []).map((e) => String(e).toLowerCase()).includes(email)
+    : (p.phones ?? []).map((x) => String(x).replace(/\\D/g, "")).includes(phoneDigits);
   const samples = [];
   for (const p of recent.people) {
     if (samples.length >= ${VOICE_SAMPLE_PEOPLE}) break;
-    if (!p?.personId || (p.emails ?? []).map((e) => String(e).toLowerCase()).includes(email)) continue;
+    if (!p?.personId || isSelf(p)) continue;
     const wrote = (p.presences ?? []).filter((x) => x?.source === "matrix").reduce((n, x) => n + (Number(x.outboundCount) || 0), 0);
     if (wrote < ${VOICE_SAMPLE_MIN_OUTBOUND}) continue;
     const key = p.emails?.[0] ? { email: p.emails[0] } : p.phones?.[0] ? { phone: p.phones[0] } : null;
@@ -371,7 +405,9 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const lead = person.lead ?? {};
   const org = lead.organization ?? {};
   const personLines = [
-    ["Name", [lead.firstName, lead.lastName].filter(present).join(" ")],
+    ["Name", [lead.firstName ?? person.firstName, lead.lastName ?? person.lastName].filter(present).join(" ")],
+    // The first name the person gave us themselves (a number given with a name): greet them by it.
+    ["First name they gave us", present(lead.firstName) ? null : person.firstName],
     ["Title", lead.currentTitle],
     ["Company", org.name],
     ["Company website", org.websiteUrl ?? org.primaryDomain],
@@ -387,7 +423,7 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const text = typeof instruction === "string" ? instruction.trim() : "";
   const followup = person.kind === "followup";
   const talked = history.hasHistory === true;
-  const whyNow = whyNowLines(occurrence, triggerType, person.email, new Date().toISOString());
+  const whyNow = whyNowLines(occurrence, triggerType, person.email ?? null, new Date().toISOString());
 
   const systemPrompt = [
     "You are " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ". You write ONE WhatsApp message to one person, from the brand's own WhatsApp number, exactly as " + owner + " would type it himself.",
@@ -498,13 +534,13 @@ export async function main(draft, person, campaignId, reach, trigger) {
   if (text !== String(json.message ?? "").trim()) {
     console.error("[cold-whatsapp-outreach] the draft used a dash the person must never read; rewritten before the send");
   }
-  const who = person?.leadId ?? person?.email;
+  const who = person?.leadId ?? person?.email ?? person?.phone;
   if (!who) throw new Error("finalize-message: no person to key the send on");
   // The next look, checked BEFORE the send (an occurrence's one message has none).
   const next = person.kind === "occurrence" ? {} : nextDate(json, "finalize-message");
   let idempotencyKey;
   if (person.kind === "occurrence") {
-    idempotencyKey = sendKey("cold-whatsapp-outreach", { id: person.rowId, email: person.email, dueAt: person.dueAt }, trigger);
+    idempotencyKey = sendKey("cold-whatsapp-outreach", { id: person.rowId, email: person.email, phone: person.phone, dueAt: person.dueAt }, trigger);
   } else if (followup) {
     if (!person.rowId || !person.dueAt) throw new Error("finalize-message: a follow-up look carries no queue row or due date to key the send on");
     idempotencyKey = "cold-whatsapp-outreach:" + String(campaignId) + ":" + String(who) + ":followup:" + String(person.rowId) + ":" + String(person.dueAt);
@@ -514,6 +550,7 @@ export async function main(draft, person, campaignId, reach, trigger) {
   // A follow-up is never sent to someone who wrote to us since (reach-plan read it; crm-service guards the race).
   const skipIfReplied = followup && reach?.skipIfReplied === true;
   const phone = typeof person.phone === "string" && person.phone.trim() !== "" ? person.phone.trim() : null;
+  if (!phone && !person.email) throw new Error("finalize-message: the person carries neither an email nor a phone to send to");
   return {
     decision: "write",
     skipSend: false,
@@ -521,7 +558,8 @@ export async function main(draft, person, campaignId, reach, trigger) {
     idempotencyKey,
     skipIfReplied,
     ...next,
-    sendBody: { email: person.email, brandId: person.brandId, text, idempotencyKey, skipIfReplied, ...(phone ? { phone } : {}) },
+    // Never a null field (crm-service 400s it): a person known only by phone is sent to by phone.
+    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, text, idempotencyKey, skipIfReplied, ...(phone ? { phone } : {}) },
   };
 }
 
@@ -688,6 +726,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
           detail: "$ref:lead-detail.output",
           served: "$ref:serve-lead.output",
           occurrence: "$ref:occurrence.output",
+          trigger: "$ref:flow_input.trigger",
         },
       },
       // What this campaign already sent them, read BEFORE anything is paid for (and reused as the writer's history).
@@ -697,8 +736,8 @@ export function buildColdWhatsappOutreachDag(): DAG {
         config: { service: "crm", method: "GET", path: "/orgs/whatsapp/messages" },
         retries: 0,
         inputMapping: {
-          "query.brandId": "$ref:pick-person.output.brandId",
-          "query.email": "$ref:pick-person.output.email",
+          // By email, or by phone for a person known only by phone.
+          query: "$ref:pick-person.output.sendsQuery",
           skip: "$ref:pick-person.output.skipSends",
         },
       },
