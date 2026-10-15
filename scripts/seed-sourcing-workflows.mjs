@@ -19,12 +19,13 @@
  */
 import {
   SOURCING_CHANNEL_SLUGS,
-  SOURCING_DESCRIPTION,
   SOURCING_FORK_PLAYS,
-  buildSourcingDag,
+  buildSourcingDagFor,
+  sourcingDescriptionOf,
   sourcingPipeIdOf,
   sourcingTargetOf,
 } from "../dist/lib/sourcing-dag.js";
+import { FRESH_CONTACTS_FIELD, freshContactsDescription } from "../dist/lib/fresh-contacts.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -61,9 +62,10 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-const current = buildSourcingDag();
-
 for (const slug of SOURCING_CHANNEL_SLUGS) {
+  // A cold channel's current DAG states fresh contacts only (src/lib/fresh-contacts.ts).
+  const current = buildSourcingDagFor(slug);
+  const genericDescription = sourcingDescriptionOf(slug);
   const existing = await call("GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
   if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
   const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
@@ -71,7 +73,9 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
     for (const w of rows) {
       // A copy (reachableBy, catch-all) keeps the serve body it states and its own description.
       const { dag: target, stated } = sourcingTargetOf(w.dag, current);
-      const description = stated ? w.description : SOURCING_DESCRIPTION;
+      const targetServe = target.nodes.find((n) => n.id === "serve-lead");
+      const fresh = targetServe?.config?.body?.[FRESH_CONTACTS_FIELD] !== undefined;
+      const description = stated ? (fresh ? freshContactsDescription(w.description) : w.description) : genericDescription;
       if (canonical(w.dag) === canonical(target)) {
         console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
         continue;
@@ -102,7 +106,7 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
     }
     continue;
   }
-  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: SOURCING_DESCRIPTION, dag: current };
+  const body = { featureSlug: slug, pipeId: sourcingPipeIdOf(slug), description: genericDescription, dag: current };
   if (!APPLY) {
     console.log(`${slug}: WOULD create on pipe ${body.pipeId}`);
     continue;
