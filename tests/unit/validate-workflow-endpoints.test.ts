@@ -1255,6 +1255,53 @@ describe("field validation — literal body values against a closed set", () => 
     expect(result.fieldIssues).toHaveLength(0);
   });
 
+  it("a oneOf discriminated union permits every variant's value, never only the last one (PUSHED-TRUTH-1015)", () => {
+    // campaign-service /end-run `delivery`: the "delivered" variant was refused because the merge kept only "refused".
+    const SPEC: Record<string, unknown> = {
+      paths: {
+        "/end-run": {
+          post: {
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                      delivery: {
+                        oneOf: [
+                          { type: "object", properties: { state: { type: "string", enum: ["delivered"] } }, required: ["state"] },
+                          {
+                            type: "object",
+                            properties: { state: { type: "string", enum: ["refused"] }, code: { type: "string" }, reason: { type: "string" } },
+                            required: ["state", "code", "reason"],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const run = (state: string) =>
+      validateWorkflowEndpoints(
+        {
+          nodes: [{ id: "end-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, delivery: { state } } } }],
+          edges: [],
+        } as DAG,
+        new Map<string, Record<string, unknown>>([["campaign", SPEC]]),
+      );
+    expect(run("delivered").fieldIssues.filter((i) => i.severity === "error")).toEqual([]);
+    expect(run("refused").fieldIssues.filter((i) => i.severity === "error")).toEqual([]);
+    const bad = run("lost").fieldIssues.filter((i) => i.severity === "error");
+    expect(bad.map((i) => i.field)).toEqual(["delivery.state"]);
+    expect(bad[0].reason).toContain('"delivered", "refused"');
+  });
+
   it("checks a nested literal and each element of an array-of-enum", () => {
     const SPEC: Record<string, unknown> = {
       paths: {
