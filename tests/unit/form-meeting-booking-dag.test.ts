@@ -105,7 +105,8 @@ describe("form -> meeting booked DAG", () => {
   it("sends the email as a new thread keyed on the queue row, then records it, then WhatsApp", () => {
     const send = byId.get("send-email")!;
     expect(send.config).toMatchObject({ method: "POST", path: "/orgs/send", body: { type: "broadcast" } });
-    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out"]);
+    // "*": any code the sender names on a 409 is a refusal no retry changes (PUSHED-TRUTH-1015).
+    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out", "*"]);
     expect(send.inputMapping).toMatchObject({
       "body.to": "$ref:resolve-form.output.email",
       "body.idempotencyKey": "$ref:finalize-answer.output.idempotencyKey",
@@ -124,6 +125,11 @@ describe("form -> meeting booked DAG", () => {
     expect(dag.edges).toContainEqual({ from: "check-sent", to: "record-refused", condition: REFUSED });
     expect(descendants(dag, "record-refused")).toEqual(new Set(["end-run-refused"]));
     expect(byId.get("record-refused")?.config?.body).toEqual({ kind: "stopped", reason: FORM_EMAIL_REFUSED_REASON });
+    // The occurrence's truth on /end-run (PUSHED-TRUTH-1015): refused verbatim off the send, delivered once answered.
+    expect(byId.get("end-run-refused")?.inputMapping).toEqual({ "body.delivery": "$ref:send-email.output.delivery" });
+    expect(byId.get("end-run-refused")?.config?.body).toEqual({ success: true, stopCampaign: false });
+    expect(byId.get("end-run")?.config?.body).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
+    expect(byId.get("end-run-error")?.config?.body).toEqual({ success: false, stopCampaign: false });
     const answer = { "finalize-answer": { decision: "answer" } };
     expect(holds(SENT, { ...answer, "send-email": { success: true } })).toBe(true);
     expect(holds(REFUSED, { ...answer, "send-email": { success: true } })).toBe(false);

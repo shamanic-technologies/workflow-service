@@ -37,7 +37,9 @@
  *    claimed person keys on the queue row and its due date.
  *  - A send email-gateway REFUSES for this person (`lead_opted_out`, `recent_brand_contact`: they asked us to stop,
  *    or the brand is already talking with them) sends nothing on any channel and stops the row with that reason,
- *    named in the log, so the queue never hands them out again for this form.
+ *    named in the log, so the queue never hands them out again for this form. Any 409 the sender names a code on
+ *    is such a refusal (`email_not_verified` too) and the run tells campaign-service `delivery: {state: "refused",
+ *    code, reason}`; an answered form ends `delivery: {state: "delivered"}` (PUSHED-TRUTH-1015).
  *  - Strictly AFTER the email, the row is marked `stopped` (`form_answered`): nothing more is owed now, and it is
  *    not a tombstone, so the same person filling a form again next month is answered again.
  *  - Then, the same answer in a few words on WhatsApp from the brand's own linked number (crm-service owns the
@@ -51,7 +53,7 @@ import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { CRM_WHATSAPP_SEND, WHATSAPP_REFUSAL_CODES } from "./cold-whatsapp-outreach-dag.js";
-import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
+import { DELIVERED, OCCURRENCE_SEND_REFUSAL_CODES, refusedDelivery } from "./occurrence-delivery.js";
 
 export const FORM_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
 
@@ -267,10 +269,11 @@ export const GATHER_CLIENT_FACTS_CODE =
   "\n\nexport async function main(offerAnswers, offerFields, brandFields) {\n" +
   "  return gatherFacts(null, offerAnswers, offerFields, brandFields);\n}";
 
-const endRun = (id: string, body: Record<string, unknown>) => ({
+const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record<string, string>) => ({
   id,
   type: "http.call" as const,
   config: { service: "campaign", method: "POST", path: "/end-run", body },
+  ...(inputMapping ? { inputMapping } : {}),
 });
 
 const PERSON_BRAND = "$ref:resolve-form.output.brandId";
@@ -432,7 +435,7 @@ export function buildFormMeetingBookingDag(): DAG {
           body: { type: "broadcast", tag: "form-meeting-booking" },
           validateResponse: { field: "success", equals: true },
           // Read, not thrown: an opted-out person or one the brand already talks to is an outcome (check-sent).
-          skipOnRefusalCodes: [...REFUSAL_SKIP_CODES],
+          skipOnRefusalCodes: [...OCCURRENCE_SEND_REFUSAL_CODES],
         },
         retries: 0,
         inputMapping: {
@@ -498,9 +501,9 @@ export function buildFormMeetingBookingDag(): DAG {
         retries: 0,
         inputMapping: { "params.id": "$ref:resolve-form.output.rowId" },
       },
-      endRun("end-run", { success: true, stopCampaign: false }),
+      endRun("end-run", { success: true, stopCampaign: false, delivery: DELIVERED }),
       endRun("end-run-no-reply", { success: true, stopCampaign: false }),
-      endRun("end-run-refused", { success: true, stopCampaign: false }),
+      endRun("end-run-refused", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
       endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
