@@ -3,6 +3,7 @@ import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   AI_INSTANT_CALL_PIPE_ID,
+  AI_INSTANT_CALL_PIPE_IDS,
   BUILD_CALL_CODE,
   INSTANT_CALL_PLACED_REASON,
   NOBODY_DUE,
@@ -97,6 +98,13 @@ describe("AI Instant Call DAG (AIC-COMMON-1015)", () => {
 
   it("lives on the Positive reply -> Booking call pipe", () => {
     expect(AI_INSTANT_CALL_PIPE_ID).toBe("ai-instant-call|conversation_to_booking_call");
+  });
+
+  it("one workflow serves both AI Instant Call pipes: a positive reply and a form fill", () => {
+    expect(AI_INSTANT_CALL_PIPE_IDS).toEqual([
+      "ai-instant-call|conversation_to_booking_call",
+      "ai-instant-call|form_submitted_to_booking_call",
+    ]);
   });
 
   it("is a valid DAG that translates to Windmill with two top-level branchones", () => {

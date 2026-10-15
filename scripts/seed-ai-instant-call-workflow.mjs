@@ -7,7 +7,8 @@
  * "The workflow of this pipe" is the dynasty features-service has ACTIVELY assigned to this leg.
  *
  * Idempotent: creates when no dynasty is assigned to the pipe, upgrades the assigned one whose stored DAG is behind
- * the current one (in its own dynasty), skips a current one.
+ * the current one (in its own dynasty), skips a current one, then registers the dynasty on every AI Instant Call pipe
+ * (`AI_INSTANT_CALL_PIPE_IDS`: the positive-reply leg and the form leg; insert-if-absent, a no-op when present).
  * Usage, from inside the workflow-service container:
  *   node seed-ai-instant-call-workflow.mjs            # dry run
  *   node seed-ai-instant-call-workflow.mjs --apply
@@ -19,6 +20,7 @@ import {
   AI_INSTANT_CALL_FEATURE_SLUG,
   AI_INSTANT_CALL_LEG_KEY,
   AI_INSTANT_CALL_PIPE_ID,
+  AI_INSTANT_CALL_PIPE_IDS,
   buildAiInstantCallDag,
 } from "../dist/lib/ai-instant-call-dag.js";
 
@@ -70,6 +72,7 @@ const dynasties = [
 ];
 if (dynasties.length > 1) throw new Error(`${AI_INSTANT_CALL_PIPE_ID}: ${dynasties.length} active dynasties (${dynasties.join(", ")}); resolve by hand`);
 
+let dynastySlug = dynasties[0] ?? null;
 if (dynasties.length === 1) {
   const existing = await call(BASE_URL, API_KEY, "GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
   if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
@@ -84,7 +87,7 @@ if (dynasties.length === 1) {
   } else {
     const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current, description: AI_INSTANT_CALL_DESCRIPTION });
     if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
-    console.log(`${AI_INSTANT_CALL_PIPE_ID}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
+    console.log(`${AI_INSTANT_CALL_PIPE_ID}: upgraded ${w.workflowDynastySlug} -> ${(up.payload.workflow ?? up.payload).workflowSlug} (${up.status})`);
   }
 } else {
   const body = { featureSlug: slug, pipeId: AI_INSTANT_CALL_PIPE_ID, description: AI_INSTANT_CALL_DESCRIPTION, dag: current };
@@ -94,5 +97,21 @@ if (dynasties.length === 1) {
     const created = await call(BASE_URL, API_KEY, "POST", "/workflows", body);
     if (created.status !== 201) throw new Error(`create: ${created.status} ${JSON.stringify(created.payload)}`);
     console.log(`${AI_INSTANT_CALL_PIPE_ID}: created ${created.payload.workflowSlug} (dynasty ${created.payload.workflowDynastySlug})`);
+    dynastySlug = created.payload.workflowDynastySlug;
   }
+}
+
+for (const pipeId of AI_INSTANT_CALL_PIPE_IDS) {
+  if (!APPLY || !dynastySlug) {
+    console.log(`${slug}: WOULD register ${dynastySlug ?? "(new dynasty)"} on ${pipeId}`);
+    continue;
+  }
+  const reg = await call(FEATURES_URL, FEATURES_KEY, "POST", "/internal/workflow-leg-assignments/register", {
+    pipeId,
+    workflowDynastySlug: dynastySlug,
+    registeredBy: "workflow-service",
+    note: "seed-ai-instant-call-workflow: one workflow rings the rep on every AI Instant Call pipe",
+  });
+  if (reg.status !== 200 && reg.status !== 201) throw new Error(`register ${dynastySlug} on ${pipeId}: ${reg.status} ${JSON.stringify(reg.payload)}`);
+  console.log(`${slug}: ${dynastySlug} on ${pipeId} (${reg.status === 201 ? "registered" : "already there"})`);
 }
