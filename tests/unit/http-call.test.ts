@@ -532,7 +532,9 @@ describe("http-call script", () => {
         skipped: true,
         status: 409,
         code: "recent_brand_contact",
+        reason: "No email was sent and nothing was billed.",
         refusal: JSON.stringify(refusal),
+        delivery: { state: "refused", code: "recent_brand_contact", reason: "No email was sent and nothing was billed." },
       });
     });
 
@@ -565,6 +567,46 @@ describe("http-call script", () => {
     it("throws on the refusal when no codes are configured", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse(refusal, 409));
       await expect(callSend(undefined)).rejects.toThrow("failed (409)");
+    });
+
+    describe("\"*\": any code the sender names on a 409 (PUSHED-TRUTH-1015)", () => {
+      const ANY = [...CODES, "*"];
+      // Prod 2026-10-15, campaign 25036bda: thrown, then redelivered six times over ~4 h.
+      const notVerified = {
+        error: "Email not verified",
+        code: "email_not_verified",
+        verdict: "invalid",
+        details: "team@x.co.uk was not sent: our verifier's verdict is invalid (verdict_invalid)",
+      };
+
+      it("reads an unlisted 409 code as a refusal, with the sender's sentence and the end-run delivery", async () => {
+        mockFetch.mockResolvedValueOnce(jsonResponse(notVerified, 409));
+        const result = (await callSend(ANY)) as Record<string, unknown>;
+        expect(result).toMatchObject({ ok: false, skipped: true, status: 409, code: "email_not_verified" });
+        expect(result.delivery).toEqual({ state: "refused", code: "email_not_verified", reason: notVerified.details });
+      });
+
+      it("takes `error` as the sentence when the body has no `details` sentence", async () => {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ error: "Lead is not a prospect", code: "lead_not_a_prospect" }, 409));
+        const result = (await callSend(ANY)) as Record<string, unknown>;
+        expect(result.delivery).toEqual({ state: "refused", code: "lead_not_a_prospect", reason: "Lead is not a prospect" });
+      });
+
+      it("still throws on a 5xx, a 402, a 409 naming no code, and an unlisted code on another 4xx", async () => {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ error: "down", code: "email_verification_unavailable" }, 502));
+        await expect(callSend(ANY)).rejects.toThrow("failed (502)");
+        mockFetch.mockResolvedValueOnce(jsonResponse({ error: "No credits", code: "insufficient_credits" }, 402));
+        await expect(callSend(ANY)).rejects.toThrow("failed (402)");
+        mockFetch.mockResolvedValueOnce(jsonResponse({ error: "conflict" }, 409));
+        await expect(callSend(ANY)).rejects.toThrow("failed (409)");
+        mockFetch.mockResolvedValueOnce(jsonResponse({ error: "bad", code: "invalid_body" }, 400));
+        await expect(callSend(ANY)).rejects.toThrow("failed (400)");
+      });
+
+      it("still throws on a transport error", async () => {
+        mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+        await expect(callSend(ANY)).rejects.toThrow("ECONNREFUSED");
+      });
     });
   });
   describe("skip (WA-RESPONDER-1012)", () => {

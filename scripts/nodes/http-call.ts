@@ -50,6 +50,12 @@ export async function main(
   // send (see REFUSAL_SKIP_CODES in src/lib/dag-to-openflow.ts): the sender
   // refuses a lead it contacted for the brand inside the re-contact window, or
   // one who opted out, and that ends THAT lead, never the campaign's run.
+  // The entry "*" also matches ANY code on a 409 (the sender's refusal status):
+  // a send carrying a trigger occurrence reads every refusal the sender names as
+  // final, since a retry cannot change it. The returned object also states
+  // `reason` (the sender's human sentence, verbatim: its `details`, else `error`)
+  // and `delivery: { state: "refused", code, reason }`, the shape campaign-service's
+  // `/end-run` reads for the occurrence the run carried.
   skipOnRefusalCodes?: string[],
   // When true, the call is NOT made and { ok: false, skipped: true, notCalled: true }
   // is returned. Mapped from an upstream result (`$ref`), it lets a flow carry one
@@ -190,11 +196,23 @@ export async function main(
         response.status < 500
       ) {
         const code = readRefusalCode(err);
-        if (code !== null && skipOnRefusalCodes.includes(code)) {
+        const anyConflict = response.status === 409 && skipOnRefusalCodes.includes("*");
+        if (code !== null && (skipOnRefusalCodes.includes(code) || anyConflict)) {
           console.log(
             `${method} ${service}${path} refused (${response.status} ${code}) — skipped, flow continues: ${err}`
           );
-          return { final: { ok: false, skipped: true, status: response.status, code, refusal: err } };
+          const reason = readRefusalReason(err) ?? code;
+          return {
+            final: {
+              ok: false,
+              skipped: true,
+              status: response.status,
+              code,
+              reason,
+              refusal: err,
+              delivery: { state: "refused", code, reason },
+            },
+          };
         }
       }
       if (tolerateFailure) {
@@ -277,4 +295,28 @@ function readRefusalCode(text: string): string | null {
     return (details as Record<string, unknown>).code as string;
   }
   return null;
+}
+
+// The sender's human sentence on a refusal body, verbatim: `details` when it is a
+// sentence, else `error` (one level down too, when a hop nests the upstream body
+// under `details`). Null when the body names none.
+function readRefusalReason(text: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const sentence = (obj: unknown): string | null => {
+    if (!obj || typeof obj !== "object") return null;
+    const o = obj as Record<string, unknown>;
+    if (typeof o.details === "string" && o.details.trim() !== "") return o.details;
+    if (o.details && typeof o.details === "object") {
+      const nested = sentence(o.details);
+      if (nested !== null) return nested;
+    }
+    if (typeof o.error === "string" && o.error.trim() !== "") return o.error;
+    return null;
+  };
+  return sentence(parsed);
 }

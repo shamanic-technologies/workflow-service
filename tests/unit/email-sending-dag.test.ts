@@ -112,7 +112,7 @@ describe("email sending DAG", () => {
     expect(byId.get("resolve-email")?.inputMapping?.trigger).toBe("$ref:flow_input.trigger");
     const send = byId.get("send-email")!;
     expect(send.config).toMatchObject({ service: "email-gateway", method: "POST", path: "/orgs/send", body: { type: "broadcast" } });
-    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out"]);
+    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out", "*"]);
     expect(send.inputMapping).toMatchObject({
       "body.to": "$ref:resolve-email.output.email",
       "body.subject": "$ref:resolve-email.output.subject",
@@ -203,3 +203,46 @@ describe("resolving the pushed email", () => {
     await expect(main({ found: true, followup: {} }, trigger)).rejects.toThrow(/no id or email/);
   });
 });
+
+describe("the occurrence's truth on /end-run (PUSHED-TRUTH-1015)", () => {
+  type Transform = { type: string; value?: unknown; expr?: string };
+  type Module = { id: string; value: { input_transforms?: Record<string, Transform>; branches?: Array<{ modules: Module[] }>; modules?: Module[]; default?: Module[] } };
+  const all = (mods: Module[]): Module[] =>
+    mods.flatMap((m) => [m, ...all(m.value.modules ?? []), ...all(m.value.default ?? []), ...(m.value.branches ?? []).flatMap((b) => all(b.modules))]);
+  const flow = dagToOpenFlow(buildEmailSendingDag(), "email-sending-test") as unknown as { value: { modules: Module[]; failure_module?: Module } };
+  const modules = all([...flow.value.modules, ...(flow.value.failure_module ? [flow.value.failure_module] : [])]);
+  /** The `/end-run` body Windmill builds for a module, given the results the run holds. */
+  function endRunBody(id: string, results: Record<string, unknown>): Record<string, unknown> {
+    const m = modules.find((x) => x.id === id || x.id === id.replace(/-/g, "_"));
+    if (!m) throw new Error(`no module ${id}`);
+    const t = m.value.input_transforms!.body;
+    if (t.type === "static") return t.value as Record<string, unknown>;
+    return new Function("results", "flow_input", `return (${t.expr});`)(results, {}) as Record<string, unknown>;
+  }
+  // What http-call returns for a 409 the sender names a code on (scripts/nodes/http-call.ts).
+  const refusedSend = {
+    ok: false,
+    skipped: true,
+    status: 409,
+    code: "email_not_verified",
+    reason: "team@x.co.uk was not sent: our verifier's verdict is invalid (verdict_invalid)",
+    delivery: { state: "refused", code: "email_not_verified", reason: "team@x.co.uk was not sent: our verifier's verdict is invalid (verdict_invalid)" },
+  };
+
+  it("a sender refusal ends a NORMAL run telling campaign-service refused + the code and sentence, verbatim", () => {
+    const body = endRunBody("end-run-refused", { send_email: refusedSend, "send-email": refusedSend });
+    expect(body).toEqual({ success: true, stopCampaign: false, delivery: refusedSend.delivery });
+    expect(holds(REFUSED, { "resolve-email": { ok: true }, "send-email": refusedSend })).toBe(true);
+  });
+
+  it("a sent email ends with delivery delivered", () => {
+    expect(endRunBody("end-run", { send_email: { success: true } })).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
+  });
+
+  it("a failure (5xx, transport, 402: the send throws) ends on the error end-run, failed, with NO delivery (redelivered)", () => {
+    const body = endRunBody("end-run-error", {});
+    expect(body).toEqual({ success: false, stopCampaign: false });
+    expect(body).not.toHaveProperty("delivery");
+  });
+});
+

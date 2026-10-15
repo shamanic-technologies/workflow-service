@@ -27,13 +27,16 @@
  *    a positive reply fires `positive_reply_received` like any campaign reply. A body pushed as text only gets an
  *    HTML twin made by escaping it and turning line breaks into `<br>`; the text itself is sent as `bodyText`.
  *  - The send's idempotency key names the occurrence (`eventId`), so a re-run never sends the same push twice.
- *  - A send email-gateway REFUSES for this person (`lead_opted_out`, `recent_brand_contact`) sends nothing and
- *    stops the row (`pushed_email_refused`), named in the log.
+ *  - A send the sender REFUSES with a 409 naming a code (`lead_opted_out`, `recent_brand_contact`,
+ *    `email_not_verified`, any code it names) sends nothing, stops the row (`pushed_email_refused`) and ends the run
+ *    as a normal run telling campaign-service `delivery: {state: "refused", code, reason}` (verbatim): the occurrence
+ *    ends at once and the client reads why (PUSHED-TRUTH-1015, `occurrence-delivery.ts`). A 5xx, transport error or
+ *    402 still fails the run (redelivered, bounded). A sent email ends with `delivery: {state: "delivered"}`.
  *  - Strictly AFTER the send, the row is marked `stopped` (`pushed_email_sent`): not a tombstone, so the next email
  *    the client pushes to the same person is sent too.
  */
 import type { DAG } from "./dag-validator.js";
-import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
+import { DELIVERED, OCCURRENCE_SEND_REFUSAL_CODES, refusedDelivery } from "./occurrence-delivery.js";
 
 export const EMAIL_SENDING_FEATURE_SLUG = "email-sending";
 
@@ -108,10 +111,11 @@ export async function main(claim, trigger) {
 }
 `.trim();
 
-const endRun = (id: string, body: Record<string, unknown>) => ({
+const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record<string, string>) => ({
   id,
   type: "http.call" as const,
   config: { service: "campaign", method: "POST", path: "/end-run", body },
+  ...(inputMapping ? { inputMapping } : {}),
 });
 
 const stopRow = (id: string, reason: string) => ({
@@ -134,7 +138,7 @@ export const NOBODY_DUE = "results['claim-followup']?.found != true && results['
 export const UNCLAIMED = "results['claim-followup']?.found != true && results['plan-claim']?.skip != true";
 /** The email went out: the send returned without a refusal. */
 export const SENT = "results['resolve-email']?.ok == true && results['send-email'] != null && results['send-email']?.skipped != true";
-/** email-gateway refused the email for this person. */
+/** The sender refused the email for this person (any 409 naming a code). */
 export const REFUSED = "results['resolve-email']?.ok == true && results['send-email']?.skipped == true";
 
 export function buildEmailSendingDag(): DAG {
@@ -186,8 +190,8 @@ export function buildEmailSendingDag(): DAG {
           path: "/orgs/send",
           body: { type: "broadcast", tag: "email-sending" },
           validateResponse: { field: "success", equals: true },
-          // Read, not thrown: an opted-out person or one the brand already talks to is an outcome (check-sent).
-          skipOnRefusalCodes: [...REFUSAL_SKIP_CODES],
+          // Read, not thrown: ANY refusal the sender names on a 409 is an outcome no retry changes (check-sent).
+          skipOnRefusalCodes: [...OCCURRENCE_SEND_REFUSAL_CODES],
         },
         retries: 0,
         inputMapping: {
@@ -207,8 +211,8 @@ export function buildEmailSendingDag(): DAG {
       stopRow("record-sent", PUSHED_EMAIL_SENT_REASON),
       stopRow("record-refused", PUSHED_EMAIL_REFUSED_REASON),
       stopRow("record-missing", PUSHED_EMAIL_MISSING_REASON),
-      endRun("end-run", { success: true, stopCampaign: false }),
-      endRun("end-run-refused", { success: true, stopCampaign: false }),
+      endRun("end-run", { success: true, stopCampaign: false, delivery: DELIVERED }),
+      endRun("end-run-refused", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
       endRun("end-run-missing", { success: false, stopCampaign: false }),
       endRun("end-run-other-person", { success: false, stopCampaign: false }),
       endRun("end-run-unclaimed", { success: false, stopCampaign: false }),
