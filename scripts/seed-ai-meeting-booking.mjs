@@ -24,11 +24,10 @@
  *   node seed-ai-meeting-booking.mjs            # dry run
  *   node seed-ai-meeting-booking.mjs --apply
  *
- * Env: WORKFLOW_SERVICE_API_KEY (required), BASE_URL (default localhost:8080),
- *      ORG_ID (default below).
+ * Env: WORKFLOW_SERVICE_API_KEY, USER_ID, RUN_ID (a REAL staff user and run; all required),
+ *      BASE_URL (default localhost:8080), ORG_ID (default below).
  */
 
-import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -47,6 +46,9 @@ import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
 const APPLY = process.argv.includes("--apply");
+/** A REAL staff user and run (never a placeholder: a cached read downstream can replay the headers it saw). */
+const USER_ID = process.env.USER_ID;
+const RUN_ID = process.env.RUN_ID;
 
 /**
  * The workflow row carries an org, but `GET /workflows?featureSlug=` only
@@ -91,8 +93,8 @@ function headers() {
     "content-type": "application/json",
     "x-api-key": API_KEY,
     "x-org-id": ORG_ID,
-    "x-user-id": randomUUID(),
-    "x-run-id": randomUUID(),
+    "x-user-id": USER_ID,
+    "x-run-id": RUN_ID,
   };
 }
 
@@ -373,8 +375,8 @@ export function needsClientStatedFacts(dag) {
 }
 
 async function main() {
-  if (!API_KEY) {
-    console.error("WORKFLOW_SERVICE_API_KEY is required");
+  if (!API_KEY || !USER_ID || !RUN_ID) {
+    console.error("WORKFLOW_SERVICE_API_KEY, USER_ID and RUN_ID are required");
     process.exit(1);
   }
 
