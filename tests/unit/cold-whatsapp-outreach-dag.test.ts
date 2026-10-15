@@ -15,13 +15,16 @@ import {
   REACH_PLAN_CODE,
   RECORD_PLAN_CODE,
   PRIOR_CONTACT_CODE,
-  WHATSAPP_FOLLOW_UP_SENT_REASON,
+  WHATSAPP_FOLLOW_UP_STOPPED_REASON,
   WHATSAPP_OCCURRENCE_SENT_REASON,
   WHATSAPP_REFUSAL_CODES,
   buildColdWhatsappOutreachDag,
   coldWhatsappPipeIdOf,
 } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { OCCURRENCE_PLAN_CODE } from "../../src/lib/occurrence-fact.js";
+import { WHATSAPP_MEDIUM, nextDateStrategy, rightMomentStrategy } from "../../src/lib/right-moment.js";
+
+const inDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString();
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, unknown>> {
   const body = code.replace(/^export async function main/m, "async function main") + "\nreturn main;";
@@ -110,7 +113,7 @@ describe("cold-whatsapp-outreach DAG", () => {
     expect(byId.get("send-whatsapp")?.config).toMatchObject({ service: "crm", method: "POST", path: "/orgs/whatsapp/messages" });
     expect(byId.get("send-whatsapp")?.inputMapping).toEqual({
       body: "$ref:finalize-message.output.sendBody",
-      skip: "$ref:reach-plan.output.skip",
+      skip: "$ref:finalize-message.output.skipSend",
     });
   });
 
@@ -313,10 +316,25 @@ describe("composing the message", () => {
     expect(message).toContain("EVENT: signup (clerk)");
   });
 
-  it("a follow-up says it is the one and only", async () => {
+  it("a follow-up look plays the shared right-moment game: no fixed count, no fixed delay, stop only on their words", async () => {
     const out = await compose({ ...first, kind: "followup", step: 2 }, null, offer, brand, rep, facts, talked, "2026-10-12");
-    expect(out.systemPrompt as string).toContain("3 days ago, got no answer. This is the ONE follow-up");
+    const system = out.systemPrompt as string;
+    expect(system).toContain("THIS IS A FOLLOW-UP LOOK");
+    expect(system).toContain(rightMomentStrategy(WHATSAPP_MEDIUM));
+    expect(system).toContain(nextDateStrategy(WHATSAPP_MEDIUM));
+    expect(system).toContain("Never stop on silence");
+    expect(system).not.toContain("ONE follow-up");
+    expect(system).not.toContain("no other message after this one");
+    expect(system).not.toMatch(/[–—]/);
     expect(out.message as string).toContain("(none: follow the strategy)");
+    expect(out.message as string).toMatch(/\nNOW: \d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("a first message writes and states the first follow-up look's date", async () => {
+    const out = await compose(first, null, offer, brand, rep, facts, fresh, "2026-10-12");
+    expect(out.systemPrompt as string).toContain("Set decision to write: this message goes out now.");
+    expect(out.systemPrompt as string).toContain("That date is the first follow-up look");
+    expect(out.systemPrompt as string).not.toContain("THIS IS A FOLLOW-UP LOOK");
   });
 
   it("never writes without a brand name, an offer name, or the history", async () => {
@@ -328,23 +346,30 @@ describe("composing the message", () => {
 });
 
 describe("finalizing and recording", () => {
-  it("strips dashes and keys the send per person per step", async () => {
-    const out = await loadMain(FINALIZE_MESSAGE_CODE)({ json: { message: "Hi Ana — quick one, 3–5 people?" } }, { leadId: "l-1", step: 1 }, "c-1");
+  it("strips dashes, checks the next date before the send, and keys a first message per person", async () => {
+    const fin = loadMain(FINALIZE_MESSAGE_CODE);
+    const next = inDays(4);
+    const out = await fin({ json: { decision: "write", message: "Hi Ana — quick one, 3–5 people?", nextFollowUpAt: next, nextFollowUpWhy: "w" } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1");
     expect(out.text).toBe("Hi Ana, quick one, 3-5 people?");
     expect(out.idempotencyKey).toBe("cold-whatsapp-outreach:c-1:l-1:1");
     expect(out.skipIfReplied).toBe(false);
-    const again = await loadMain(FINALIZE_MESSAGE_CODE)({ json: { message: "Hi" } }, { kind: "followup", leadId: "l-1", step: 2 }, "c-1");
-    expect(again.skipIfReplied).toBe(true);
-    await expect(loadMain(FINALIZE_MESSAGE_CODE)({ json: { message: "  " } }, { leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/empty/);
+    expect(out.skipSend).toBe(false);
+    expect(out.nextFollowUpAt).toBe(next);
+    await expect(fin({ json: { decision: "write", message: "  ", nextFollowUpAt: inDays(4) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/empty/);
+    // No usable next date: thrown BEFORE the send, never a message whose next look cannot be recorded.
+    await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: "" } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/not a date/);
+    await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(-1) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/not in the future/);
+    await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(400) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/365/);
+    // Only a follow-up look may wait or stop.
+    await expect(fin({ json: { decision: "later", message: "", nextFollowUpAt: inDays(4) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/only a follow-up/);
   });
 
-  it("a sent first message schedules the one follow-up 3 days out; a refused one records nothing and is named", async () => {
+  it("a sent first message schedules the first follow-up look at the model's date; a refused one records nothing and is named", async () => {
     const plan = loadMain(RECORD_PLAN_CODE);
-    const sent = await plan({ kind: "first", email: "a@x.com" }, { ok: true }, "2026-10-12");
-    expect(sent.action).toBe("schedule");
-    const days = (Date.parse(sent.dueAt as string) - Date.now()) / 86400000;
-    expect(days).toBeGreaterThan(2.9);
-    expect(days).toBeLessThan(3.1);
+    const at = new Date(Date.parse(inDays(5))).toISOString();
+    const sent = await plan({ kind: "first", email: "a@x.com" }, { ok: true }, "2026-10-12", { skip: false }, { decision: "write", nextFollowUpAt: at });
+    expect(sent).toMatchObject({ action: "schedule", dueAt: at, email: "a@x.com" });
+    await expect(plan({ kind: "first", email: "a@x.com" }, { ok: true }, "x", { skip: false }, {})).rejects.toThrow(/no next follow-up date/);
     const refused = await plan({ kind: "first", email: "a@x.com" }, { ok: false, skipped: true, code: "whatsapp_not_linked" }, "2026-10-12");
     expect(refused).toEqual({
       action: "none",
@@ -373,12 +398,18 @@ describe("finalizing and recording", () => {
     });
   });
 
-  it("a follow-up is handed over for good, sent or refused, so there is never a second", async () => {
+  it("a refused follow-up about the PERSON is handed over; about the BRAND's WhatsApp it stays followed up", async () => {
     const plan = loadMain(RECORD_PLAN_CODE);
-    const sent = await plan({ kind: "followup", rowId: "r" }, { ok: true }, "x");
-    expect(sent).toMatchObject({ action: "record", body: { kind: "handed", reason: WHATSAPP_FOLLOW_UP_SENT_REASON } });
-    const replied = await plan({ kind: "followup", rowId: "r" }, { skipped: true, code: "person_replied" }, "x");
+    const at = new Date(Date.parse(inDays(3))).toISOString();
+    const final = { decision: "write", nextFollowUpAt: at };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const replied = await plan({ kind: "followup", rowId: "r" }, { skipped: true, code: "person_replied" }, "x", { skip: false }, final);
     expect(replied).toMatchObject({ action: "record", body: { kind: "handed", reason: "whatsapp_person_replied" } });
+    for (const code of ["whatsapp_not_linked", "whatsapp_not_connected"]) {
+      const down = await plan({ kind: "followup", rowId: "r" }, { skipped: true, code }, "x", { skip: false }, final);
+      expect(down).toMatchObject({ action: "record", outcome: "deferred", body: { kind: "scheduled", dueAt: at } });
+    }
+    spy.mockRestore();
   });
 });
 
@@ -428,15 +459,16 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
     expect((out.systemPrompt as string) + (out.message as string)).not.toMatch(/[–—]/);
 
     const fin = loadMain(FINALIZE_MESSAGE_CODE);
-    const sent = await fin({ json: { message: "Hi Kevin" } }, p, "c-1", { skip: false }, trigger);
+    const sent = await fin({ json: { decision: "write", message: "Hi Kevin", nextFollowUpAt: "" } }, p, "c-1", { skip: false }, trigger);
+    expect(sent).not.toHaveProperty("nextFollowUpAt");
     expect(sent.idempotencyKey).toBe("cold-whatsapp-outreach:event:ev-1");
     expect(sent.skipIfReplied).toBe(false);
     expect(sent.sendBody).toEqual({ email: "Kevin@distribute.you", brandId: "b-1", text: "Hi Kevin", idempotencyKey: "cold-whatsapp-outreach:event:ev-1", skipIfReplied: false, phone: "+33600000000" });
     // A redelivery re-files the person with a new due date: same occurrence, same key, nothing sent twice.
-    const again = await fin({ json: { message: "Hi Kevin again" } }, { ...p, dueAt: "2026-10-14T10:02:00Z" }, "c-1", { skip: false }, trigger);
+    const again = await fin({ json: { decision: "write", message: "Hi Kevin again" } }, { ...p, dueAt: "2026-10-14T10:02:00Z" }, "c-1", { skip: false }, trigger);
     expect(again.idempotencyKey).toBe(sent.idempotencyKey);
     // No phone named: the body carries none (crm-service refuses a null), crm-service reads the CRM's.
-    const noPhone = await fin({ json: { message: "Hi" } }, { ...p, phone: null }, "c-1", { skip: false }, trigger);
+    const noPhone = await fin({ json: { decision: "write", message: "Hi" } }, { ...p, phone: null }, "c-1", { skip: false }, trigger);
     expect(noPhone.sendBody).not.toHaveProperty("phone");
   });
 
@@ -471,16 +503,21 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
   it("decides before the model writes, from the occurrence's phone or the CRM person's", async () => {
     expect(descendants(dag, "reach-plan").has("draft-message")).toBe(true);
     expect(byId.get("draft-message")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
-    expect(byId.get("send-whatsapp")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
-    expect(byId.get("reach-plan")?.inputMapping).toEqual({ person: "$ref:pick-person.output", thread: "$ref:person-thread.output" });
+    expect(byId.get("send-whatsapp")?.inputMapping?.skip).toBe("$ref:finalize-message.output.skipSend");
+    expect(byId.get("reach-plan")?.inputMapping).toEqual({
+      person: "$ref:pick-person.output",
+      thread: "$ref:person-thread.output",
+      sends: "$ref:prior-sends.output",
+      campaignId: "$ref:flow_input.campaignId",
+    });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await reach({ email: "a@x.com" }, { person: { phones: [] } })).toMatchObject({ skip: true, code: "no_phone_known" });
     expect(spy.mock.calls[0]?.[0]).toContain("no_phone_known");
     spy.mockRestore();
-    expect(await reach({ email: "a@x.com", phone: "+33600000000" }, { person: { phones: [] } })).toEqual({ skip: false, code: null });
-    expect(await reach({ email: "a@x.com" }, { person: { phones: ["+33600000000"] } })).toEqual({ skip: false, code: null });
+    expect(await reach({ email: "a@x.com", phone: "+33600000000" }, { person: { phones: [] } })).toEqual({ skip: false, code: null, skipIfReplied: false });
+    expect(await reach({ email: "a@x.com" }, { person: { phones: ["+33600000000"] } })).toEqual({ skip: false, code: null, skipIfReplied: false });
     // A thread read stating no phone list decides nothing: crm-service answers.
-    expect(await reach({ email: "a@x.com" }, { person: {} })).toEqual({ skip: false, code: null });
+    expect(await reach({ email: "a@x.com" }, { person: {} })).toEqual({ skip: false, code: null, skipIfReplied: false });
   });
 
   it("records exactly what crm-service's own refusal would: a first message releases the person, an occurrence stops the row", async () => {
@@ -595,5 +632,127 @@ describe("a reactive (or unknown) unit never buys a stranger", () => {
     expect(holds(due.condition!, { "claim-followup": { found: true } })).toBe(true);
     const out = await pick({ found: true, followup: { id: "r", email: "a@x.com" } }, { leadDetail: { lead: {} } }, undefined, await plan(undefined, null, true));
     expect(out).toMatchObject({ kind: "followup" });
+  });
+});
+
+// WA-FOLLOWUP-LOOP-1015 (owner 2026-10-15): « une campagne qui output non seulement un message à envoyer mais une date
+// de followup. Puis sur trigger de ce followup, check la conv et décide s'il écrit ou s'arrête car déjà répondu. Si pas
+// répondu, alors écrit et choisit une autre date de followup. Ainsi de suite jusqu'à l'infini. »
+describe("a WhatsApp conversation is followed up until the person answers, like email", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const pick = loadMain(PICK_PERSON_CODE);
+  const reach = loadMain(REACH_PLAN_CODE);
+  const fin = loadMain(FINALIZE_MESSAGE_CODE);
+  const record = loadMain(RECORD_PLAN_CODE);
+  const noOccurrence = { answering: false, serveNewLead: true };
+  const detail = { leadDetail: { lead: { firstName: "Ana" } } };
+  const campaignId = "c-1";
+  const firstSentAt = "2026-10-10T09:00:00.000Z";
+  const sends = { sends: [{ sendId: "s-1", campaignId, status: "sent", sentAt: firstSentAt, text: "Hey Ana" }] };
+  const ourFirst = { kind: "message", direction: "outbound", source: "matrix", channel: "whatsapp", at: firstSentAt, text: "Hey Ana" };
+  const quietThread = { person: { phones: ["+33600000000"] }, items: [ourFirst] };
+
+  /** One look: claim a due row, read, decide, send (or not), record. Returns what lead-service is told. */
+  async function look(dueAt: string, thread: unknown, draftJson: Record<string, unknown> | null) {
+    const claim = { found: true, followup: { id: "row-1", leadId: "l-1", email: "ana@x.com", brandId: "b-1", dueAt } };
+    const person = await pick(claim, detail, undefined, noOccurrence);
+    const r = await reach(person, thread, sends, campaignId);
+    // draft-message is skipped when reach-plan says so (http.call answers notCalled).
+    const draft = r.skip === true ? { ok: false, skipped: true, notCalled: true } : { json: draftJson };
+    const final = await fin(draft, person, campaignId, r, undefined);
+    const send = final.skipSend === true ? { ok: false, skipped: true, notCalled: true } : { ok: true, status: "sent" };
+    const rec = await record(person, send, "2026-10-15", r, final);
+    return { person, reach: r, final, send, record: rec };
+  }
+
+  it("a follow-up look carries its due date from the queue claim", async () => {
+    const p = await pick({ found: true, followup: { id: "row-1", leadId: "l-1", email: "ana@x.com", brandId: "b-1", dueAt: "2026-10-13T09:00:00Z" } }, detail, undefined, noOccurrence);
+    expect(p).toMatchObject({ kind: "followup", rowId: "row-1", dueAt: "2026-10-13T09:00:00Z" });
+  });
+
+  it("write: sends in the same WhatsApp conversation, outputs the next date, and re-arms the row (acted, due again)", async () => {
+    const next = inDays(4);
+    const out = await look("2026-10-13T09:00:00.000Z", quietThread, { decision: "write", message: "Still curious, Ana?", reason: "r", nextFollowUpAt: next, nextFollowUpWhy: "w" });
+    expect(out.final).toMatchObject({ decision: "write", skipSend: false, skipIfReplied: true });
+    expect(out.final.sendBody).toMatchObject({ email: "ana@x.com", brandId: "b-1", text: "Still curious, Ana?", skipIfReplied: true });
+    expect(out.record).toEqual({
+      action: "record",
+      outcome: "sent",
+      body: { kind: "acted", nextDueAt: new Date(Date.parse(next)).toISOString() },
+      delivery: { state: "delivered" },
+    });
+    const toRecord = dag.edges.find((e) => e.from === "check-record" && e.to === "record-followup")!;
+    expect(holds(toRecord.condition!, { "record-plan": out.record })).toBe(true);
+    expect(dag.nodes.find((n) => n.id === "record-followup")?.inputMapping).toEqual({ "params.id": "$ref:pick-person.output.rowId", body: "$ref:record-plan.output.body" });
+  });
+
+  it("a second and a third look follow, each its own send (keyed on the row AND its due date), with no count anywhere", async () => {
+    const msg = (m: string, days: number) => ({ decision: "write", message: m, reason: "r", nextFollowUpAt: inDays(days), nextFollowUpWhy: "w" });
+    const second = await look("2026-10-13T09:00:00.000Z", quietThread, msg("Second", 6));
+    const later = { ...quietThread, items: [...quietThread.items, { ...ourFirst, at: "2026-10-13T09:01:00.000Z", text: "Second" }] };
+    const third = await look(second.record.body.nextDueAt as string, later, msg("Third", 14));
+    const fourth = await look(third.record.body.nextDueAt as string, later, msg("Fourth", 40));
+    for (const l of [second, third, fourth]) expect(l.record).toMatchObject({ action: "record", outcome: "sent", body: { kind: "acted" } });
+    const keys = [second, third, fourth].map((l) => l.final.idempotencyKey);
+    expect(new Set(keys).size).toBe(3);
+    expect(keys[0]).toBe("cold-whatsapp-outreach:c-1:l-1:followup:row-1:2026-10-13T09:00:00.000Z");
+    // A retried look (same row, same due date) is the same key: crm-service sends nothing twice.
+    const retried = await look("2026-10-13T09:00:00.000Z", quietThread, msg("Second, redrafted", 6));
+    expect(retried.final.idempotencyKey).toBe(keys[0]);
+    // No fixed cadence, no fixed count in the DAG.
+    const text = JSON.stringify(dag);
+    expect(text).not.toMatch(/FOLLOW_UP_AFTER_DAYS|ONE follow-up|no other message after this one|whatsapp_follow_up_sent/);
+  });
+
+  it("later: nothing is sent and the row is due again at the model's date", async () => {
+    const at = inDays(2);
+    const out = await look("2026-10-13T09:00:00.000Z", quietThread, { decision: "later", message: "", reason: "we wrote yesterday", nextFollowUpAt: at, nextFollowUpWhy: "w" });
+    expect(out.final).toMatchObject({ decision: "later", skipSend: true, sendBody: null });
+    expect(out.send.notCalled).toBe(true);
+    expect(out.record).toEqual({ action: "record", outcome: "later", body: { kind: "scheduled", dueAt: new Date(Date.parse(at)).toISOString() } });
+    await expect(look("2026-10-13T09:00:00.000Z", quietThread, { decision: "later", message: "", nextFollowUpAt: "soon" })).rejects.toThrow(/not a date/);
+  });
+
+  it("stop (their own words): nothing is sent and the row is stopped", async () => {
+    const out = await look("2026-10-13T09:00:00.000Z", quietThread, { decision: "stop", message: "", reason: "asked us to stop", nextFollowUpAt: "", nextFollowUpWhy: "" });
+    expect(out.final).toMatchObject({ decision: "stop", skipSend: true });
+    expect(out.record).toEqual({ action: "record", outcome: "stopped", body: { kind: "stopped", reason: WHATSAPP_FOLLOW_UP_STOPPED_REASON } });
+  });
+
+  it("they answered since the campaign first wrote, on ANY channel: no automated message for that look, nothing drafted, row handed", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const answer of [
+      { kind: "message", direction: "inbound", source: "matrix", channel: "whatsapp", at: "2026-10-11T08:00:00.000Z", text: "Hey!" },
+      { kind: "message", direction: "inbound", source: "gmail", channel: "email", at: "2026-10-11T08:00:00.000Z", text: "Saw your WhatsApp" },
+      { kind: "message", direction: "inbound", source: "instantly", channel: "email", at: "2026-10-12T08:00:00.000Z", text: "Re: hi" },
+    ]) {
+      const out = await look("2026-10-13T09:00:00.000Z", { ...quietThread, items: [ourFirst, answer] }, null);
+      expect(out.reach).toMatchObject({ skip: true, code: "person_replied" });
+      expect(out.final).toMatchObject({ skipSend: true, sendBody: null });
+      expect(out.send.notCalled).toBe(true);
+      expect(out.record).toMatchObject({ action: "record", body: { kind: "handed", reason: "whatsapp_person_replied" } });
+    }
+    // The model is never called: draft-message is skipped on reach-plan's verdict.
+    expect(dag.nodes.find((n) => n.id === "draft-message")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
+    // Product use (Copilot, API) is no answer.
+    const copilot = await reach(await pick({ found: true, followup: { id: "r", email: "ana@x.com", brandId: "b-1", dueAt: "d" } }, detail, undefined, noOccurrence),
+      { ...quietThread, items: [ourFirst, { kind: "message", direction: "inbound", source: "copilot", at: "2026-10-11T08:00:00.000Z", text: "how much?" }] }, sends, campaignId);
+    expect(copilot.skip).toBe(false);
+    log.mockRestore();
+    err.mockRestore();
+  });
+
+  it("someone who talked with us BEFORE the campaign wrote is still followed up; crm-service's ever-replied guard is then not asked", async () => {
+    const before = { kind: "message", direction: "inbound", source: "matrix", channel: "whatsapp", at: "2026-09-01T08:00:00.000Z", text: "old chat" };
+    const out = await look("2026-10-13T09:00:00.000Z", { ...quietThread, items: [before, ourFirst] }, { decision: "write", message: "Hi again", reason: "r", nextFollowUpAt: inDays(3), nextFollowUpWhy: "w" });
+    expect(out.reach).toMatchObject({ skip: false, skipIfReplied: false });
+    expect(out.final.sendBody).toMatchObject({ skipIfReplied: false });
+    expect(out.record).toMatchObject({ outcome: "sent", body: { kind: "acted" } });
+  });
+
+  it("the model's answer carries a decision and the next date, the shared right-moment contract", () => {
+    expect(MESSAGE_RESPONSE_SCHEMA.properties.decision.enum).toEqual(["write", "later", "stop"]);
+    expect(MESSAGE_RESPONSE_SCHEMA.required).toEqual(expect.arrayContaining(["decision", "nextFollowUpAt", "nextFollowUpWhy"]));
   });
 });
