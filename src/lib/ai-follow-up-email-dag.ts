@@ -53,6 +53,7 @@ import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-da
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import { DELIVERED, refusedDelivery } from "./occurrence-delivery.js";
 import {
   FOLLOW_UP_SEND_REFUSAL_CODES,
   NEXT_DATE_FN,
@@ -265,10 +266,11 @@ export const GATHER_CLIENT_FACTS_CODE =
   "\n\nexport async function main(offerAnswers, offerFields, brandFields) {\n" +
   "  return gatherFacts(null, offerAnswers, offerFields, brandFields);\n}";
 
-const endRun = (id: string, body: Record<string, unknown>) => ({
+const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record<string, string>) => ({
   id,
   type: "http.call" as const,
   config: { service: "campaign", method: "POST", path: "/end-run", body },
+  ...(inputMapping ? { inputMapping } : {}),
 });
 
 /** The claimed row, due again at the model's date with nothing sent (`scheduled`: not an action, the count stays). */
@@ -519,10 +521,13 @@ export function buildAiFollowUpEmailDag(): DAG {
         retries: 0,
         inputMapping: { "params.id": "$ref:claim-followup.output.followup.id" },
       },
-      endRun("end-run", { success: true, stopCampaign: false }),
+      // The occurrence's truth (PUSHED-TRUTH-1015): sent = delivered; any refusal the send skipped (passing or final)
+      // = refused + the sender's code and sentence, so campaign-service never records a refused email as delivered.
+      endRun("end-run", { success: true, stopCampaign: false, delivery: DELIVERED }),
+      endRun("end-run-deferred", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
       endRun("end-run-later", { success: true, stopCampaign: false }),
       endRun("end-run-stopped", { success: true, stopCampaign: false }),
-      endRun("end-run-refused", { success: true, stopCampaign: false }),
+      endRun("end-run-refused", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
       endRun("end-run-unwritable", { success: false, stopCampaign: false }),
       // Nobody due is NOTHING TO DO, never a failure: campaign-service's scheduler runs every funnel unit on its
       // cadence with no trigger, and a failure here would back the unit off and skip its next real occurrence.
@@ -566,7 +571,7 @@ export function buildAiFollowUpEmailDag(): DAG {
       { from: "check-sent", to: "record-deferred", condition: DEFERRED },
       { from: "check-sent", to: "record-refused", condition: REFUSED },
       { from: "record-sent", to: "end-run" },
-      { from: "record-deferred", to: "end-run" },
+      { from: "record-deferred", to: "end-run-deferred" },
       { from: "record-refused", to: "end-run-refused" },
       { from: "release-unwritable", to: "end-run-unwritable" },
     ],

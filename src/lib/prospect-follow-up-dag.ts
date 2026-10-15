@@ -39,6 +39,7 @@
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS } from "./ai-meeting-booking-dag.js";
 import { GATHER_CLIENT_FACTS_CODE } from "./ai-follow-up-email-dag.js";
+import { deliveryOf, refusedDelivery, sendDeliveryNode } from "./occurrence-delivery.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import {
   FOLLOW_UP_SEND_REFUSAL_CODES,
@@ -402,10 +403,11 @@ export async function main() {
 }
 `.trim();
 
-const endRun = (id: string, body: Record<string, unknown>): DAGNode => ({
+const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record<string, string>): DAGNode => ({
   id,
   type: "http.call",
   config: { service: "campaign", method: "POST", path: "/end-run", body },
+  ...(inputMapping ? { inputMapping } : {}),
 });
 
 const stopRow = (id: string, reason: string): DAGNode => ({
@@ -643,12 +645,15 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
         "body.requestedByCampaignId": "$ref:flow_input.campaignId",
       },
     },
-    endRun("end-run", { success: true, stopCampaign: false }),
+    // The occurrence's truth (PUSHED-TRUTH-1015): `end-run` closes both a sent email and a passing refusal (next date
+    // still recorded), so its delivery is read off the send (`send-delivery`); a final refusal states it verbatim.
+    sendDeliveryNode("send-delivery", "send-email"),
+    endRun("end-run", { success: true, stopCampaign: false }, deliveryOf("send-delivery")),
     endRun("end-run-later", { success: true, stopCampaign: false }),
     endRun("end-run-not-owed", { success: true, stopCampaign: false }),
     endRun("end-run-not-yet", { success: true, stopCampaign: false }),
     endRun("end-run-stopped", { success: true, stopCampaign: false }),
-    endRun("end-run-opted-out", { success: true, stopCampaign: false }),
+    endRun("end-run-opted-out", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
   ];
   const edges: DAG["edges"] = [
     { from: "resolve-person", to: "prospect-verdict" },
@@ -721,7 +726,8 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       { from: "record-later", to: "end-run-later" },
       { from: "schedule-next", to: "send-outcome" },
       { from: "send-outcome", to: "record-sent" },
-      { from: "record-sent", to: "end-run" },
+      { from: "record-sent", to: "send-delivery" },
+      { from: "send-delivery", to: "end-run" },
       { from: "check-sent", to: "record-opted-out", condition: OPTED_OUT },
       { from: "record-opted-out", to: "end-run-opted-out" },
     );
@@ -732,7 +738,8 @@ function writerTail(opts: { anchor: string; reactive: boolean }): { nodes: DAGNo
       { from: "check-owed", to: "end-run-not-owed", condition: NOT_OWED },
       { from: "check-decision", to: "end-run-stopped", condition: STOP },
       { from: "schedule-later", to: "end-run-later" },
-      { from: "schedule-next", to: "end-run" },
+      { from: "schedule-next", to: "send-delivery" },
+      { from: "send-delivery", to: "end-run" },
       { from: "check-sent", to: "end-run-opted-out", condition: OPTED_OUT },
     );
   }
