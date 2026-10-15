@@ -95,7 +95,9 @@ export const DESCRIPTION =
   "relevant offer document to the email reply when one helps: a case study, a one-pager the client uploaded on " +
   "the offer. Jev picks one document or none from each document's name and description and the prospect's message; " +
   "the reply mentions the attached file in one short sentence. With no document on the offer, or none relevant, " +
-  "it replies exactly like the AI meeting booking responder.";
+  "it replies exactly like the AI meeting booking responder. Answers leads only: every follow-up claim asks " +
+  "lead-service for pure prospects of the brand (relationships pure_prospect), so a personal contact, a customer, " +
+  "team member, investor, partner, supplier or advisor of the brand is refused by lead-service and never answered.";
 
 export const PLAN_DOCUMENT_CODE = `
 export async function main(documents, thread, conversation, prompt) {

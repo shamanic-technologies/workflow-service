@@ -22,6 +22,15 @@
  *    chosen per lead, because a prospect who writes "recontact me in January"
  *    must be honoured; lead-service stores it rather than deriving it.
  *
+ * IT ANSWERS LEADS ONLY (REPLY-ANY-LEAD-1015). Every claim it makes states
+ * `relationships: "pure_prospect"` to lead-service, which refuses anyone who is
+ * not a pure prospect of the brand (a personal contact, a customer, team,
+ * investor, partner, supplier or advisor): a refused person is never answered.
+ * When the person the run's trigger occurrence names is refused, the run ends on
+ * `end-run-person-not-admitted` stating lead-service's reason verbatim; a person
+ * whose relationship is still pending ends the run idle so the occurrence comes
+ * back later. Judging the relationship is lead-service's alone.
+ *
  * ONE MORE THING IT DOES NOT OWN, and it is the reason this workflow answered
  * nobody for its first two weeks: WHICH CAMPAIGN holds the person. An offer is
  * sold over several LEGS and campaign-service mints one campaign per leg, so the prospect
@@ -215,21 +224,73 @@ export async function main(claimOwn, startRun, predecessorRead) {
 `.trim();
 
 /**
+ * WHO this pipe answers (REPLY-ANY-LEAD-1015, owner 2026-10-15): only the people lead-service holds as PURE
+ * PROSPECTS of the brand. Never the owner's personal contacts, the brand's customers, team, investors, partners,
+ * suppliers or advisors, even when they write to the brand on a mirrored channel (WhatsApp) and that message is
+ * reported as a positive reply. Every follow-up claim of this flow states it on lead-service's claim
+ * (`relationships`), and lead-service is the only judge: this flow never re-judges a relationship, it reads the
+ * verdict the claim returns (`relationships.refused` = final, the row is stopped there; `relationships.pending` =
+ * still owed once the relationship is known). The same value the sourcing serve states for its own policy.
+ */
+export const ANSWERS_LEADS_ONLY_POLICY = "pure_prospect";
+
+/** The reason lead-service names when it refuses a person who is not a lead of the brand. */
+export const NOT_A_LEAD_REASON = "not_a_lead";
+
+/**
  * The person this run answers, whichever queue held them, and the campaign
  * whose row it is (lead-service hops name it). A predecessor claim names the
  * campaign that held the person itself (`followup.campaignId`): with several
  * predecessors it is whichever one had them. A predecessor claim that was not
  * called reads as nobody.
+ *
+ * It also reads what the claims said about the person the run's trigger
+ * OCCURRENCE names (`trigger.person.email`, or `trigger.leadId`), on nobody
+ * claimed: refused by lead-service (not a lead of the brand) = `notAdmitted`
+ * `{reason}` verbatim, which the run states on `/end-run` as
+ * `personNotAdmitted` (final for this occurrence, never redelivered); pending
+ * (their relationship is not known yet) = nothing here, the run ends idle
+ * (`noWorkAvailable`) and campaign-service redelivers the occurrence later. A
+ * run with no trigger (the cadence) reads neither.
  */
 export const CLAIMED_CODE = `
-export async function main(claimOwn, claimPredecessor, campaignId, predecessorCampaignId) {
+export async function main(claimOwn, claimPredecessor, campaignId, predecessorCampaignId, trigger) {
+  const triggerEmail = typeof trigger?.person?.email === "string" ? trigger.person.email.trim().toLowerCase() : null;
+  const triggerLeadId = typeof trigger?.leadId === "string" && trigger.leadId ? trigger.leadId : null;
+  const isTriggerPerson = (entry) =>
+    (triggerEmail !== null && typeof entry?.email === "string" && entry.email.trim().toLowerCase() === triggerEmail) ||
+    (triggerLeadId !== null && entry?.leadId === triggerLeadId);
+  const verdicts = (kind) => [claimOwn, claimPredecessor]
+    .flatMap((c) => (Array.isArray(c?.relationships?.[kind]) ? c.relationships[kind] : []));
+  const refused = verdicts("refused");
+  const pending = verdicts("pending");
+  for (const r of refused) {
+    console.log("[ai-meeting-booking] not answered, lead-service refuses them (" + String(r?.reason) + "): " +
+      String(r?.email) + " tags=" + JSON.stringify(r?.tags ?? []) + " unsure=" + JSON.stringify(r?.unsureTags ?? []));
+  }
+  for (const p of pending) {
+    console.log("[ai-meeting-booking] not answered yet, relationship pending (" + String(p?.reason) + "): " +
+      String(p?.email) + ", retry in " + String(p?.retryAfterSeconds) + "s");
+  }
+
   const pick = claimOwn?.found === true
     ? { claim: claimOwn, heldCampaignId: campaignId, queue: "own" }
     : claimPredecessor?.found === true
       ? { claim: claimPredecessor, heldCampaignId: claimPredecessor.followup?.campaignId ?? predecessorCampaignId, queue: "predecessor" }
       : null;
   if (!pick) {
-    return { found: false, reason: claimPredecessor?.reason ?? claimOwn?.reason ?? null, followup: null, heldCampaignId: null, queue: null, personKey: null };
+    const refusedTriggerPerson = refused.find(isTriggerPerson);
+    const notAdmitted = refusedTriggerPerson ? { reason: String(refusedTriggerPerson.reason ?? "${NOT_A_LEAD_REASON}") } : null;
+    return {
+      found: false,
+      reason: claimPredecessor?.reason ?? claimOwn?.reason ?? null,
+      followup: null,
+      heldCampaignId: null,
+      queue: null,
+      personKey: null,
+      notAdmitted,
+      triggerPersonPending: pending.some(isTriggerPerson),
+    };
   }
   const followup = pick.claim.followup;
   if (!followup?.id || !followup?.email) {
@@ -241,6 +302,8 @@ export async function main(claimOwn, claimPredecessor, campaignId, predecessorCa
     heldCampaignId: pick.heldCampaignId,
     queue: pick.queue,
     personKey: "email:" + String(followup.email).trim().toLowerCase(),
+    notAdmitted: null,
+    triggerPersonPending: false,
   };
 }
 `.trim();
@@ -1805,6 +1868,21 @@ export function needsEveryPredecessorClaim(dag: { nodes?: Array<{ id?: string; i
 }
 
 /**
+ * True when a stored DAG claims a person without stating the leads-only policy on EVERY lead-service follow-up
+ * claim (REPLY-ANY-LEAD-1015): crm-service reports every human inbound message as a positive reply, so such a DAG
+ * would answer the owner's personal contacts and the brand's customers. Current = each claim states
+ * `relationships: "pure_prospect"` and a refused occurrence person ends on `end-run-person-not-admitted`.
+ */
+export function needsLeadsOnlyClaim(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const claims = nodes.filter((n) => n?.id === "claim-own" || n?.id === "claim-followup");
+  if (claims.length === 0) return false;
+  const states = (n: { config?: Record<string, unknown> }) =>
+    (n.config?.body as Record<string, unknown> | undefined)?.relationships === ANSWERS_LEADS_ONLY_POLICY;
+  return !claims.every(states) || !nodes.some((n) => n?.id === "end-run-person-not-admitted");
+}
+
+/**
  * True when a stored DAG keys its WhatsApp reply or rep alert on the claimed row and its due date only
  * (REDELIVERY-IDEMPOTENCY-1014): a redelivered occurrence re-dues the row, so the key changed and a run that
  * sent then failed would write the person twice. Current = both nodes read `flow_input.trigger`.
@@ -1906,6 +1984,10 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       // campaign's OWN queue: a trigger that names a person (a WhatsApp answer
       // reported by crm-service, any channel later) files them on THIS campaign
       // and makes them due here, and the ladder after answering them lives here.
+      // WHO: only the people lead-service holds as pure prospects of the brand
+      // (`ANSWERS_LEADS_ONLY_POLICY`). A personal contact, a customer, team,
+      // investor, partner, supplier or advisor is refused by lead-service and
+      // never answered.
       {
         id: "claim-own",
         type: "http.call",
@@ -1913,6 +1995,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           service: "lead",
           method: "POST",
           path: "/orgs/campaigns/{campaignId}/followups/claim-next",
+          body: { relationships: ANSWERS_LEADS_ONLY_POLICY },
         },
         retries: 0,
         inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
@@ -1939,6 +2022,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           service: "lead",
           method: "POST",
           path: "/orgs/campaigns/{campaignId}/followups/claim-next",
+          // Same policy as `claim-own`: pure prospects of the brand only.
+          body: { relationships: ANSWERS_LEADS_ONLY_POLICY },
         },
         retries: 0,
         inputMapping: {
@@ -1957,6 +2042,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           claimPredecessor: "$ref:claim-followup.output",
           campaignId: "$ref:flow_input.campaignId",
           predecessorCampaignId: PREDECESSOR_CAMPAIGN_REF,
+          trigger: "$ref:flow_input.trigger",
         },
       },
       { id: "check-claim", type: "condition" },
@@ -2528,6 +2614,22 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           body: { success: true, stopCampaign: false, noWorkAvailable: true },
         },
       },
+      // The person this run's occurrence names is NOT a lead of the brand
+      // (lead-service refused them: a personal contact, a customer, team...).
+      // Nothing is sent, ever: campaign-service records the occurrence as
+      // skipped `person_not_admitted` with lead-service's reason verbatim and
+      // does not redeliver it. A successful run, not a failure.
+      {
+        id: "end-run-person-not-admitted",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+        inputMapping: { "body.personNotAdmitted": "$ref:claimed.output.notAdmitted" },
+      },
       // This campaign has no preceding leg, so there is nobody it CAN answer and
       // no thread it could answer into. A failure, not an idle tick: it will not
       // resolve itself by waiting, and calling it idle is what hid it before.
@@ -2579,7 +2681,20 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       // claim never ran, so both arms must read false rather than throw.
       { from: "predecessor-campaign", to: "check-claim" },
       { from: "check-claim", to: "campaign-detail", condition: "results['claimed']?.found == true" },
-      { from: "check-claim", to: "end-run-nobody-due", condition: "results['claimed']?.found == false" },
+      // Nobody claimed and the occurrence's own person was refused by
+      // lead-service (not a lead): the run says so. Nobody claimed otherwise
+      // (nobody due, or their relationship still pending) ends idle, and an
+      // occurrence is then redelivered later.
+      {
+        from: "check-claim",
+        to: "end-run-person-not-admitted",
+        condition: "results['claimed']?.found == false && results['claimed']?.notAdmitted != null",
+      },
+      {
+        from: "check-claim",
+        to: "end-run-nobody-due",
+        condition: "results['claimed']?.found == false && results['claimed']?.notAdmitted == null",
+      },
       { from: "campaign-detail", to: "offer-economics" },
       { from: "offer-economics", to: "brand-profile" },
       { from: "brand-profile", to: "lead-detail" },
