@@ -24,7 +24,8 @@
  *  - Only a run CARRYING an occurrence that names a person claims anyone (campaign-service also dispatches reactive
  *    units on a schedule with no trigger: idle). A run that claims nobody ends idle (`noWorkAvailable`), rings
  *    nobody: this is also what every positive reply does until instantly-service pushes the occurrence.
- *  - The occurrence is used ONLY when it names the claimed person (email, case-folded). Claimed someone else: their
+ *  - The occurrence is used ONLY when it names the claimed person (email, case-folded; a person known only by phone,
+ *    a WhatsApp writer, by phone). Claimed someone else: their
  *    row is left alone, nobody rung, the run fails so this occurrence is redelivered.
  *  - A brand with no sales rep phone wants no call: the row is stopped (`no_sales_rep_phone`), the run ends cleanly.
  *  - The number to bridge to: the phone the occurrence carries (a form always does: the person gave it), else, for an
@@ -84,8 +85,10 @@ export const NO_SALES_REP_PHONE_REASON = "no_sales_rep_phone";
 /** Whether this run carries an occurrence naming someone: a run that does not claims nobody. Pure. */
 export const PLAN_CLAIM_CODE = `
 export async function main(trigger) {
-  const email = trigger && typeof trigger === "object" ? trigger.person?.email : null;
-  const carries = typeof email === "string" && email.trim() !== "";
+  const person = trigger && typeof trigger === "object" ? trigger.person : null;
+  const said = (v) => typeof v === "string" && v.trim() !== "";
+  // A person known only by phone (a WhatsApp writer, REPLY-PHONE-ONLY-1015) is named too.
+  const carries = said(person?.email) || said(person?.phone);
   if (!carries) console.log("[ai-instant-call] this run carries no occurrence naming a person: nobody is claimed");
   return { skip: !carries };
 }
@@ -99,13 +102,25 @@ export async function main(trigger) {
 export const RESOLVE_CALL_CODE = `
 export async function main(claim, trigger, leadDetail, rep, brand) {
   const f = claim?.followup ?? {};
-  if (!f.id || !f.email) throw new Error("resolve-call: a claimed row carries no id or email");
-  const fold = (s) => typeof s === "string" ? s.trim().toLowerCase() : null;
+  const fold = (s) => typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null;
+  // A phone in international form reduced to its digits, else null.
+  const digits = (s) => {
+    if (typeof s !== "string" || !/^\\s*(\\+|00)/.test(s)) return null;
+    const d = s.replace(/^\\s*(\\+|00)/, "").replace(/\\D/g, "");
+    return d.length >= 8 ? d : null;
+  };
+  // The person: by email, else (known only by phone, a WhatsApp writer, REPLY-PHONE-ONLY-1015) by phone.
+  const claimedEmail = fold(f.email);
+  const claimedPhone = claimedEmail === null ? digits(f.phone) : null;
+  if (!f.id || (claimedEmail === null && claimedPhone === null)) throw new Error("resolve-call: a claimed row carries no id, email or phone");
   const said = (v) => typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
   const t = trigger && typeof trigger === "object" ? trigger : null;
-  if (!t || fold(t.person?.email) === null || fold(t.person?.email) !== fold(f.email)) {
-    console.error("[ai-instant-call] nobody rung about " + String(f.email) + ": this run's occurrence names " + String(t?.person?.email ?? "nobody"));
-    return { ok: false, rowId: f.id, email: f.email };
+  const named = !!t && (claimedEmail !== null
+    ? fold(t.person?.email) === claimedEmail
+    : digits(t.person?.phone) === claimedPhone);
+  if (!named) {
+    console.error("[ai-instant-call] nobody rung about " + String(f.email ?? f.phone) + ": this run's occurrence names " + String(t?.person?.email ?? t?.person?.phone ?? "nobody"));
+    return { ok: false, rowId: f.id, email: f.email ?? null };
   }
   const item = t.item && typeof t.item === "object" ? t.item : {};
 
@@ -113,7 +128,7 @@ export async function main(claim, trigger, leadDetail, rep, brand) {
   if (leadDetail?.ok === false) console.error("[ai-instant-call] the lead read failed for " + String(f.email) + ": rung about who the occurrence names");
   const lead = d?.lead ?? {};
   const org = lead.organization ?? {};
-  const name = said(lead.name) ?? (said(lead.firstName) || said(lead.lastName) ? [said(lead.firstName), said(lead.lastName)].filter(Boolean).join(" ") : undefined) ?? said(t.person?.name) ?? f.email;
+  const name = said(lead.name) ?? (said(lead.firstName) || said(lead.lastName) ? [said(lead.firstName), said(lead.lastName)].filter(Boolean).join(" ") : undefined) ?? said(t.person?.name) ?? f.email ?? f.phone;
   const reply = { name };
   const put = (k, v) => { const x = said(v); if (x) reply[k] = x; };
   put("company", org.name ?? d?.company?.name);
@@ -141,8 +156,11 @@ export async function main(claim, trigger, leadDetail, rep, brand) {
       answers: answers.length ? answers : [{ question: "Answers", answer: "none beyond their contact details" }],
     };
   } else {
-    reply.message = said(item.replyText) ?? ${JSON.stringify(REPLY_TEXT_UNAVAILABLE)};
-    if (!said(item.replyText)) console.error("[ai-instant-call] the occurrence carries no reply text for " + String(f.email) + ": the call says it is unavailable");
+    // An email reply carries \`replyText\`; a chat reply (crm-service, WhatsApp) the person's own \`messages\`, oldest first.
+    const chatText = (Array.isArray(item.messages) ? item.messages : []).map((m) => said(m?.text)).filter(Boolean).join("\\n");
+    const replyText = said(item.replyText) ?? said(chatText);
+    reply.message = replyText ?? ${JSON.stringify(REPLY_TEXT_UNAVAILABLE)};
+    if (!replyText) console.error("[ai-instant-call] the occurrence carries no reply text for " + String(f.email) + ": the call says it is unavailable");
     priorMessages = (Array.isArray(item.priorMessages) ? item.priorMessages : [])
       .filter((m) => (m?.direction === "outbound" || m?.direction === "inbound") && said(m?.text))
       .slice(0, ${MAX_PRIOR_MESSAGES})

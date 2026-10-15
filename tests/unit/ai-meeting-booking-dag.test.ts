@@ -31,6 +31,7 @@ import {
   CHAT_STEP_MAX_TOKENS,
   PLAN_CLAIM_CODE,
   CLAIMED_CODE,
+  needsPhoneOnlyPerson,
   THREAD_CODE,
   FINALIZE_REPLY_CODE,
   CRM_WHATSAPP_SEND,
@@ -216,6 +217,7 @@ describe("ai-meeting-booking DAG", () => {
     expect(byId.get("conversation")?.inputMapping).toEqual({
       "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
       "query.email": "$ref:claimed.output.followup.email",
+      skip: "$ref:claimed.output.skipEmailThread",
     });
     expect(byId.get("prior-generation")?.config).toMatchObject({
       service: "content-generation",
@@ -1969,7 +1971,7 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     expect(await claimed({ found: false, reason: "nothing_due" }, notCalled, "resp-1", "pred-1")).toMatchObject({
       found: false, reason: "nothing_due", followup: null,
     });
-    await expect(claimed({ found: true, followup: { id: "row-1" } }, notCalled, "r", "p")).rejects.toThrow("without a row id or an email");
+    await expect(claimed({ found: true, followup: { id: "row-1" } }, notCalled, "r", "p")).rejects.toThrow("without a row id, an email or a phone");
   });
 
   it("reads the person's chats from crm-service beside the email thread", () => {
@@ -2045,10 +2047,7 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     const send = byId.get("send-whatsapp-reply");
     expect(send?.config).toEqual({ ...CRM_WHATSAPP_SEND });
     expect(send?.inputMapping).toEqual({
-      "body.email": "$ref:claimed.output.followup.email",
-      "body.brandId": "$ref:claimed.output.followup.brandId",
-      "body.text": "$ref:finalize-reply.output.whatsappText",
-      "body.idempotencyKey": "$ref:finalize-reply.output.whatsappIdempotencyKey",
+      body: "$ref:finalize-reply.output.whatsappBody",
       skip: "$ref:thread.output.skipWhatsapp",
     });
     // Both sends sit before the outcome is read, and the record comes after.
@@ -2103,6 +2102,79 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     for (const id of ["finalize-reply", "compose-rep-alert"]) {
       expect(dag.nodes.find((n) => n.id === id)?.inputMapping?.trigger).toBe("$ref:flow_input.trigger");
     }
+  });
+
+  it("an email person's WhatsApp reply body is what it always was: email, brand, text, key", async () => {
+    const out = await loadMain(FINALIZE_REPLY_CODE)(
+      { json: { replyHtml: "<p>Hi</p>" } },
+      { id: "row-1", brandId: "b1", email: "ada@example.com", phone: "+447700900123", dueAt: "2026-10-12T16:00:00.000Z" },
+    );
+    expect(out.whatsappBody).toEqual({
+      email: "ada@example.com",
+      brandId: "b1",
+      text: "Hi",
+      idempotencyKey: "ai-meeting-booking:row-1:2026-10-12T16:00:00.000Z:whatsapp",
+    });
+  });
+
+  describe("a person known ONLY by phone (a WhatsApp writer) is answered like an email one (REPLY-PHONE-ONLY-1015)", () => {
+    const row = { id: "row-9", leadId: "l9", brandId: "b1", campaignId: "resp-1", email: null, phone: "+447700900123", dueAt: "2026-10-15T09:00:00.000Z" };
+    const trigger = { eventId: "evt-9", triggerId: "positive_reply_received", leadId: "l9", person: { email: null, phone: "+44 7700 900123", name: "Sam" } };
+
+    it("claims them, keys their person on the phone, and skips the email thread read", async () => {
+      const out = await loadMain(CLAIMED_CODE)({ found: true, followup: row }, notCalled, "resp-1", "pred-1", trigger);
+      expect(out).toMatchObject({ found: true, queue: "own", personKey: "phone:+447700900123", skipEmailThread: true });
+      const email = await loadMain(CLAIMED_CODE)({ found: true, followup: { ...row, email: "Ada@Example.com" } }, notCalled, "resp-1", "pred-1");
+      expect(email).toMatchObject({ personKey: "email:ada@example.com", skipEmailThread: false });
+      expect(byId.get("conversation")?.inputMapping?.skip).toBe("$ref:claimed.output.skipEmailThread");
+    });
+
+    it("reads their WhatsApp chat as the whole conversation when the email thread was not asked", async () => {
+      const l = log();
+      const out = await loadMain(THREAD_CODE)(notCalled, timeline([wa("inbound", "hi, is this still available?", "2026-10-15T08:59:00.000Z")]));
+      l.mockRestore();
+      expect(out).toMatchObject({ replyChannel: "whatsapp", skipEmail: true, skipWhatsapp: false });
+    });
+
+    it("sends the reply on WhatsApp to their phone, keyed on the occurrence, never a null email", async () => {
+      const out = await loadMain(FINALIZE_REPLY_CODE)({ json: { replyHtml: "<p>Yes it is.</p>" } }, row, trigger);
+      expect(out.whatsappBody).toEqual({
+        phone: "+447700900123",
+        brandId: "b1",
+        text: "Yes it is.",
+        idempotencyKey: "ai-meeting-booking:event:evt-9:whatsapp",
+      });
+      expect("email" in (out.whatsappBody as Record<string, unknown>)).toBe(false);
+      // Another phone on the occurrence = someone else: the row and its due date key the send.
+      const other = await loadMain(FINALIZE_REPLY_CODE)({ json: { replyHtml: "<p>x</p>" } }, row, { ...trigger, person: { phone: "+33612345678" } });
+      expect(other.whatsappIdempotencyKey).toBe("ai-meeting-booking:row-9:2026-10-15T09:00:00.000Z:whatsapp");
+    });
+
+    it("refused by the leads-only claim (not_a_lead): ends person-not-admitted, nothing sent", async () => {
+      const refused = {
+        found: false,
+        reason: "nothing_due",
+        relationships: { policy: "pure_prospect", refused: [{ leadId: "other", email: null, phone: "+447700900123", reason: "not_a_lead", tags: ["personal"] }], pending: [] },
+      };
+      const l = log();
+      const out = await loadMain(CLAIMED_CODE)(refused, notCalled, "resp-1", "pred-1", { ...trigger, leadId: null });
+      l.mockRestore();
+      expect(out).toMatchObject({ found: false, notAdmitted: { reason: "not_a_lead" } });
+      // An email person refused with the same phone is NOT the phone-only writer this occurrence names.
+      const l2 = log();
+      const emailRefused = { ...refused, relationships: { ...refused.relationships, refused: [{ ...refused.relationships.refused[0], email: "x@y.com" }] } };
+      expect((await loadMain(CLAIMED_CODE)(emailRefused, notCalled, "resp-1", "pred-1", { ...trigger, leadId: null })).notAdmitted).toBeNull();
+      l2.mockRestore();
+    });
+
+    it("a stored DAG that answers by email only is upgraded", () => {
+      expect(needsPhoneOnlyPerson(buildAiMeetingBookingDag(DAG_OPTS))).toBe(false);
+      const stale = buildAiMeetingBookingDag(DAG_OPTS);
+      const send = stale.nodes.find((n) => n.id === "send-whatsapp-reply")!;
+      send.inputMapping = { "body.email": "$ref:claimed.output.followup.email", skip: "$ref:thread.output.skipWhatsapp" };
+      expect(needsPhoneOnlyPerson(stale)).toBe(true);
+      expect(needsPhoneOnlyPerson({ nodes: [{ id: "resolve-form" }] })).toBe(false);
+    });
   });
 
   it("tells the model to write a chat message when the reply goes out on WhatsApp, and keeps the email rules otherwise", async () => {

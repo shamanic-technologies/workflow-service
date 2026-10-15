@@ -245,7 +245,8 @@ export const NOT_A_LEAD_REASON = "not_a_lead";
  * called reads as nobody.
  *
  * It also reads what the claims said about the person the run's trigger
- * OCCURRENCE names (`trigger.person.email`, or `trigger.leadId`), on nobody
+ * OCCURRENCE names (`trigger.person.email`; a person known only by phone, a
+ * WhatsApp writer, by `trigger.person.phone`; or `trigger.leadId`), on nobody
  * claimed: refused by lead-service (not a lead of the brand) = `notAdmitted`
  * `{reason}` verbatim, which the run states on `/end-run` as
  * `personNotAdmitted` (final for this occurrence, never redelivered); pending
@@ -255,10 +256,20 @@ export const NOT_A_LEAD_REASON = "not_a_lead";
  */
 export const CLAIMED_CODE = `
 export async function main(claimOwn, claimPredecessor, campaignId, predecessorCampaignId, trigger) {
-  const triggerEmail = typeof trigger?.person?.email === "string" ? trigger.person.email.trim().toLowerCase() : null;
+  // A phone in international form, as crm-service keys it: "+" and its digits (8 to 15), else null.
+  const phoneOf = (s) => {
+    if (typeof s !== "string" || !/^\\s*(\\+|00)/.test(s)) return null;
+    const d = s.replace(/^\\s*(\\+|00)/, "").replace(/\\D/g, "");
+    return d.length >= 8 && d.length <= 15 ? "+" + d : null;
+  };
+  const emailOf = (s) => (typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null);
+  const triggerEmail = emailOf(trigger?.person?.email);
+  const triggerPhone = phoneOf(trigger?.person?.phone);
   const triggerLeadId = typeof trigger?.leadId === "string" && trigger.leadId ? trigger.leadId : null;
+  // A person known by email is matched on it; a person known ONLY by phone (a WhatsApp writer) on the phone.
   const isTriggerPerson = (entry) =>
-    (triggerEmail !== null && typeof entry?.email === "string" && entry.email.trim().toLowerCase() === triggerEmail) ||
+    (triggerEmail !== null && emailOf(entry?.email) === triggerEmail) ||
+    (triggerPhone !== null && emailOf(entry?.email) === null && phoneOf(entry?.phone) === triggerPhone) ||
     (triggerLeadId !== null && entry?.leadId === triggerLeadId);
   const verdicts = (kind) => [claimOwn, claimPredecessor]
     .flatMap((c) => (Array.isArray(c?.relationships?.[kind]) ? c.relationships[kind] : []));
@@ -266,11 +277,11 @@ export async function main(claimOwn, claimPredecessor, campaignId, predecessorCa
   const pending = verdicts("pending");
   for (const r of refused) {
     console.log("[ai-meeting-booking] not answered, lead-service refuses them (" + String(r?.reason) + "): " +
-      String(r?.email) + " tags=" + JSON.stringify(r?.tags ?? []) + " unsure=" + JSON.stringify(r?.unsureTags ?? []));
+      String(r?.email ?? r?.phone) + " tags=" + JSON.stringify(r?.tags ?? []) + " unsure=" + JSON.stringify(r?.unsureTags ?? []));
   }
   for (const p of pending) {
     console.log("[ai-meeting-booking] not answered yet, relationship pending (" + String(p?.reason) + "): " +
-      String(p?.email) + ", retry in " + String(p?.retryAfterSeconds) + "s");
+      String(p?.email ?? p?.phone) + ", retry in " + String(p?.retryAfterSeconds) + "s");
   }
 
   const pick = claimOwn?.found === true
@@ -288,20 +299,26 @@ export async function main(claimOwn, claimPredecessor, campaignId, predecessorCa
       heldCampaignId: null,
       queue: null,
       personKey: null,
+      skipEmailThread: true,
       notAdmitted,
       triggerPersonPending: pending.some(isTriggerPerson),
     };
   }
   const followup = pick.claim.followup;
-  if (!followup?.id || !followup?.email) {
-    throw new Error("[ai-meeting-booking] lead-service claimed someone without a row id or an email: " + JSON.stringify(followup));
+  const email = emailOf(followup?.email);
+  const phone = email === null ? phoneOf(followup?.phone) : null;
+  if (!followup?.id || (email === null && phone === null)) {
+    throw new Error("[ai-meeting-booking] lead-service claimed someone without a row id, an email or a phone: " + JSON.stringify(followup));
   }
   return {
     found: true,
     followup,
     heldCampaignId: pick.heldCampaignId,
     queue: pick.queue,
-    personKey: "email:" + String(followup.email).trim().toLowerCase(),
+    // crm-service names a person by any identity key: their email, else (a WhatsApp writer) their phone.
+    personKey: email !== null ? "email:" + email : "phone:" + phone,
+    // No email = no email thread to read (instantly-service keys it on the address).
+    skipEmailThread: email === null,
     notAdmitted: null,
     triggerPersonPending: false,
   };
@@ -324,6 +341,8 @@ export const THREAD_CODE = `
 export async function main(conversation, timeline) {
   const CHANNELS = REPLY_CHANNELS_LIST;
   const failedRead = (read, what) => {
+    // Not asked (a person known only by phone has no email thread to read): no messages there.
+    if (read?.notCalled === true) return true;
     if (read?.ok === false && read?.status !== 404) {
       throw new Error("[ai-meeting-booking] could not read " + what + " (" + String(read?.status) + "): " + String(read?.error ?? "").slice(0, 300));
     }
@@ -400,9 +419,20 @@ export async function main(draft, followup, trigger) {
     .replace(/\\n{3,}/g, "\\n\\n")
     .trim();
   if (!followup?.id) throw new Error("[ai-meeting-booking] finalize-reply: no claimed row");
+  const whatsappIdempotencyKey = sendKey("ai-meeting-booking", followup, trigger) + ":whatsapp";
+  // Who crm-service writes to: the person by email, else (known only by phone, a WhatsApp writer) by phone.
+  // Never both, never a null field (crm-service refuses a null email).
+  const email = typeof followup.email === "string" && followup.email.trim() !== "" ? followup.email : null;
+  const phone = typeof followup.phone === "string" && followup.phone.trim() !== "" ? followup.phone.trim() : null;
   return {
     whatsappText: text,
-    whatsappIdempotencyKey: sendKey("ai-meeting-booking", followup, trigger) + ":whatsapp",
+    whatsappIdempotencyKey,
+    whatsappBody: {
+      ...(email !== null ? { email } : phone !== null ? { phone } : {}),
+      brandId: followup.brandId,
+      text,
+      idempotencyKey: whatsappIdempotencyKey,
+    },
   };
 }
 
@@ -426,8 +456,10 @@ export async function main(draft, followup, thread, brand, trigger) {
     console.error("[ai-meeting-booking] escalated " + String(followup?.email) + " but the brand states no sales rep phone: nobody was alerted on WhatsApp (they stay in Needs your call)");
     return { skip: true, reason: "no_sales_rep_phone" };
   }
-  const who = (thread?.person?.name ?? followup?.email ?? "Someone") +
-    (thread?.person?.phone ? " (" + thread.person.phone + ")" : followup?.email ? " (" + followup.email + ")" : "");
+  // A person known only by phone (a WhatsApp writer): their phone names them when the timeline shows none.
+  const theirPhone = thread?.person?.phone ?? (followup?.email ? null : followup?.phone ?? null);
+  const who = (thread?.person?.name ?? followup?.email ?? theirPhone ?? "Someone") +
+    (theirPhone ? " (" + theirPhone + ")" : followup?.email ? " (" + followup.email + ")" : "");
   const asked = String(draft?.json?.question ?? "").trim();
   const text = [
     "Needs your call: " + who + " wrote on " + thread.replyChannel + " and I could not answer.",
@@ -1888,6 +1920,22 @@ export function needsLeadsOnlyClaim(dag: { nodes?: Array<{ id?: string; config?:
 }
 
 /**
+ * True when a stored DAG can only answer a person known by EMAIL (REPLY-PHONE-ONLY-1015): most WhatsApp writers have
+ * no email, only a phone, and lead-service claims them with `followup.email: null`. Such a DAG read their email
+ * thread with `email=null`, sent the WhatsApp reply with a null email (crm-service 400s) and keyed their person on
+ * `email:null`. Current = the email thread read is skipped for them (`claimed.skipEmailThread`) and the WhatsApp
+ * reply takes its whole body from `finalize-reply` (the person by email, else by phone).
+ */
+export function needsPhoneOnlyPerson(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, string> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const send = nodes.find((n) => n?.id === "send-whatsapp-reply");
+  const conversation = nodes.find((n) => n?.id === "conversation");
+  if (!send || !conversation) return false;
+  return send.inputMapping?.body !== "$ref:finalize-reply.output.whatsappBody" ||
+    conversation.inputMapping?.skip !== "$ref:claimed.output.skipEmailThread";
+}
+
+/**
  * True when a stored DAG keys its WhatsApp reply or rep alert on the claimed row and its due date only
  * (REDELIVERY-IDEMPOTENCY-1014): a redelivered occurrence re-dues the row, so the key changed and a run that
  * sent then failed would write the person twice. Current = both nodes read `flow_input.trigger`.
@@ -2109,6 +2157,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         inputMapping: {
           "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
           "query.email": "$ref:claimed.output.followup.email",
+          // A person known only by phone has no email thread: not asked (`thread` reads it as none).
+          skip: "$ref:claimed.output.skipEmailThread",
         },
       },
       // ... and every chat channel of the person's merged timeline (WhatsApp
@@ -2479,11 +2529,10 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
         type: "http.call",
         config: { ...CRM_WHATSAPP_SEND },
         retries: 0,
+        // The whole body from `finalize-reply`: the person by email, or by phone when that is all we know of them
+        // (REPLY-PHONE-ONLY-1015), never a null field.
         inputMapping: {
-          "body.email": "$ref:claimed.output.followup.email",
-          "body.brandId": "$ref:claimed.output.followup.brandId",
-          "body.text": "$ref:finalize-reply.output.whatsappText",
-          "body.idempotencyKey": "$ref:finalize-reply.output.whatsappIdempotencyKey",
+          body: "$ref:finalize-reply.output.whatsappBody",
           skip: "$ref:thread.output.skipWhatsapp",
         },
       },

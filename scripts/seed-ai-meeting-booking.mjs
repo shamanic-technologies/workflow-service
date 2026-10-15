@@ -41,6 +41,7 @@ import {
   needsLeadsOnlyClaim,
   needsOccurrenceDelivery,
   needsOccurrenceSendKey,
+  needsPhoneOnlyPerson,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 
@@ -424,7 +425,8 @@ async function main() {
         needsOccurrenceDelivery(w.dag) ||
         needsCallRequest(w.dag) ||
         needsPersonRelationship(w.dag) ||
-        needsLeadsOnlyClaim(w.dag))
+        needsLeadsOnlyClaim(w.dag) ||
+        needsPhoneOnlyPerson(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
