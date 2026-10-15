@@ -254,6 +254,34 @@ describe("resolve-call", () => {
   });
 });
 
+describe("a person known ONLY by phone (a WhatsApp writer, REPLY-PHONE-ONLY-1015)", () => {
+  const resolve = loadMain(RESOLVE_CALL_CODE);
+  const phoneClaim = { found: true, followup: { id: "row-2", leadId: "lead-2", email: null, phone: "+447700900123", brandId: "brand-1" } };
+  const waTrigger = {
+    eventId: "ev-wa",
+    triggerId: "positive_reply_received",
+    leadId: "lead-2",
+    person: { email: null, phone: "+44 7700 900123", name: "Sam" },
+    item: { kind: "reply", channel: "whatsapp", messages: [{ at: "2026-10-15T09:00:00.000Z", text: "Hi" }, { at: "2026-10-15T09:00:05.000Z", text: "is it still on?" }] },
+  };
+
+  it("is claimed (the occurrence names them by phone) and rung about, bridged to their phone, with their WhatsApp words", async () => {
+    expect(await loadMain(PLAN_CLAIM_CODE)(waTrigger)).toEqual({ skip: false });
+    const r = await resolve(phoneClaim, waTrigger, { ok: false, status: 404 }, rep, brand);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(r.ok).toBe(true);
+    expect(r.reply).toEqual({ name: "Sam", message: "Hi\nis it still on?" });
+    expect(r.knownPhone).toBe("+44 7700 900123");
+    expect(holds(RING, { "resolve-call": r })).toBe(true);
+  });
+
+  it("an occurrence naming another phone leaves their row alone", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await resolve(phoneClaim, { ...waTrigger, person: { phone: "+33612345678" } }, leadDetail, rep, brand);
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe("build-call", () => {
   const resolve = loadMain(RESOLVE_CALL_CODE);
   const build = loadMain(BUILD_CALL_CODE);
