@@ -74,7 +74,12 @@ if (rows.length === 1) {
   } else if (!APPLY) {
     console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
   } else {
-    const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: w.workflowDynastySlug, dag: current });
+    const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", {
+      workflowDynastySlug: w.workflowDynastySlug,
+      dag: current,
+      // The judged description must say what the DAG does (WA-FOLLOWUP-LOOP-1015: follow-ups until they answer).
+      description: COLD_WHATSAPP_OUTREACH_DESCRIPTION,
+    });
     if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
     console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
   }
