@@ -63,6 +63,12 @@ export async function main(
   // and crm-service files any WhatsApp send carrying a campaign id as that
   // campaign's thread. Removed after every other header is set.
   omitHeaders?: string[],
+  // A BOUNDED wait on an outcome the callee delivers later (Apollo's phone reveal answers `pending` and the number
+  // arrives minutes after): while the 2xx answer's `field` (dotted allowed) equals `equals`, the same request is made
+  // again every `intervalSeconds`, at most until `timeoutSeconds` (capped at 300) have passed. The LAST answer is
+  // returned either way, with `pollTimedOut: true` when the wait ran out, so the node downstream decides what a
+  // still-pending outcome means. Never throws for the wait itself; a failed request behaves as without it.
+  pollWhile?: { field: string; equals: unknown; intervalSeconds?: number; timeoutSeconds?: number },
 ) {
   if (skip === true) {
     console.log(`[http-call] ${method} ${service} ${path} not called: skip is true for this run`);
@@ -149,70 +155,98 @@ export async function main(
     options.body = JSON.stringify(body);
   }
 
-  let response: Response;
-  try {
-    response = await fetch(url, options);
-  } catch (err) {
-    // Transport failure (DNS, refused, timeout) — the request never got an
-    // answer. Under tolerateFailure that is the same outcome as a 5xx from the
-    // caller's point of view, so report it in the same shape.
-    if (tolerateFailure) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(
-        `${method} ${service}${path} did not complete: ${message} — tolerated, flow continues`
-      );
-      return { ok: false, status: 0, error: message };
-    }
-    throw err;
-  }
-
-  if (!response.ok) {
-    const err = await response.text();
-    if (
-      skipOnRefusalCodes &&
-      skipOnRefusalCodes.length > 0 &&
-      response.status >= 400 &&
-      response.status < 500
-    ) {
-      const code = readRefusalCode(err);
-      if (code !== null && skipOnRefusalCodes.includes(code)) {
-        console.log(
-          `${method} ${service}${path} refused (${response.status} ${code}) — skipped, flow continues: ${err}`
+  const readField = (obj: Record<string, unknown>, field: string): unknown =>
+    field in obj
+      ? obj[field]
+      : field.split(".").reduce<unknown>(
+          (v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined),
+          obj,
         );
-        return { ok: false, skipped: true, status: response.status, code, refusal: err };
+
+  const attempt = async (): Promise<{ final: Record<string, unknown> } | { result: Record<string, unknown> }> => {
+    let response: Response;
+    try {
+      response = await fetch(url, options);
+    } catch (err) {
+      // Transport failure (DNS, refused, timeout) — the request never got an
+      // answer. Under tolerateFailure that is the same outcome as a 5xx from the
+      // caller's point of view, so report it in the same shape.
+      if (tolerateFailure) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `${method} ${service}${path} did not complete: ${message} — tolerated, flow continues`
+        );
+        return { final: { ok: false, status: 0, error: message } };
       }
+      throw err;
     }
-    if (tolerateFailure) {
-      console.error(
-        `${method} ${service}${path} failed (${response.status}): ${err} — tolerated, flow continues`
+
+    if (!response.ok) {
+      const err = await response.text();
+      if (
+        skipOnRefusalCodes &&
+        skipOnRefusalCodes.length > 0 &&
+        response.status >= 400 &&
+        response.status < 500
+      ) {
+        const code = readRefusalCode(err);
+        if (code !== null && skipOnRefusalCodes.includes(code)) {
+          console.log(
+            `${method} ${service}${path} refused (${response.status} ${code}) — skipped, flow continues: ${err}`
+          );
+          return { final: { ok: false, skipped: true, status: response.status, code, refusal: err } };
+        }
+      }
+      if (tolerateFailure) {
+        console.error(
+          `${method} ${service}${path} failed (${response.status}): ${err} — tolerated, flow continues`
+        );
+        return { final: { ok: false, status: response.status, error: err } };
+      }
+      throw new Error(
+        `${method} ${service}${path} failed (${response.status}): ${err}`
       );
-      return { ok: false, status: response.status, error: err };
     }
-    throw new Error(
-      `${method} ${service}${path} failed (${response.status}): ${err}`
-    );
-  }
 
-  // Handle empty responses (204 No Content, etc.)
-  const text = await response.text();
-  if (!text) return {};
+    // Handle empty responses (204 No Content, etc.)
+    const text = await response.text();
+    if (!text) return { final: {} };
 
-  let result: Record<string, unknown>;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    result = { raw: text };
+    let result: Record<string, unknown>;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      result = { raw: text };
+    }
+    return { result };
+  };
+
+  let outcome = await attempt();
+  if ("final" in outcome) return outcome.final;
+  let result = outcome.result;
+
+  if (pollWhile && typeof pollWhile.field === "string") {
+    const intervalMs = Math.max(1, Math.min(60, Number(pollWhile.intervalSeconds ?? 5))) * 1000;
+    const deadline = Date.now() + Math.max(0, Math.min(300, Number(pollWhile.timeoutSeconds ?? 60))) * 1000;
+    while (readField(result, pollWhile.field) === pollWhile.equals) {
+      if (Date.now() + intervalMs > deadline) {
+        console.log(
+          `${method} ${service}${path}: ${pollWhile.field} still ${JSON.stringify(pollWhile.equals)} when the wait ran out — returning the last answer`
+        );
+        result = { ...result, pollTimedOut: true };
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      outcome = await attempt();
+      if ("final" in outcome) return outcome.final;
+      result = outcome.result;
+    }
   }
 
   // Validate response field if configured — throws to stop the flow and trigger onError.
   // A dotted field reads a nested one (`post.status`); a plain key reads as it always did.
   if (validateResponse) {
-    const actual = validateResponse.field in result
-      ? result[validateResponse.field]
-      : validateResponse.field.split(".").reduce<unknown>(
-          (v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined),
-          result,
-        );
+    const actual = readField(result, validateResponse.field);
     if (actual !== validateResponse.equals) {
       throw new Error(
         `${method} ${service}${path} validation failed: ` +
