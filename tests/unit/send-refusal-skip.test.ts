@@ -56,6 +56,12 @@ function allModules(mods: Module[]): Module[] {
   ]);
 }
 
+/** Evaluates a compiled transform the way Windmill does. */
+function evaluated(transform: Transform, flowInput: Record<string, unknown> = {}, results: Record<string, unknown> = {}): unknown {
+  if (transform.type === "static") return transform.value;
+  return JSON.parse(JSON.stringify(new Function("results", "flow_input", `return (${transform.expr});`)(results, flowInput)));
+}
+
 function transforms(dag: DAG, moduleId: string): Record<string, Transform> {
   const flow = dagToOpenFlow(dag, "send refusal");
   const mod = allModules(flow.value.modules as unknown as Module[]).find((m) => m.id === moduleId);
@@ -65,17 +71,14 @@ function transforms(dag: DAG, moduleId: string): Record<string, Transform> {
 
 describe("a cold-email send skips a sender refusal instead of failing the run", () => {
   it("the send feeding only the end-run carries the closed refusal list", () => {
-    expect(transforms(coldEmailDag(), "email_send").skipOnRefusalCodes).toEqual({
-      type: "static",
-      value: ["recent_brand_contact", "lead_opted_out"],
-    });
+    expect(evaluated(transforms(coldEmailDag(), "email_send").skipOnRefusalCodes)).toEqual(["recent_brand_contact", "lead_opted_out"]);
     expect([...REFUSAL_SKIP_CODES]).toEqual(["recent_brand_contact", "lead_opted_out"]);
   });
 
   it("the end-run after it still ends the run successfully", () => {
-    expect(transforms(coldEmailDag(), "end_run").body).toEqual({
-      type: "static",
-      value: { success: true, stopCampaign: false },
+    expect(evaluated(transforms(coldEmailDag(), "end_run").body, {}, { email_send: { ok: true } })).toEqual({
+      success: true,
+      stopCampaign: false,
     });
   });
 
