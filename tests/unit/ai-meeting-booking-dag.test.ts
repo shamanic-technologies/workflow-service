@@ -140,11 +140,13 @@ describe("ai-meeting-booking DAG", () => {
     // row out with an atomic conditional UPDATE, so at most one run sees
     // found=true. The other takes the false edge — and from there the send is
     // structurally unreachable, so it cannot answer anyone at all.
-    const nobody = dag.edges.find((e) => e.from === "check-claim" && e.condition?.includes("== false"));
-    expect(nobody?.to).toBe("end-run-nobody-due");
-    const reachedWithoutAClaim = descendants(dag, nobody?.to as string);
-    expect(reachedWithoutAClaim.has("send-reply")).toBe(false);
-    expect(reachedWithoutAClaim.has("record-followup")).toBe(false);
+    const nobodyArms = dag.edges.filter((e) => e.from === "check-claim" && e.condition?.includes("found == false"));
+    expect(nobodyArms.map((e) => e.to)).toEqual(["end-run-person-not-admitted", "end-run-nobody-due"]);
+    for (const nobody of nobodyArms) {
+      const reachedWithoutAClaim = descendants(dag, nobody.to);
+      expect(reachedWithoutAClaim.has("send-reply")).toBe(false);
+      expect(reachedWithoutAClaim.has("record-followup")).toBe(false);
+    }
 
     const claimed = dag.edges.find((e) => e.from === "check-claim" && e.condition?.includes("== true"));
     expect(descendants(dag, claimed?.to as string).has("send-reply")).toBe(true);
@@ -2139,7 +2141,7 @@ describe("every branch expression reaches Windmill in dot notation (WA-RESPONDER
     walk(flow.value.modules as unknown as Array<{ value: Record<string, unknown> }>);
     expect(exprs.length).toBeGreaterThan(5);
     for (const e of exprs) expect(e).not.toMatch(/results\[/);
-    expect(exprs).toContain("results.claimed?.found == false");
+    expect(exprs).toContain("results.claimed?.found == false && results.claimed?.notAdmitted == null");
   });
 });
 

@@ -39,6 +39,7 @@ import {
   needsCallRequest,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
+  needsLeadsOnlyClaim,
   needsOccurrenceSendKey,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
@@ -77,6 +78,9 @@ export function cellForDag(dag) {
 
 export const DESCRIPTION =
   "Answers one prospect who showed sales interest and is owed our next message. " +
+  "Answers leads only: every follow-up claim asks lead-service for pure prospects of the brand " +
+  "(relationships pure_prospect), so a personal contact, a customer, team member, investor, partner, " +
+  "supplier or advisor of the brand is refused by lead-service and never answered. " +
   "Claims them from the campaign's follow-up queue, reads what they wrote and what we already sent, " +
   "answers the question they actually asked, proposes two concrete slots in their own timezone read " +
   "from the offer's booking page, sends it as a reply in their existing thread from " +
@@ -415,7 +419,8 @@ async function main() {
         needsEveryPredecessorClaim(w.dag) ||
         needsOccurrenceSendKey(w.dag) ||
         needsCallRequest(w.dag) ||
-        needsPersonRelationship(w.dag))
+        needsPersonRelationship(w.dag) ||
+        needsLeadsOnlyClaim(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
@@ -438,6 +443,7 @@ async function main() {
     const res = await call("POST", "/workflows/upgrade", {
       workflowDynastySlug: slug,
       dag: buildAiMeetingBookingDag(own),
+      description: DESCRIPTION,
     });
     if (res.status === 200 || res.status === 201) {
       console.log(`  ${slug}: upgraded -> ${res.payload?.workflowSlug ?? "unknown"}`);
