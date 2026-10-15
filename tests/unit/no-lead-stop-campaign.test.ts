@@ -105,7 +105,9 @@ describe("applyNoLeadStopCampaign", () => {
     expect(evaluate({ fetch_lead: { found: false, reason: "audience_exhausted" } })).toEqual({ success: true, stopCampaign: true, noWorkAvailable: false });
     expect(evaluate({ fetch_lead: { found: false, reason: "source_campaign_off" } })).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
     expect(sent.modules.map((m) => m.id)).toEqual(["email_send", "end_run"]);
-    expect(sent.modules[1].value.input_transforms.body.value).toEqual({ success: true, stopCampaign: false });
+    // A run no trigger occurrence carries sends the body it always sent (LEAD-NAMED-SERVE-1015).
+    const sentBody = new Function("results", "flow_input", `return (${sent.modules[1].value.input_transforms.body.expr});`);
+    expect(JSON.parse(JSON.stringify(sentBody({ email_send: { ok: true } }, {})))).toEqual({ success: true, stopCampaign: false });
   });
 
   it("flips in place when the empty path's end-run is used by nothing else", () => {
