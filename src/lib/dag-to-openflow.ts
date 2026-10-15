@@ -946,6 +946,14 @@ function isRefusalSkippableSend(
  */
 export const OCCURRENCE_LEAD_REF = "flow_input.trigger?.leadId";
 
+/**
+ * The `namedLead` a served-lead fetch states on a run whose occurrence names a person: lead-service then hands out
+ * EXACTLY that person (filed on this campaign by campaign-service's door), never an audience's next one, and an
+ * empty answer says `final` (a retry cannot change it) or not. Undefined (key dropped) on a run no occurrence carries.
+ */
+export const NAMED_LEAD_EXPR =
+  "((t) => (t && typeof t.leadId === \"string\" && t.leadId ? { leadId: t.leadId, triggerEventId: t.eventId } : undefined))(flow_input.trigger)";
+
 /** True for an http.call node that is a refusal-skippable send (see isRefusalSkippableSend), read off the node. */
 function isRefusalSkippableSendNode(node: DAGNode | undefined, dag: DAG): boolean {
   if (!node) return false;
@@ -1152,7 +1160,35 @@ function nodeToModule(
     const exhausted = `results.${servedLead.leadModuleId}?.reason === ${JSON.stringify(AUDIENCE_EXHAUSTED_REASON)}`;
     extraTransforms["body.stopCampaign"] = { type: "javascript", expr: exhausted };
     const timedOut = `results.${servedLead.leadModuleId}?.reason === ${JSON.stringify(SERVE_TIMED_OUT_REASON)}`;
-    extraTransforms["body.noWorkAvailable"] = { type: "javascript", expr: `!(${exhausted}) && !(${timedOut})` };
+    // A serve naming its person (LEAD-NAMED-SERVE-1015) that must wait (`final: false`, even a timed-out one) is
+    // idle, so campaign-service redelivers the occurrence (bounded); a normal run would read as delivered.
+    const namedWait = `results.${servedLead.leadModuleId}?.final === false`;
+    extraTransforms["body.noWorkAvailable"] = {
+      type: "javascript",
+      expr: `!(${exhausted}) && (!(${timedOut}) || ${namedWait})`,
+    };
+    // ...and one a retry cannot change (`final: true`) ends the occurrence as refused, lead-service's code and
+    // sentence verbatim, never redelivered on our money. Any other empty serve states no delivery.
+    if (!statesBodyFieldAlready("delivery", scriptConfig, resolvedInputMapping)) {
+      extraTransforms["body.delivery"] = {
+        type: "javascript",
+        expr:
+          `((r) => (r && r.final === true && typeof r.reason === "string" ` +
+          `? { state: "refused", code: r.reason, reason: typeof r.message === "string" ? r.message : r.reason } ` +
+          `: undefined))(results.${servedLead.leadModuleId})`,
+      };
+    }
+  }
+
+  // The served-lead fetch names the person its run's trigger occurrence names (see NAMED_LEAD_EXPR). A serve that
+  // states a `population` (a source unit walking contacted prospects) or the field itself is left alone.
+  if (
+    servedLead.leadModuleId === moduleId &&
+    isServedLeadFetch(node) &&
+    !statesBodyFieldAlready("namedLead", scriptConfig, resolvedInputMapping) &&
+    !statesBodyFieldAlready("population", scriptConfig, resolvedInputMapping)
+  ) {
+    extraTransforms["body.namedLead"] = { type: "javascript", expr: NAMED_LEAD_EXPR };
   }
 
   // The end-run right after a cold email send states, on a run answering a trigger occurrence, what

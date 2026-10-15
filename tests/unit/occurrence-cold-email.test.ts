@@ -112,4 +112,57 @@ describe("a cold email run answering an occurrence states what became of the per
       delivery: { state: "refused", code: "email_not_verified" },
     });
   });
+
+  it("the serve names the person the occurrence names, and nothing on a run no occurrence carries", () => {
+    const t = transform(coldEmailDag(), "fetch_lead", "body");
+    expect(sent(t, occurrence)).toEqual({ namedLead: { leadId: "lead-1", triggerEventId: "ev-1" } });
+    expect(sent(t, {})).toEqual({});
+  });
+
+  it("a serve stating a population is left alone", () => {
+    const dag = coldEmailDag();
+    dag.nodes = dag.nodes.map((n) => (n.id === "fetch-lead" ? { ...n, config: { ...n.config, body: { population: "contacted_pure_prospects" } } } : n));
+    expect(sent(transform(dag, "fetch_lead", "body"), occurrence)).toEqual({ population: "contacted_pure_prospects" });
+  });
+
+  it("a final empty named serve ends the occurrence as refused, lead-service's words verbatim", () => {
+    const body = sent(transform(coldEmailDag(), "end_run_no_lead", "body"), occurrence, {
+      fetch_lead: {
+        found: false,
+        reason: "named_lead_unwritable",
+        message: "We only know this person's email address: no name or company was found, so we cannot write them a real email.",
+        final: true,
+      },
+    });
+    expect(body).toMatchObject({
+      success: true,
+      stopCampaign: false,
+      delivery: {
+        state: "refused",
+        code: "named_lead_unwritable",
+        reason: "We only know this person's email address: no name or company was found, so we cannot write them a real email.",
+      },
+    });
+  });
+
+  it("a named serve that must wait ends idle (redelivered), a timed-out one too, with no delivery", () => {
+    for (const reason of ["credit_insufficient", "serve_timed_out", "named_lead_sender_unreadable"]) {
+      expect(
+        sent(transform(coldEmailDag(), "end_run_no_lead", "body"), occurrence, { fetch_lead: { found: false, reason, final: false } }),
+      ).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+    }
+  });
+
+  it("an audience serve's empty answer is unchanged (no delivery, timed out = normal run)", () => {
+    expect(sent(transform(coldEmailDag(), "end_run_no_lead", "body"), {}, { fetch_lead: { found: false, reason: "serve_timed_out" } })).toEqual({
+      success: true,
+      stopCampaign: false,
+      noWorkAvailable: false,
+    });
+    expect(sent(transform(coldEmailDag(), "end_run_no_lead", "body"), {}, { fetch_lead: { found: false, reason: "audience_exhausted" } })).toEqual({
+      success: true,
+      stopCampaign: true,
+      noWorkAvailable: false,
+    });
+  });
 });
