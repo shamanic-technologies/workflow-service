@@ -16,7 +16,8 @@
  *    Opt-outs, bounces, positive replies and meetings are also ended upstream by whoever owns them (lead-service's
  *    queue and verdict, the sender's refusals).
  *
- * Generic: no branch per channel, per brand, per trigger or per writer; each writer only decides WHERE its date
+ * Generic: no branch per brand, per trigger or per writer, and one game for every channel (`rightMomentStrategy`, the
+ * channel only names its message: email, WhatsApp); each writer only decides WHERE its date
  * lives (its own follow-up queue row, or the follow-up date trigger) and calls the same text and checks.
  */
 import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
@@ -44,24 +45,64 @@ export const RIGHT_MOMENT_DECISIONS = ["write", "later", "stop"] as const;
 export const MAX_NEXT_FOLLOW_UP_DAYS = 365;
 
 /**
+ * The words a channel puts in the shared game: the game itself is ONE text, whatever the channel (owner 2026-10-15,
+ * WA-FOLLOWUP-LOOP-1015: a WhatsApp conversation is followed up exactly like an email one).
+ */
+export interface RightMomentMedium {
+  /** What one message is called ("email", "WhatsApp message"). */
+  message: string;
+  /** The plural of an automated one ("automated email"). */
+  automated: string;
+  /** What to leave empty when nothing is sent. */
+  emptyFields: string;
+  /** Where a written message goes. */
+  whereItGoes: string;
+  /** Plural noun for the history ("emails", "messages"). */
+  many: string;
+}
+
+export const EMAIL_MEDIUM: RightMomentMedium = {
+  message: "email",
+  automated: "automated email",
+  emptyFields: "leave subject and bodyHtml empty",
+  whereItGoes: "the email is a reply in the thread they wrote in last",
+  many: "emails",
+};
+
+export const WHATSAPP_MEDIUM: RightMomentMedium = {
+  message: "WhatsApp message",
+  automated: "automated message",
+  emptyFields: "leave message empty",
+  whereItGoes: "the message continues the WhatsApp conversation we already have with them, from the same number",
+  many: "messages",
+};
+
+/**
  * The game, word for word in every writer's system prompt. Kept free of em and en dashes: the model copies the
  * style of its prompt.
  */
-export const RIGHT_MOMENT_STRATEGY = [
-  "THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.",
-  "It is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an automated email), or when what this email would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, leave subject and bodyHtml empty, and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).",
-  "It IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: the email is a reply in the thread they wrote in last, so never re-introduce us and never repeat what the thread already says.",
-  "later is never the end: the person stays followed up at the date you choose.",
-].join("\n");
+export const rightMomentStrategy = (m: RightMomentMedium): string =>
+  [
+    "THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.",
+    "It is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an " + m.automated + "), or when what this " + m.message + " would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, " + m.emptyFields + ", and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).",
+    "It IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: " + m.whereItGoes + ", so never re-introduce us and never repeat what the thread already says.",
+    "later is never the end: the person stays followed up at the date you choose.",
+  ].join("\n");
 
 /** How the model picks the next date, word for word in every writer's system prompt (dash-free, see above). */
-export const NEXT_DATE_STRATEGY =
+export const nextDateStrategy = (m: RightMomentMedium): string =>
   "THE NEXT DATE. Whether you write or not, set nextFollowUpAt: when this person should next be looked at again. " +
   "There is no fixed schedule. Decide it from the history: how many times we already wrote and how recently, whether " +
   "they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many " +
-  "emails (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). Pick a " +
+  m.many + " (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). Pick a " +
   "working day and a working hour in their timezone when you know it. ISO 8601 date-time in UTC, strictly after " +
   "NOW, at most " + MAX_NEXT_FOLLOW_UP_DAYS + " days away. Say why in nextFollowUpWhy.";
+
+/** The email writers' game (ai-follow-up-email, both prospect follow-ups). */
+export const RIGHT_MOMENT_STRATEGY = rightMomentStrategy(EMAIL_MEDIUM);
+
+/** The email writers' next-date rule. */
+export const NEXT_DATE_STRATEGY = nextDateStrategy(EMAIL_MEDIUM);
 
 /** The schema properties every right-moment writer adds for the next date. */
 export const NEXT_DATE_SCHEMA_PROPERTIES = {
