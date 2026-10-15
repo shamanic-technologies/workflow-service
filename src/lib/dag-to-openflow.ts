@@ -938,6 +938,36 @@ function isRefusalSkippableSend(
   return outs.every((e) => isCampaignEndRun(dag.nodes.find((n) => n.id === e.to)));
 }
 
+/**
+ * The lead a run's trigger OCCURRENCE names (LEAD-NAMED-SERVE-1015): campaign-service's door passes
+ * `flow_input.trigger` (`{eventId, triggerId, leadId, person, item}`), and `leadId` is the person lead-service
+ * filed on this campaign for it (a ⚡ Lead fired by a client or by lead-service). Undefined on a run no
+ * occurrence carries (the proactive cadence), so everything keyed on it below is byte-identical there.
+ */
+export const OCCURRENCE_LEAD_REF = "flow_input.trigger?.leadId";
+
+/** True for an http.call node that is a refusal-skippable send (see isRefusalSkippableSend), read off the node. */
+function isRefusalSkippableSendNode(node: DAGNode | undefined, dag: DAG): boolean {
+  if (!node) return false;
+  const { retries: _r, stopAfterIf: _s, skipIf: _sk, retryDelaySeconds: _rd, ...config } = node.config ?? {};
+  return isRefusalSkippableSend(node, dag, config, node.inputMapping);
+}
+
+/**
+ * The `/end-run` `delivery` of a cold email run that answers a trigger occurrence naming a person
+ * (LEAD-NAMED-SERVE-1015, PUSHED-TRUTH-1015): the send's refusal verbatim when it skipped one, delivered
+ * otherwise; undefined (key dropped) on a run no occurrence carries. Before it, a refused send ended
+ * `success: true` and campaign-service read the occurrence as delivered.
+ */
+function sendDeliveryExpr(sendModuleId: string): string {
+  return (
+    `((lead, s) => !lead ? undefined : ` +
+    `(s && typeof s === "object" && s.skipped === true && typeof s.code === "string" ` +
+    `? (s.delivery ?? { state: "refused", code: s.code, reason: typeof s.reason === "string" ? s.reason : s.code }) ` +
+    `: { state: "delivered" }))(${OCCURRENCE_LEAD_REF}, results.${sendModuleId})`
+  );
+}
+
 function nodeToModule(
   node: DAGNode,
   dag: DAG,
@@ -1125,6 +1155,22 @@ function nodeToModule(
     extraTransforms["body.noWorkAvailable"] = { type: "javascript", expr: `!(${exhausted}) && !(${timedOut})` };
   }
 
+  // The end-run right after a cold email send states, on a run answering a trigger occurrence, what
+  // became of the person it named (see sendDeliveryExpr). A node that maps `delivery` itself wins.
+  const inServedLeadScope =
+    !!servedLead.leadModuleId &&
+    servedLead.descendants.has(moduleId) &&
+    loopBodyIds === null;
+  if (inServedLeadScope && isCampaignEndRun(node) && !statesBodyFieldAlready("delivery", scriptConfig, resolvedInputMapping)) {
+    const send = dag.edges
+      .filter((e) => e.to === node.id)
+      .map((e) => dag.nodes.find((n) => n.id === e.from))
+      .find((n) => isRefusalSkippableSendNode(n, dag));
+    if (send) {
+      extraTransforms["body.delivery"] = { type: "javascript", expr: sendDeliveryExpr(send.id.replace(/-/g, "_")) };
+    }
+  }
+
   const inputTransforms = buildInputTransforms(
     Object.keys(scriptConfig).length > 0 ? scriptConfig : undefined,
     resolvedInputMapping,
@@ -1132,9 +1178,16 @@ function nodeToModule(
   );
 
   // A send the sender refuses for this one lead ends the run as a normal run.
-  // See REFUSAL_SKIP_CODES.
+  // See REFUSAL_SKIP_CODES. On a run answering a trigger occurrence EVERY refusal the
+  // sender names is final for that person (PUSHED-TRUTH-1015's "*"), read and reported
+  // on the end-run rather than thrown and redelivered six times.
   if (isRefusalSkippableSend(node, dag, scriptConfig, resolvedInputMapping)) {
-    inputTransforms.skipOnRefusalCodes = { type: "static", value: [...REFUSAL_SKIP_CODES] };
+    inputTransforms.skipOnRefusalCodes = inServedLeadScope
+      ? {
+          type: "javascript",
+          expr: `${OCCURRENCE_LEAD_REF} ? ${JSON.stringify([...REFUSAL_SKIP_CODES, "*"])} : ${JSON.stringify([...REFUSAL_SKIP_CODES])}`,
+        }
+      : { type: "static", value: [...REFUSAL_SKIP_CODES] };
   }
 
   // Auto-inject identity + tracking context from flow_input unless explicitly mapped
