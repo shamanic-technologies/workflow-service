@@ -287,7 +287,7 @@ export async function main(person, thread) {
   const phones = thread?.person?.phones;
   if (asked || !Array.isArray(phones) || phones.some((p) => typeof p === "string" && p.trim() !== "")) return { skip: false, code: null };
   console.error("[cold-whatsapp-outreach] " + String(person?.email) + ": no phone known on the occurrence or in the brand's CRM; nothing drafted, nothing sent (no_phone_known)");
-  return { skip: true, code: "no_phone_known" };
+  return { skip: true, code: "no_phone_known", reason: "No phone number is known for this person, on the occurrence or in the brand's CRM: nothing was sent." };
 }
 `.trim();
 
@@ -448,6 +448,17 @@ export const CHANNEL_UNREACHABLE_CODES = ["no_phone_known", "not_on_whatsapp"] a
  */
 export const RECORD_PLAN_CODE = `
 export async function main(person, send, currentDate, reach) {
+  const out = plan(person, send, currentDate, reach);
+  // The occurrence's truth on /end-run (PUSHED-TRUTH-1015): refused + the refusal's code and sentence, verbatim.
+  const refusedNow = send?.skipped === true;
+  const reason = send?.notCalled === true ? reach?.reason : (send?.reason ?? send?.delivery?.reason);
+  out.delivery = refusedNow
+    ? { state: "refused", code: out.code, reason: typeof reason === "string" && reason.trim() !== "" ? reason : out.code }
+    : { state: "delivered" };
+  return out;
+}
+
+function plan(person, send, currentDate, reach) {
   const refused = send?.skipped === true;
   // Not called: reach-plan found no phone before anything was drafted; recorded as crm-service's refusal would be.
   const code = !refused ? null : send.notCalled === true ? String(reach?.code ?? "not_sent") : String(send.code ?? "refused");
@@ -506,11 +517,13 @@ export const WHATSAPP_REFUSAL_CODES = [
 const PERSON = "results['pick-person']";
 const WRITTEN = "results['prior-contact']?.alreadyWritten";
 const VOICE_SLOTS = Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => i + 1);
-const endRun = (id: string, body: Record<string, unknown>) => ({
+const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record<string, string>) => ({
   id,
   type: "http.call" as const,
   config: { service: "campaign", method: "POST", path: "/end-run", body },
+  ...(inputMapping ? { inputMapping } : {}),
 });
+const RECORDED_DELIVERY = { "body.delivery": "$ref:record-plan.output.delivery" };
 
 export function buildColdWhatsappOutreachDag(): DAG {
   return {
@@ -821,9 +834,10 @@ export function buildColdWhatsappOutreachDag(): DAG {
           body: "$ref:record-plan.output.body",
         },
       },
-      endRun("end-run", { success: true, stopCampaign: false }),
-      endRun("end-run-followup", { success: true, stopCampaign: false }),
-      endRun("end-run-unreachable", { success: true, stopCampaign: false }),
+      // The occurrence's truth (PUSHED-TRUTH-1015): every arm after the send states record-plan's delivery.
+      endRun("end-run", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
+      endRun("end-run-followup", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
+      endRun("end-run-unreachable", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
       // A re-served person this campaign already wrote to: nothing to do this run.
       endRun("end-run-already-written", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-no-lead", { success: true, stopCampaign: true }),

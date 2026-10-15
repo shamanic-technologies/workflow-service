@@ -1687,15 +1687,20 @@ export async function main(send, whatsapp, replyChannel) {
   }
 
   let code = null;
+  let body = null;
   try {
-    code = JSON.parse(String(send?.error ?? "{}"))?.code ?? null;
+    body = JSON.parse(String(send?.error ?? "{}"));
+    code = body?.code ?? null;
   } catch (err) {
     code = null;
   }
 
   if (send?.status === 409 && code === "human_took_over") {
     console.error("[ai-meeting-booking] a person has already answered this thread since the prospect last wrote; the automated reply was refused and no follow-up is recorded");
-    return { outcome: "human_took_over", status: 409 };
+    // The occurrence's truth on /end-run (PUSHED-TRUTH-1015): refused by the sender, its sentence verbatim.
+    const sentence = typeof body?.details === "string" && body.details.trim() !== "" ? body.details
+      : typeof body?.error === "string" && body.error.trim() !== "" ? body.error : code;
+    return { outcome: "human_took_over", status: 409, delivery: { state: "refused", code, reason: sentence } };
   }
 
   throw new Error("[ai-meeting-booking] the reply could not be sent (" + String(send?.status) +
@@ -1892,6 +1897,17 @@ export function needsOccurrenceSendKey(dag: { nodes?: Array<{ id?: string; input
   const keyed = nodes.filter((n) => n?.id === "finalize-reply" || n?.id === "compose-rep-alert");
   if (keyed.length === 0) return false;
   return keyed.some((n) => n.inputMapping?.trigger !== "$ref:flow_input.trigger");
+}
+
+/**
+ * True when a stored DAG ends an answered occurrence without telling campaign-service what became of it
+ * (PUSHED-TRUTH-1015): a reply the sender refused (`human_took_over`) ended `success: true` and the occurrence read
+ * as delivered. Current = the human-took-over end-run maps `classify-send`'s delivery.
+ */
+export function needsOccurrenceDelivery(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, string> }> } | null | undefined): boolean {
+  const end = (dag?.nodes ?? []).find((n) => n?.id === "end-run-human-took-over");
+  if (!end) return false;
+  return end.inputMapping?.["body.delivery"] !== "$ref:classify-send.output.delivery";
 }
 
 /**
@@ -2538,7 +2554,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           service: "campaign",
           method: "POST",
           path: "/end-run",
-          body: { success: true, stopCampaign: false },
+          // The reply went out: the occurrence was answered (PUSHED-TRUTH-1015).
+          body: { success: true, stopCampaign: false, delivery: { state: "delivered" } },
         },
       },
       {
@@ -2548,7 +2565,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           service: "campaign",
           method: "POST",
           path: "/end-run",
-          body: { success: true, stopCampaign: false },
+          // The reply went out: the occurrence was answered (PUSHED-TRUTH-1015).
+          body: { success: true, stopCampaign: false, delivery: { state: "delivered" } },
         },
       },
       {
@@ -2558,7 +2576,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           service: "campaign",
           method: "POST",
           path: "/end-run",
-          body: { success: true, stopCampaign: false },
+          // The reply went out: the occurrence was answered (PUSHED-TRUTH-1015).
+          body: { success: true, stopCampaign: false, delivery: { state: "delivered" } },
         },
       },
       // Nobody due right now is not the campaign being finished — the queue
@@ -2603,6 +2622,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           path: "/end-run",
           body: { success: true, stopCampaign: false },
         },
+        // The sender refused the reply (a person answers this thread): refused + its code and sentence.
+        inputMapping: { "body.delivery": "$ref:classify-send.output.delivery" },
       },
       {
         id: "end-run-nobody-due",
