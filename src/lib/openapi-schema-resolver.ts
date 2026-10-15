@@ -56,7 +56,12 @@ export function resolveSchema(
         if (typeof sub !== "object" || sub === null) continue;
         const resolved = resolveSchema(sub as Record<string, unknown>, spec, depth + 1);
         if (resolved) {
-          Object.assign(merged.properties, resolved.properties);
+          // A field several variants declare is permitted whatever ANY variant permits: never last-wins, which
+          // made a discriminated union (`state: "delivered"` | `state: "refused"`) refuse its first variant.
+          for (const [key, prop] of Object.entries(resolved.properties)) {
+            merged.properties[key] =
+              key in merged.properties ? mergeVariantProperty(merged.properties[key], prop, spec) : prop;
+          }
           // Only keep required fields that appear in ALL variants
         }
       }
@@ -273,6 +278,26 @@ function formatAvailableKeys(
     const suffix = subKeys.length > MAX_SUB_KEYS ? ",..." : "";
     return `${key}{${shown}${suffix}}`;
   });
+}
+
+/**
+ * The schema of a field two oneOf/anyOf variants both declare. Two closed sets of scalars (`enum` / `const`) become
+ * their union; anything else becomes an `anyOf` of both, which no value-level check reads as a closed set.
+ */
+function mergeVariantProperty(a: unknown, b: unknown, spec: Record<string, unknown>): unknown {
+  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return b;
+  const ra = resolveRawSchema(a as Record<string, unknown>, spec);
+  const rb = resolveRawSchema(b as Record<string, unknown>, spec);
+  const closed = (r: Record<string, unknown>): unknown[] | null =>
+    "const" in r ? [r.const] : Array.isArray(r.enum) && r.enum.length > 0 ? (r.enum as unknown[]) : null;
+  const ca = closed(ra);
+  const cb = closed(rb);
+  if (ca && cb) {
+    const { const: _ca, ...restA } = ra;
+    return { ...restA, enum: [...new Set([...ca, ...cb])] };
+  }
+  if (ra === rb) return a;
+  return { anyOf: [a, b] };
 }
 
 /**
