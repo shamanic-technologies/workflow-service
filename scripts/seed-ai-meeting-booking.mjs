@@ -39,6 +39,7 @@ import {
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
   needsLeadsOnlyClaim,
+  needsOccurrenceDelivery,
   needsOccurrenceSendKey,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
@@ -420,6 +421,7 @@ async function main() {
         needsChannelAgnosticReply(w.dag) ||
         needsEveryPredecessorClaim(w.dag) ||
         needsOccurrenceSendKey(w.dag) ||
+        needsOccurrenceDelivery(w.dag) ||
         needsCallRequest(w.dag) ||
         needsPersonRelationship(w.dag) ||
         needsLeadsOnlyClaim(w.dag))

@@ -359,7 +359,8 @@ describe("ai-meeting-booking DAG", () => {
   it("tells campaign-service the run had no work only when nobody was due", () => {
     // The idle cadence belongs to campaign-service; this DAG only states the
     // fact. A run that answered somebody, and a run that errored, say nothing.
-    expect(byId.get("end-run")?.config?.body).toEqual({ success: true, stopCampaign: false });
+    // An answered run states the occurrence was delivered (PUSHED-TRUTH-1015); an errored one says nothing.
+    expect(byId.get("end-run")?.config?.body).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
     expect(byId.get("end-run-error")?.config?.body).toEqual({ success: false, stopCampaign: false });
   });
 });
@@ -893,7 +894,7 @@ describe("declaring the caller, and standing down when a human has taken over", 
 
     expect(
       await main({ ok: false, status: 409, error: JSON.stringify({ error: "x", code: "human_took_over" }) }, notCalled, "email"),
-    ).toEqual({ outcome: "human_took_over", status: 409 });
+    ).toEqual({ outcome: "human_took_over", status: 409, delivery: { state: "refused", code: "human_took_over", reason: "x" } });
 
     // A 409 is NOT enough on its own — three other codes share it and all mean
     // the reply could not be sent.
@@ -1194,7 +1195,9 @@ describe("a prospect who tells us the meeting is booked", () => {
       path: "/orgs/leads/{id}/followups",
       body: { kind: "stopped", reason: BOOKING_CONFIRMED_REASON },
     });
-    expect(byId.get("end-run-booking-confirmed")?.config?.body).toEqual({ success: true, stopCampaign: false });
+    expect(byId.get("end-run-booking-confirmed")?.config?.body).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
+    // The sender refusing the reply (a person answers the thread) ends refused, its code and sentence verbatim.
+    expect(byId.get("end-run-human-took-over")?.inputMapping).toEqual({ "body.delivery": "$ref:classify-send.output.delivery" });
     // A human takeover still records nothing on either path.
     const takeover = dag.edges.find((e) => e.from === "check-sent" && e.condition?.includes("human_took_over"));
     expect(takeover?.to).toBe("end-run-human-took-over");

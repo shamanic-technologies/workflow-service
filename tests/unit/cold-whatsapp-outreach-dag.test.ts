@@ -346,14 +346,20 @@ describe("finalizing and recording", () => {
     expect(days).toBeGreaterThan(2.9);
     expect(days).toBeLessThan(3.1);
     const refused = await plan({ kind: "first", email: "a@x.com" }, { ok: false, skipped: true, code: "whatsapp_not_linked" }, "2026-10-12");
-    expect(refused).toEqual({ action: "none", outcome: "unreachable", code: "whatsapp_not_linked" });
+    expect(refused).toEqual({
+      action: "none",
+      outcome: "unreachable",
+      code: "whatsapp_not_linked",
+      delivery: { state: "refused", code: "whatsapp_not_linked", reason: "whatsapp_not_linked" },
+    });
+    expect(sent.delivery).toEqual({ state: "delivered" });
   });
 
   it("a first message refused about the CHANNEL releases the person to the brand's pipes that can reach them", async () => {
     const plan = loadMain(RECORD_PLAN_CODE);
     for (const code of ["no_phone_known", "not_on_whatsapp"]) {
       const out = await plan({ kind: "first", email: "a@x.com" }, { ok: false, skipped: true, code }, "2026-10-12");
-      expect(out).toEqual({ action: "release", outcome: "unreachable", code, email: "a@x.com" });
+      expect(out).toEqual({ action: "release", outcome: "unreachable", code, email: "a@x.com", delivery: { state: "refused", code, reason: code } });
     }
     const release = buildColdWhatsappOutreachDag().nodes.find((n) => n.id === "release-person");
     expect(release?.config).toMatchObject({
@@ -437,12 +443,23 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
   it("is handed for good once sent; refused, it is stopped (a later occurrence may reach them) and the run ends normally", async () => {
     const record = loadMain(RECORD_PLAN_CODE);
     const p = { kind: "occurrence", rowId: "row-1", email: "kevin@distribute.you" };
-    expect(await record(p, { ok: true }, "x", { skip: false })).toEqual({ action: "record", outcome: "sent", body: { kind: "handed", reason: WHATSAPP_OCCURRENCE_SENT_REASON } });
+    expect(await record(p, { ok: true }, "x", { skip: false })).toEqual({ action: "record", outcome: "sent", body: { kind: "handed", reason: WHATSAPP_OCCURRENCE_SENT_REASON }, delivery: { state: "delivered" } });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await record(p, { ok: false, skipped: true, code: "not_on_whatsapp" }, "x", { skip: false }))
-      .toEqual({ action: "record", outcome: "unreachable", code: "not_on_whatsapp", body: { kind: "stopped", reason: "whatsapp_not_on_whatsapp" } });
+    // The occurrence's truth on /end-run (PUSHED-TRUTH-1015): crm-service's refusal, its sentence verbatim.
+    const refusedSend = { ok: false, skipped: true, code: "not_on_whatsapp", reason: "+336 is not on WhatsApp" };
+    expect(await record(p, refusedSend, "x", { skip: false }))
+      .toEqual({
+        action: "record",
+        outcome: "unreachable",
+        code: "not_on_whatsapp",
+        body: { kind: "stopped", reason: "whatsapp_not_on_whatsapp" },
+        delivery: { state: "refused", code: "not_on_whatsapp", reason: "+336 is not on WhatsApp" },
+      });
     spy.mockRestore();
     expect(dag.edges).toContainEqual({ from: "record-followup", to: "end-run-followup" });
+    for (const id of ["end-run", "end-run-followup", "end-run-unreachable"]) {
+      expect(dag.nodes.find((n) => n.id === id)?.inputMapping).toEqual({ "body.delivery": "$ref:record-plan.output.delivery" });
+    }
   });
 });
 
@@ -457,7 +474,7 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
     expect(byId.get("send-whatsapp")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
     expect(byId.get("reach-plan")?.inputMapping).toEqual({ person: "$ref:pick-person.output", thread: "$ref:person-thread.output" });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await reach({ email: "a@x.com" }, { person: { phones: [] } })).toEqual({ skip: true, code: "no_phone_known" });
+    expect(await reach({ email: "a@x.com" }, { person: { phones: [] } })).toMatchObject({ skip: true, code: "no_phone_known" });
     expect(spy.mock.calls[0]?.[0]).toContain("no_phone_known");
     spy.mockRestore();
     expect(await reach({ email: "a@x.com", phone: "+33600000000" }, { person: { phones: [] } })).toEqual({ skip: false, code: null });
@@ -472,8 +489,8 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
     expect(fin).toMatchObject({ skipped: true, sendBody: null });
     const record = loadMain(RECORD_PLAN_CODE);
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await record({ kind: "first", email: "a@x.com" }, notCalled, "x", { skip: true, code: "no_phone_known" }))
-      .toEqual({ action: "release", outcome: "unreachable", code: "no_phone_known", email: "a@x.com" });
+    expect(await record({ kind: "first", email: "a@x.com" }, notCalled, "x", { skip: true, code: "no_phone_known", reason: "No phone." }))
+      .toEqual({ action: "release", outcome: "unreachable", code: "no_phone_known", email: "a@x.com", delivery: { state: "refused", code: "no_phone_known", reason: "No phone." } });
     expect(await record({ kind: "occurrence", rowId: "r", email: "a@x.com" }, notCalled, "x", { skip: true, code: "no_phone_known" }))
       .toMatchObject({ action: "record", body: { kind: "stopped", reason: "whatsapp_no_phone_known" } });
     spy.mockRestore();

@@ -40,6 +40,7 @@
  *    for the same person rings again.
  */
 import type { DAG } from "./dag-validator.js";
+import { DELIVERED } from "./occurrence-delivery.js";
 
 export const AI_INSTANT_CALL_FEATURE_SLUG = "ai-instant-call";
 
@@ -347,7 +348,8 @@ export function buildAiInstantCallDag(): DAG {
       // Strictly AFTER the call, and tolerated: nothing after a placed call may fail the run (a redelivery would ring again).
       stopRow("record-called", INSTANT_CALL_PLACED_REASON, true),
       stopRow("record-no-rep", NO_SALES_REP_PHONE_REASON),
-      endRun("end-run", { success: true, stopCampaign: false }),
+      // The call was placed: the occurrence was acted on (PUSHED-TRUTH-1015).
+      endRun("end-run", { success: true, stopCampaign: false, delivery: DELIVERED }),
       endRun("end-run-no-rep", { success: true, stopCampaign: false }),
       endRun("end-run-other-person", { success: false, stopCampaign: false }),
       endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),

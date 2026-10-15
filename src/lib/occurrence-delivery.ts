@@ -31,3 +31,34 @@ export const DELIVERED = { state: "delivered" } as const;
 export function refusedDelivery(sendNodeId: string): Record<string, string> {
   return { "body.delivery": `$ref:${sendNodeId}.output.delivery` };
 }
+
+/**
+ * Where ONE end-run closes both a sent and a skipped send (a passing refusal that still records the next date), the
+ * delivery is read off the send's own output by this pure script: refused (code + sentence, verbatim) when the send
+ * skipped a refusal, delivered otherwise. Never throws.
+ */
+export const SEND_DELIVERY_CODE = `
+export async function main(send) {
+  if (send && typeof send === "object" && send.skipped === true && send.notCalled !== true && typeof send.code === "string") {
+    if (send.delivery && typeof send.delivery === "object") return send.delivery;
+    return { state: "refused", code: send.code, reason: typeof send.reason === "string" ? send.reason : send.code };
+  }
+  return { state: "delivered" };
+}
+`.trim();
+
+/** The script node computing a shared end-run's delivery from `sendNodeId`; map it with `deliveryOf(id)`. */
+export function sendDeliveryNode(id: string, sendNodeId: string) {
+  return {
+    id,
+    type: "script" as const,
+    config: { code: SEND_DELIVERY_CODE },
+    retries: 0,
+    inputMapping: { send: `$ref:${sendNodeId}.output` },
+  };
+}
+
+/** The input mapping of an end-run whose delivery a `sendDeliveryNode` computed. */
+export function deliveryOf(deliveryNodeId: string): Record<string, string> {
+  return { "body.delivery": `$ref:${deliveryNodeId}.output` };
+}
