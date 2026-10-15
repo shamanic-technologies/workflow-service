@@ -121,6 +121,8 @@ Example:
   "retries": 0
 }
 
+A workflow that serves people to prospect COLD (it finds them, or writes them a first email) states \`"excludeEmailedWithin": "3_months"\` in the static body of its lead serve (\`POST /orgs/buffer/next\`): nobody the brand emailed in the last 3 months is handed out. A workflow that re-engages people already emailed (follow-ups, nurtures) or sends to a person the client named never states it.
+
 ## Flow Control Node Types
 
 - "condition": if/then/else branching. Outgoing edges WITH a condition expression define branches (target nodes are nested inside that branch). Outgoing edges WITHOUT condition are after-branch steps that always execute after the branchone completes.

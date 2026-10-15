@@ -19,6 +19,7 @@
  * dynasty, so the dynasty slug units store keeps resolving forward to the current version).
  */
 import type { DAG } from "./dag-validator.js";
+import { FRESH_CONTACTS_FIELD, FRESH_CONTACTS_WINDOW, freshContactsDescription, isFreshContactsChannel } from "./fresh-contacts.js";
 
 /** The sourcing channels, one workflow each (features-service `SOURCING_CHANNEL_SLUGS`, the live ones). */
 export const SOURCING_CHANNEL_SLUGS = [
@@ -139,8 +140,22 @@ export const SOURCING_FORK_PLAYS = [
   },
 ] as const;
 
+/** The generic description of a channel's sourcing workflow (a cold channel says it serves fresh contacts only). */
+export function sourcingDescriptionOf(channelSlug: string): string {
+  return isFreshContactsChannel(channelSlug) ? freshContactsDescription(SOURCING_DESCRIPTION) : SOURCING_DESCRIPTION;
+}
+
+/** The current DAG of one channel's generic sourcing workflow (a cold channel's serve states fresh contacts only). */
+export function buildSourcingDagFor(channelSlug: string): DAG {
+  return buildSourcingDag({ freshContacts: isFreshContactsChannel(channelSlug) });
+}
+
 /** The DAG of every sourcing pipe: a campaign run whose only work is the find. */
-export function buildSourcingDag(opts: { businessOnly?: boolean } = {}): DAG {
+export function buildSourcingDag(opts: { businessOnly?: boolean; freshContacts?: boolean } = {}): DAG {
+  const serveBody = {
+    ...(opts.businessOnly ? { relationships: BUSINESS_ONLY_RELATIONSHIPS } : {}),
+    ...(opts.freshContacts ? { [FRESH_CONTACTS_FIELD]: FRESH_CONTACTS_WINDOW } : {}),
+  };
   return {
     nodes: [
       {
@@ -156,7 +171,7 @@ export function buildSourcingDag(opts: { businessOnly?: boolean } = {}): DAG {
           service: "lead",
           method: "POST",
           path: "/orgs/buffer/next",
-          ...(opts.businessOnly ? { body: { relationships: BUSINESS_ONLY_RELATIONSHIPS } } : {}),
+          ...(Object.keys(serveBody).length > 0 ? { body: serveBody } : {}),
         },
         retries: 0,
       },
@@ -180,17 +195,24 @@ export function buildSourcingDag(opts: { businessOnly?: boolean } = {}): DAG {
  * PURE: what the seed should store for an existing row of a sourcing channel: the current DAG, carrying over the
  * static body the row's OWN lead-serving node states. A copy differs from the generic workflow by exactly that body
  * (`reachableBy`, `acceptedEmails`: src/lib/reachable-by-copy.ts, a catch-all fork), so upgrading it to the bare
- * current DAG would silently turn it back into the generic one. Returns `stated: false` for the generic row.
+ * current DAG would silently turn it back into the generic one. The current DAG's own serve body (a cold channel's
+ * `excludeEmailedWithin`) is kept under the copy's, except on a serve stating a `population` (people the brand already
+ * contacted: a fresh-contacts skip would serve none of them). Returns `stated: false` for the generic row.
  */
 export function sourcingTargetOf(storedDag: DAG, current: DAG = buildSourcingDag()): { dag: DAG; stated: boolean } {
   const storedServe = storedDag.nodes.find(
     (n) => n.type === "http.call" && (n.config as { path?: string } | undefined)?.path === "/orgs/buffer/next",
   );
-  const body = (storedServe?.config as { body?: Record<string, unknown> } | undefined)?.body;
-  if (body === undefined || Object.keys(body).length === 0) return { dag: current, stated: false };
+  const body = (storedServe?.config as { body?: Record<string, unknown> } | undefined)?.body ?? {};
+  const own = Object.keys(body).filter((k) => k !== FRESH_CONTACTS_FIELD);
+  if (own.length === 0) return { dag: current, stated: false };
   const dag = structuredClone(current);
   const serve = dag.nodes.find((n) => n.id === "serve-lead");
   if (!serve) throw new Error("current sourcing DAG has no serve-lead node");
-  (serve.config as Record<string, unknown>).body = structuredClone(body);
+  const currentBody = (serve.config as { body?: Record<string, unknown> }).body ?? {};
+  const merged: Record<string, unknown> = { ...structuredClone(currentBody), ...structuredClone(body) };
+  if (merged.population !== undefined) delete merged[FRESH_CONTACTS_FIELD];
+  else if (currentBody[FRESH_CONTACTS_FIELD] === undefined) delete merged[FRESH_CONTACTS_FIELD];
+  (serve.config as Record<string, unknown>).body = merged;
   return { dag, stated: true };
 }
