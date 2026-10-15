@@ -6,7 +6,8 @@
  * work (`/end-run` success=false, nothing to do, no lead), with the SAME `trigger.eventId`, re-filing the person
  * and making them due again: the queue row gets a NEW due date. A key naming the row and its due date therefore
  * changes between the run that sent and then failed and the redelivered run, and the person would be written to
- * twice. So when the run's trigger names the person it claimed (email, case-folded) the key names the occurrence;
+ * twice. So when the run's trigger names the person it claimed (email, case-folded; a person with no email, by phone)
+ * the key names the occurrence;
  * a new occurrence for the same person is a new key and is answered. A run with no trigger, or whose trigger names
  * someone else (a scheduled follow-up rung, another person's occurrence), keys on the row and its due date as
  * before. Script text, appended after `main` in a Windmill rawscript (function declarations hoist).
@@ -18,6 +19,10 @@ function sendKey(workflow, followup, trigger) {
   const eventId = t && typeof t.eventId === "string" && t.eventId.trim() !== "" ? t.eventId.trim() : null;
   const claimed = fold(followup?.email);
   if (eventId && claimed !== null && fold(t.person?.email) === claimed) return workflow + ":event:" + eventId;
+  // A person known only by phone (a WhatsApp writer, REPLY-PHONE-ONLY-1015): the occurrence names them by phone.
+  const digits = (s) => (typeof s === "string" && /^\\s*(\\+|00)/.test(s) ? s.replace(/^\\s*(\\+|00)/, "").replace(/\\D/g, "") : "");
+  const claimedPhone = claimed === null ? digits(followup?.phone) : "";
+  if (eventId && claimedPhone.length >= 8 && digits(t.person?.phone) === claimedPhone) return workflow + ":event:" + eventId;
   return workflow + ":" + String(followup?.id) + ":" + String(followup?.dueAt ?? "");
 }
 `.trim();
