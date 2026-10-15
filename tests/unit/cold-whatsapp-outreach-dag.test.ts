@@ -62,10 +62,12 @@ describe("cold-whatsapp-outreach DAG", () => {
   const flow = dagToOpenFlow(dag, "cold-whatsapp-outreach-test");
   const mods = allModules(flow.value.modules as Mod[]);
 
-  it("serves both pipes of its channel", () => {
+  it("serves every pipe of its channel, the reactive ones included (signup not paid, WhatsApp number given)", () => {
     expect(COLD_WHATSAPP_OUTREACH_LEG_KEYS.map(coldWhatsappPipeIdOf)).toEqual([
       "cold-whatsapp-outreach|lead_found_to_conversation",
       "cold-whatsapp-outreach|lead_found_to_website_visit",
+      "cold-whatsapp-outreach|signup_to_paid_client",
+      "cold-whatsapp-outreach|start_to_signup",
     ]);
   });
 
@@ -349,7 +351,7 @@ describe("finalizing and recording", () => {
   it("strips dashes, checks the next date before the send, and keys a first message per person", async () => {
     const fin = loadMain(FINALIZE_MESSAGE_CODE);
     const next = inDays(4);
-    const out = await fin({ json: { decision: "write", message: "Hi Ana — quick one, 3–5 people?", nextFollowUpAt: next, nextFollowUpWhy: "w" } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1");
+    const out = await fin({ json: { decision: "write", message: "Hi Ana — quick one, 3–5 people?", nextFollowUpAt: next, nextFollowUpWhy: "w" } }, { kind: "first", leadId: "l-1", step: 1, email: "ana@x.com" }, "c-1");
     expect(out.text).toBe("Hi Ana, quick one, 3-5 people?");
     expect(out.idempotencyKey).toBe("cold-whatsapp-outreach:c-1:l-1:1");
     expect(out.skipIfReplied).toBe(false);
@@ -547,8 +549,7 @@ describe("a person this campaign already wrote to is never read or written again
   it("reads crm-service's sends right after the person is picked, before anything paid", () => {
     expect(byId.get("prior-sends")?.config).toMatchObject({ service: "crm", method: "GET", path: "/orgs/whatsapp/messages" });
     expect(byId.get("prior-sends")?.inputMapping).toMatchObject({
-      "query.brandId": "$ref:pick-person.output.brandId",
-      "query.email": "$ref:pick-person.output.email",
+      query: "$ref:pick-person.output.sendsQuery",
       skip: "$ref:pick-person.output.skipSends",
     });
     expect(dag.edges).toContainEqual({ from: "pick-person", to: "prior-sends" });
@@ -754,5 +755,68 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
   it("the model's answer carries a decision and the next date, the shared right-moment contract", () => {
     expect(MESSAGE_RESPONSE_SCHEMA.properties.decision.enum).toEqual(["write", "later", "stop"]);
     expect(MESSAGE_RESPONSE_SCHEMA.required).toEqual(expect.arrayContaining(["decision", "nextFollowUpAt", "nextFollowUpWhy"]));
+  });
+});
+
+describe("greeting a person who just gave their WhatsApp number, known only by that phone (WA-WELCOME-WORKFLOW-1015)", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const person = { email: null, name: "Marie Curie", phone: "+33611111111", crmContact: null };
+  const trigger = {
+    eventId: "ev-wa-1",
+    triggerId: "whatsapp_number_given",
+    leadId: "l-9",
+    item: { kind: "phone_given", phone: "+33611111111", firstName: "Marie", lastName: "Curie", source: "clerk" },
+    person,
+  };
+  const claim = { found: true, followup: { id: "row-9", leadId: "l-9", email: null, phone: "+33611111111", brandId: "b-1", dueAt: "2026-10-15T10:00:00Z" } };
+  const detail = { leadDetail: { lead: {} } };
+  const plan = loadMain(OCCURRENCE_PLAN_CODE);
+  const pick = loadMain(PICK_PERSON_CODE);
+
+  it("claims the phone-only person, matched by phone, with the first name the occurrence gave", async () => {
+    const out = await pick(claim, detail, undefined, await plan(trigger, null), trigger);
+    expect(out).toMatchObject({
+      kind: "occurrence", rowId: "row-9", email: null, phone: "+33611111111", firstName: "Marie", lastName: "Curie",
+      sendsQuery: { brandId: "b-1", phone: "+33611111111" },
+    });
+    // The sends read asks by phone, never a null email.
+    expect(byId.get("prior-sends")?.inputMapping?.query).toBe("$ref:pick-person.output.sendsQuery");
+    // No first name on the item: the first word of the person's name.
+    const noItem = await pick(claim, detail, undefined, await plan({ ...trigger, item: null }, null), { ...trigger, item: null });
+    expect(noItem.firstName).toBe("Marie");
+  });
+
+  it("reads their thread by phone, and the owner's voice from other people only", async () => {
+    const p = await pick(claim, detail, undefined, await plan(trigger, null), trigger);
+    const out = await loadMain(HISTORY_PLAN_CODE)(p, {
+      people: [
+        { personId: "self", emails: [], phones: ["+33611111111"], presences: [{ source: "matrix", outboundCount: 9 }] },
+        { personId: "p-2", emails: ["z@z.com"], phones: [], presences: [{ source: "matrix", outboundCount: 9 }] },
+      ],
+    });
+    expect(out.thread).toEqual({ brandId: "b-1", personKey: "phone:+33611111111" });
+    expect(out.sends).toEqual({ brandId: "b-1", phone: "+33611111111" });
+    expect((out.samples as Array<{ personId: string | null }>).map((x) => x.personId)).toEqual(["p-2", null, null, null]);
+  });
+
+  it("greets by the first name they gave, and sends ONE message by phone, never a null email, keyed on the occurrence", async () => {
+    const p = await pick(claim, detail, undefined, await plan(trigger, null), trigger);
+    const triggerType = { name: "WhatsApp number given", line: "A person gave their WhatsApp number.", params: {} };
+    const fresh = { hasHistory: false, threadLines: [], eventLines: [], lastMessage: null, olderMessagesOmitted: 0, voiceLines: ["to someone else, whatsapp: yo"] };
+    const composed = await withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 10)(
+      p, "Hi Marie! Kevin here.", { name: "Revenue made easy" }, { brand: { name: "Distribute.you" } }, { salesRepFirstName: "Kevin" }, { exact: [], neverGive: [] }, fresh, "2026-10-15", await plan(trigger, null), triggerType,
+    );
+    expect(composed.message as string).toContain("Name: Marie Curie");
+    expect(composed.message as string).toContain("First name they gave us: Marie");
+    expect(composed.systemPrompt as string).toContain("This is the ONE message this fact gets");
+
+    const reach = await loadMain(REACH_PLAN_CODE)(p, { items: [], person: { phones: [] } }, { sends: [] }, "c-1");
+    expect(reach).toMatchObject({ skip: false });
+    const sent = await loadMain(FINALIZE_MESSAGE_CODE)({ json: { decision: "write", message: "Hi Marie!" } }, p, "c-1", reach, trigger);
+    expect(sent.sendBody).toEqual({ brandId: "b-1", text: "Hi Marie!", idempotencyKey: "cold-whatsapp-outreach:event:ev-wa-1", skipIfReplied: false, phone: "+33611111111" });
+    // Sent: the row is handed for good, no follow-up is scheduled.
+    const rec = await loadMain(RECORD_PLAN_CODE)(p, { ok: true }, "2026-10-15", reach, sent);
+    expect(rec).toMatchObject({ action: "record", outcome: "sent", body: { kind: "handed" }, delivery: { state: "delivered" } });
   });
 });
