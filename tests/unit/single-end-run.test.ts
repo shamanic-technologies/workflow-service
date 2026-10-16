@@ -26,6 +26,7 @@ const DAGS: Record<string, DAG> = {
   "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
   "ai-instant-call": buildAiInstantCallDag(),
+  "ai-instant-call-email-only": buildAiInstantCallDag({ emailRepliesOnly: true }),
   "email-sending": buildEmailSendingDag(),
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),

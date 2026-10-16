@@ -15,7 +15,16 @@ import {
   REPLY_TEXT_UNAVAILABLE,
   RESOLVE_CALL_CODE,
   RING,
+  AI_INSTANT_CALL_DESCRIPTION,
+  EMAIL_REPLIES_ONLY_DESCRIPTION,
+  NOT_BY_EMAIL,
+  NO_REP_EMAIL_ONLY,
+  REPLY_CHANNEL_CODE,
+  REPLY_CHANNEL_UNKNOWN_REASON,
+  REPLY_NOT_BY_EMAIL_REASON,
+  RING_EMAIL_ONLY,
   buildAiInstantCallDag,
+  ringsOnEmailRepliesOnly,
 } from "../../src/lib/ai-instant-call-dag.js";
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, any>> {
@@ -325,5 +334,105 @@ describe("build-call", () => {
       expect(body.connectTo).toBeUndefined();
       expect(connectOffered).toBe(false);
     }
+  });
+});
+
+describe("the email-only copy (INSTANT-CALL-EMAIL-ONLY-1016): rings only on a positive reply received by email", () => {
+  const base = buildAiInstantCallDag();
+  const dag = buildAiInstantCallDag({ emailRepliesOnly: true });
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const resolve = loadMain(RESOLVE_CALL_CODE);
+  const channelOf = loadMain(REPLY_CHANNEL_CODE);
+  const emailReply = { ...replyTrigger, item: { ...replyTrigger.item, channel: "email" } };
+  const waReply = { ...replyTrigger, item: { ...replyTrigger.item, channel: "whatsapp" } };
+
+  async function route(trigger: unknown, r = rep) {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const resolved = await resolve(claim, trigger, leadDetail, r, brand);
+    const channel = await channelOf(trigger);
+    const results = { "claim-followup": claim, "resolve-call": resolved, "reply-channel": channel };
+    const arms = dag.edges.filter((e) => e.from === "check-call" && e.condition && holds(e.condition, results)).map((e) => e.to);
+    return { channel, arms };
+  }
+
+  it("the default workflow is untouched: no channel read, same DAG as before", () => {
+    expect(ringsOnEmailRepliesOnly(base)).toBe(false);
+    expect(base.nodes.some((n) => n.id === "reply-channel")).toBe(false);
+    expect(ringsOnEmailRepliesOnly(dag)).toBe(true);
+    expect(JSON.stringify(buildAiInstantCallDag({}))).toBe(JSON.stringify(base));
+  });
+
+  it("is a valid DAG with the same two top-level branchones, every leaf an end-run", () => {
+    expect(validateDAG(dag).errors).toEqual([]);
+    const flow = dagToOpenFlow(dag, "ai-instant-call-email-only-test");
+    expect(flow.value.modules.filter((m: { value: { type: string } }) => m.value.type === "branchone")).toHaveLength(2);
+    for (const leaf of dag.nodes.filter((n) => !dag.edges.some((e) => e.from === n.id))) {
+      expect(leaf.config?.path).toBe("/end-run");
+    }
+    expect(dag.edges).toContainEqual({ from: "resolve-call", to: "reply-channel" });
+    expect(dag.edges).toContainEqual({ from: "reply-channel", to: "check-call" });
+    expect(dag.edges).not.toContainEqual({ from: "resolve-call", to: "check-call" });
+  });
+
+  it("a reply received by email proceeds to the call plan", async () => {
+    const { channel, arms } = await route(emailReply);
+    expect(channel).toEqual({ allowed: true, channel: "email", occasion: "reply" });
+    expect(arms).toEqual(["request-reveal"]);
+    expect(descendants(dag, "request-reveal").has("ring-rep")).toBe(true);
+  });
+
+  it("a reply received on WhatsApp rings nobody: the row is stopped reply_not_by_email, the run ends as a refused skip", async () => {
+    const { channel, arms } = await route(waReply);
+    expect(channel.allowed).toBe(false);
+    expect(channel.stop).toEqual({ kind: "stopped", reason: REPLY_NOT_BY_EMAIL_REASON });
+    expect(channel.delivery).toMatchObject({ state: "refused", code: REPLY_NOT_BY_EMAIL_REASON });
+    expect(channel.delivery.reason).toContain("whatsapp");
+    expect(arms).toEqual(["record-not-email"]);
+    expect(descendants(dag, "record-not-email").has("ring-rep")).toBe(false);
+    expect(descendants(dag, "record-not-email").has("request-reveal")).toBe(false);
+    expect(byId.get("record-not-email")?.inputMapping).toEqual({
+      "params.id": "$ref:resolve-call.output.rowId",
+      body: "$ref:reply-channel.output.stop",
+    });
+    expect(byId.get("end-run-not-email")?.config?.body).toEqual({ success: true, stopCampaign: false });
+    expect(byId.get("end-run-not-email")?.inputMapping).toEqual({ "body.delivery": "$ref:reply-channel.output.delivery" });
+  });
+
+  it("a reply stating NO channel is never assumed to be email: skipped as reply_channel_unknown", async () => {
+    const { channel, arms } = await route(replyTrigger);
+    expect(channel).toMatchObject({ allowed: false, channel: null, stop: { kind: "stopped", reason: REPLY_CHANNEL_UNKNOWN_REASON } });
+    expect(arms).toEqual(["record-not-email"]);
+    expect((await channelOf(undefined)).allowed).toBe(false);
+    expect((await channelOf({ item: { channel: "  " } })).stop.reason).toBe(REPLY_CHANNEL_UNKNOWN_REASON);
+  });
+
+  it("the channel is case-folded: EMAIL rings", async () => {
+    expect((await channelOf({ item: { channel: "EMAIL" } })).allowed).toBe(true);
+  });
+
+  it("a form fill is not a reply: it rings as always", async () => {
+    const { channel, arms } = await route(formTrigger);
+    expect(channel).toEqual({ allowed: true, channel: null, occasion: "form" });
+    expect(arms).toEqual(["request-reveal"]);
+  });
+
+  it("no rep phone on an email reply still stops the row no_sales_rep_phone; on WhatsApp the channel skip wins", async () => {
+    expect((await route(emailReply, { salesRepPhone: null } as typeof rep)).arms).toEqual(["record-no-rep"]);
+    expect((await route(waReply, { salesRepPhone: null } as typeof rep)).arms).toEqual(["record-not-email"]);
+  });
+
+  it("an occurrence naming someone else still leaves their row alone, whatever its channel", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { arms } = await route({ ...waReply, person: { email: "other@example.com" } });
+    expect(arms).toEqual(["end-run-other-person"]);
+  });
+
+  it("nobody due takes no arm of check-call", () => {
+    for (const c of [RING_EMAIL_ONLY, NO_REP_EMAIL_ONLY, NOT_BY_EMAIL]) expect(holds(c, { "claim-followup": { found: false } })).toBe(false);
+  });
+
+  it("its description states the rule plainly (a tactic is judged on it)", () => {
+    expect(EMAIL_REPLIES_ONLY_DESCRIPTION.startsWith(AI_INSTANT_CALL_DESCRIPTION)).toBe(true);
+    expect(EMAIL_REPLIES_ONLY_DESCRIPTION).toContain("Rings only on a positive reply received by email");
   });
 });
