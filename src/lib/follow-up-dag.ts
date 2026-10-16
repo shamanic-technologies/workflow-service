@@ -97,6 +97,7 @@ export const FOLLOW_UP_WHATSAPP_REFUSAL_CODES = [
   "not_on_whatsapp",
   "person_replied",
   "automation_not_allowed",
+  "human_in_conversation",
 ] as const;
 
 /** Email refusals that mean the person is out for good (opted out, not a prospect): the chain stops. */
