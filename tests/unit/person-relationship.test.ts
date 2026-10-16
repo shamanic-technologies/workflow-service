@@ -4,6 +4,7 @@ import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import {
   KNOWN_RELATIONSHIP_TAGS,
   PERSON_RELATIONSHIP_STRATEGY,
+  RELATIONSHIP_TAGS,
   PERSON_THREAD_QUERY_CODE,
   WHO_THEY_ARE_CODE,
   needsPersonRelationship,
@@ -85,10 +86,21 @@ describe("who this person is to the brand (shared step)", () => {
       const out = await who(leadRead(relationship({ tags: [tag] })), undefined, timeline());
       expect(out?.state, tag).toBe("known");
     }
-    for (const tag of ["prospect", "other_professional"]) {
+    for (const tag of ["prospect", "other_professional", "journalist"]) {
       const out = await who(leadRead(relationship({ tags: [tag] })), undefined, timeline());
       expect(out?.state, tag).toBe("not_known");
     }
+  });
+
+  it("a journalist is named in plain words, never as a raw tag, and the strategy says they are never sold to", async () => {
+    expect(RELATIONSHIP_TAGS).toContain("journalist");
+    expect(KNOWN_RELATIONSHIP_TAGS as readonly string[]).not.toContain("journalist");
+    const out = await who(leadRead(relationship({ tags: ["journalist"] })), undefined, timeline());
+    const lines = (out?.lines as string[]).join("\n");
+    expect(lines).toContain("Also: a journalist the brand pitches for press coverage (never a buyer).");
+    const unsure = await who(leadRead(relationship({ unsureTags: ["journalist"] })), undefined, timeline());
+    expect((unsure?.lines as string[]).join("\n")).toContain("Possibly (not confirmed): a journalist the brand pitches for press coverage");
+    expect(PERSON_RELATIONSHIP_STRATEGY).toContain("A journalist is someone the brand pitches for press coverage, never a buyer");
   });
 
   it("a person never judged is POSSIBLY known, never a stranger, even with no relationship served at all", async () => {
