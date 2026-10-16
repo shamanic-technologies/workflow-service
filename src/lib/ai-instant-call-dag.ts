@@ -252,8 +252,8 @@ export const NO_REP = "results['resolve-call']?.ok == true && results['resolve-c
 /** The run claimed someone its occurrence does not name: their row is left alone. */
 export const OTHER_PERSON = "results['resolve-call']?.ok == false";
 
-export function buildAiInstantCallDag(): DAG {
-  return {
+export function buildAiInstantCallDag(opts: { emailRepliesOnly?: boolean } = {}): DAG {
+  const dag: DAG = {
     nodes: [
       {
         id: "gate-check",
@@ -397,4 +397,107 @@ export function buildAiInstantCallDag(): DAG {
     ],
     onError: "end-run-error",
   };
+  return opts.emailRepliesOnly ? withEmailRepliesOnly(dag) : dag;
+}
+
+/**
+ * THE EMAIL-ONLY COPY (INSTANT-CALL-EMAIL-ONLY-1016, owner 2026-10-16: « Enlève aussi les instant call sur WA. Fait
+ * uniquement sur email positive reply »). Its OWN dynasty, a fork of the default one (never an upgrade: every
+ * campaign on the pipe would switch to it), so a tactic "rings only on replies received by email" is judged on its
+ * DAG and description and a strategy requiring it selects it. No channel rule lives in a trigger or a service: the
+ * reply channel is read off the occurrence the run carries (`trigger.item.channel`, crm-service states it: "whatsapp"
+ * for a WhatsApp answer, "email" for its Gmail mirror).
+ *
+ * After the claim and the person's resolution (internal reads, no spend), `reply-channel` decides:
+ *  - a reply stating `channel: "email"`: the call proceeds exactly as in the default workflow;
+ *  - a reply stating any other channel: nobody rung, the claimed row is stopped `reply_not_by_email`, the run ends
+ *    `success: true` with delivery `refused` (code + sentence), so campaign-service never redelivers it;
+ *  - a reply stating NO channel: never assumed to be email, same skip with `reply_channel_unknown`;
+ *  - a form fill (not a reply): rings as always (the copy is registered on the form pipe too, like its source).
+ */
+export const EMAIL_REPLY_CHANNEL = "email";
+export const REPLY_NOT_BY_EMAIL_REASON = "reply_not_by_email";
+export const REPLY_CHANNEL_UNKNOWN_REASON = "reply_channel_unknown";
+
+export const EMAIL_REPLIES_ONLY_DESCRIPTION =
+  AI_INSTANT_CALL_DESCRIPTION +
+  " Rings only on a positive reply received by email: a reply received on WhatsApp or any other channel, or one " +
+  "whose channel is not stated, rings nobody and the run ends as a skip. A form fill rings as always.";
+
+/** Whether the triggering reply may ring: by email, or not a reply at all (a form). Pure, never throws. */
+export const REPLY_CHANNEL_CODE = `
+export async function main(trigger) {
+  const item = trigger && typeof trigger === "object" && trigger.item && typeof trigger.item === "object" ? trigger.item : {};
+  const isForm = Array.isArray(item.answers) || (typeof item.formName === "string" && item.formName.trim() !== "");
+  if (isForm) return { allowed: true, channel: null, occasion: "form" };
+  const channel = typeof item.channel === "string" && item.channel.trim() !== "" ? item.channel.trim().toLowerCase() : null;
+  if (channel === ${JSON.stringify(EMAIL_REPLY_CHANNEL)}) return { allowed: true, channel, occasion: "reply" };
+  const code = channel === null ? ${JSON.stringify(REPLY_CHANNEL_UNKNOWN_REASON)} : ${JSON.stringify(REPLY_NOT_BY_EMAIL_REASON)};
+  const reason = channel === null
+    ? "The positive reply states no channel: this workflow rings only on a reply received by email."
+    : "The positive reply was received on " + channel + ": this workflow rings only on a reply received by email.";
+  console.log("[ai-instant-call] nobody rung (" + code + "): " + reason);
+  return {
+    allowed: false,
+    channel,
+    occasion: "reply",
+    stop: { kind: "stopped", reason: code },
+    delivery: { state: "refused", code, reason },
+  };
+}
+`.trim();
+
+/** The email-only copy rings when the default would AND the reply may ring. */
+export const RING_EMAIL_ONLY = `${RING} && results['reply-channel']?.allowed == true`;
+export const NO_REP_EMAIL_ONLY = `${NO_REP} && results['reply-channel']?.allowed == true`;
+/** A reply not received by email (or stating no channel): nobody rung, the row is stopped. */
+export const NOT_BY_EMAIL = "results['resolve-call']?.ok == true && results['reply-channel']?.allowed == false";
+
+function withEmailRepliesOnly(dag: DAG): DAG {
+  const condition: Record<string, string> = { "request-reveal": RING_EMAIL_ONLY, "record-no-rep": NO_REP_EMAIL_ONLY };
+  return {
+    ...dag,
+    nodes: [
+      ...dag.nodes,
+      {
+        id: "reply-channel",
+        type: "script",
+        config: { code: REPLY_CHANNEL_CODE },
+        retries: 0,
+        inputMapping: { trigger: "$ref:flow_input.trigger" },
+      },
+      {
+        id: "record-not-email",
+        type: "http.call",
+        config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups" },
+        retries: 0,
+        inputMapping: { "params.id": "$ref:resolve-call.output.rowId", body: "$ref:reply-channel.output.stop" },
+      },
+      {
+        id: "end-run-not-email",
+        type: "http.call",
+        config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, stopCampaign: false } },
+        inputMapping: { "body.delivery": "$ref:reply-channel.output.delivery" },
+      },
+    ],
+    edges: [
+      ...dag.edges.flatMap((e) => {
+        if (e.from === "resolve-call" && e.to === "check-call") {
+          return [
+            { from: "resolve-call", to: "reply-channel" },
+            { from: "reply-channel", to: "check-call" },
+          ];
+        }
+        if (e.from === "check-call" && condition[e.to]) return [{ ...e, condition: condition[e.to] }];
+        return [e];
+      }),
+      { from: "check-call", to: "record-not-email", condition: NOT_BY_EMAIL },
+      { from: "record-not-email", to: "end-run-not-email" },
+    ],
+  };
+}
+
+/** Whether a stored DAG is the email-only copy (the seed tells the two dynasties apart by this). */
+export function ringsOnEmailRepliesOnly(dag: { nodes?: { id?: string }[] } | null | undefined): boolean {
+  return (dag?.nodes ?? []).some((n) => n?.id === "reply-channel");
 }
