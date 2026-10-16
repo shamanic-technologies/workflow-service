@@ -19,6 +19,9 @@ export const FRESH_CONTACTS_FIELD = "excludeEmailedWithin";
 /** The channels whose serve hands out people to prospect cold. */
 export const FRESH_CONTACTS_FEATURE_SLUGS = [
   "sales-cold-email-outreach",
+  // Same cold email to buyers, the gift-for-feedback offer: its 9 dynasties were upgraded with the window on 2026-10-16
+  // when they were brought back from the pre-guard stale sweep (2026-09-16), so the list now says so.
+  "feedback-request-cold-email-outreach",
   "lead-sourcing",
   "sourcing-apollo-cold-filters",
   "sourcing-apollo-buying-signals",
