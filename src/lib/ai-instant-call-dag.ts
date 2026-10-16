@@ -402,8 +402,8 @@ export function buildAiInstantCallDag(opts: { emailRepliesOnly?: boolean } = {})
 
 /**
  * THE EMAIL-ONLY COPY (INSTANT-CALL-EMAIL-ONLY-1016, owner 2026-10-16: « Enlève aussi les instant call sur WA. Fait
- * uniquement sur email positive reply »). Its OWN dynasty, a fork of the default one (never an upgrade: every
- * campaign on the pipe would switch to it), so a tactic "rings only on replies received by email" is judged on its
+ * uniquement sur email positive reply »). Its OWN dynasty (never an upgrade of the default: every campaign on the
+ * pipe would switch to it), so a tactic "rings only on replies received by email" is judged on its
  * DAG and description and a strategy requiring it selects it. No channel rule lives in a trigger or a service: the
  * reply channel is read off the occurrence the run carries (`trigger.item.channel`, crm-service states it: "whatsapp"
  * for a WhatsApp answer, "email" for its Gmail mirror).
@@ -411,9 +411,12 @@ export function buildAiInstantCallDag(opts: { emailRepliesOnly?: boolean } = {})
  * After the claim and the person's resolution (internal reads, no spend), `reply-channel` decides:
  *  - a reply stating `channel: "email"`: the call proceeds exactly as in the default workflow;
  *  - a reply stating any other channel: nobody rung, the claimed row is stopped `reply_not_by_email`, the run ends
- *    `success: true` with delivery `refused` (code + sentence), so campaign-service never redelivers it;
- *  - a reply stating NO channel: never assumed to be email, same skip with `reply_channel_unknown`;
- *  - a form fill (not a reply): rings as always (the copy is registered on the form pipe too, like its source).
+ *    `success: true` with `personNotAdmitted {reason}` (campaign-service: FINAL for this campaign, never
+ *    redelivered, recorded skipped `person_not_admitted` with the sentence verbatim);
+ *  - a reply stating NO channel: never assumed to be email, same skip with `reply_channel_unknown` (instantly-service
+ *    states no channel on its occurrence as of 2026-10-16: a producer gap, fixed there);
+ *  - a form fill: rings as always, but the copy lives ONLY on the positive-reply pipe (a form item carries no channel;
+ *    the seed creates it there with `pipeId`, never as a fork, which would register it on the form pipe too).
  */
 export const EMAIL_REPLY_CHANNEL = "email";
 export const REPLY_NOT_BY_EMAIL_REASON = "reply_not_by_email";
@@ -442,7 +445,7 @@ export async function main(trigger) {
     channel,
     occasion: "reply",
     stop: { kind: "stopped", reason: code },
-    delivery: { state: "refused", code, reason },
+    notAdmitted: { reason: code + ": " + reason },
   };
 }
 `.trim();
@@ -477,7 +480,7 @@ function withEmailRepliesOnly(dag: DAG): DAG {
         id: "end-run-not-email",
         type: "http.call",
         config: { service: "campaign", method: "POST", path: "/end-run", body: { success: true, stopCampaign: false } },
-        inputMapping: { "body.delivery": "$ref:reply-channel.output.delivery" },
+        inputMapping: { "body.personNotAdmitted": "$ref:reply-channel.output.notAdmitted" },
       },
     ],
     edges: [
