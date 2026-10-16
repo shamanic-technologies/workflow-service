@@ -381,12 +381,14 @@ describe("the email-only copy (INSTANT-CALL-EMAIL-ONLY-1016): rings only on a po
     expect(descendants(dag, "request-reveal").has("ring-rep")).toBe(true);
   });
 
-  it("a reply received on WhatsApp rings nobody: the row is stopped reply_not_by_email, the run ends as a refused skip", async () => {
+  it("a reply received on WhatsApp rings nobody: the row is stopped reply_not_by_email, the run ends person not admitted", async () => {
     const { channel, arms } = await route(waReply);
     expect(channel.allowed).toBe(false);
     expect(channel.stop).toEqual({ kind: "stopped", reason: REPLY_NOT_BY_EMAIL_REASON });
-    expect(channel.delivery).toMatchObject({ state: "refused", code: REPLY_NOT_BY_EMAIL_REASON });
-    expect(channel.delivery.reason).toContain("whatsapp");
+    expect(channel.notAdmitted.reason.startsWith(REPLY_NOT_BY_EMAIL_REASON + ": ")).toBe(true);
+    expect(channel.notAdmitted.reason).toContain("whatsapp");
+    expect(channel.notAdmitted.reason.length).toBeLessThanOrEqual(200);
+    expect(channel.delivery).toBeUndefined();
     expect(arms).toEqual(["record-not-email"]);
     expect(descendants(dag, "record-not-email").has("ring-rep")).toBe(false);
     expect(descendants(dag, "record-not-email").has("request-reveal")).toBe(false);
@@ -395,7 +397,7 @@ describe("the email-only copy (INSTANT-CALL-EMAIL-ONLY-1016): rings only on a po
       body: "$ref:reply-channel.output.stop",
     });
     expect(byId.get("end-run-not-email")?.config?.body).toEqual({ success: true, stopCampaign: false });
-    expect(byId.get("end-run-not-email")?.inputMapping).toEqual({ "body.delivery": "$ref:reply-channel.output.delivery" });
+    expect(byId.get("end-run-not-email")?.inputMapping).toEqual({ "body.personNotAdmitted": "$ref:reply-channel.output.notAdmitted" });
   });
 
   it("a reply stating NO channel is never assumed to be email: skipped as reply_channel_unknown", async () => {
@@ -404,6 +406,7 @@ describe("the email-only copy (INSTANT-CALL-EMAIL-ONLY-1016): rings only on a po
     expect(arms).toEqual(["record-not-email"]);
     expect((await channelOf(undefined)).allowed).toBe(false);
     expect((await channelOf({ item: { channel: "  " } })).stop.reason).toBe(REPLY_CHANNEL_UNKNOWN_REASON);
+    expect((await channelOf(replyTrigger)).notAdmitted.reason.length).toBeLessThanOrEqual(200);
   });
 
   it("the channel is case-folded: EMAIL rings", async () => {

@@ -8,13 +8,13 @@
  *
  * TWO dynasties live on the pipe, told apart by their DAG (`ringsOnEmailRepliesOnly`): the DEFAULT one (rings on
  * every positive reply and form) and the EMAIL-ONLY copy (INSTANT-CALL-EMAIL-ONLY-1016: rings only on a reply
- * received by email), a FORK of the default (`POST /workflows/dynasty/{slug}/fork`, registered on every pipe its
- * source serves) so a strategy requiring the tactic selects it and no campaign on the default switches.
+ * received by email), its own dynasty created ON the positive-reply pipe only (`POST /workflows` with `pipeId`; never
+ * a fork, which registers the copy on every pipe its source serves, the form pipe included, whose items carry no
+ * channel), so a strategy requiring the tactic selects it and no campaign on the default switches.
  *
- * Idempotent: creates the default when no dynasty is assigned to the pipe, forks the email-only copy when absent,
- * upgrades either whose stored DAG is behind the current one (in its own dynasty), skips a current one, then
- * registers both on every AI Instant Call pipe (`AI_INSTANT_CALL_PIPE_IDS`: the positive-reply leg and the form
- * leg; insert-if-absent, a no-op when present).
+ * Idempotent: creates either when absent, upgrades either whose stored DAG is behind the current one (in its own
+ * dynasty), skips a current one, then registers the default on every AI Instant Call pipe (`AI_INSTANT_CALL_PIPE_IDS`:
+ * the positive-reply leg and the form leg) and the copy on the positive-reply leg only (insert-if-absent).
  * Usage, from inside the workflow-service container:
  *   node seed-ai-instant-call-workflow.mjs            # dry run
  *   node seed-ai-instant-call-workflow.mjs --apply
@@ -116,41 +116,22 @@ for (const kind of KINDS) {
     }
     continue;
   }
-  if (!kind.emailOnly) {
-    const body = { featureSlug: slug, pipeId: AI_INSTANT_CALL_PIPE_ID, description: kind.description, dag: kind.dag };
-    if (!APPLY) {
-      console.log(`${AI_INSTANT_CALL_PIPE_ID}: WOULD create the default`);
-      dynastyOf[kind.name] = null;
-      continue;
-    }
-    const created = await call(BASE_URL, API_KEY, "POST", "/workflows", body);
-    if (created.status !== 201) throw new Error(`create: ${created.status} ${JSON.stringify(created.payload)}`);
-    console.log(`${AI_INSTANT_CALL_PIPE_ID}: created ${created.payload.workflowSlug} (dynasty ${created.payload.workflowDynastySlug})`);
-    dynastyOf[kind.name] = created.payload.workflowDynastySlug;
-    continue;
-  }
-  // The email-only copy: a FORK of the default (its own dynasty), the whole node and edge set stated as the change.
-  const source = dynastyOf.default;
-  if (!APPLY || !source) {
-    console.log(`${AI_INSTANT_CALL_PIPE_ID}: WOULD fork ${source ?? "(the default)"} into the email-only dynasty`);
+  const body = { featureSlug: slug, pipeId: AI_INSTANT_CALL_PIPE_ID, description: kind.description, dag: kind.dag };
+  if (!APPLY) {
+    console.log(`${AI_INSTANT_CALL_PIPE_ID}: WOULD create the ${kind.name} one`);
     dynastyOf[kind.name] = null;
     continue;
   }
-  const fork = await call(BASE_URL, API_KEY, "POST", `/workflows/dynasty/${encodeURIComponent(source)}/fork`, {
-    changes: [
-      { op: "replace", path: "/nodes", value: kind.dag.nodes },
-      { op: "replace", path: "/edges", value: kind.dag.edges },
-    ],
-    description: kind.description,
-  });
-  if (fork.status !== 201) throw new Error(`fork ${source}: ${fork.status} ${JSON.stringify(fork.payload)}`);
-  console.log(`${AI_INSTANT_CALL_PIPE_ID}: forked ${source} -> email-only ${fork.payload.workflow?.workflowSlug} (dynasty ${fork.payload.workflow?.workflowDynastySlug})`);
-  dynastyOf[kind.name] = fork.payload.workflow?.workflowDynastySlug ?? null;
+  const created = await call(BASE_URL, API_KEY, "POST", "/workflows", body);
+  if (created.status !== 201) throw new Error(`create ${kind.name}: ${created.status} ${JSON.stringify(created.payload)}`);
+  console.log(`${AI_INSTANT_CALL_PIPE_ID}: created ${kind.name} ${created.payload.workflowSlug} (dynasty ${created.payload.workflowDynastySlug})`);
+  dynastyOf[kind.name] = created.payload.workflowDynastySlug;
 }
 
 for (const kind of KINDS) {
   const dynastySlug = dynastyOf[kind.name];
-  for (const pipeId of AI_INSTANT_CALL_PIPE_IDS) {
+  // The copy reads the reply channel: a form item carries none, so it never sits on the form pipe.
+  for (const pipeId of kind.emailOnly ? [AI_INSTANT_CALL_PIPE_ID] : AI_INSTANT_CALL_PIPE_IDS) {
     if (!APPLY || !dynastySlug) {
       console.log(`${slug}: WOULD register ${kind.name} ${dynastySlug ?? "(new dynasty)"} on ${pipeId}`);
       continue;
@@ -159,7 +140,7 @@ for (const kind of KINDS) {
       pipeId,
       workflowDynastySlug: dynastySlug,
       registeredBy: "workflow-service",
-      note: `seed-ai-instant-call-workflow: the ${kind.name} AI Instant Call workflow, on every AI Instant Call pipe`,
+      note: `seed-ai-instant-call-workflow: the ${kind.name} AI Instant Call workflow`,
     });
     if (reg.status !== 200 && reg.status !== 201) throw new Error(`register ${dynastySlug} on ${pipeId}: ${reg.status} ${JSON.stringify(reg.payload)}`);
     console.log(`${slug}: ${kind.name} ${dynastySlug} on ${pipeId} (${reg.status === 201 ? "registered" : "already there"})`);
