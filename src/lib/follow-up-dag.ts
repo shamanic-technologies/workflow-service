@@ -39,6 +39,7 @@ import type { DAG, DAGNode } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { PERSON_THREAD_NODE_ID, PERSON_THREAD_QUERY_NODE_ID, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
+import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import {
   EMAIL_MEDIUM,
   FOLLOW_UP_SEND_REFUSAL_CODES,
@@ -95,6 +96,7 @@ export const FOLLOW_UP_WHATSAPP_REFUSAL_CODES = [
   "no_phone_known",
   "not_on_whatsapp",
   "person_replied",
+  "automation_not_allowed",
 ] as const;
 
 /** Email refusals that mean the person is out for good (opted out, not a prospect): the chain stops. */
@@ -375,6 +377,8 @@ export async function main(person, plan, reach, timeline) {
       email,
       phone: reach.to ?? person.phone ?? null,
       fromAccount: reach.fromAccount ?? null,
+      // The persona of the account that will send, or null (SOPHIE-WA-1016): the writer speaks as it.
+      persona: senderPersona(reach),
       why: "The brand's WhatsApp reaches them (" + String(reach.to) + ")" + (lastWhere && lastWhere !== "whatsapp" ? "; their last message came by " + lastWhere : "") + ".",
     };
   }
@@ -390,6 +394,8 @@ export async function main(person, plan, reach, timeline) {
   console.error("[follow-up] no route can write to " + String(person.phone ?? "this person") + ": WhatsApp " + String(reach.code) + ", no email known; nothing drafted");
   return { channel: null, skipModel: true, noChannel: true, why: "WhatsApp " + String(reach.code) + " and no email known" };
 }
+
+${SENDER_PERSONA_FN}
 `.trim();
 
 const GATHER_FACTS_SIGNATURE = "export async function main(plan, offerAnswers, offerFields, brandFields)";
@@ -510,6 +516,8 @@ export async function main(person, channel, offer, brand, facts, history, figure
     wa
       ? "THE CHANNEL is WhatsApp: the message continues our WhatsApp conversation with them, from the same number, in the language and tone of that conversation. Two to four short sentences, no greeting line of its own, no sign off, plain text, no links unless the facts give one."
       : "THE CHANNEL is email: the email is a reply in the last email thread we have with them, from the same mailbox, so never re-introduce us. Under 120 words. Greet them by first name when you have it. No sign off or signature block: ours is added below your text. bodyHtml is simple HTML, <p> paragraphs only. The subject is short and plain, never \\"Re:\\" or \\"Follow-up\\".",
+    // The sending WhatsApp account's own persona (SOPHIE-WA-1016): none = the prompt of before.
+    ...(wa && channel.persona ? personaLines(channel.persona, brandName) : []),
     "The channel was chosen for you. Their last message may be on another channel (LinkedIn, Telegram, a call): read it, carry on from it, never say where you are writing from or why.",
     ...(text
       ? ["You also follow the INSTRUCTION from our client below where it does not contradict these rules."]
@@ -567,6 +575,8 @@ export async function main(person, channel, offer, brand, facts, history, figure
 ${WHY_NOW_FN}
 
 ${LOCAL_TIME_FN}
+
+${SENDER_PERSONA_FN}
 `.trim();
 
 /**

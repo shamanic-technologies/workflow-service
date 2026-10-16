@@ -248,11 +248,12 @@ describe("reading the history before writing", () => {
     expect(out.voiceLines).toEqual(["to this person, whatsapp: T'as dépensé combien ?", "to someone else, whatsapp: yo ça dit quoi"]);
   });
 
-  it("fails the person loud when the thread is unreadable, or when the owner's voice cannot be learned", async () => {
+  it("fails the person loud when the thread is unreadable; no owner voice is left to the writer (a persona needs none)", async () => {
     const read = loadMain(READ_HISTORY_CODE);
     await expect(read(undefined, {})).rejects.toThrow(/thread did not come back/);
     await expect(read({ items: [], sources: [{ source: "matrix", status: "failed", error: "db down" }] }, {})).rejects.toThrow(/unreadable \(matrix: db down\)/);
-    await expect(read({ items: [msg("2026-10-01T00:00:00Z", "matrix", "inbound", "hello")], sources: ok }, {})).rejects.toThrow(/voice/);
+    // SOPHIE-WA-1016: compose decides (it fails loud without a persona, see sender-persona.test.ts).
+    expect((await read({ items: [msg("2026-10-01T00:00:00Z", "matrix", "inbound", "hello")], sources: ok }, {})).voiceLines).toEqual([]);
   });
 
   it("a person nobody ever wrote to has no history, and still gets the owner's voice from his other conversations", async () => {
@@ -546,7 +547,7 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
     // reach-plan already refused: the check was not called, its verdict stands.
     const noPhone = { skip: true, code: "no_phone_known", skipIfReplied: false, reason: "No phone." };
     expect(await verdict(noPhone, { ok: false, skipped: true, notCalled: true })).toEqual(noPhone);
-    expect(await verdict(plan, { reachable: true, to: "+33600000000" })).toEqual(plan);
+    expect(await verdict(plan, { reachable: true, to: "+33600000000" })).toEqual({ ...plan, persona: null });
     const out = await verdict(plan, { reachable: false, code: "not_on_whatsapp", error: "+254111 is not on WhatsApp" });
     expect(out).toEqual({ skip: true, code: "not_on_whatsapp", skipIfReplied: false, owed: false, reason: "+254111 is not on WhatsApp" });
     // No answer = nothing drafted blind.
