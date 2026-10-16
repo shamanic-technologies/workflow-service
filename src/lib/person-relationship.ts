@@ -7,7 +7,7 @@
  * DEVRAIT JAMAIS ASSUME QUE JE NE LES CONNAIS PAS ».
  *
  * lead-service owns who a person is to the brand: the `relationship` block (tags Personal / Customer / Prospect /
- * Team / Investor / Advisor / Supplier / Partner / Other professional, each yes / unsure, judged on the person's
+ * Team / Investor / Advisor / Supplier / Partner / Other professional / Journalist, each yes / unsure, judged on the person's
  * whole merged thread) served on `GET /orgs/leads/{id}/relationship` (`relationship`, same id as the lead detail,
  * which itself carries none) and on the lead handed by `POST /orgs/buffer/next` (`lead.data.relationship`). crm-service owns the person's whole merged thread
  * (`GET /orgs/people/timeline`, every channel).
@@ -34,9 +34,15 @@ export const RELATIONSHIP_TAGS = [
   "supplier",
   "partner",
   "other_professional",
+  "journalist",
 ] as const;
 
-/** A person carrying one of these is someone the brand already knows: never written to as a stranger. */
+/**
+ * A person carrying one of these is someone the brand already knows: never written to as a stranger.
+ * `journalist` (JOURNALISTS-NOT-LEADS-1016) is NOT here: the tag says the brand pitches them for press coverage, not
+ * that they ever answered or know the brand. Whether they do is read off the thread (any message = possibly known),
+ * like any other person. What the tag changes is the game (never sold to), told in the strategy below.
+ */
 export const KNOWN_RELATIONSHIP_TAGS = ["personal", "customer", "team", "investor", "advisor", "partner", "supplier"] as const;
 
 /** Timeline sources that carry MESSAGES: one of them unreadable means the thread is unreadable. */
@@ -51,6 +57,7 @@ export const PERSON_RELATIONSHIP_STRATEGY = [
   "Someone the brand already knows (a personal contact of the owner, a customer, someone on the team, an investor, an advisor, a partner or a supplier) must read a message from someone who knows them. Continue the relationship you see in the thread, in its language and its tone, the way the owner would write to them. Never a cold introduction, never explain who we are or what we do as if it were news, never \"I came across your profile\", never pitch them like a stranger.",
   "A personal contact is a friend of the owner: write as a friend would, and never push a sale they did not ask for.",
   "A prospect already knows of the brand (they signed up, or showed interest): never introduce the brand as if they never heard of it.",
+  "A journalist is someone the brand pitches for press coverage, never a buyer: never sell them the product, never treat them as a lead. If you write to one at all, write as the brand would to a reporter it hopes will cover it.",
   "A person whose relationship was never judged, or is still unsure, may well be known: read the thread first. If anything in it shows they know us, write as someone who knows them. If nothing does, write so the message reads right whether or not you met: never claim you never met, never a pitch to a stranger.",
   "Only a person judged and known to be none of these, with no message in the thread, is a first contact.",
   "Never mention these tags, and never say that anyone classified them.",
@@ -78,6 +85,7 @@ export async function main(relationshipRead, served, timeline) {
     supplier: "a supplier",
     partner: "a partner",
     other_professional: "someone the owner knows professionally",
+    journalist: "a journalist the brand pitches for press coverage (never a buyer)",
   };
   if (relationshipRead && relationshipRead.ok === false && relationshipRead.notCalled !== true && relationshipRead.status !== 404) {
     throw new Error("who-they-are: who the person is to the brand could not be read (" + String(relationshipRead.status ?? "no status") + " " + String(relationshipRead.error ?? "").slice(0, 200) + "); nothing is written blind");
