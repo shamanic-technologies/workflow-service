@@ -42,10 +42,12 @@ import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } fro
 import {
   EMAIL_MEDIUM,
   FOLLOW_UP_SEND_REFUSAL_CODES,
+  LOCAL_TIME_FN,
   NEXT_DATE_FN,
   NEXT_DATE_SCHEMA_PROPERTIES,
   PASSING_REFUSAL_CODES,
   WHATSAPP_MEDIUM,
+  localTimeStrategy,
   nextDateStrategy,
   rightMomentStrategy,
 } from "./right-moment.js";
@@ -498,6 +500,8 @@ export async function main(person, channel, offer, brand, facts, history, figure
   const notRead = !skippedFigures && typeof figures.missing === "string" && figures.missing.trim() ? figures.missing.trim() : null;
   const game = wa ? ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))} : ${JSON.stringify(rightMomentStrategy(EMAIL_MEDIUM))};
   const nextDate = wa ? ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))} : ${JSON.stringify(nextDateStrategy(EMAIL_MEDIUM))};
+  const localHour = wa ? ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))} : ${JSON.stringify(localTimeStrategy(EMAIL_MEDIUM))};
+  const localTime = localTimeLines(nowIso, { timezone: person?.timezone, city: p.city, country: p.country, phone: channel.phone ?? person?.phone });
 
   const systemPrompt = [
     "You follow up ONE person for the team at " + brandName + ", and you decide WHEN they are next followed up. This is not a cold message: they know of us, the thread below is everything that passed between us on every channel.",
@@ -516,6 +520,7 @@ export async function main(person, channel, offer, brand, facts, history, figure
     "If the INSTRUCTION asks for something none of those hold (a figure that could not be read), set decision to cannot_write and say in reason what is missing.",
     who.strategy,
     game,
+    localHour,
     nextDate,
     "STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again, or they show they are not a fit at all (the wrong person, they left the company, they do not run anything like what we offer). Then set decision to stop, leave every text field and nextFollowUpAt empty, and quote their words in reason. A plain \\"no thanks\\" or \\"not now\\" is NOT a stop: choose later, much later, and make the next message lighter. Silence is never a reason to stop.",
     "Write like a person who knows them: short, plain, warm, one idea per sentence. No filler, no \\"I hope this finds you well\\".",
@@ -530,6 +535,9 @@ export async function main(person, channel, offer, brand, facts, history, figure
     "Messages of ours on record: " + String(history?.ourMessages ?? 0) + ". Our last: " + String(history?.lastOursAt ?? "unknown") + ". Their last message: " + String(history?.lastTheirsAt ?? "never") + ".",
     ...(text ? ["", "INSTRUCTION from our client:", text] : []),
     ...(factLines.length ? ["", "WHY WE WRITE NOW:", ...factLines] : []),
+    "",
+    "THEIR LOCAL TIME:",
+    ...localTime,
     "",
     "WHO WE WRITE TO:",
     ...(personLines.length ? personLines : ["(nothing beyond how to reach them)"]),
@@ -557,6 +565,8 @@ export async function main(person, channel, offer, brand, facts, history, figure
 }
 
 ${WHY_NOW_FN}
+
+${LOCAL_TIME_FN}
 `.trim();
 
 /**
