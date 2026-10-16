@@ -11,7 +11,7 @@ import {
 } from "../../src/lib/person-relationship.js";
 import { buildColdWhatsappOutreachDag, COMPOSE_MESSAGE_PROMPT_CODE } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { buildAiMeetingBookingDag, COMPOSE_REPLY_PROMPT_CODE } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildAiFollowUpEmailDag, COMPOSE_EMAIL_PROMPT_CODE } from "../../src/lib/ai-follow-up-email-dag.js";
+import { buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
 import { buildFormMeetingBookingDag, COMPOSE_ANSWER_PROMPT_CODE } from "../../src/lib/form-meeting-booking-dag.js";
 import {
   BUSINESS_ONLY_CHANGES,
@@ -195,7 +195,6 @@ describe("every writer runs the shared step before writing, the same way", () =>
   const writers: Array<{ name: string; dag: DAG; compose: string }> = [
     { name: "cold-whatsapp-outreach", dag: buildColdWhatsappOutreachDag(), compose: "compose-message" },
     { name: "ai-meeting-booking", dag: buildAiMeetingBookingDag({ provider: "anthropic", model: "opus" } as never), compose: "compose-prompt" },
-    { name: "ai-follow-up-email", dag: buildAiFollowUpEmailDag(), compose: "compose-email" },
     { name: "form-meeting-booking", dag: buildFormMeetingBookingDag(), compose: "compose-answer" },
   ];
 
@@ -263,15 +262,27 @@ describe("every writer puts who they are to us in front of the model", () => {
     expect(text).not.toContain("This is a FIRST message");
   });
 
-  it("follow-up email: the relationship, the strategy and the thread", async () => {
+  it("follow-up: the relationship, the strategy and the thread", async () => {
     const withThread = { ...known, threadLines: ["2026-09-02 10:00 | whatsapp | THEM: See you Friday!"] };
-    const text = await prompt(COMPOSE_EMAIL_PROMPT_CODE, [
-      "Tell them their balance.", { followup: { id: "r", email: "y@example.com" } }, { leadDetail: { lead: {} } },
-      offer, brand, facts, { figures: [], missing: null }, "2026-10-14", undefined, undefined, withThread,
+    const person = { ok: true, email: "y@example.com", brandId: "b-1", lead: {}, timezone: null };
+    const channel = { channel: "whatsapp", skipModel: false, email: "y@example.com", phone: "+33612345678", why: "reachable" };
+    const text = await prompt(COMPOSE_FOLLOW_UP_CODE, [
+      person, channel, offer, brand, facts, { lines: [], ourMessages: 0 }, undefined, "Tell them their balance.",
+      undefined, undefined, undefined, "2026-10-16T10:00:00.000Z", "2026-10-16", withThread,
     ]);
     expect(text).toContain("WHO THEY ARE TO US:");
     expect(text).toContain(PERSON_RELATIONSHIP_STRATEGY);
     expect(text).toContain("THEM: See you Friday!");
+  });
+
+  it("follow-up: who-they-are reads the thread and the relationship before the writer", () => {
+    const dag = buildFollowUpReactiveDag({ readFigures: false });
+    expect(validateDAG(dag).valid).toBe(true);
+    const step = dag.nodes.find((n) => n.id === "who-they-are");
+    expect(step?.config?.code).toBe(WHO_THEY_ARE_CODE);
+    expect(step?.inputMapping).toMatchObject({ relationshipRead: "$ref:relationship-read.output", timeline: "$ref:person-thread.output" });
+    expect(dag.nodes.find((n) => n.id === "compose")?.inputMapping?.who).toBe("$ref:who-they-are.output");
+    expect(withPersonRelationshipStep(dag)).toBe(dag);
   });
 
   it("form responder: the relationship, the strategy and the thread", async () => {
@@ -293,7 +304,7 @@ describe("every writer puts who they are to us in front of the model", () => {
   });
 
   it("every writer refuses to write without the step", async () => {
-    await expect(loadMain(COMPOSE_EMAIL_PROMPT_CODE)("x", {}, {}, offer, brand, facts, { figures: [] }, "d", undefined)).rejects.toThrow(/nothing is written blind/);
+    await expect(loadMain(COMPOSE_FOLLOW_UP_CODE)({}, { channel: "email" }, offer, brand, facts, {}, undefined, "x")).rejects.toThrow(/nothing is written blind/);
     await expect(loadMain(COMPOSE_ANSWER_PROMPT_CODE)({ email: "a@b.c" }, offer, brand, {}, facts, "d", undefined)).rejects.toThrow(/nothing is written blind/);
   });
 });
