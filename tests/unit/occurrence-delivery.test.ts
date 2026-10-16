@@ -2,8 +2,7 @@ import { describe, it, expect } from "vitest";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { SEND_DELIVERY_CODE } from "../../src/lib/occurrence-delivery.js";
-import { buildAiFollowUpEmailDag } from "../../src/lib/ai-follow-up-email-dag.js";
-import { buildProspectFollowUpProactiveDag, buildProspectFollowUpReactiveDag } from "../../src/lib/prospect-follow-up-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag, FOLLOW_UP_END_KINDS } from "../../src/lib/follow-up-dag.js";
 import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { buildAiMeetingBookingDag, needsOccurrenceDelivery } from "../../src/lib/ai-meeting-booking-dag.js";
@@ -51,34 +50,25 @@ describe("SEND_DELIVERY_CODE (one end-run closing both a sent and a skipped send
   });
 });
 
-describe("ai-follow-up-email", () => {
-  const dag = buildAiFollowUpEmailDag();
-  it("sent = delivered; a passing refusal (deferred) and a final one = refused verbatim; a throw = no delivery", () => {
-    expect(validateDAG(dag).errors).toEqual([]);
-    const passing = refusedSend("brand_sequence_queued", "a step of their sequence is still queued");
-    const final = refusedSend("lead_opted_out", "they asked us to stop");
-    expect(endRunBody(dag, "end-run", { send_email: { success: true } })).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
-    expect(endRunBody(dag, "end-run-deferred", { send_email: passing })).toEqual({ success: true, stopCampaign: false, delivery: passing.delivery });
-    expect(endRunBody(dag, "end-run-refused", { send_email: final })).toEqual({ success: true, stopCampaign: false, delivery: final.delivery });
-    expect(dag.edges).toContainEqual({ from: "record-deferred", to: "end-run-deferred" });
-    expect(dag.edges).toContainEqual({ from: "record-sent", to: "end-run" });
-    expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
-  });
-});
-
-describe("prospect-follow-up (both pipes)", () => {
-  for (const [name, dag] of [["reactive", buildProspectFollowUpReactiveDag()], ["proactive", buildProspectFollowUpProactiveDag()]] as const) {
-    it(`${name}: the shared end-run reads the send (sent = delivered, passing refusal = refused); a stop refusal = refused`, async () => {
+describe("follow-up (every pipe)", () => {
+  const dags = [
+    ["proactive", buildFollowUpProactiveDag()],
+    ["reactive", buildFollowUpReactiveDag({ readFigures: false })],
+    ["reactive + figures", buildFollowUpReactiveDag({ readFigures: true })],
+  ] as const;
+  for (const [name, dag] of dags) {
+    it(`${name}: every end that sent, refused or found no channel states the outcome's delivery; a throw = no delivery`, () => {
       expect(validateDAG(dag).errors).toEqual([]);
-      const passing = refusedSend("recent_brand_contact", "emailed 2 days ago");
-      const main = loadMain(SEND_DELIVERY_CODE);
-      const sentDelivery = await main({ success: true });
-      const passingDelivery = await main(passing);
-      expect(endRunBody(dag, "end-run", { send_delivery: sentDelivery })).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
-      expect(endRunBody(dag, "end-run", { send_delivery: passingDelivery })).toEqual({ success: true, stopCampaign: false, delivery: passing.delivery });
-      const stop = refusedSend("lead_not_a_prospect", "not a prospect");
-      expect(endRunBody(dag, "end-run-opted-out", { send_email: stop })).toEqual({ success: true, stopCampaign: false, delivery: stop.delivery });
-      expect(dag.edges).toContainEqual({ from: "send-delivery", to: "end-run" });
+      const refused = delivery("lead_opted_out", "they asked us to stop");
+      for (const kind of ["sent", "no-channel", "refused-kept", "refused-final", "not-writable"]) {
+        const body = endRunBody(dag, `end-run-${kind}`, { outcome: { delivery: refused } });
+        expect(body.delivery).toEqual(refused);
+      }
+      expect(endRunBody(dag, "end-run-sent", { outcome: { delivery: { state: "delivered" } } }).delivery).toEqual({ state: "delivered" });
+      for (const kind of ["later", "queued", "not-yet", "not-owed", "stopped"]) {
+        expect(endRunBody(dag, `end-run-${kind}`, {})).toEqual({ success: true, stopCampaign: false });
+      }
+      expect(FOLLOW_UP_END_KINDS.length).toBe(10);
       expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
     });
   }

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildAiFollowUpEmailDag } from "../../src/lib/ai-follow-up-email-dag.js";
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
 import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
@@ -10,10 +9,7 @@ import { buildEmailSendingDag } from "../../src/lib/email-sending-dag.js";
 import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildSourcingDag } from "../../src/lib/sourcing-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
-import {
-  buildProspectFollowUpProactiveDag,
-  buildProspectFollowUpReactiveDag,
-} from "../../src/lib/prospect-follow-up-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 
 /**
  * LLM-SPEND-NO-SEND-1016: a run reports its end to campaign-service ONCE. An `/end-run` node that is the target of
@@ -27,7 +23,6 @@ type Mod = { id: string; value: { type: string; branches?: { modules: Mod[] }[];
 const CELL = { provider: "google", model: "pro" } as const;
 const DAGS: Record<string, DAG> = {
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
-  "ai-follow-up-email": buildAiFollowUpEmailDag(),
   "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
   "ai-instant-call": buildAiInstantCallDag(),
@@ -35,8 +30,9 @@ const DAGS: Record<string, DAG> = {
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   sourcing: buildSourcingDag(),
-  "prospect-follow-up-proactive": buildProspectFollowUpProactiveDag(),
-  "prospect-follow-up-reactive": buildProspectFollowUpReactiveDag(),
+  "follow-up-proactive": buildFollowUpProactiveDag(),
+  "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
+  "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),
 };
 
 const moduleId = (nodeId: string) => nodeId.replace(/-/g, "_");

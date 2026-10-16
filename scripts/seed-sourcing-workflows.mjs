@@ -9,7 +9,7 @@
  * dynasty slug units store resolves forward to it); a current one is skipped.
  * Every play in SOURCING_FORK_PLAYS gets its OWN dynasty on its channels: a FORK of the generic one
  * (`POST /workflows/dynasty/{slug}/fork` with the play's one serve-body change: "business contacts only"
- * RELATIONSHIP-TAGS-1014, "contacted pure prospects" NEVER-NO-FOLLOWUP-1014), so the generic dynasty stays the default
+ * RELATIONSHIP-TAGS-1014, "Lead follow-up due" MULTICHANNEL-FOLLOWUP-1016, which upgraded the "contacted pure prospects" copy), so the generic dynasty stays the default
  * play and features-service judges the tactic on the fork.
  * Usage, from inside the workflow-service container:
  *   node seed-sourcing-workflows.mjs            # dry run
@@ -72,10 +72,11 @@ for (const slug of SOURCING_CHANNEL_SLUGS) {
   if (rows.length > 0) {
     for (const w of rows) {
       // A copy (reachableBy, catch-all) keeps the serve body it states and its own description.
-      const { dag: target, stated } = sourcingTargetOf(w.dag, current);
+      const { dag: target, stated, description: successorDescription } = sourcingTargetOf(w.dag, current);
       const targetServe = target.nodes.find((n) => n.id === "serve-lead");
       const fresh = targetServe?.config?.body?.[FRESH_CONTACTS_FIELD] !== undefined;
-      const description = stated ? (fresh ? freshContactsDescription(w.description) : w.description) : genericDescription;
+      // A copy whose population was replaced takes its successor's description (the tactic is judged on it).
+      const description = successorDescription ?? (stated ? (fresh ? freshContactsDescription(w.description) : w.description) : genericDescription);
       if (canonical(w.dag) === canonical(target)) {
         console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
         continue;
