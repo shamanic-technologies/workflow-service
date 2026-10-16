@@ -77,6 +77,7 @@ import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import {
   LOCAL_TIME_FN,
   NEXT_DATE_FN,
@@ -130,9 +131,14 @@ export const REPLY_SOURCES = ["gmail", "matrix", "instantly"] as const;
 
 /**
  * crm-service refusals about the BRAND's WhatsApp, not the person: on a follow-up look nothing was sent and the
- * person stays followed up at the model's date (crm-service tells the owner to reconnect).
+ * person stays followed up at the model's date (crm-service tells the owner to reconnect), or, when the refusal came
+ * before any draft (the reach check), `BRAND_SIDE_RECHECK_DAYS` later. `automation_not_allowed` = the brand has no
+ * linked account it lets automation write from (SOPHIE-WA-1016).
  */
-export const BRAND_SIDE_REFUSAL_CODES = ["whatsapp_not_linked", "whatsapp_not_connected"] as const;
+export const BRAND_SIDE_REFUSAL_CODES = ["whatsapp_not_linked", "whatsapp_not_connected", "automation_not_allowed"] as const;
+
+/** A brand-side refusal with no date of the model's (nothing was drafted): the person is looked at again this long after. */
+export const BRAND_SIDE_RECHECK_DAYS = 7;
 
 /** Stored on the queue row once the message answering an occurrence went out: handed, permanent, one message. */
 export const WHATSAPP_OCCURRENCE_SENT_REASON = "whatsapp_occurrence_sent";
@@ -286,8 +292,10 @@ export const MESSAGE_SOURCES = ["gmail", "matrix", "instantly", "copilot"] as co
  *   person's thread first, then the other sampled people's. His chat messages (WhatsApp, LinkedIn) when he has any,
  *   since a WhatsApp message is what is being written; his emails only when he never chatted.
  *
- * Fails the person loud when the thread cannot be read whole, or when there is not one message of the owner to learn
- * his voice from: a blind generic message is exactly what this step exists to prevent.
+ * Fails the person loud when the thread cannot be read whole: a blind generic message is exactly what this step
+ * exists to prevent. Not one message of the owner to learn his voice from is decided by the writer (compose), once
+ * the reach check said who sends: a sending account with a persona speaks as itself and needs no owner voice
+ * (SOPHIE-WA-1016); without one, compose fails loud as this step used to.
  */
 export const READ_HISTORY_CODE = `
 export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
@@ -336,7 +344,6 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
     for (const i of v.items.filter((x) => ownerTyped(x, b)).slice(-12)) take(i, "to someone else");
   }
   const voice = chat.length ? chat : mail;
-  if (voice.length === 0) throw new Error("read-history: not one message the owner typed himself was found to learn his voice from; nothing is written blind");
 
   return {
     hasHistory: messages.length > 0,
@@ -410,7 +417,8 @@ export async function main(person, thread, sends, campaignId) {
  * (LLM-SPEND-NO-SEND-1016: 28 Opus drafts in 5 days went to people the send then refused, one invalid number
  * redrafted every hour for 18 hours). `reachable: false` = the send's own refusal code, nothing drafted or sent,
  * recorded exactly as that refusal would be. A failed check throws (a bridge failure on a valid number): the run
- * fails having paid for no draft.
+ * fails having paid for no draft. Reachable = the persona of the account that will send, for the writer
+ * (`persona`, null when the account states none; SOPHIE-WA-1016).
  */
 export const REACH_VERDICT_CODE = `
 export async function main(plan, check) {
@@ -418,12 +426,14 @@ export async function main(plan, check) {
   if (!check || check.notCalled === true || typeof check.reachable !== "boolean") {
     throw new Error("reach-verdict: crm-service's reach check gave no answer; nothing is drafted blind");
   }
-  if (check.reachable === true) return plan;
+  if (check.reachable === true) return { ...plan, persona: senderPersona(check) };
   const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
   console.error("[cold-whatsapp-outreach] crm-service says the brand's WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
   const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
   return { skip: true, code, skipIfReplied: false, owed: plan?.owed === true, reason };
 }
+
+${SENDER_PERSONA_FN}
 `.trim();
 
 /**
@@ -439,7 +449,9 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const brandName = typeof b.name === "string" && b.name.trim() ? b.name.trim() : null;
   if (!brandName) throw new Error("compose-message: the brand read carries no name");
   if (person?.kind !== "first" && person?.kind !== "followup" && person?.kind !== "occurrence") throw new Error("compose-message: no person to write to");
-  if (!Array.isArray(history?.threadLines) || !Array.isArray(history?.voiceLines) || history.voiceLines.length === 0) {
+  // The persona of the account that will send (crm-service's reach check): it speaks as itself, and needs no owner voice.
+  const persona = senderPersona(reach);
+  if (!Array.isArray(history?.threadLines) || !Array.isArray(history?.voiceLines) || (history.voiceLines.length === 0 && !persona)) {
     throw new Error("compose-message: no thread or no owner's voice was read; nothing is written blind");
   }
   if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
@@ -479,21 +491,27 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const localTime = localTimeLines(nowIso, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: person.phone ?? contactPhone });
 
   const systemPrompt = [
-    "You are " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ". You write ONE WhatsApp message to one person, from the brand's own WhatsApp number, exactly as " + owner + " would type it himself.",
+    persona
+      ? "You are " + persona.name + (persona.role ? ", " + persona.role : "") + " at " + brandName + ". You write ONE WhatsApp message to one person, from " + brandName + "'s WhatsApp number, as yourself."
+      : "You are " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ". You write ONE WhatsApp message to one person, from the brand's own WhatsApp number, exactly as " + owner + " would type it himself.",
     "",
-    "WHAT " + owner.toUpperCase() + " WANTS FROM THIS CONVERSATION (a strategy, not a script): a real conversation, not a sale. He wants to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so he can compare with what he sees elsewhere), what they think of " + brandName + ", what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift. Pick the ONE angle that fits where the conversation is, and ask at most ONE easy question they can answer in a line (one question mark, never two questions joined by \\"and\\").",
+    persona
+      ? "WHAT " + brandName.toUpperCase() + " WANTS FROM THIS CONVERSATION (a strategy, not a script): a real conversation, not a sale. " + brandName + " wants to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so we can compare with what we see elsewhere), what they think of " + brandName + ", what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift. Pick the ONE angle that fits where the conversation is, and ask at most ONE easy question they can answer in a line (one question mark, never two questions joined by \\"and\\")."
+      : "WHAT " + owner.toUpperCase() + " WANTS FROM THIS CONVERSATION (a strategy, not a script): a real conversation, not a sale. He wants to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so he can compare with what he sees elsewhere), what they think of " + brandName + ", what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift. Pick the ONE angle that fits where the conversation is, and ask at most ONE easy question they can answer in a line (one question mark, never two questions joined by \\"and\\").",
     "",
     "WHERE THE CONVERSATION STANDS: THE THREAD below is every message ever exchanged with this person, on every channel (email, WhatsApp, LinkedIn), oldest first, plus a few events (signup, visits).",
     talked
       ? "They ALREADY talked with us. This is NOT a first contact: never introduce yourself, never say who you are or what " + brandName + " is, never thank them for signing up as if it were news. Pick the conversation back up from where it stopped, like a friend reopening a chat: answer anything they asked that was left unanswered, follow up on the last thing that was still alive, or bring a new angle that fits what they told us. Refer to what was actually said."
       : who.state === "known"
-        ? "No message with them is on record, but the brand ALREADY KNOWS them (WHO THEY ARE TO US below). This is NOT a cold first contact: write as " + owner + " writing to someone he knows, never an introduction."
+        ? "No message with them is on record, but the brand ALREADY KNOWS them (WHO THEY ARE TO US below). This is NOT a cold first contact: " + (persona ? "write to them as someone " + brandName + " knows" : "write as " + owner + " writing to someone he knows") + ", never an introduction."
         : who.state === "possibly_known"
-          ? "No message with them is on record, and nobody confirmed yet whether " + owner + " knows them. Write so it reads right either way: a light word on who you are is fine, never a pitch to a stranger, never claim you never met."
+          ? "No message with them is on record, and nobody confirmed yet whether " + (persona ? brandName : owner) + " knows them. Write so it reads right either way: a light word on who you are is fine, never a pitch to a stranger, never claim you never met."
           : "Nobody from " + brandName + " ever exchanged a message with them. This is a FIRST message: say who you are in a few words and why you write to them, personally.",
     "",
     who.strategy,
-    "Lines marked [automated ...] or [AI Copilot] were sent by our software, not typed by " + owner + ": the person saw them, so they are part of the history, but they are NEVER a model of how " + owner + " writes. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it.",
+    persona
+      ? "Lines marked [automated WhatsApp] are earlier messages from this number, sent as you: stay consistent with them, never repeat them. Lines marked [automated cold email] or [AI Copilot] were sent by our software: the person saw them, so they are part of the history. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it."
+      : "Lines marked [automated ...] or [AI Copilot] were sent by our software, not typed by " + owner + ": the person saw them, so they are part of the history, but they are NEVER a model of how " + owner + " writes. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it.",
     ...(followup && !owed ? [
       "THIS IS A FOLLOW-UP LOOK. Our campaign already wrote to them on WhatsApp (the [automated WhatsApp] lines in THE THREAD) and they have not answered since, on any channel. There is no fixed number of follow-ups and no fixed delay: we keep following up, each time at the moment you judge right, until they answer.",
       ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
@@ -513,9 +531,11 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
       "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all.",
     ] : []),
     "",
-    "HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people). Copy his length, his tone, his greeting habits (or the lack of them), his punctuation and capitalisation, his emoji use (none if he uses none), whether he signs. If he writes several short lines, you may too (separate them with a line break). Write in the language he uses with THIS person in the thread; with no thread, write in English.",
-    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over his voice. It was written for the whole campaign without knowing this person: where it assumes something THE THREAD or WHO THEY ARE TO US contradicts (that you never talked, that they are a stranger, that they just signed up, which language to use), THE THREAD and WHO THEY ARE TO US win.",
-    "Keep it as short as he would, never more than 60 words. No sales pitch, no links unless the instruction gives one, no filler, no \\"I hope this finds you well\\".",
+    ...(persona
+      ? [...personaLines(persona, brandName), "Write in the language they use with us in THE THREAD; with no thread, write in English."]
+      : ["HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people). Copy his length, his tone, his greeting habits (or the lack of them), his punctuation and capitalisation, his emoji use (none if he uses none), whether he signs. If he writes several short lines, you may too (separate them with a line break). Write in the language he uses with THIS person in the thread; with no thread, write in English."]),
+    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over " + (persona ? "YOUR OWN INSTRUCTIONS" : "his voice") + ". It was written for the whole campaign without knowing this person: where it assumes something THE THREAD or WHO THEY ARE TO US contradicts (that you never talked, that they are a stranger, that they just signed up, which language to use), THE THREAD and WHO THEY ARE TO US win.",
+    (persona ? "Keep it short" : "Keep it as short as he would") + ", never more than 60 words. No sales pitch, no links unless the instruction gives one, no filler, no \\"I hope this finds you well\\".",
     "State only what the THREAD, the INSTRUCTION or the FACTS say. Never invent a figure, a price, a promise, a result or a customer.",
     "Never use an em dash or an en dash. Use a comma or a period.",
   ].filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\\n");
@@ -544,14 +564,14 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
     ...(exact.length ? exact.map((f) => f.id + ". " + f.label + ": " + f.value) : ["(none)"]),
     ...(neverGive.length ? ["", "NEVER offer or promise any of these, whole or in part:", ...neverGive.map((x) => "- " + x)] : []),
     "",
-    "THE THREAD with this person (oldest first; OWNER = " + owner + " typing himself):",
+    persona
+      ? "THE THREAD with this person (oldest first; OWNER = someone at " + brandName + " typing himself; [automated WhatsApp] = earlier messages from this number):"
+      : "THE THREAD with this person (oldest first; OWNER = " + owner + " typing himself):",
     ...(history.olderMessagesOmitted > 0 ? ["(" + history.olderMessagesOmitted + " older messages not shown)"] : []),
     ...(history.threadLines.length ? history.threadLines : ["(no message ever exchanged)"]),
     ...(history.eventLines?.length ? ["", "RECENT EVENTS:", ...history.eventLines] : []),
     ...(last ? ["", "THE CONVERSATION STOPPED HERE: " + last.from + " wrote last, " + String(last.at ?? "date unknown").slice(0, 10) + ": " + last.text] : []),
-    "",
-    "HIS OWN MESSAGES (how " + owner + " writes):",
-    ...history.voiceLines.map((l) => "- " + l),
+    ...(persona ? [] : ["", "HIS OWN MESSAGES (how " + owner + " writes):", ...history.voiceLines.map((l) => "- " + l)]),
   ].join("\\n");
 
   return { systemPrompt, message };
@@ -560,6 +580,8 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
 ${WHY_NOW_FN}
 
 ${LOCAL_TIME_FN}
+
+${SENDER_PERSONA_FN}
 `.trim();
 
 /**
@@ -709,9 +731,13 @@ function plan(person, send, currentDate, reach, final) {
   if (person?.kind === "followup") {
     // Sent: acted, due again at the model's date (the queue row is the date's only store).
     if (!refused) return { action: "record", outcome: "sent", body: { kind: "acted", nextDueAt: nextAt() } };
-    // The brand's WhatsApp is down (not linked, not connected): nothing was sent, the person stays followed up.
-    if (${JSON.stringify(BRAND_SIDE_REFUSAL_CODES)}.includes(code) && typeof final?.nextFollowUpAt === "string" && final.nextFollowUpAt) {
-      return { action: "record", outcome: "deferred", code, body: { kind: "scheduled", dueAt: final.nextFollowUpAt } };
+    // The brand's WhatsApp cannot write (not linked, not connected, no account automation may write from): nothing
+    // was sent, the person stays followed up, at the model's date, else (refused before any draft) a recheck later.
+    if (${JSON.stringify(BRAND_SIDE_REFUSAL_CODES)}.includes(code)) {
+      const dueAt = typeof final?.nextFollowUpAt === "string" && final.nextFollowUpAt
+        ? final.nextFollowUpAt
+        : new Date(Date.now() + ${BRAND_SIDE_RECHECK_DAYS} * 86400000).toISOString();
+      return { action: "record", outcome: "deferred", code, body: { kind: "scheduled", dueAt } };
     }
     // About the person (they answered, no phone, not on WhatsApp): handed, their conversation is not ours to automate.
     return { action: "record", outcome: "unreachable", code, body: { kind: "handed", reason: "whatsapp_" + code } };
@@ -743,6 +769,7 @@ export const WHATSAPP_REFUSAL_CODES = [
   "no_phone_known",
   "not_on_whatsapp",
   "person_replied",
+  "automation_not_allowed",
 ] as const;
 
 const PERSON = "results['pick-person']";

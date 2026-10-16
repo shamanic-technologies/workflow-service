@@ -1301,7 +1301,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     const order = [
       "prior-generation", "compose-questions-prompt", "list-questions", "plan-lookups",
       "offer-answers", "offer-user-fields", "brand-user-fields", "gather-facts",
-      "compose-prompt", "draft-reply", "ground-draft", "check-answerable",
+      "sender-reach-plan", "sender-reach", "compose-prompt", "draft-reply", "ground-draft", "check-answerable",
     ];
     for (let i = 0; i < order.length - 1; i++) {
       expect(dag.edges.some((e) => e.from === order[i] && e.to === order[i + 1])).toBe(true);

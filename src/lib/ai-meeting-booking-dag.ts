@@ -142,6 +142,7 @@
 
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 /**
@@ -1337,7 +1338,7 @@ export const PLAYBOOK_QUIET_FOLLOWUPS = 2;
  * is deliberately no cap on the number of follow-ups.
  */
 export const COMPOSE_REPLY_PROMPT_CODE = `
-export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest, who) {
+export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest, who, sender) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
     throw new Error("[ai-meeting-booking] who this person is to the brand was not read; refusing to draft blind");
@@ -1475,13 +1476,26 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     return who + on + when + ":\\n" + String(m?.text ?? "").trim();
   }).join("\\n\\n---\\n\\n");
   // The reply goes out where they last wrote. Email keeps its thread rules;
-  // a chat is written as a chat, by the person who has been writing there.
+  // a chat is written as a chat, by the person who has been writing there, or
+  // AS the persona of the WhatsApp account that sends (SOPHIE-WA-1016): its
+  // name, role and instructions, never a human it is not. Named as the client
+  // only in a thread where we wrote as the client.
+  const persona = replyChannel === "email" ? null : senderPersona(sender);
+  const personaBrand = stance === "insider" ? client : "the team you write for";
   const howToWrite = replyChannel === "email"
     ? [
         "Write only the words the prospect reads, as HTML. No signature: the mailbox that answers appends its own.",
         "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
         "No subject line: this goes into the thread they already have.",
         "Short. Plain. The way one person writes to another.",
+      ]
+    : persona
+    ? [
+        "Their last message came on " + replyChannel + ", so your reply goes out there, in the same chat, from the same number our earlier " + replyChannel + " messages came from.",
+        ...personaLines(persona, personaBrand),
+        "Write it as a chat message from you, " + persona.name + ": short, plain, in the language of that chat. No subject, no greeting block, no signature.",
+        "Put each paragraph in its own <p> (it is sent as plain text). A link is written out in full.",
+        "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
       ]
     : [
         "Their last message came on " + replyChannel + ", so your reply goes out there, in the same chat, from the same number our earlier " + replyChannel + " messages came from.",
@@ -1618,7 +1632,9 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
 
   const systemPrompt = [
     "You answer one prospect at a time, in a conversation that is already running, by email or in a chat.",
-    "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
+    persona
+      ? "You are " + persona.name + (persona.role ? ", " + persona.role : "") + ", writing from the same number as our earlier messages in this chat. You present yourself exactly as your role says: if it says you are an AI or an assistant, you never claim or imply to be a human."
+      : "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
     "You answer what they asked before you ask for anything.",
     "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
@@ -1630,7 +1646,10 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
 
   return { message, systemPrompt, ladderNextDueAt, timezone, stance, playbook };
 }
+
+SENDER_PERSONA_FN_TEXT
 `.trim()
+  .replace("SENDER_PERSONA_FN_TEXT", SENDER_PERSONA_FN)
   .replace("STANCES_LIST", JSON.stringify(STANCES))
   .replace("PLAYBOOKS_LIST", JSON.stringify(PLAYBOOKS))
   .replace("PLAYBOOK_LINES", JSON.stringify(ACQUISITION_QUESTIONS_PLAYBOOK))
@@ -1917,6 +1936,32 @@ export function needsLeadsOnlyClaim(dag: { nodes?: Array<{ id?: string; config?:
   const states = (n: { config?: Record<string, unknown> }) =>
     (n.config?.body as Record<string, unknown> | undefined)?.relationships === ANSWERS_LEADS_ONLY_POLICY;
   return !claims.every(states) || !nodes.some((n) => n?.id === "end-run-person-not-admitted");
+}
+
+/**
+ * Who crm-service would send the WhatsApp reply as (SOPHIE-WA-1016): the reach check names the same person the send
+ * will (email, else phone; never a null field), asked only when the reply goes out on WhatsApp.
+ */
+export const SENDER_REACH_PLAN_CODE = `
+export async function main(followup, thread) {
+  if (thread?.replyChannel !== "whatsapp") return { skip: true, body: {} };
+  const email = typeof followup?.email === "string" && followup.email.trim() !== "" ? followup.email : null;
+  const phone = typeof followup?.phone === "string" && followup.phone.trim() !== "" ? followup.phone.trim() : null;
+  if (!email && !phone) throw new Error("[ai-meeting-booking] sender-reach-plan: the claimed person carries neither an email nor a phone");
+  return { skip: false, body: { brandId: followup.brandId, ...(email ? { email } : { phone }) } };
+}
+`.trim();
+
+/**
+ * True when a stored DAG answers on WhatsApp without asking crm-service who sends (SOPHIE-WA-1016): its reply speaks
+ * as "the person who has been writing to them, not a bot", even from an account whose persona is an AI assistant.
+ * Current = `sender-reach` feeds `compose-prompt`.
+ */
+export function needsSenderPersona(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, string> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  if (!nodes.some((n) => n?.id === "send-whatsapp-reply")) return false;
+  const compose = nodes.find((n) => n?.id === "compose-prompt");
+  return !nodes.some((n) => n?.id === "sender-reach") || compose?.inputMapping?.sender !== "$ref:sender-reach.output";
 }
 
 /**
@@ -2308,6 +2353,22 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           brandFields: "$ref:brand-user-fields.output",
         },
       },
+      // Who sends on WhatsApp (SOPHIE-WA-1016): crm-service picks the account and states its persona. Asked only
+      // when the reply goes out on WhatsApp; the email path is not called.
+      {
+        id: "sender-reach-plan",
+        type: "script",
+        config: { code: SENDER_REACH_PLAN_CODE },
+        retries: 0,
+        inputMapping: { followup: "$ref:claimed.output", thread: "$ref:thread.output" },
+      },
+      {
+        id: "sender-reach",
+        type: "http.call",
+        config: { service: "crm", method: "POST", path: "/orgs/whatsapp/reach" },
+        retries: 1,
+        inputMapping: { body: "$ref:sender-reach-plan.output.body", skip: "$ref:sender-reach-plan.output.skip" },
+      },
       {
         id: "compose-prompt",
         type: "script",
@@ -2327,6 +2388,7 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
           playbook: "$ref:plan-lookups.output.playbook",
           callRequest: "$ref:plan-lookups.output.callRequest",
           who: "$ref:who-they-are.output",
+          sender: "$ref:sender-reach.output",
         },
       },
       // The LLM call goes through chat-service, which owns the model resolution,
@@ -2782,7 +2844,9 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       { from: "offer-answers", to: "offer-user-fields" },
       { from: "offer-user-fields", to: "brand-user-fields" },
       { from: "brand-user-fields", to: "gather-facts" },
-      { from: "gather-facts", to: "compose-prompt" },
+      { from: "gather-facts", to: "sender-reach-plan" },
+      { from: "sender-reach-plan", to: "sender-reach" },
+      { from: "sender-reach", to: "compose-prompt" },
       { from: "compose-prompt", to: "draft-reply" },
       { from: "draft-reply", to: "ground-draft" },
       { from: "ground-draft", to: "check-answerable" },
