@@ -364,7 +364,7 @@ describe("finalizing and recording", () => {
     await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(-1) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/not in the future/);
     await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(400) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/365/);
     // Only a follow-up look may wait or stop.
-    await expect(fin({ json: { decision: "later", message: "", nextFollowUpAt: inDays(4) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/only a follow-up/);
+    await expect(fin({ json: { decision: "later", message: "", nextFollowUpAt: inDays(4) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/a first message to a new person is always written/);
   });
 
   it("a sent first message schedules the first follow-up look at the model's date; a refused one records nothing and is named", async () => {
@@ -457,7 +457,7 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
     );
     expect(out.message as string).toContain("WHY WE WRITE NOW:\nTrigger: Signup Not Paid");
     expect(out.message as string).toContain("minutes = 1440");
-    expect(out.systemPrompt as string).toContain("This is the ONE message this fact gets");
+    expect(out.systemPrompt as string).toContain("this is the ONE message this fact gets");
     expect(out.systemPrompt as string).not.toContain("This is the ONE follow-up");
     expect((out.systemPrompt as string) + (out.message as string)).not.toMatch(/[–—]/);
 
@@ -525,7 +525,7 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
 
   it("asks crm-service's reach check with the person exactly as the send names them, before the model", async () => {
     expect(await reach({ email: "a@x.com", phone: " +33600000000 ", brandId: "b-1" }, { person: { phones: [] } }))
-      .toEqual({ skip: false, code: null, skipIfReplied: false, reachBody: { email: "a@x.com", brandId: "b-1", skipIfReplied: false, phone: "+33600000000" } });
+      .toEqual({ skip: false, code: null, skipIfReplied: false, owed: false, reachBody: { email: "a@x.com", brandId: "b-1", skipIfReplied: false, phone: "+33600000000" } });
     // A person known only by phone: no email key, never a null field.
     expect((await reach({ phone: "+33600000000", brandId: "b-1" }, { person: {} })).reachBody).toEqual({ brandId: "b-1", skipIfReplied: false, phone: "+33600000000" });
     // Known by email, phone resolved by crm-service: no phone key.
@@ -548,7 +548,7 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
     expect(await verdict(noPhone, { ok: false, skipped: true, notCalled: true })).toEqual(noPhone);
     expect(await verdict(plan, { reachable: true, to: "+33600000000" })).toEqual(plan);
     const out = await verdict(plan, { reachable: false, code: "not_on_whatsapp", error: "+254111 is not on WhatsApp" });
-    expect(out).toEqual({ skip: true, code: "not_on_whatsapp", skipIfReplied: false, reason: "+254111 is not on WhatsApp" });
+    expect(out).toEqual({ skip: true, code: "not_on_whatsapp", skipIfReplied: false, owed: false, reason: "+254111 is not on WhatsApp" });
     // No answer = nothing drafted blind.
     await expect(verdict(plan, { ok: false, skipped: true, notCalled: true })).rejects.toThrow(/no answer/);
     await expect(verdict(plan, undefined)).rejects.toThrow(/no answer/);
@@ -850,7 +850,7 @@ describe("greeting a person who just gave their WhatsApp number, known only by t
     );
     expect(composed.message as string).toContain("Name: Marie Curie");
     expect(composed.message as string).toContain("First name they gave us: Marie");
-    expect(composed.systemPrompt as string).toContain("This is the ONE message this fact gets");
+    expect(composed.systemPrompt as string).toContain("this is the ONE message this fact gets");
 
     const reach = await loadMain(REACH_PLAN_CODE)(p, { items: [], person: { phones: [] } }, { sends: [] }, "c-1");
     expect(reach).toMatchObject({ skip: false });

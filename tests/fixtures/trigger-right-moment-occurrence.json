@@ -1,0 +1,381 @@
+{
+ "_about": "TRIGGER-RIGHT-MOMENT-1016: the compose-message input of the 2026-10-16 12:27 UTC trigger run (signup_not_paid_24_hours, cold-whatsapp-outreach-zaurak-v10) that wrote on top of six unanswered messages the owner typed at 00:07-00:21 the person's time. Read off Windmill v2_job args; person anonymised (same +1 585 area code).",
+ "args": {
+  "rep": {
+   "salesRepRole": "Founder",
+   "salesRepEmail": "kevin@distribute.you",
+   "salesRepPhone": "+33600000000",
+   "salesRepFirstName": "Kevin"
+  },
+  "who": {
+   "tags": [
+    "prospect"
+   ],
+   "known": false,
+   "lines": [
+    "This person MAY be known to the brand: read the thread before assuming anything.",
+    "Also: a prospect (signed up, or showed interest).",
+    "Their company: Example Health.",
+    "Why a prospect (signed up, or showed interest): signup"
+   ],
+   "state": "possibly_known",
+   "judged": true,
+   "strategy": "WHO THIS PERSON IS TO US decides how you write, before anything else. Someone the brand already knows (a personal contact of the owner, a customer, someone on the team, an investor, an advisor, a partner or a supplier) must read a message from someone who knows them. Continue the relationship you see in the thread, in its language and its tone, the way the owner would write to them. Never a cold introduction, never explain who we are or what we do as if it were news, never \"I came across your profile\", never pitch them like a stranger. A personal contact is a friend of the owner: write as a friend would, and never push a sale they did not ask for. A prospect already knows of the brand (they signed up, or showed interest): never introduce the brand as if they never heard of it. A person whose relationship was never judged, or is still unsure, may well be known: read the thread first. If anything in it shows they know us, write as someone who knows them. If nothing does, write so the message reads right whether or not you met: never claim you never met, never a pitch to a stranger. Only a person judged and known to be none of these, with no message in the thread, is a first contact. Never mention these tags, and never say that anyone classified them.",
+   "hasThread": true,
+   "eventLines": [
+    "2026-10-15 21:06 | web | EVENT: event (posthog)",
+    "2026-10-15 22:15 | web | EVENT: visit (posthog)",
+    "2026-10-15 22:15 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:23 | web | EVENT: event (posthog)"
+   ],
+   "unsureTags": [],
+   "threadLines": [
+    "2026-10-15 13:01 | email | US [automated cold email]: [Your first Example Health campaign] Hi Noah, Welcome to distribute.you, and congrats on signing up. Your offer is a clear one to put in front of buyers: an agent stack to scale accounts receivable follow-up without adding headcount. Your first campaign is one step away. Open your account, confirm the offer and audiences we prefilled from your site, and launch. Your first outreach can leave today. Would you rather we handle it? Just ...",
+    "2026-10-15 13:23 | whatsapp | US: Hi Noah, Kevin here, founder of distribute.you :-)",
+    "2026-10-15 13:23 | whatsapp | US: Saw your card didn't go through when you signed up",
+    "2026-10-15 13:23 | whatsapp | US: That message about \"suspicious activity\" came from your bank, not from us. It refused the $1 card check",
+    "2026-10-15 13:23 | whatsapp | US: US business cards sometimes block a charge from a processor abroad. Another card usually goes through, or a quick call to your bank",
+    "2026-10-15 13:23 | whatsapp | US: Happy to help you get your campaign live today 👍",
+    "2026-10-15 13:25 | whatsapp | THEM: All goof",
+    "2026-10-15 13:25 | whatsapp | THEM: Did want some more reference of customers",
+    "2026-10-15 13:38 | whatsapp | US: Great :-)",
+    "2026-10-15 13:38 | whatsapp | US: Sure! A few customers shared their experience on our site: Andrew Becker (founder of voozaa.app), Christian Lemke and Katherine Fleishman",
+    "2026-10-15 13:39 | whatsapp | US: You can read them here: https://distribute.you",
+    "2026-10-15 13:39 | whatsapp | US: And happy to jump on a quick call if you want to go through it together 👍",
+    "2026-10-15 17:00 | whatsapp | THEM: Incoming call. Use the WhatsApp app to answer.",
+    "2026-10-15 18:00 | whatsapp | THEM: Lmk when ur free to talk",
+    "2026-10-15 18:01 | whatsapp | US: Sorry I missed your call Noah! I'm free tomorrow (Friday) at 8:00 or 10:00 UTC, does one of those work for you? If not, just pick whatever suits you here: https://calendar.app.google/BkmyoA7ujMFFDg1s9 👍",
+    "2026-10-15 18:25 | whatsapp | US: What did you say about the gift you send? It looked cool. The network cut at that sentence",
+    "2026-10-15 22:22 | whatsapp | THEM: Yes just gift giving my question Ian",
+    "2026-10-15 22:22 | whatsapp | THEM: Is",
+    "2026-10-15 22:22 | whatsapp | THEM: I see the examples here but I wanna see what the to and from and cc will look like",
+    "2026-10-16 04:07 | whatsapp | US: The from and cc would be something like",
+    "2026-10-16 04:08 | whatsapp | US: from: Kevin Lourd<kevin@usedistribute.com> Signature : -- Kevin Lourd | Founder Distribute.you | Marketing Agency",
+    "2026-10-16 04:10 | whatsapp | US: We AB test templates where we name the brand and others where we don't (we just check the Why and praise the credentials with the Hermozi formula)",
+    "2026-10-16 04:12 | whatsapp | US: In any case, when there is a an interest for meeting, we either keep replying with your meeting link until they book with you (we reply below <1min which increase booking rate by +50% in our data) or we either reply ourselves with you in CC introducing you to continue the conversation",
+    "2026-10-16 04:16 | whatsapp | US: This is how we have been working so far and it works great. B2B brands with a clear offer like you typically have positive replies for an actual meeting (not just a yes to receive a gift) around $50-150/ unit at scale in autopilot",
+    "2026-10-16 04:21 | whatsapp | US: Since this week we are allowing flexibility to edit this approach (signed on your name, written on you name, custom sending domains, and we extend beyond email), so if you want that rather that's also possible in complement or in replacement to the above approach. Buying and using domains names/accounts at your name/ domain-look-alike and redirection would be custom so I would only do that with an..."
+   ],
+   "olderMessagesOmitted": 0
+  },
+  "brand": {
+   "brand": {
+    "id": "f4d73dab-1f9d-49b2-b16e-63ecde76a5eb",
+    "url": "https://distribute.you",
+    "name": "Distribute.you",
+    "colors": null,
+    "domain": "distribute.you",
+    "createdAt": "2026-04-14 07:46:46.073376+00",
+    "updatedAt": "2026-09-09 14:25:36.370803+00",
+    "salesRepRole": "Founder",
+    "whatsAppLink": null,
+    "salesRepEmail": "kevin@distribute.you",
+    "salesRepPhone": "+33600000000",
+    "salesRepFirstName": "Kevin",
+    "clickDestinationUrl": "https://distribute.you"
+   }
+  },
+  "facts": {
+   "exact": [
+    {
+     "id": "E1",
+     "label": "urgency",
+     "value": "Your first outreach leaves today and the first revenue signal lands within 24 hours. Every meeting you are not sourcing yourself, you are buying somewhere else at a price nobody is showing you. Building the alternative in house means domains, inboxes, data, copy and a testing process before the first reply exists, and at the end of it you have one channel instead of a dozen running against each other. An SDR is months of recruiting and ramp. An agency is a retainer and a setup window, and you still will not know what an outcome costs you. Here there is nothing to build and nothing to learn: paste the website, confirm what we already prefilled, and the campaign starts producing measured numbers the same day. The sooner it starts, the sooner you have your own figure instead of someone else’s average.",
+     "source": "offer-user-fields"
+    },
+    {
+     "id": "E2",
+     "label": "scarcity",
+     "value": "The $7 median cost per hot lead and the 4.0x median return are what our clients are observing right now, not a rate card and not a promise. They move as clients spend, as outcomes land and as the testing engine improves, and your own numbers will be your own. Capacity is real too: outreach runs on inboxes we warm and operate ourselves, so new accounts are onboarded at a pace that protects deliverability for everyone already sending. Three channels are live today and eight more are queued, so the accounts running now are the ones whose audiences get tested on each new channel first.",
+     "source": "offer-user-fields"
+    },
+    {
+     "id": "E3",
+     "label": "services",
+     "value": "Autonomous multi-channel acquisition",
+     "source": "offer-user-fields"
+    },
+    {
+     "id": "E4",
+     "label": "socialProof",
+     "value": "Opsfolio runs 45x on what they spend, at $2.8 per website visit across 2,663 people contacted. Shockwave Centers runs 3.2x at $114 per sales interest. Doc Dinners has 20 sales interests and 3 booked meetings off 15,211 people contacted. Across every client: 811 hot leads for 23 companies, a $7 median cost per hot lead and a 4.0x median return, live on the homepage. 70+ founders and GTM experts on the platform.  Ryan W.D. Parenti, founder of Doc Dinners: “Kevin is a very intelligent person with insights on how to expand and grow a business. I am happy to work with an ethical and hard working individual who brings results.”  Andrew Becker, founder of voozaa.app: “Best thing I liked is the depth to which it personalizes outreach. Something I always wished I could do better at scale.”  Nazim Zidi, GTM expert and founder with one exit: “You can A/B test my acquisition channels and keep the one that works the best.”  Christian Lemke, Google Ads expert at Maggie M.: “It was incredibly fast to launch a campaign. I just entered my URL, the platform identified the right audience, handled the outreach, and even let me download the contacts, so I didn’t need to buy lists or set up a separate email marketing system.”  Katherine Fleishman, marketing expert with 20+ years of experience: “This platform is incredible. Excellent click-through rate. I can literally see everything at a glance. Seriously, amazing work here, this is next-level.”",
+     "source": "offer-user-fields"
+    },
+    {
+     "id": "E5",
+     "label": "dreamOutcome",
+     "value": "Meetings on your calendar with buyers who asked for them, and a real number attached to each one. You set a daily budget from $1. We run several acquisition channels at once, write every prospect an individual email, answer the interested ones ourselves until the meeting is booked, and the invite lands in the calendar you already use. Your first outreach leaves the day you sign up and the first revenue signal lands within 24 hours. Nobody can quote you a cost per meeting in advance, us included. What we do is spend your budget, run the campaign, and measure what each outcome actually cost you, live, per offer, per channel and per audience. Across our clients right now a hot lead costs $7 and the median return on paid budget is 4.0x. You do not need to use any software to get this: send us your website and we set the whole thing up at the same price, with the interested replies landing in your normal inbox. The dashboard is there if you want it, never mandatory.",
+     "source": "offer-user-fields"
+    },
+    {
+     "id": "E6",
+     "label": "riskReversal",
+     "value": "You never commit to an amount you cannot see. No engagement, no retainer, no seats, no contract, no software to learn. You set a maximum daily budget from $1, like a Google Ads campaign, and pause it in one click, so the most you can ever be exposed to is one day of spend. New accounts get $30 of free budget and no card is needed to look around. Nothing sends until you confirm the offer, the audiences and the channels we prefilled from your site, which takes under two minutes, and you can stay entirely on email if you would rather we operate everything for you. We run our own domains and inboxes, so your company domain is never exposed and your sender reputation stays untouched. You can bring your own list as a CSV and it runs as its own audience, with its own cost per outcome, next to the ones we find. On the managed plan the paid media budget is refunded in full if you have not had 6 meetings after 3 months. We do not quote you a cost per outcome. We report the one your campaign produced.",
+     "source": "offer-user-fields"
+    },
+    {
+     "id": "E7",
+     "label": "perceivedLikelihood",
+     "value": "Most vendors sell you activity and let you guess at the economics. distribute.you is an acquisition agency built to measure what each outcome costs you and then push it down. We read your website, extract your offer, and propose audiences already split by geography, company size and role. Then we run several bets at once: several channels, several audiences, several templates, each one its own experiment with its own cost per outcome, and budget moves toward the ones that pay. Every message is written individually for the prospect receiving it rather than merged from a template, and every template is engineered on the Hormozi offer formula, so what gets pitched is built for conversion. When somebody replies with a question we answer it ourselves and keep going until the meeting is booked. You do not have to take any of that on faith: the return we show is revenue attributed to the campaign divided by what you paid for it, measured and not projected, starting at zero and climbing as meetings turn into paying customers, and broken out per offer, per channel and per audience. Across our clients the median sits at 4.0x.",
+     "source": "offer-user-fields"
+    }
+   ],
+   "withheld": [],
+   "neverGive": [],
+   "questions": []
+  },
+  "offer": {
+   "name": "Product-led",
+   "offerId": "832126f3-f3f1-4601-885d-bc8e101e5680",
+   "legRates": [
+    {
+     "stated": false,
+     "toStep": "Meeting booked",
+     "ratePct": null,
+     "fromStep": "Positive reply",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Meeting attended",
+     "ratePct": null,
+     "fromStep": "Meeting booked",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Paid client",
+     "ratePct": null,
+     "fromStep": "Meeting attended",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Meeting booked",
+     "ratePct": null,
+     "fromStep": "Website visit",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Signup",
+     "ratePct": null,
+     "fromStep": "Website visit",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Paid client",
+     "ratePct": null,
+     "fromStep": "Signup",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Form filled",
+     "ratePct": null,
+     "fromStep": "Website visit",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Paid client",
+     "ratePct": null,
+     "fromStep": "Form filled",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Paid client",
+     "ratePct": null,
+     "fromStep": "Positive reply",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Paid client",
+     "ratePct": null,
+     "fromStep": "Lead form submitted",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Purchase",
+     "ratePct": null,
+     "fromStep": "Website visit",
+     "statedAt": null
+    },
+    {
+     "stated": false,
+     "toStep": "Paid client",
+     "ratePct": null,
+     "fromStep": "Purchase",
+     "statedAt": null
+    }
+   ],
+   "bookingUrl": "https://calendar.app.google/BkmyoA7ujMFFDg1s9",
+   "destinationUrl": "https://distribute.you/",
+   "lifetimeRevenueUsd": 500,
+   "lifetimeRevenueStatedAt": "2026-09-15 09:52:21.799+00"
+  },
+  "person": {
+   "kind": "occurrence",
+   "lead": {
+    "city": null,
+    "name": "Noah Example",
+    "state": null,
+    "leadId": "a0f2fb6c-ff20-4d1d-a968-9a036bc9ca40",
+    "country": null,
+    "contacts": [
+     {
+      "value": "noah@example-health.com",
+      "source": "crm_signup",
+      "status": null,
+      "channel": "email"
+     },
+     {
+      "value": "+15855550123",
+      "source": "named_person",
+      "status": null,
+      "channel": "phone"
+     }
+    ],
+    "headline": null,
+    "lastName": "Example",
+    "photoUrl": null,
+    "timezone": null,
+    "firstName": "Noah",
+    "functions": null,
+    "githubUrl": null,
+    "seniority": null,
+    "enrichedAt": null,
+    "twitterUrl": null,
+    "departments": null,
+    "facebookUrl": null,
+    "linkedinUrl": null,
+    "currentTitle": null,
+    "organization": null,
+    "apolloPersonId": null,
+    "subdepartments": null,
+    "timezoneSource": null,
+    "businessLanguages": null,
+    "employmentHistory": []
+   },
+   "step": 1,
+   "dueAt": "2026-10-16 12:25:34.099+00",
+   "email": "noah@example-health.com",
+   "phone": "+15855550123",
+   "rowId": "517b6fa0-cc6c-4b03-a38c-e868d4e0946b",
+   "leadId": "a0f2fb6c-ff20-4d1d-a968-9a036bc9ca40",
+   "brandId": "f4d73dab-1f9d-49b2-b16e-63ecde76a5eb",
+   "lastName": null,
+   "firstName": "Noah",
+   "skipSends": false,
+   "sendsQuery": {
+    "email": "noah@example-health.com",
+    "brandId": "f4d73dab-1f9d-49b2-b16e-63ecde76a5eb"
+   }
+  },
+  "history": {
+   "eventLines": [
+    "2026-10-15 21:06 | web | EVENT: event (posthog)",
+    "2026-10-15 22:15 | web | EVENT: visit (posthog)",
+    "2026-10-15 22:15 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:17 | web | EVENT: event (posthog)",
+    "2026-10-15 22:23 | web | EVENT: event (posthog)"
+   ],
+   "hasHistory": true,
+   "voiceLines": [
+    "to this person, whatsapp: Hi Noah, Kevin here, founder of distribute.you :-)",
+    "to this person, whatsapp: Saw your card didn't go through when you signed up",
+    "to this person, whatsapp: That message about \"suspicious activity\" came from your bank, not from us. It refused the $1 card check",
+    "to this person, whatsapp: US business cards sometimes block a charge from a processor abroad. Another card usually goes through, or a quick call to your bank",
+    "to this person, whatsapp: Happy to help you get your campaign live today 👍",
+    "to this person, whatsapp: Great :-)",
+    "to this person, whatsapp: Sure! A few customers shared their experience on our site: Andrew Becker (founder of voozaa.app), Christian Lemke and Katherine Fleishman",
+    "to this person, whatsapp: You can read them here: https://distribute.you",
+    "to this person, whatsapp: And happy to jump on a quick call if you want to go through it together 👍",
+    "to this person, whatsapp: What did you say about the gift you send? It looked cool. The network cut at that sentence",
+    "to this person, whatsapp: The from and cc would be something like",
+    "to this person, whatsapp: from: Kevin Lourd<kevin@usedistribute.com> Signature : -- Kevin Lourd | Founder Distribute.you | Marketing Agency",
+    "to this person, whatsapp: We AB test templates where we name the brand and others where we don't (we just check the Why and praise the credentials with the Hermozi formula)",
+    "to this person, whatsapp: In any case, when there is a an interest for meeting, we either keep replying with your meeting link until they book with you (we reply below <1min which increase booking rate by +50% in our data) or we either reply ourselves with you in CC introducing you to continue the conversation",
+    "to this person, whatsapp: This is how we have been working so far and it works great. B2B brands with a clear offer like you typically have positive replies for an actual meeting (not just a yes to receive a gift) around $50-150/ unit at scale in autopilot",
+    "to this person, whatsapp: Since this week we are allowing flexibility to edit this approach (signed on your name, written on you name, custom sending domains, and we extend beyond email), so if you want that rather that's also possible in complement or in replacement to the above approach. Buying and using domains names/acco..."
+   ],
+   "lastMessage": {
+    "at": "2026-10-16T04:21:40.000Z",
+    "from": "OWNER",
+    "text": "Since this week we are allowing flexibility to edit this approach (signed on your name, written on you name, custom sending domains, and we extend beyond email), so if you want that rather that's also possible in complement or in replacement to the above approach. Buying and using domains names/acco...",
+    "channel": "whatsapp"
+   },
+   "threadLines": [
+    "2026-10-15 13:39 | whatsapp | OWNER: And happy to jump on a quick call if you want to go through it together 👍",
+    "2026-10-15 17:00 | whatsapp | THEM: Incoming call. Use the WhatsApp app to answer.",
+    "2026-10-15 18:00 | whatsapp | THEM: Lmk when ur free to talk",
+    "2026-10-15 18:01 | whatsapp | US [automated WhatsApp]: Sorry I missed your call Noah! I'm free tomorrow (Friday) at 8:00 or 10:00 UTC, does one of those work for you? If not, just pick whatever suits you here: https://calendar.app.google/BkmyoA7ujMFFDg1s9 👍",
+    "2026-10-15 18:25 | whatsapp | OWNER: What did you say about the gift you send? It looked cool. The network cut at that sentence",
+    "2026-10-15 22:22 | whatsapp | THEM: Yes just gift giving my question Ian",
+    "2026-10-15 22:22 | whatsapp | THEM: Is",
+    "2026-10-15 22:22 | whatsapp | THEM: I see the examples here but I wanna see what the to and from and cc will look like",
+    "2026-10-16 04:07 | whatsapp | OWNER: The from and cc would be something like",
+    "2026-10-16 04:08 | whatsapp | OWNER: from: Kevin Lourd<kevin@usedistribute.com> Signature : -- Kevin Lourd | Founder Distribute.you | Marketing Agency",
+    "2026-10-16 04:10 | whatsapp | OWNER: We AB test templates where we name the brand and others where we don't (we just check the Why and praise the credentials with the Hermozi formula)",
+    "2026-10-16 04:12 | whatsapp | OWNER: In any case, when there is a an interest for meeting, we either keep replying with your meeting link until they book with you (we reply below <1min which increase booking rate by +50% in our data) or we either reply ourselves with you in CC introducing you to continue the conversation",
+    "2026-10-16 04:16 | whatsapp | OWNER: This is how we have been working so far and it works great. B2B brands with a clear offer like you typically have positive replies for an actual meeting (not just a yes to receive a gift) around $50-150/ unit at scale in autopilot",
+    "2026-10-16 04:21 | whatsapp | OWNER: Since this week we are allowing flexibility to edit this approach (signed on your name, written on you name, custom sending domains, and we extend beyond email), so if you want that rather that's also possible in complement or in replacement to the above approach. Buying and using domains names/accounts at your name/ domain-look-alike and redirection would be custom so I would only do that with an upfront budget. Happy to serve you/ help you grow"
+   ],
+   "ownerWroteThem": true,
+   "olderMessagesOmitted": 0
+  },
+  "occurrence": {
+   "person": {
+    "name": "Noah Example",
+    "email": "noah@example-health.com",
+    "phone": "+15855550123"
+   },
+   "eventId": "b72bead4-c0ad-4dea-8593-3ca4dca04220",
+   "answering": true,
+   "triggerId": "signup_not_paid_24_hours",
+   "skipFigures": false,
+   "serveNewLead": false,
+   "hasInstruction": true,
+   "skipTriggerRead": false
+  },
+  "currentDate": "2026-10-16",
+  "instruction": "Strategy: this person showed interest in distribute.you (they visited our site or signed up) and stopped before the next step. Write as Kevin, the founder: one short, warm, personal note. Congratulate the step they already took, show the value waiting for them (prospects who answer, meetings booked, new revenue) and make the next step feel like a quick win: open their account and launch, or simply reply with their website and we set everything up for them. Our promise is: Revenue made easy. Tone: reward, growth, joy, reassurance. Never talk about effort, cost, risk, commitment or exposure, and never list what will not happen. Plain short sentences, one idea each. No dashes of any kind.",
+  "triggerType": {
+   "id": "signup_not_paid_24_hours",
+   "icon": "lightning",
+   "kind": "delay",
+   "line": "A person signed up and did not pay within 24 hours.",
+   "name": "Signup Not Paid In 24 Hours",
+   "type": "condition",
+   "coded": false,
+   "color": "#3D7FD0",
+   "object": "trigger",
+   "origin": "declared",
+   "params": {
+    "minutes": 1440,
+    "afterStep": "signup",
+    "unlessStep": "paid_client"
+   },
+   "firedBy": "campaign-service",
+   "callable": false,
+   "fromStep": "signup",
+   "valueUsd": null,
+   "eventIcon": "clock-countdown",
+   "pipeCount": 1,
+   "outcomeKey": null,
+   "fromStepName": "Signup",
+   "valueUnavailableReason": "condition_trigger"
+  }
+ }
+}

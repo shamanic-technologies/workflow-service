@@ -48,10 +48,16 @@
  *
  * A run that answers a trigger OCCURRENCE (FACT-NOT-FOLLOWED-1014, owner 2026-10-14: « Pareil pour un WA si signup non
  * suivi d'un paid client dans les 24 h »; campaign-service filed the person and made them due on this campaign's
- * own queue before dispatching it) writes ONE message to that person and nothing else:
+ * own queue before dispatching it) owes that person ONE message and nothing else:
  *
  *  - The claimed person is kind `occurrence`: never a "follow-up" (we never wrote to them), never served a new lead
- *    (nobody due = the idle end-run, `noWorkAvailable`), never a scheduled follow-up after it (the row is handed).
+ *    (nobody due = the idle end-run, `noWorkAvailable`), never a scheduled follow-up after a sent one (the row is handed).
+ *  - The model still judges THE RIGHT MOMENT and THEIR LOCAL TIME (TRIGGER-RIGHT-MOMENT-1016, owner 2026-10-16: a
+ *    trigger message landed at 08:27 their time on top of six messages the owner typed at midnight their time, which
+ *    they had not answered yet): `later` sends nothing and schedules the row on THIS campaign's queue at the model's
+ *    date; that look (a row this campaign never wrote to, `reach-plan` `owed`) is judged again the same way, and a
+ *    written one is the occurrence's one message. `stop` only on their own words. Never a new occurrence at the
+ *    trigger door: it would reach every campaign on that trigger.
  *  - WHY WE WRITE NOW is the trigger type features-service declares (`occurrence-fact.ts`), any trigger, any params.
  *  - The phone the occurrence names wins (crm-service `phone`); the send is keyed on the occurrence
  *    (`OCCURRENCE_SEND_KEY_FN`), so a redelivery of the same event never writes twice (crm-service's key is durable).
@@ -72,10 +78,12 @@ import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import {
+  LOCAL_TIME_FN,
   NEXT_DATE_FN,
   NEXT_DATE_SCHEMA_PROPERTIES,
   RIGHT_MOMENT_DECISIONS,
   WHATSAPP_MEDIUM,
+  localTimeStrategy,
   nextDateStrategy,
   rightMomentStrategy,
 } from "./right-moment.js";
@@ -106,8 +114,10 @@ export const COLD_WHATSAPP_OUTREACH_DESCRIPTION =
   "or stop on their own words), with no fixed count and no fixed delay. The brand's team takes over as soon as they " +
   "answer, on any channel. A person we cannot reach on WhatsApp is named and left to the email path. On a run that " +
   "answers a trigger occurrence (a person just gave their WhatsApp number, a signup not followed by a payment), it " +
-  "writes that person ONE message and never follows up: a person known only by their phone is written to by phone, " +
-  "greeted by the first name they gave.";
+  "owes that person ONE message and never follows up after it: the model still judges the right moment from the " +
+  "whole thread and the hour where they are, and may wait to a later date it picks (they stay owed) when we wrote " +
+  "last and they have not answered, or it is not a sensible hour for them. A person known only by their phone is " +
+  "written to by phone, greeted by the first name they gave.";
 
 /** The model the message is written with, through chat-service. Always-thinking: no temperature. */
 export const COLD_WHATSAPP_LLM = { provider: "anthropic", model: "opus" } as const;
@@ -135,7 +145,7 @@ export const MESSAGE_RESPONSE_SCHEMA = {
     decision: {
       type: "string",
       enum: [...RIGHT_MOMENT_DECISIONS],
-      description: "write = send the message now; later = not the right moment, nothing is sent; stop = their own words end the follow-ups. Only a follow-up look may be later or stop.",
+      description: "write = send the message now; later = not the right moment (or not a sensible hour where they are), nothing is sent and they are looked at again at nextFollowUpAt; stop = their own words end it. A first message to a new person is always write.",
     },
     message: { type: "string", description: "The WhatsApp message, plain text, exactly as the person will read it. Empty unless decision is write." },
     reason: { type: "string", description: "One sentence: what this message is trying to learn or start, or why later or stop." },
@@ -345,8 +355,8 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
  *
  * A FOLLOW-UP look first: did the person answer since this campaign first wrote to them (its earliest `sent` send),
  * on any channel (`REPLY_SOURCES`, off their merged thread)? Then nothing is drafted or sent (`person_replied`, the
- * code crm-service's own guard answers): their conversation is a person's now. With no send of this campaign found,
- * any answer counts. `skipIfReplied` (crm-service: "ever wrote to the brand") is then asked on the send only when
+ * code crm-service's own guard answers): their conversation is a person's now. A row this campaign never sent anything
+ * to is `owed` (a deferred occurrence message): no hand-off, the model judges the moment again. `skipIfReplied` (crm-service: "ever wrote to the brand") is then asked on the send only when
  * they never wrote at all, so it is an exact race guard and never blocks someone who talked with us BEFORE the
  * campaign wrote.
  *
@@ -357,14 +367,21 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
 export const REACH_PLAN_CODE = `
 export async function main(person, thread, sends, campaignId) {
   let skipIfReplied = false;
+  let owed = false;
   if (person?.kind === "followup") {
     const items = Array.isArray(thread?.items) ? thread.items : [];
     const inbound = items.filter((i) => i?.kind === "message" && i?.direction === "inbound" && ${JSON.stringify(REPLY_SOURCES)}.includes(i?.source));
     const ours = (Array.isArray(sends?.sends) ? sends.sends : []).filter((x) => x?.campaignId === campaignId && x?.status === "sent");
+    // Nothing of this campaign was ever sent to them: the row is the message an occurrence made due, deferred by an
+    // earlier look (decision later). Still owed: the model judges the moment again from the whole thread, never a hand-off.
+    owed = ours.length === 0;
+  }
+  if (person?.kind === "followup" && !owed) {
+    const items = Array.isArray(thread?.items) ? thread.items : [];
+    const inbound = items.filter((i) => i?.kind === "message" && i?.direction === "inbound" && ${JSON.stringify(REPLY_SOURCES)}.includes(i?.source));
+    const ours = (Array.isArray(sends?.sends) ? sends.sends : []).filter((x) => x?.campaignId === campaignId && x?.status === "sent");
     const firstAt = ours.map((x) => Date.parse(String(x?.sentAt ?? x?.createdAt ?? ""))).filter(Number.isFinite).sort((a, b) => a - b)[0];
-    const since = Number.isFinite(firstAt)
-      ? inbound.filter((i) => { const t = Date.parse(String(i.at ?? "")); return !Number.isFinite(t) || t > firstAt; })
-      : inbound;
+    const since = inbound.filter((i) => { const t = Date.parse(String(i.at ?? "")); return !Number.isFinite(t) || !Number.isFinite(firstAt) || t > firstAt; });
     if (since.length) {
       const last = since[since.length - 1];
       console.log("[cold-whatsapp-outreach] " + String(person.email) + " answered since this campaign first wrote (" + String(last.channel ?? last.source) + ", " +
@@ -380,10 +397,10 @@ export async function main(person, thread, sends, campaignId) {
     const phone = asked ? person.phone.trim() : null;
     if (!phone && !person?.email) throw new Error("reach-plan: the person carries neither an email nor a phone");
     const reachBody = { ...(person?.email ? { email: person.email } : {}), brandId: person?.brandId, skipIfReplied, ...(phone ? { phone } : {}) };
-    return { skip: false, code: null, skipIfReplied, reachBody };
+    return { skip: false, code: null, skipIfReplied, owed, reachBody };
   }
   console.error("[cold-whatsapp-outreach] " + String(person?.email) + ": no phone known on the occurrence or in the brand's CRM; nothing drafted, nothing sent (no_phone_known)");
-  return { skip: true, code: "no_phone_known", skipIfReplied: false, reason: "No phone number is known for this person, on the occurrence or in the brand's CRM: nothing was sent." };
+  return { skip: true, code: "no_phone_known", skipIfReplied: false, owed, reason: "No phone number is known for this person, on the occurrence or in the brand's CRM: nothing was sent." };
 }
 `.trim();
 
@@ -405,7 +422,7 @@ export async function main(plan, check) {
   const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
   console.error("[cold-whatsapp-outreach] crm-service says the brand's WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
   const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
-  return { skip: true, code, skipIfReplied: false, reason };
+  return { skip: true, code, skipIfReplied: false, owed: plan?.owed === true, reason };
 }
 `.trim();
 
@@ -415,7 +432,7 @@ export async function main(plan, check) {
  * The strategy is explained to the model, never a script per case (owner rule).
  */
 export const COMPOSE_MESSAGE_PROMPT_CODE = `
-export async function main(person, instruction, offer, brand, rep, facts, history, currentDate, occurrence, triggerType, who) {
+export async function main(person, instruction, offer, brand, rep, facts, history, currentDate, occurrence, triggerType, who, reach) {
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-message: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
@@ -450,8 +467,16 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const neverGive = facts?.neverGive ?? [];
   const text = typeof instruction === "string" ? instruction.trim() : "";
   const followup = person.kind === "followup";
+  // A row nothing of this campaign was ever sent to: the message an occurrence made due, deferred by an earlier look.
+  const owed = followup && reach?.owed === true;
+  // ONE message a fact made due (now, or deferred): the right moment is judged, and no follow-up comes after it.
+  const oneMessage = person.kind === "occurrence" || owed;
   const talked = history.hasHistory === true;
-  const whyNow = whyNowLines(occurrence, triggerType, person.email ?? null, new Date().toISOString());
+  const nowIso = new Date().toISOString();
+  const whyNow = whyNowLines(occurrence, triggerType, person.email ?? null, nowIso);
+  if (owed) whyNow.push("An earlier look judged it was not the right moment for the message this person is owed, and nothing was sent. This is the next look.");
+  const contactPhone = (lead.contacts ?? []).find((c) => c?.channel === "phone" && present(c.value))?.value;
+  const localTime = localTimeLines(nowIso, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: person.phone ?? contactPhone });
 
   const systemPrompt = [
     "You are " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ". You write ONE WhatsApp message to one person, from the brand's own WhatsApp number, exactly as " + owner + " would type it himself.",
@@ -469,16 +494,24 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
     "",
     who.strategy,
     "Lines marked [automated ...] or [AI Copilot] were sent by our software, not typed by " + owner + ": the person saw them, so they are part of the history, but they are NEVER a model of how " + owner + " writes. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it.",
-    ...(followup ? [
+    ...(followup && !owed ? [
       "THIS IS A FOLLOW-UP LOOK. Our campaign already wrote to them on WhatsApp (the [automated WhatsApp] lines in THE THREAD) and they have not answered since, on any channel. There is no fixed number of follow-ups and no fixed delay: we keep following up, each time at the moment you judge right, until they answer.",
       ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
       "If you write: do not repeat an earlier message and do not guilt them. Give them a different, lighter reason to answer, or a short tip, and make it easy to say no.",
       "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all. Never stop on silence: silence is why we follow up.",
+      ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))},
       ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))},
     ] : []),
-    person.kind === "first" ? "Set decision to write: this message goes out now. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))} + " That date is the first follow-up look, in case they do not answer." : "",
+    person.kind === "first" ? "Set decision to write: this message goes out now. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))} + " That date is the first follow-up look, in case they do not answer. Any day or time you put in the message is in their timezone (THEIR LOCAL TIME), never UTC." : "",
     ...(whyNow.length ? [${JSON.stringify(WHY_NOW_STRATEGY)}] : []),
-    person.kind === "occurrence" ? "This is the ONE message this fact gets: there is no follow-up after it. Set decision to write and leave nextFollowUpAt and nextFollowUpWhy empty." : "",
+    ...(oneMessage ? [
+      "A FACT MADE THIS MESSAGE DUE (WHY WE WRITE NOW), and it is still yours to judge WHEN it goes out.",
+      ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
+      ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))},
+      "If you write, this is the ONE message this fact gets: there is no follow-up after it, so leave nextFollowUpAt and nextFollowUpWhy empty.",
+      "If you choose later, nothing is sent, the message stays owed, and this person is looked at again at nextFollowUpAt. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))},
+      "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all.",
+    ] : []),
     "",
     "HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people). Copy his length, his tone, his greeting habits (or the lack of them), his punctuation and capitalisation, his emoji use (none if he uses none), whether he signs. If he writes several short lines, you may too (separate them with a line break). Write in the language he uses with THIS person in the thread; with no thread, write in English.",
     "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over his voice. It was written for the whole campaign without knowing this person: where it assumes something THE THREAD or WHO THEY ARE TO US contradicts (that you never talked, that they are a stranger, that they just signed up, which language to use), THE THREAD and WHO THEY ARE TO US win.",
@@ -496,6 +529,9 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
     text || "(none: follow the strategy)",
     "",
     ...(whyNow.length ? ["WHY WE WRITE NOW:", ...whyNow, ""] : []),
+    "THEIR LOCAL TIME:",
+    ...localTime,
+    "",
     "WHO WE WRITE TO:",
     ...(personLines.length ? personLines : ["(nothing beyond their contact)"]),
     "",
@@ -522,11 +558,14 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
 }
 
 ${WHY_NOW_FN}
+
+${LOCAL_TIME_FN}
 `.trim();
 
 /**
  * Holds the model to its contract before anything is sent. A follow-up look may decide `later` (nothing sent, the
- * next date checked) or `stop` (nothing sent); a first message and an occurrence must `write`. A `write` with an empty
+ * next date checked) or `stop` (nothing sent), and so may an occurrence and its deferred look; a first message to a
+ * newly served person must `write`. A `write` with an empty
  * message throws, any em/en dash is rewritten (between digits a hyphen, otherwise a comma), and the next date (first
  * message and follow-up) is held to `NEXT_DATE_FN` strictly BEFORE the send: a message whose next look cannot be
  * recorded is the dead end the loop exists to prevent. Builds the send's idempotency key (a first message per person;
@@ -541,17 +580,22 @@ export async function main(draft, person, campaignId, reach, trigger) {
   }
   const json = draft?.json ?? {};
   const followup = person?.kind === "followup";
-  if (followup && json.decision === "stop") {
-    console.log("[cold-whatsapp-outreach] " + String(person.email) + ": their own words end the follow-ups, nothing is sent: " + JSON.stringify(json.reason ?? null));
+  // ONE message a fact made due, now (an occurrence) or deferred by an earlier look (a row this campaign never wrote).
+  const oneMessage = person?.kind === "occurrence" || (followup && reach?.owed === true);
+  // Every person but a newly served one may be judged not the right moment (TRIGGER-RIGHT-MOMENT-1016).
+  const judged = followup || person?.kind === "occurrence";
+  const personLabel = String(person?.email ?? person?.phone ?? "");
+  if (judged && json.decision === "stop") {
+    console.log("[cold-whatsapp-outreach] " + personLabel + ": their own words end it, nothing is sent: " + JSON.stringify(json.reason ?? null));
     return { skipSend: true, decision: "stop", reason: String(json.reason ?? ""), sendBody: null };
   }
-  if (followup && json.decision === "later") {
+  if (judged && json.decision === "later") {
     const later = nextDate(json, "finalize-message");
-    console.log("[cold-whatsapp-outreach] " + String(person.email) + ": not the right moment, nothing is sent; next look at " + later.nextFollowUpAt + ": " + later.nextFollowUpWhy);
+    console.log("[cold-whatsapp-outreach] " + personLabel + ": not the right moment, nothing is sent; next look at " + later.nextFollowUpAt + ": " + later.nextFollowUpWhy);
     return { skipSend: true, decision: "later", reason: String(json.reason ?? ""), ...later, sendBody: null };
   }
   if (json.decision !== "write") {
-    throw new Error("finalize-message: decision " + JSON.stringify(json.decision) + " on a " + String(person?.kind) + " message; only a follow-up look may wait or stop");
+    throw new Error("finalize-message: decision " + JSON.stringify(json.decision) + " on a " + String(person?.kind) + " message; a first message to a new person is always written");
   }
   const undash = (s) => String(s ?? "")
     .replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-")
@@ -564,8 +608,8 @@ export async function main(draft, person, campaignId, reach, trigger) {
   }
   const who = person?.leadId ?? person?.email ?? person?.phone;
   if (!who) throw new Error("finalize-message: no person to key the send on");
-  // The next look, checked BEFORE the send (an occurrence's one message has none).
-  const next = person.kind === "occurrence" ? {} : nextDate(json, "finalize-message");
+  // The next look, checked BEFORE the send (the one message a fact made due has none).
+  const next = oneMessage ? {} : nextDate(json, "finalize-message");
   let idempotencyKey;
   if (person.kind === "occurrence") {
     idempotencyKey = sendKey("cold-whatsapp-outreach", { id: person.rowId, email: person.email, phone: person.phone, dueAt: person.dueAt }, trigger);
@@ -624,11 +668,15 @@ export async function main(person, send, currentDate, reach, final) {
 }
 
 function plan(person, send, currentDate, reach, final) {
-  if (person?.kind === "followup" && final?.decision === "later") {
+  // A later or a stop on a follow-up look, an occurrence, or a deferred occurrence: the queue row is the date's only
+  // store, so a later keeps the person owed on THIS campaign's queue (never a new occurrence: that would reach every
+  // campaign on the trigger).
+  const judged = person?.kind === "followup" || person?.kind === "occurrence";
+  if (judged && final?.decision === "later") {
     if (!final.nextFollowUpAt) throw new Error("record-plan: a later look carries no next date");
     return { action: "record", outcome: "later", decided: true, body: { kind: "scheduled", dueAt: final.nextFollowUpAt } };
   }
-  if (person?.kind === "followup" && final?.decision === "stop") {
+  if (judged && final?.decision === "stop") {
     return { action: "record", outcome: "stopped", decided: true, body: { kind: "stopped", reason: "${WHATSAPP_FOLLOW_UP_STOPPED_REASON}" } };
   }
   const nextAt = () => {
@@ -652,8 +700,9 @@ function plan(person, send, currentDate, reach, final) {
     // The first follow-up look, at the date the model chose.
     return { action: "schedule", outcome: "sent", dueAt: nextAt(), email: person.email };
   }
-  if (person?.kind === "occurrence") {
-    // ONE message per occurrence: sent = handed for good; refused = stopped (a later occurrence may reach them).
+  if (person?.kind === "occurrence" || (person?.kind === "followup" && reach?.owed === true)) {
+    // ONE message per occurrence (sent now, or deferred by an earlier look): sent = handed for good; refused =
+    // stopped (a later occurrence may reach them).
     if (!refused) return { action: "record", outcome: "sent", body: { kind: "handed", reason: "${WHATSAPP_OCCURRENCE_SENT_REASON}" } };
     return { action: "record", outcome: "unreachable", code, body: { kind: "stopped", reason: "whatsapp_" + code } };
   }
@@ -942,6 +991,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
           currentDate: "$ref:flow_input.currentDate",
           occurrence: "$ref:occurrence.output",
           triggerType: "$ref:trigger-type.output",
+          reach: "$ref:reach-verdict.output",
         },
       },
       {
