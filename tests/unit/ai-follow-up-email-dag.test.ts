@@ -12,6 +12,9 @@ import {
   FOLLOW_UP_STOPPED_REASON,
   GATHER_CLIENT_FACTS_CODE,
   INSTRUCTION_NOT_WRITABLE_REASON,
+  HAS_EMAIL,
+  NO_EMAIL_DELIVERY,
+  NO_EMAIL_KNOWN_REASON,
   REFUSED,
   SENT,
   buildAiFollowUpEmailDag,
@@ -179,12 +182,33 @@ describe("ai-follow-up-email DAG", () => {
     expect(descendants(dag, "read-figures").has("send-email")).toBe(true);
   });
 
+  it("a claimed person with no email costs nothing: no read, no model call, row stopped, occurrence refused for good", () => {
+    const toReads = dag.edges.find((e) => e.from === "check-claim" && e.to === "offer-economics");
+    const toStop = dag.edges.find((e) => e.from === "check-claim" && e.to === "release-no-email");
+    const withEmail = { "claim-followup": { found: true, followup: { id: "r1", email: "probe+x@example.com" } } };
+    const phoneOnly = { "claim-followup": { found: true, followup: { id: "r1", email: null, phone: "+33600000000" } } };
+    const blank = { "claim-followup": { found: true, followup: { id: "r1", email: "  " } } };
+    expect(holds(toReads!.condition!, withEmail)).toBe(true);
+    expect(holds(toStop!.condition!, withEmail)).toBe(false);
+    for (const r of [phoneOnly, blank]) {
+      expect(holds(toReads!.condition!, r)).toBe(false);
+      expect(holds(toStop!.condition!, r)).toBe(true);
+    }
+    expect(HAS_EMAIL).toContain("followup?.email");
+    expect(descendants(dag, "release-no-email")).toEqual(new Set(["end-run-no-email"]));
+    expect(byId.get("release-no-email")?.config?.body).toEqual({ kind: "stopped", reason: NO_EMAIL_KNOWN_REASON });
+    expect(byId.get("end-run-no-email")?.config?.body).toEqual({ success: true, stopCampaign: false, delivery: NO_EMAIL_DELIVERY });
+    expect(NO_EMAIL_DELIVERY).toMatchObject({ state: "refused", code: "no_email_known" });
+  });
+
   it("an unwritable instruction sends nothing, releases the claim as stopped, and fails the run", () => {
     const edge = dag.edges.find((e) => e.from === "check-writable" && e.to === "release-unwritable");
     expect(edge?.condition).toContain("'cannot_write'");
     expect(descendants(dag, "release-unwritable")).toEqual(new Set(["end-run-unwritable"]));
     expect(byId.get("release-unwritable")?.config?.body).toEqual({ kind: "stopped", reason: INSTRUCTION_NOT_WRITABLE_REASON });
     expect(byId.get("end-run-unwritable")?.config?.body).toEqual({ success: false, stopCampaign: false });
+    // FINAL for the occurrence: a redelivery would only re-draft the same refusal (LLM-SPEND-NO-SEND-1016).
+    expect(byId.get("end-run-unwritable")?.inputMapping).toEqual({ "body.delivery": "$ref:finalize-email.output.delivery" });
     // check-writable converges (edge from outside check-claim's branch), never nested.
     expect(dag.edges.filter((e) => e.to === "check-writable").map((e) => e.from)).toContain("claim-followup");
   });
@@ -386,7 +410,11 @@ describe("finalizing the email", () => {
   it("passes cannot_write through without a sequence", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const out = await main({ json: { decision: "cannot_write", subject: "", bodyHtml: "", reason: "no exact figure" } }, followup);
-    expect(out).toEqual({ decision: "cannot_write", reason: "no exact figure" });
+    expect(out).toEqual({
+      decision: "cannot_write",
+      reason: "no exact figure",
+      delivery: { state: "refused", code: INSTRUCTION_NOT_WRITABLE_REASON, reason: "no exact figure" },
+    });
   });
 
   it("throws on a write with an empty body, and on an unknown decision", async () => {

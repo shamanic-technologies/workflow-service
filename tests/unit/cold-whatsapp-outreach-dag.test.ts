@@ -121,7 +121,7 @@ describe("cold-whatsapp-outreach DAG", () => {
 
   it("records strictly AFTER the send: a first message schedules the follow-up, a follow-up hands the row over", () => {
     expect(descendants(dag, "send-whatsapp")).toEqual(
-      new Set(["record-plan", "check-record", "schedule-followup", "record-followup", "release-person", "end-run-unreachable", "end-run", "end-run-followup"]),
+      new Set(["record-plan", "check-record", "schedule-followup", "record-followup", "release-person", "end-run-unreachable", "end-run-released", "end-run", "end-run-followup"]),
     );
     expect(descendants(dag, "schedule-followup").has("send-whatsapp")).toBe(false);
     expect(byId.get("schedule-followup")?.config?.path).toBe("/orgs/campaigns/{campaignId}/followups/schedule-by-email");
@@ -491,7 +491,7 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
       });
     spy.mockRestore();
     expect(dag.edges).toContainEqual({ from: "record-followup", to: "end-run-followup" });
-    for (const id of ["end-run", "end-run-followup", "end-run-unreachable"]) {
+    for (const id of ["end-run", "end-run-followup", "end-run-unreachable", "end-run-released"]) {
       expect(dag.nodes.find((n) => n.id === id)?.inputMapping).toEqual({ "body.delivery": "$ref:record-plan.output.delivery" });
     }
   });

@@ -90,6 +90,27 @@ export const FOLLOW_UP_STOPPED_REASON = "follow_up_stopped";
 /** Stored when the model could not write what the instruction asks: stopped, so a later report can retry. */
 export const INSTRUCTION_NOT_WRITABLE_REASON = "instruction_not_writable";
 
+/**
+ * Stored when the claimed person has no email address (a person known only by phone): stopped BEFORE any read or
+ * model call, so an unreachable person costs nothing (LLM-SPEND-NO-SEND-1016).
+ */
+export const NO_EMAIL_KNOWN_REASON = "no_email_known";
+
+/** The claimed person can be emailed at all: positive evidence, an address on the claimed row. */
+export const HAS_EMAIL =
+  "typeof results['claim-followup']?.followup?.email == 'string' && results['claim-followup']?.followup?.email.trim() != ''";
+
+/**
+ * The occurrence's truth when nothing can be sent to the person, stated FINAL so campaign-service never redelivers
+ * the occurrence: a redelivery re-files the same person, who is drafted again by the model and refused again (four
+ * Opus drafts for one person on a not-writable instruction, 2026-10-14).
+ */
+export const NO_EMAIL_DELIVERY = {
+  state: "refused",
+  code: NO_EMAIL_KNOWN_REASON,
+  reason: "The person has no email address on record, so no email can be sent to them.",
+} as const;
+
 export const EMAIL_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -213,7 +234,11 @@ export async function main(draft, followup, trigger) {
   if (json.decision === "cannot_write") {
     console.error("[ai-follow-up-email] the instruction cannot be written from what we hold; nothing is sent. Missing: " +
       JSON.stringify(json.reason ?? null));
-    return { decision: "cannot_write", reason: json.reason ?? null };
+    return {
+      decision: "cannot_write",
+      reason: json.reason ?? null,
+      delivery: { state: "refused", code: "${INSTRUCTION_NOT_WRITABLE_REASON}", reason: String(json.reason ?? "The email could not be written from what we hold.") },
+    };
   }
   if (json.decision === "stop") {
     console.log("[ai-follow-up-email] the person's own words end the follow-ups: " + JSON.stringify(json.reason ?? null));
@@ -528,7 +553,11 @@ export function buildAiFollowUpEmailDag(): DAG {
       endRun("end-run-later", { success: true, stopCampaign: false }),
       endRun("end-run-stopped", { success: true, stopCampaign: false }),
       endRun("end-run-refused", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
-      endRun("end-run-unwritable", { success: false, stopCampaign: false }),
+      // Failed (named in the log) but FINAL for the occurrence: a redelivery would only re-draft the same refusal.
+      endRun("end-run-unwritable", { success: false, stopCampaign: false }, { "body.delivery": "$ref:finalize-email.output.delivery" }),
+      // No email address: nothing read, nothing drafted, nothing sent; the row stopped with the reason.
+      stopRow("release-no-email", NO_EMAIL_KNOWN_REASON),
+      endRun("end-run-no-email", { success: true, stopCampaign: false, delivery: NO_EMAIL_DELIVERY }),
       // Nobody due is NOTHING TO DO, never a failure: campaign-service's scheduler runs every funnel unit on its
       // cadence with no trigger, and a failure here would back the unit off and skip its next real occurrence.
       endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
@@ -540,7 +569,9 @@ export function buildAiFollowUpEmailDag(): DAG {
       { from: "occurrence", to: "trigger-type" },
       { from: "trigger-type", to: "claim-followup" },
       { from: "claim-followup", to: "check-claim" },
-      { from: "check-claim", to: "offer-economics", condition: "results['claim-followup']?.found == true" },
+      { from: "check-claim", to: "offer-economics", condition: `results['claim-followup']?.found == true && ${HAS_EMAIL}` },
+      { from: "check-claim", to: "release-no-email", condition: `results['claim-followup']?.found == true && !(${HAS_EMAIL})` },
+      { from: "release-no-email", to: "end-run-no-email" },
       { from: "check-claim", to: "end-run-nobody-due", condition: "results['claim-followup']?.found == false" },
       { from: "offer-economics", to: "brand-profile" },
       { from: "brand-profile", to: "lead-detail" },
