@@ -13,6 +13,7 @@ import {
   VOICE_SAMPLE_PEOPLE,
   PICK_PERSON_CODE,
   REACH_PLAN_CODE,
+  REACH_VERDICT_CODE,
   RECORD_PLAN_CODE,
   PRIOR_CONTACT_CODE,
   WHATSAPP_FOLLOW_UP_STOPPED_REASON,
@@ -106,7 +107,7 @@ describe("cold-whatsapp-outreach DAG", () => {
   });
 
   it("sends once, on WhatsApp through crm-service, keyed per person per step, with named refusals tolerated", () => {
-    const sends = dag.nodes.filter((n) => n.config?.service === CRM_WHATSAPP_SEND.service && n.config?.method === "POST");
+    const sends = dag.nodes.filter((n) => n.config?.path === CRM_WHATSAPP_SEND.path && n.config?.method === "POST");
     expect(sends.map((n) => n.id)).toEqual(["send-whatsapp"]);
     expect(dag.nodes.some((n) => n.config?.service === "email-gateway")).toBe(false);
     const send = mods.find((m) => m.id === "send_whatsapp")!;
@@ -504,7 +505,7 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
 
   it("decides before the model writes, from the occurrence's phone or the CRM person's", async () => {
     expect(descendants(dag, "reach-plan").has("draft-message")).toBe(true);
-    expect(byId.get("draft-message")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
+    expect(byId.get("draft-message")?.inputMapping?.skip).toBe("$ref:reach-verdict.output.skip");
     expect(byId.get("send-whatsapp")?.inputMapping?.skip).toBe("$ref:finalize-message.output.skipSend");
     expect(byId.get("reach-plan")?.inputMapping).toEqual({
       person: "$ref:pick-person.output",
@@ -516,10 +517,50 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
     expect(await reach({ email: "a@x.com" }, { person: { phones: [] } })).toMatchObject({ skip: true, code: "no_phone_known" });
     expect(spy.mock.calls[0]?.[0]).toContain("no_phone_known");
     spy.mockRestore();
-    expect(await reach({ email: "a@x.com", phone: "+33600000000" }, { person: { phones: [] } })).toEqual({ skip: false, code: null, skipIfReplied: false });
-    expect(await reach({ email: "a@x.com" }, { person: { phones: ["+33600000000"] } })).toEqual({ skip: false, code: null, skipIfReplied: false });
+    expect(await reach({ email: "a@x.com", phone: "+33600000000" }, { person: { phones: [] } })).toMatchObject({ skip: false, code: null, skipIfReplied: false });
+    expect(await reach({ email: "a@x.com" }, { person: { phones: ["+33600000000"] } })).toMatchObject({ skip: false, code: null, skipIfReplied: false });
     // A thread read stating no phone list decides nothing: crm-service answers.
-    expect(await reach({ email: "a@x.com" }, { person: {} })).toEqual({ skip: false, code: null, skipIfReplied: false });
+    expect(await reach({ email: "a@x.com" }, { person: {} })).toMatchObject({ skip: false, code: null, skipIfReplied: false });
+  });
+
+  it("asks crm-service's reach check with the person exactly as the send names them, before the model", async () => {
+    expect(await reach({ email: "a@x.com", phone: " +33600000000 ", brandId: "b-1" }, { person: { phones: [] } }))
+      .toEqual({ skip: false, code: null, skipIfReplied: false, reachBody: { email: "a@x.com", brandId: "b-1", skipIfReplied: false, phone: "+33600000000" } });
+    // A person known only by phone: no email key, never a null field.
+    expect((await reach({ phone: "+33600000000", brandId: "b-1" }, { person: {} })).reachBody).toEqual({ brandId: "b-1", skipIfReplied: false, phone: "+33600000000" });
+    // Known by email, phone resolved by crm-service: no phone key.
+    expect((await reach({ email: "a@x.com", brandId: "b-1" }, { person: { phones: ["+33600000000"] } })).reachBody).toEqual({ email: "a@x.com", brandId: "b-1", skipIfReplied: false });
+    const check = byId.get("reach-check")!;
+    expect(check.config).toMatchObject({ service: "crm", method: "POST", path: "/orgs/whatsapp/reach" });
+    expect(check.inputMapping).toEqual({ body: "$ref:reach-plan.output.reachBody", skip: "$ref:reach-plan.output.skip" });
+    expect(descendants(dag, "reach-check").has("draft-message")).toBe(true);
+    expect(descendants(dag, "draft-message").has("reach-check")).toBe(false);
+    expect(byId.get("finalize-message")?.inputMapping?.reach).toBe("$ref:reach-verdict.output");
+    expect(byId.get("record-plan")?.inputMapping?.reach).toBe("$ref:reach-verdict.output");
+  });
+
+  it("an unreachable person (crm-service says so) costs no draft and is recorded as the send's own refusal would be", async () => {
+    const verdict = loadMain(REACH_VERDICT_CODE);
+    const plan = { skip: false, code: null, skipIfReplied: true, reachBody: {} };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // reach-plan already refused: the check was not called, its verdict stands.
+    const noPhone = { skip: true, code: "no_phone_known", skipIfReplied: false, reason: "No phone." };
+    expect(await verdict(noPhone, { ok: false, skipped: true, notCalled: true })).toEqual(noPhone);
+    expect(await verdict(plan, { reachable: true, to: "+33600000000" })).toEqual(plan);
+    const out = await verdict(plan, { reachable: false, code: "not_on_whatsapp", error: "+254111 is not on WhatsApp" });
+    expect(out).toEqual({ skip: true, code: "not_on_whatsapp", skipIfReplied: false, reason: "+254111 is not on WhatsApp" });
+    // No answer = nothing drafted blind.
+    await expect(verdict(plan, { ok: false, skipped: true, notCalled: true })).rejects.toThrow(/no answer/);
+    await expect(verdict(plan, undefined)).rejects.toThrow(/no answer/);
+    // The draft is skipped and a first message is released to the pipes that can reach them, nothing sent.
+    const fin = await loadMain(FINALIZE_MESSAGE_CODE)({ ok: false, skipped: true, notCalled: true }, { kind: "first", leadId: "l-1", step: 1 }, "c-1", out);
+    expect(fin).toMatchObject({ skipSend: true, sendBody: null, code: "not_on_whatsapp" });
+    const notCalled = { ok: false, skipped: true, notCalled: true };
+    expect(await loadMain(RECORD_PLAN_CODE)({ kind: "first", email: "a@x.com" }, notCalled, "x", out)).toEqual({
+      action: "release", outcome: "unreachable", code: "not_on_whatsapp", email: "a@x.com",
+      delivery: { state: "refused", code: "not_on_whatsapp", reason: "+254111 is not on WhatsApp" },
+    });
+    spy.mockRestore();
   });
 
   it("records exactly what crm-service's own refusal would: a first message releases the person, an occurrence stops the row", async () => {
@@ -735,7 +776,7 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
       expect(out.record).toMatchObject({ action: "record", body: { kind: "handed", reason: "whatsapp_person_replied" } });
     }
     // The model is never called: draft-message is skipped on reach-plan's verdict.
-    expect(dag.nodes.find((n) => n.id === "draft-message")?.inputMapping?.skip).toBe("$ref:reach-plan.output.skip");
+    expect(dag.nodes.find((n) => n.id === "draft-message")?.inputMapping?.skip).toBe("$ref:reach-verdict.output.skip");
     // Product use (Copilot, API) is no answer.
     const copilot = await reach(await pick({ found: true, followup: { id: "r", email: "ana@x.com", brandId: "b-1", dueAt: "d" } }, detail, undefined, noOccurrence),
       { ...quietThread, items: [ourFirst, { kind: "message", direction: "inbound", source: "copilot", at: "2026-10-11T08:00:00.000Z", text: "how much?" }] }, sends, campaignId);
