@@ -34,6 +34,7 @@ describe("tactic Fresh contacts only (FRESH-CONTACTS-WF-1015)", () => {
   it("covers the cold channels only, never CRM contacts, follow-ups or Email Sending", () => {
     expect([...FRESH_CONTACTS_FEATURE_SLUGS]).toEqual([
       "sales-cold-email-outreach",
+      "feedback-request-cold-email-outreach",
       "lead-sourcing",
       "sourcing-apollo-cold-filters",
       "sourcing-apollo-buying-signals",
