@@ -89,7 +89,7 @@ describe("cold-whatsapp-outreach", () => {
   it("every arm after the send states record-plan's delivery; a throw = no delivery", () => {
     expect(validateDAG(dag).errors).toEqual([]);
     const refused = delivery("not_on_whatsapp", "+336 is not on WhatsApp");
-    for (const id of ["end-run", "end-run-followup", "end-run-unreachable"]) {
+    for (const id of ["end-run", "end-run-followup", "end-run-unreachable", "end-run-released"]) {
       expect(endRunBody(dag, id, { record_plan: { delivery: refused } })).toEqual({ success: true, stopCampaign: false, delivery: refused });
     }
     expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);

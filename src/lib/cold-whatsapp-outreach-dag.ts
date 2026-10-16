@@ -999,6 +999,10 @@ export function buildColdWhatsappOutreachDag(): DAG {
       endRun("end-run", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
       endRun("end-run-followup", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
       endRun("end-run-unreachable", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
+      // Its own end-run, never a shared one with the `none` arm: a node fed by an arm AND by a node inside another
+      // arm is a convergence point, emitted top level, run on EVERY run after the branch's own end-run
+      // (LLM-SPEND-NO-SEND-1016: "normal run" after "idle" re-dispatched the campaign every ~14 seconds).
+      endRun("end-run-released", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
       // A re-served person this campaign already wrote to: nothing to do this run.
       endRun("end-run-already-written", { success: true, stopCampaign: false, noWorkAvailable: true }),
       endRun("end-run-no-lead", { success: true, stopCampaign: true }),
@@ -1060,7 +1064,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
       { from: "check-record", to: "record-followup", condition: "results['record-plan']?.action == 'record'" },
       { from: "check-record", to: "end-run-unreachable", condition: "results['record-plan']?.action == 'none'" },
       { from: "check-record", to: "release-person", condition: "results['record-plan']?.action == 'release'" },
-      { from: "release-person", to: "end-run-unreachable" },
+      { from: "release-person", to: "end-run-released" },
       { from: "schedule-followup", to: "end-run" },
       { from: "record-followup", to: "end-run-followup" },
     ],
