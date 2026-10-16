@@ -2045,7 +2045,7 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
   it("sends on exactly one transport per run: the email reply and the WhatsApp reply are each skipped unless theirs", () => {
     expect(byId.get("send-reply")?.inputMapping?.skip).toBe("$ref:thread.output.skipEmail");
     const send = byId.get("send-whatsapp-reply");
-    expect(send?.config).toEqual({ ...CRM_WHATSAPP_SEND });
+    expect(send?.config).toEqual({ ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: ["human_in_conversation"] });
     expect(send?.inputMapping).toEqual({
       body: "$ref:finalize-reply.output.whatsappBody",
       skip: "$ref:thread.output.skipWhatsapp",

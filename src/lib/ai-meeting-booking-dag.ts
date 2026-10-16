@@ -1725,9 +1725,15 @@ export async function main(draft, ladderNextDueAt) {
  */
 export const CLASSIFY_SEND_CODE = `
 export async function main(send, whatsapp, replyChannel) {
-  // A chat reply went out through crm-service, which fails loud on any refusal,
-  // so reaching here with its answer means it was sent.
+  // A chat reply went out through crm-service, which fails loud on any refusal
+  // but one: someone of the brand typed by hand in this thread
+  // (human_in_conversation), the WhatsApp twin of the email takeover.
   if (replyChannel !== "email") {
+    if (whatsapp?.skipped === true && whatsapp?.notCalled !== true && whatsapp?.code === "human_in_conversation") {
+      console.error("[ai-meeting-booking] someone of the brand writes to this person by hand on " + String(replyChannel) + "; the automated reply was refused and no follow-up is recorded");
+      const reason = typeof whatsapp.refusal === "string" && whatsapp.refusal.trim() !== "" ? whatsapp.refusal : whatsapp.code;
+      return { outcome: "human_took_over", status: whatsapp.status ?? 422, channel: replyChannel, delivery: { state: "refused", code: whatsapp.code, reason } };
+    }
     if (whatsapp?.status === "sent") {
       return { outcome: "sent", status: 200, channel: replyChannel, duplicate: whatsapp?.duplicate === true };
     }
@@ -1758,6 +1764,17 @@ export async function main(send, whatsapp, replyChannel) {
     " " + String(code) + "): " + String(send?.error));
 }
 `.trim();
+
+/** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
+export const WHATSAPP_TAKEOVER_CODES = ["human_in_conversation"] as const;
+
+/** True when a stored DAG fails the run on a WhatsApp reply a human of the brand already took over. */
+export function needsWhatsappTakeover(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const send = (dag?.nodes ?? []).find((n) => n?.id === "send-whatsapp-reply");
+  if (!send) return false;
+  const codes = send.config?.skipOnRefusalCodes;
+  return !Array.isArray(codes) || !WHATSAPP_TAKEOVER_CODES.every((c) => codes.includes(c));
+}
 
 export const FEATURE_SLUG = "ai-meeting-booking";
 
@@ -2589,7 +2606,8 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
       {
         id: "send-whatsapp-reply",
         type: "http.call",
-        config: { ...CRM_WHATSAPP_SEND },
+        // A human of the brand in the thread is the takeover, read by classify-send.
+        config: { ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: [...WHATSAPP_TAKEOVER_CODES] },
         retries: 0,
         // The whole body from `finalize-reply`: the person by email, or by phone when that is all we know of them
         // (REPLY-PHONE-ONLY-1015), never a null field.
