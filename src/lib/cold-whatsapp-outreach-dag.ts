@@ -375,9 +375,37 @@ export async function main(person, thread, sends, campaignId) {
   }
   const asked = typeof person?.phone === "string" && person.phone.trim() !== "";
   const phones = thread?.person?.phones;
-  if (asked || !Array.isArray(phones) || phones.some((p) => typeof p === "string" && p.trim() !== "")) return { skip: false, code: null, skipIfReplied };
+  if (asked || !Array.isArray(phones) || phones.some((p) => typeof p === "string" && p.trim() !== "")) {
+    // The person exactly as the send will name them: crm-service's reach check answers what that send would.
+    const phone = asked ? person.phone.trim() : null;
+    if (!phone && !person?.email) throw new Error("reach-plan: the person carries neither an email nor a phone");
+    const reachBody = { ...(person?.email ? { email: person.email } : {}), brandId: person?.brandId, skipIfReplied, ...(phone ? { phone } : {}) };
+    return { skip: false, code: null, skipIfReplied, reachBody };
+  }
   console.error("[cold-whatsapp-outreach] " + String(person?.email) + ": no phone known on the occurrence or in the brand's CRM; nothing drafted, nothing sent (no_phone_known)");
   return { skip: true, code: "no_phone_known", skipIfReplied: false, reason: "No phone number is known for this person, on the occurrence or in the brand's CRM: nothing was sent." };
+}
+`.trim();
+
+/**
+ * crm-service's answer to "can the brand's WhatsApp reach this person now?" (`POST /orgs/whatsapp/reach`: the same
+ * checks the send runs, in its order, nothing sent), merged with reach-plan's own verdict BEFORE any model call
+ * (LLM-SPEND-NO-SEND-1016: 28 Opus drafts in 5 days went to people the send then refused, one invalid number
+ * redrafted every hour for 18 hours). `reachable: false` = the send's own refusal code, nothing drafted or sent,
+ * recorded exactly as that refusal would be. A failed check throws (a bridge failure on a valid number): the run
+ * fails having paid for no draft.
+ */
+export const REACH_VERDICT_CODE = `
+export async function main(plan, check) {
+  if (plan?.skip === true) return plan;
+  if (!check || check.notCalled === true || typeof check.reachable !== "boolean") {
+    throw new Error("reach-verdict: crm-service's reach check gave no answer; nothing is drafted blind");
+  }
+  if (check.reachable === true) return plan;
+  const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
+  console.error("[cold-whatsapp-outreach] crm-service says the brand's WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
+  const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
+  return { skip: true, code, skipIfReplied: false, reason };
 }
 `.trim();
 
@@ -881,6 +909,22 @@ export function buildColdWhatsappOutreachDag(): DAG {
           campaignId: "$ref:flow_input.campaignId",
         },
       },
+      // crm-service runs the send's own checks (phone, on WhatsApp, account connected) without sending: an
+      // unreachable person costs no model call.
+      {
+        id: "reach-check",
+        type: "http.call",
+        config: { service: "crm", method: "POST", path: "/orgs/whatsapp/reach" },
+        retries: 1,
+        inputMapping: { body: "$ref:reach-plan.output.reachBody", skip: "$ref:reach-plan.output.skip" },
+      },
+      {
+        id: "reach-verdict",
+        type: "script",
+        config: { code: REACH_VERDICT_CODE },
+        retries: 0,
+        inputMapping: { plan: "$ref:reach-plan.output", check: "$ref:reach-check.output" },
+      },
       {
         id: "compose-message",
         type: "script",
@@ -919,7 +963,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
         inputMapping: {
           "body.message": "$ref:compose-message.output.message",
           "body.systemPrompt": "$ref:compose-message.output.systemPrompt",
-          skip: "$ref:reach-plan.output.skip",
+          skip: "$ref:reach-verdict.output.skip",
         },
       },
       {
@@ -931,7 +975,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
           draft: "$ref:draft-message.output",
           person: "$ref:pick-person.output",
           campaignId: "$ref:flow_input.campaignId",
-          reach: "$ref:reach-plan.output",
+          reach: "$ref:reach-verdict.output",
           trigger: "$ref:flow_input.trigger",
         },
       },
@@ -954,7 +998,7 @@ export function buildColdWhatsappOutreachDag(): DAG {
           person: "$ref:pick-person.output",
           send: "$ref:send-whatsapp.output",
           currentDate: "$ref:flow_input.currentDate",
-          reach: "$ref:reach-plan.output",
+          reach: "$ref:reach-verdict.output",
           final: "$ref:finalize-message.output",
         },
       },
@@ -1053,7 +1097,9 @@ export function buildColdWhatsappOutreachDag(): DAG {
       ]),
       { from: "read-history", to: "who-they-are" },
       { from: "who-they-are", to: "reach-plan" },
-      { from: "reach-plan", to: "compose-message" },
+      { from: "reach-plan", to: "reach-check" },
+      { from: "reach-check", to: "reach-verdict" },
+      { from: "reach-verdict", to: "compose-message" },
       { from: "compose-message", to: "draft-message" },
       { from: "draft-message", to: "finalize-message" },
       { from: "finalize-message", to: "send-whatsapp" },
