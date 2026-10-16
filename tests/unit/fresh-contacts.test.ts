@@ -8,7 +8,7 @@ import {
   withFreshContacts,
 } from "../../src/lib/fresh-contacts.js";
 import {
-  CONTACTED_PROSPECTS_CHANGES,
+  LEAD_FOLLOW_UP_DUE_CHANGES,
   SOURCING_DESCRIPTION,
   buildSourcingDag,
   buildSourcingDagFor,
@@ -56,7 +56,7 @@ describe("tactic Fresh contacts only (FRESH-CONTACTS-WF-1015)", () => {
   });
 
   it("a serve of people already contacted (a population) is a re-engagement play: never stated", () => {
-    const contacted = applyDagPatch(buildSourcingDag(), CONTACTED_PROSPECTS_CHANGES as never);
+    const contacted = applyDagPatch(buildSourcingDag(), LEAD_FOLLOW_UP_DUE_CHANGES as never);
     expect(freshContactsApplies(contacted)).toBe(false);
     expect(() => withFreshContacts(contacted)).toThrow(/not a cold serve/);
   });
@@ -102,11 +102,21 @@ describe("the sourcing seed carries Fresh contacts only on cold channels and nev
     expect(serveBody(r.dag)).toEqual({ excludeEmailedWithin: "3_months", acceptedEmails: "valid_and_catch_all" });
   });
 
-  it("the contacted pure prospects copy never gains it", () => {
+  it("the Lead follow-up due copy never gains it", () => {
     const current = buildSourcingDagFor("lead-sourcing");
-    const forked = applyDagPatch(current, CONTACTED_PROSPECTS_CHANGES as never);
-    expect(serveBody(forked)).toEqual({ population: "contacted_pure_prospects" });
-    expect(serveBody(sourcingTargetOf(forked, current).dag)).toEqual({ population: "contacted_pure_prospects" });
+    const forked = applyDagPatch(current, LEAD_FOLLOW_UP_DUE_CHANGES as never);
+    expect(serveBody(forked)).toEqual({ population: "lead_followup_due" });
+    expect(serveBody(sourcingTargetOf(forked, current).dag)).toEqual({ population: "lead_followup_due" });
+    expect(sourcingTargetOf(forked, current).description).toBeUndefined();
+  });
+
+  it("the contacted pure prospects copy is upgraded to Lead follow-up due, with its description (MULTICHANNEL-FOLLOWUP-1016)", () => {
+    const current = buildSourcingDagFor("lead-sourcing");
+    const stored = applyDagPatch(current, [{ op: "add", path: "/nodes/serve-lead/config/body", value: { population: "contacted_pure_prospects" } }]);
+    const r = sourcingTargetOf(stored, current);
+    expect(serveBody(r.dag)).toEqual({ population: "lead_followup_due" });
+    expect(r.description).toMatch(/^Lead follow-up due: /);
+    expect(r.description).toMatch(/Never a paying client, a personal contact/);
   });
 
   it("a CRM copy stays exactly what it states", () => {

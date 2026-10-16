@@ -91,32 +91,38 @@ export function servesBusinessOnly(dag: { nodes?: Array<{ id?: string; config?: 
 }
 
 /**
- * The Lead Sourcing pipe's "contacted pure prospects" play (NEVER-NO-FOLLOWUP-1014, owner 2026-10-14): the people the
- * brand ALREADY contacted who are still pure prospects (no relationship tag but prospect, not opted out, never
- * disqualified, no positive reply, meeting or sale). lead-service serves that population when the source run states
- * it on `POST /orgs/buffer/next`; the follow-up pipe fed by this source writes them their first follow-up
- * (`prospect-follow-up-dag.ts`). Its OWN dynasty, a fork of the channel's generic workflow like the business-only one:
- * features-service judges the tactic "Contacted pure prospects" on this DAG and the strategy of that name requires it.
+ * The Lead Sourcing pipe's "Lead follow-up due" play (LEAD-FOLLOWUP-DATE-1016 + MULTICHANNEL-FOLLOWUP-1016, owner
+ * 2026-10-16): every lead of the brand carries a next follow-up date on lead-service; this play hands the ones whose
+ * date has passed (most overdue first, again every time their date passes again), never a client, a personal contact,
+ * an opted-out, unsubscribed or disqualified person. The follow-up pipe fed by this source writes to them on the best
+ * channel of the Unibox and sets their next date (`follow-up-dag.ts`): an infinite loop by construction.
+ *
+ * Its own dynasty, a fork of the channel's generic workflow, like the business-only one. It SUCCEEDS the
+ * "contacted pure prospects" play (NEVER-NO-FOLLOWUP-1014, people we cold-emailed, handed once ever): that dynasty is
+ * UPGRADED to this population (`RETIRED_POPULATIONS`), never forked again.
  */
-export const CONTACTED_PURE_PROSPECTS_POPULATION = "contacted_pure_prospects";
+export const LEAD_FOLLOW_UP_DUE_POPULATION = "lead_followup_due";
 
-export const CONTACTED_PROSPECTS_SOURCING_CHANNELS = ["lead-sourcing"] as const;
+/** A population a stored copy still states, and the one that replaced it (the seed upgrades the copy to it). */
+export const RETIRED_POPULATIONS: Record<string, string> = { contacted_pure_prospects: LEAD_FOLLOW_UP_DUE_POPULATION };
 
-export const CONTACTED_PROSPECTS_SOURCING_DESCRIPTION =
-  "Finds, one per run, inside its campaign's caps, a person the brand ALREADY contacted who is still a pure " +
-  "prospect: no relationship to the brand but prospect, never opted out or unsubscribed, never disqualified, never " +
-  "replied positively, booked or bought, and never handed to this population before. Buys nobody new and emails " +
-  "nobody: hands them to Lead found, where the follow-up pipe writes to them.";
+export const LEAD_FOLLOW_UP_DUE_SOURCING_CHANNELS = ["lead-sourcing"] as const;
 
-export const CONTACTED_PROSPECTS_CHANGES = [
-  { op: "add", path: "/nodes/serve-lead/config/body", value: { population: CONTACTED_PURE_PROSPECTS_POPULATION } },
+export const LEAD_FOLLOW_UP_DUE_SOURCING_DESCRIPTION =
+  "Lead follow-up due: finds, one per run, inside its campaign's caps, a lead the brand already knows whose next " +
+  "follow-up date has passed, the most overdue first, and hands them to Lead found again each time their date " +
+  "passes. Never a paying client, a personal contact, or anyone who opted out, unsubscribed or was disqualified. " +
+  "Buys nobody new and writes to nobody: the follow-up pipe after it does.";
+
+export const LEAD_FOLLOW_UP_DUE_CHANGES = [
+  { op: "add", path: "/nodes/serve-lead/config/body", value: { population: LEAD_FOLLOW_UP_DUE_POPULATION } },
 ] as const;
 
-/** True when a stored sourcing DAG serves the contacted pure prospects. */
-export function servesContactedProspects(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+/** True when a stored sourcing DAG serves the "Lead follow-up due" population (or the one it replaced). */
+export function servesLeadFollowUpDue(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
   const serve = (dag?.nodes ?? []).find((n) => n?.id === "serve-lead");
-  const body = serve?.config?.body as { population?: unknown } | undefined;
-  return body?.population === CONTACTED_PURE_PROSPECTS_POPULATION;
+  const population = (serve?.config?.body as { population?: unknown } | undefined)?.population;
+  return population === LEAD_FOLLOW_UP_DUE_POPULATION || (typeof population === "string" && RETIRED_POPULATIONS[population] === LEAD_FOLLOW_UP_DUE_POPULATION);
 }
 
 /**
@@ -132,11 +138,11 @@ export const SOURCING_FORK_PLAYS = [
     serves: servesBusinessOnly,
   },
   {
-    name: "contacted-pure-prospects",
-    channels: CONTACTED_PROSPECTS_SOURCING_CHANNELS as readonly string[],
-    changes: CONTACTED_PROSPECTS_CHANGES,
-    description: CONTACTED_PROSPECTS_SOURCING_DESCRIPTION,
-    serves: servesContactedProspects,
+    name: "lead-follow-up-due",
+    channels: LEAD_FOLLOW_UP_DUE_SOURCING_CHANNELS as readonly string[],
+    changes: LEAD_FOLLOW_UP_DUE_CHANGES,
+    description: LEAD_FOLLOW_UP_DUE_SOURCING_DESCRIPTION,
+    serves: servesLeadFollowUpDue,
   },
 ] as const;
 
@@ -199,7 +205,10 @@ export function buildSourcingDag(opts: { businessOnly?: boolean; freshContacts?:
  * `excludeEmailedWithin`) is kept under the copy's, except on a serve stating a `population` (people the brand already
  * contacted: a fresh-contacts skip would serve none of them). Returns `stated: false` for the generic row.
  */
-export function sourcingTargetOf(storedDag: DAG, current: DAG = buildSourcingDag()): { dag: DAG; stated: boolean } {
+export function sourcingTargetOf(
+  storedDag: DAG,
+  current: DAG = buildSourcingDag(),
+): { dag: DAG; stated: boolean; description?: string } {
   const storedServe = storedDag.nodes.find(
     (n) => n.type === "http.call" && (n.config as { path?: string } | undefined)?.path === "/orgs/buffer/next",
   );
@@ -211,8 +220,14 @@ export function sourcingTargetOf(storedDag: DAG, current: DAG = buildSourcingDag
   if (!serve) throw new Error("current sourcing DAG has no serve-lead node");
   const currentBody = (serve.config as { body?: Record<string, unknown> }).body ?? {};
   const merged: Record<string, unknown> = { ...structuredClone(currentBody), ...structuredClone(body) };
+  // A population that was replaced moves to its successor, with the successor's description.
+  let description: string | undefined;
+  if (typeof merged.population === "string" && RETIRED_POPULATIONS[merged.population]) {
+    merged.population = RETIRED_POPULATIONS[merged.population];
+    if (merged.population === LEAD_FOLLOW_UP_DUE_POPULATION) description = LEAD_FOLLOW_UP_DUE_SOURCING_DESCRIPTION;
+  }
   if (merged.population !== undefined) delete merged[FRESH_CONTACTS_FIELD];
   else if (currentBody[FRESH_CONTACTS_FIELD] === undefined) delete merged[FRESH_CONTACTS_FIELD];
   (serve.config as Record<string, unknown>).body = merged;
-  return { dag, stated: true };
+  return { dag, stated: true, ...(description ? { description } : {}) };
 }
