@@ -123,10 +123,10 @@ describe("lead-service's follow-up state", () => {
     expect(await main(person(), answer({ kind: "owed" }, { any: true, followups: [own] }), NOW)).toMatchObject({ proceed: true });
   });
   it("stop: nothing written, no date", async () => {
-    expect(await main(person(), answer({ kind: "stop", reason: "customer" }), NOW)).toMatchObject({ proceed: false, kind: "stop" });
+    expect(await main(person(), answer({ kind: "stop", reason: "customer", reasons: ["customer"] }), NOW)).toMatchObject({ proceed: false, kind: "stop" });
   });
   it("not yet: nothing written, the date moves to retryAfter (never in the past)", async () => {
-    const out = await main(person(), answer({ kind: "not_yet", reason: "sequence_running", retryAfter: inDays(2) }), NOW);
+    const out = await main(person(), answer({ kind: "not_yet", reason: "relationship_not_judged", reasons: ["relationship_not_judged"], retryAfter: inDays(2) }), NOW);
     expect(out).toMatchObject({ proceed: false, kind: "not_yet" });
     expect(Date.parse(out.nextFollowUpAt)).toBeGreaterThan(Date.now() + 86400000);
   });
@@ -142,6 +142,17 @@ describe("lead-service's follow-up state", () => {
     const a = answer({ kind: "owed" }, { any: true, emailSequence: true });
     a.followupDate.nextFollowupAt = later;
     expect(await main(person(), a, NOW)).toMatchObject({ proceed: false, kind: "queued", nextFollowUpAt: later });
+  });
+  it("a lead event is answered through engagement (a positive reply, a live conversation), never through an owner stop", async () => {
+    const replied = answer({ kind: "stop", reason: "positive_reply", reasons: ["positive_reply", "in_conversation"] });
+    expect(await main(person(), replied, NOW)).toMatchObject({ proceed: true });
+    expect(await main(person({ entry: "served" }), replied, NOW)).toMatchObject({ proceed: false, kind: "stop" });
+    const optedOut = answer({ kind: "stop", reason: "opted_out", reasons: ["opted_out", "positive_reply"] });
+    expect(await main(person(), optedOut, NOW)).toMatchObject({ proceed: false, kind: "stop", reason: "opted_out" });
+    const unresolved = answer({ kind: "stop", reason: "meeting_booked", reasons: ["meeting_booked", "identity_unresolved"] });
+    expect(await main(person(), unresolved, NOW)).toMatchObject({ proceed: false, kind: "not_yet", reason: "identity_unresolved" });
+    const sequence = answer({ kind: "not_yet", reason: "in_conversation", reasons: ["in_conversation", "sequence_running"], retryAfter: inDays(2) });
+    expect(await main(person(), sequence, NOW)).toMatchObject({ proceed: false, kind: "queued" });
   });
   it("an answer with no kind fails loud", async () => {
     await expect(main(person(), {}, NOW)).rejects.toThrow(/no follow-up kind/);

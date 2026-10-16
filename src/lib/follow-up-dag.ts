@@ -65,6 +65,15 @@ export const FOLLOW_UP_LLM = { provider: "anthropic", model: "opus" } as const;
  */
 export const FOLLOW_UP_STATE = { method: "GET", path: "/orgs/leads/{id}/followup-date" } as const;
 
+/**
+ * lead-service verdict reasons that say the person ENGAGED (a reply, a booking, a live conversation): on a run
+ * answering a lead event they are what the writer judges, never a reason to stay silent.
+ */
+export const ENGAGEMENT_REASONS = ["positive_reply", "meeting_booked", "meeting_attended", "in_conversation"] as const;
+
+/** Verdict reasons that only wait (who they are is not resolved yet, a sequence step is queued): never a stop. */
+export const WAIT_REASONS = ["sequence_running", "relationship_not_judged", "same_person_question_open", "identity_unresolved"] as const;
+
 /** lead-service's write of the next follow-up date (or of a stop on the person's own words). */
 export const SET_NEXT_DATE = { method: "PUT", path: "/orgs/leads/{id}/followup-date" } as const;
 
@@ -259,7 +268,7 @@ export const READ_STATE_CODE = `
 export async function main(person, state, nowIso) {
   if (person?.ok !== true) return { proceed: false, kind: "none", skip: true };
   const owed = state?.owed;
-  const kind = owed?.kind;
+  let kind = owed?.kind;
   if (kind !== "owed" && kind !== "stop" && kind !== "not_yet") {
     throw new Error("follow-up-state: lead-service answered no follow-up kind: " + JSON.stringify(state).slice(0, 300));
   }
@@ -267,14 +276,35 @@ export async function main(person, state, nowIso) {
     throw new Error("follow-up-state: lead-service answered no date or queue: " + JSON.stringify(state).slice(0, 300));
   }
   const now = Date.parse(String(nowIso));
-  const reason = String(owed.reason ?? kind);
   const currentNext = Date.parse(String(state.followupDate.nextFollowupAt ?? ""));
+  let reason = String(owed.reason ?? kind);
+  // A run answering a lead EVENT (claimed) exists because the person just engaged: a reply, a booking, a live
+  // conversation are what the writer reads in the thread and judges, never a reason to stay silent. Only the owner's
+  // stops (opted out, unsubscribed, bounced, disqualified, a client or anyone but a prospect) end it; who they are
+  // still unresolved waits. The proactive walk keeps lead-service's whole verdict (its serve already re-checked it).
+  const reasons = Array.isArray(owed.reasons) ? owed.reasons : [];
+  if (person.entry === "claimed" && kind !== "owed" && reasons.length > 0) {
+    const left = reasons.filter((r) => !${JSON.stringify(ENGAGEMENT_REASONS)}.includes(r));
+    if (left.length === 0) {
+      console.log("[follow-up] lead-service holds them back for " + reasons.join(", ") + ": a lead event is answered anyway, the writer judges the thread");
+      kind = "owed";
+    } else if (left.every((r) => r === "sequence_running")) {
+      kind = "owed";
+      state = { ...state, queued: { ...state.queued, emailSequence: true } };
+    } else if (left.some((r) => !${JSON.stringify(WAIT_REASONS)}.includes(r))) {
+      kind = "stop";
+      reason = left.find((r) => !${JSON.stringify(WAIT_REASONS)}.includes(r));
+    } else {
+      kind = "not_yet";
+      reason = left[0];
+    }
+  }
   if (kind === "stop") {
     console.log("[follow-up] lead-service says stop (" + reason + "): nothing written, no next date");
     return { proceed: false, kind, reason, skip: true };
   }
   if (kind === "not_yet") {
-    const at = Date.parse(String(owed.retryAfter ?? ""));
+    const at = owed.kind === "not_yet" ? Date.parse(String(owed.retryAfter ?? "")) : now + 24 * 3600000;
     if (!Number.isFinite(at)) throw new Error("follow-up-state: not_yet without a retryAfter: " + JSON.stringify(owed).slice(0, 300));
     // A date already past fires again at once: ask again in an hour rather than in a loop.
     const next = new Date(Math.max(at, now + 3600000)).toISOString();
