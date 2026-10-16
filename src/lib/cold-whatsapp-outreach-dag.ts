@@ -140,6 +140,13 @@ export const BRAND_SIDE_REFUSAL_CODES = ["whatsapp_not_linked", "whatsapp_not_co
 /** A brand-side refusal with no date of the model's (nothing was drafted): the person is looked at again this long after. */
 export const BRAND_SIDE_RECHECK_DAYS = 7;
 
+/**
+ * crm-service refusal: someone of the brand typed by hand in this person's WhatsApp thread, so automation stays out of
+ * it for good. Named (never a failed run) but about the PERSON, not brand-side: a follow-up look hands them over
+ * (`handed`, permanent), never a recheck that would re-look at them forever.
+ */
+export const HUMAN_IN_CONVERSATION_CODE = "human_in_conversation";
+
 /** Stored on the queue row once the message answering an occurrence went out: handed, permanent, one message. */
 export const WHATSAPP_OCCURRENCE_SENT_REASON = "whatsapp_occurrence_sent";
 
@@ -770,6 +777,7 @@ export const WHATSAPP_REFUSAL_CODES = [
   "not_on_whatsapp",
   "person_replied",
   "automation_not_allowed",
+  HUMAN_IN_CONVERSATION_CODE,
 ] as const;
 
 const PERSON = "results['pick-person']";
