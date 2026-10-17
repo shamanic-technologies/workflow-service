@@ -4,6 +4,8 @@ import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   COLD_WHATSAPP_OUTREACH_LEG_KEYS,
+  ADMISSION_PLAN_CODE,
+  COLD_WHATSAPP_OUTREACH_DESCRIPTION,
   COMPOSE_MESSAGE_PROMPT_CODE,
   CRM_WHATSAPP_SEND,
   FINALIZE_MESSAGE_CODE,
@@ -493,9 +495,13 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
       });
     spy.mockRestore();
     expect(dag.edges).toContainEqual({ from: "record-followup", to: "end-run-followup" });
-    for (const id of ["end-run", "end-run-followup", "end-run-unreachable", "end-run-released"]) {
+    for (const id of ["end-run", "end-run-unreachable", "end-run-released"]) {
       expect(dag.nodes.find((n) => n.id === id)?.inputMapping).toEqual({ "body.delivery": "$ref:record-plan.output.delivery" });
     }
+    expect(dag.nodes.find((n) => n.id === "end-run-followup")?.inputMapping).toEqual({
+      "body.delivery": "$ref:record-plan.output.delivery",
+      "body.personNotAdmitted": "$ref:record-plan.output.notAdmitted",
+    });
   });
 });
 
@@ -513,6 +519,8 @@ describe("no phone known: nothing is drafted, nothing is sent", () => {
       thread: "$ref:person-thread.output",
       sends: "$ref:prior-sends.output",
       campaignId: "$ref:flow_input.campaignId",
+      admission: "$ref:admission-plan.output",
+      team: "$ref:team-membership.output",
     });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await reach({ email: "a@x.com" }, { person: { phones: [] } })).toMatchObject({ skip: true, code: "no_phone_known" });
@@ -860,5 +868,93 @@ describe("greeting a person who just gave their WhatsApp number, known only by t
     // Sent: the row is handed for good, no follow-up is scheduled.
     const rec = await loadMain(RECORD_PLAN_CODE)(p, { ok: true }, "2026-10-15", reach, sent);
     expect(rec).toMatchObject({ action: "record", outcome: "sent", body: { kind: "handed" }, delivery: { state: "delivered" } });
+  });
+});
+
+describe("a message a trigger made due reaches only a new contact of the brand (WA-WELCOME-STRATEGY-1017)", () => {
+  const dag = buildColdWhatsappOutreachDag();
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  const admit = loadMain(ADMISSION_PLAN_CODE);
+  const reach = loadMain(REACH_PLAN_CODE);
+  const occ = { kind: "occurrence", rowId: "row-1", phone: "+33600000001", brandId: "b-1", email: null };
+  const visit = { kind: "event", source: "posthog", channel: "web", event: { step: "visit" }, at: "2026-10-17T10:00:00Z" };
+  const quiet = (fn: () => Promise<unknown>) => async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      return await fn();
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it("runs before any model spend, and asks crm-service's team read only when the thread admits them", () => {
+    expect(descendants(dag, "admission-plan").has("draft-message")).toBe(true);
+    expect(descendants(dag, "team-membership").has("reach-plan")).toBe(true);
+    expect(descendants(dag, "who-they-are").has("admission-plan")).toBe(true);
+    expect(byId.get("team-membership")?.config).toMatchObject({ service: "crm", method: "POST", path: "/orgs/people/team-membership" });
+    expect(byId.get("team-membership")?.inputMapping).toEqual({ body: "$ref:admission-plan.output.teamBody", skip: "$ref:admission-plan.output.skipTeam" });
+    expect(validateDAG(dag).valid).toBe(true);
+  });
+
+  it("an onboarding visitor with a number, a visit and no message is asked about, then welcomed", quiet(async () => {
+    const plan = await admit(occ, { items: [visit], person: { phones: [] } }, { sends: [] }, "c-1");
+    expect(plan).toEqual({ gated: true, skipTeam: false, teamBody: { brandId: "b-1", phone: "+33600000001" }, code: null, notAdmitted: null });
+    const out = await reach(occ, { person: { phones: [] } }, { sends: [] }, "c-1", plan, { staff: false, ownTeam: false, matches: [] });
+    expect(out).toMatchObject({ skip: false, code: null, reachBody: { brandId: "b-1", phone: "+33600000001" } });
+  }));
+
+  it("no visit on record: skipped, crm-service not asked", quiet(async () => {
+    const plan = await admit(occ, { items: [], person: {} }, { sends: [] }, "c-1");
+    expect(plan).toMatchObject({ gated: true, skipTeam: true, teamBody: null, code: "no_website_visit" });
+    const out = await reach(occ, {}, { sends: [] }, "c-1", plan, { ok: false, skipped: true, notCalled: true });
+    expect(out).toMatchObject({ skip: true, code: "no_website_visit", notAdmitted: { reason: expect.stringContaining("no_website_visit") } });
+  }));
+
+  it("a person who already wrote (any channel) is skipped; a click or a product chat alone is not a message", quiet(async () => {
+    const wroteWa = { kind: "message", direction: "inbound", source: "matrix", channel: "whatsapp", at: "2026-10-16T10:00:00Z", text: "hi" };
+    expect(await admit(occ, { items: [visit, wroteWa] }, { sends: [] }, "c-1")).toMatchObject({ code: "person_wrote", skipTeam: true });
+    const click = { kind: "event", source: "instantly", event: { step: "email_clicked" } };
+    const copilot = { kind: "message", direction: "inbound", source: "copilot", text: "how?" };
+    expect(await admit(occ, { items: [visit, click, copilot] }, { sends: [] }, "c-1")).toMatchObject({ code: null, skipTeam: false });
+  }));
+
+  it("our staff and the brand's own team are skipped; an unanswered team read fails loud", quiet(async () => {
+    const plan = await admit(occ, { items: [visit] }, { sends: [] }, "c-1");
+    const own = await reach(occ, {}, { sends: [] }, "c-1", plan, { staff: false, ownTeam: true, matches: [{ kind: "linked_whatsapp_account", via: "+33600000001", description: "a linked WhatsApp account" }] });
+    expect(own).toMatchObject({ skip: true, code: "own_team", notAdmitted: { reason: expect.stringContaining("own_team") } });
+    const staff = await reach(occ, {}, { sends: [] }, "c-1", plan, { staff: true, ownTeam: false, matches: [] });
+    expect(staff).toMatchObject({ skip: true, code: "staff" });
+    await expect(reach(occ, {}, { sends: [] }, "c-1", plan, { ok: false, skipped: true, notCalled: true })).rejects.toThrow(/nobody is welcomed blind/);
+  }));
+
+  it("a newly served person and a follow-up of a sent message are never gated", async () => {
+    expect(await admit({ kind: "first", email: "a@x.com" }, { items: [] }, { sends: [] }, "c-1")).toMatchObject({ gated: false, skipTeam: true });
+    const sent = { sends: [{ campaignId: "c-1", status: "sent" }] };
+    expect(await admit({ kind: "followup", email: "a@x.com" }, { items: [] }, sent, "c-1")).toMatchObject({ gated: false });
+    // The deferred look of an occurrence (nothing of this campaign was sent) is gated like the occurrence.
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await admit({ kind: "followup", email: "a@x.com", brandId: "b-1" }, { items: [] }, { sends: [] }, "c-1")).toMatchObject({ gated: true, code: "no_website_visit" });
+    spy.mockRestore();
+  });
+
+  it("not admitted = nothing drafted or sent, the row stopped, the run states personNotAdmitted and no delivery", async () => {
+    const reachOut = { skip: true, code: "own_team", owed: false, notAdmitted: { reason: "own_team: one of the brand's own team" } };
+    const fin = await loadMain(FINALIZE_MESSAGE_CODE)({ ok: false, skipped: true, notCalled: true }, occ, "c-1", reachOut);
+    expect(fin).toMatchObject({ skipSend: true, sendBody: null });
+    const rec = await loadMain(RECORD_PLAN_CODE)(occ, { ok: false, skipped: true, notCalled: true }, "2026-10-17", reachOut, fin);
+    expect(rec).toEqual({
+      action: "record",
+      outcome: "not_admitted",
+      code: "own_team",
+      notAdmitted: { reason: "own_team: one of the brand's own team" },
+      body: { kind: "stopped", reason: "whatsapp_own_team" },
+    });
+    expect(holds("results['record-plan']?.action == 'record'", { "record-plan": rec })).toBe(true);
+  });
+
+  it("the judged description states the three skips", () => {
+    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/no visit to the brand's website/);
+    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/already wrote a message/);
+    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/staff or the brand's own team/);
   });
 });
