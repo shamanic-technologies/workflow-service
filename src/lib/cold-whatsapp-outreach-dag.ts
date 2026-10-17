@@ -118,7 +118,11 @@ export const COLD_WHATSAPP_OUTREACH_DESCRIPTION =
   "owes that person ONE message and never follows up after it: the model still judges the right moment from the " +
   "whole thread and the hour where they are, and may wait to a later date it picks (they stay owed) when we wrote " +
   "last and they have not answered, or it is not a sensible hour for them. A person known only by their phone is " +
-  "written to by phone, greeted by the first name they gave.";
+  "written to by phone, greeted by the first name they gave. On such a trigger run it writes ONLY to a new contact " +
+  "of the brand, and skips before any AI spend: a person with no visit to the brand's website on record; a person " +
+  "who already wrote a message to the brand on any channel (email, WhatsApp, LinkedIn; a visit or a click alone " +
+  "does not skip them); and our own staff or the brand's own team (its linked WhatsApp numbers, its sales rep, the " +
+  "members of its organization).";
 
 /** The model the message is written with, through chat-service. Always-thinking: no temperature. */
 export const COLD_WHATSAPP_LLM = { provider: "anthropic", model: "opus" } as const;
@@ -364,8 +368,69 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
 }
 `.trim();
 
+/** Timeline event steps that are a visit to the brand's website (PostHog `visit`, a CRM `website_visit` fact). */
+export const WEBSITE_VISIT_STEPS = ["visit", "website_visit"] as const;
+
+/**
+ * Why a person a trigger made due is NOT written to (WA-WELCOME-STRATEGY-1017, owner 2026-10-17: a person who just
+ * gave their WhatsApp number gets ONE warm welcome only when they are a new contact of the brand). Each is a tactic
+ * features-service judges on this workflow's versions; the trigger states only the fact.
+ */
+export const NOT_ADMITTED_CODES = {
+  noWebsiteVisit: "no_website_visit",
+  personWrote: "person_wrote",
+  staff: "staff",
+  ownTeam: "own_team",
+} as const;
+
+/**
+ * WHO a message a trigger made due may reach (a run answering an occurrence, or the deferred look of one: a row this
+ * campaign never sent anything to), decided off their merged thread BEFORE any model spend:
+ *  - no visit to the brand's website on record = not admitted (`no_website_visit`);
+ *  - a message FROM them on any channel (`REPLY_SOURCES`: a visit, a click or a product use is not a message) = not
+ *    admitted (`person_wrote`): they are already talking with the brand, a welcome would read as a bot;
+ *  - otherwise crm-service is asked whether they are our staff or the brand's own team (`team-membership`, the next
+ *    node; reach-plan reads its answer).
+ * A newly served person or a follow-up of a message we sent is not gated here (`gated: false`, nothing asked).
+ */
+export const ADMISSION_PLAN_CODE = `
+export async function main(person, thread, sends, campaignId) {
+  const owedLook = person?.kind === "followup"
+    && !(Array.isArray(sends?.sends) ? sends.sends : []).some((x) => x?.campaignId === campaignId && x?.status === "sent");
+  const gated = person?.kind === "occurrence" || owedLook;
+  if (!gated) return { gated: false, skipTeam: true, teamBody: null, notAdmitted: null };
+  if (!thread || !Array.isArray(thread.items)) throw new Error("admission-plan: the person's thread did not come back");
+  const items = thread.items;
+  const who = String(person.email ?? person.phone ?? "");
+  const refuse = (code, reason) => {
+    console.log("[cold-whatsapp-outreach] " + who + " not admitted (" + code + "): " + reason);
+    return { gated: true, skipTeam: true, teamBody: null, code, notAdmitted: { reason: code + ": " + reason } };
+  };
+  const visited = items.some((i) => i?.kind === "event" && ${JSON.stringify(WEBSITE_VISIT_STEPS)}.includes(i?.event?.step));
+  if (!visited) return refuse("${NOT_ADMITTED_CODES.noWebsiteVisit}", "no visit to the brand's website is on record for this person");
+  const wrote = items.find((i) => i?.kind === "message" && i?.direction === "inbound" && ${JSON.stringify(REPLY_SOURCES)}.includes(i?.source));
+  if (wrote) return refuse("${NOT_ADMITTED_CODES.personWrote}", "they already wrote to the brand (" + String(wrote.channel ?? wrote.source) + ", " + String(wrote.at ?? "date unknown") + ")");
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const phone = s(person.phone) ?? (Array.isArray(thread.person?.phones) ? thread.person.phones.map(s).find(Boolean) ?? null : null);
+  const email = s(person.email);
+  if (!email && !phone) throw new Error("admission-plan: the person carries neither an email nor a phone to ask crm-service about");
+  if (!person.brandId) throw new Error("admission-plan: the person carries no brand");
+  return {
+    gated: true,
+    skipTeam: false,
+    teamBody: { brandId: person.brandId, ...(email ? { email } : {}), ...(phone ? { phone } : {}) },
+    code: null,
+    notAdmitted: null,
+  };
+}
+`.trim();
+
 /**
  * Whether the message may leave at all, decided BEFORE the model writes.
+ *
+ * First, for a message a trigger made due: the admission (`ADMISSION_PLAN_CODE` + crm-service's team-membership
+ * answer). Not admitted = nothing drafted or sent, the row stopped, and the run states `personNotAdmitted` (final for
+ * this occurrence, never redelivered). An unanswered team read throws: nobody is welcomed blind.
  *
  * A FOLLOW-UP look first: did the person answer since this campaign first wrote to them (its earliest `sent` send),
  * on any channel (`REPLY_SOURCES`, off their merged thread)? Then nothing is drafted or sent (`person_replied`, the
@@ -379,7 +444,24 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
  * drafted. A thread read that states no phone list decides nothing (crm-service answers).
  */
 export const REACH_PLAN_CODE = `
-export async function main(person, thread, sends, campaignId) {
+export async function main(person, thread, sends, campaignId, admission, team) {
+  if (admission?.gated === true) {
+    const owedRow = person?.kind === "followup";
+    const notAdmitted = (code, reason) => ({ skip: true, code, skipIfReplied: false, owed: owedRow, reason, notAdmitted: { reason: code + ": " + reason } });
+    if (admission.notAdmitted) return { ...notAdmitted(admission.code, admission.notAdmitted.reason), notAdmitted: admission.notAdmitted };
+    if (!team || team.notCalled === true || typeof team.staff !== "boolean" || typeof team.ownTeam !== "boolean") {
+      throw new Error("reach-plan: crm-service did not say whether this person is our staff or the brand's own team; nobody is welcomed blind");
+    }
+    const via = (Array.isArray(team.matches) ? team.matches : []).map((m) => String(m?.description ?? m?.kind)).join(", ");
+    if (team.staff === true) {
+      console.log("[cold-whatsapp-outreach] " + String(person?.email ?? person?.phone) + " not admitted (${NOT_ADMITTED_CODES.staff}): " + via);
+      return notAdmitted("${NOT_ADMITTED_CODES.staff}", "one of our own staff (" + via + ")");
+    }
+    if (team.ownTeam === true) {
+      console.log("[cold-whatsapp-outreach] " + String(person?.email ?? person?.phone) + " not admitted (${NOT_ADMITTED_CODES.ownTeam}): " + via);
+      return notAdmitted("${NOT_ADMITTED_CODES.ownTeam}", "one of the brand's own team (" + via + ")");
+    }
+  }
   let skipIfReplied = false;
   let owed = false;
   if (person?.kind === "followup") {
@@ -700,6 +782,19 @@ function plan(person, send, currentDate, reach, final) {
   // A later or a stop on a follow-up look, an occurrence, or a deferred occurrence: the queue row is the date's only
   // store, so a later keeps the person owed on THIS campaign's queue (never a new occurrence: that would reach every
   // campaign on the trigger).
+  // A person a trigger made due who is not a new contact of the brand (WA-WELCOME-STRATEGY-1017): nothing was
+  // drafted or sent, the row is stopped, and the run tells campaign-service the person was not admitted (final for
+  // this occurrence, never redelivered). No delivery: nothing was attempted.
+  if (reach?.notAdmitted && (person?.kind === "occurrence" || person?.kind === "followup")) {
+    return {
+      action: "record",
+      outcome: "not_admitted",
+      decided: true,
+      code: String(reach.code),
+      notAdmitted: reach.notAdmitted,
+      body: { kind: "stopped", reason: "whatsapp_" + String(reach.code) },
+    };
+  }
   const judged = person?.kind === "followup" || person?.kind === "occurrence";
   if (judged && final?.decision === "later") {
     if (!final.nextFollowUpAt) throw new Error("record-plan: a later look carries no next date");
@@ -980,6 +1075,27 @@ export function buildColdWhatsappOutreachDag(): DAG {
         served: "$ref:serve-lead.output",
         timeline: "$ref:person-thread.output",
       }),
+      // A message a trigger made due reaches only a new contact of the brand: a visit on record, no message from
+      // them, not our staff, not the brand's own team (WA-WELCOME-STRATEGY-1017).
+      {
+        id: "admission-plan",
+        type: "script",
+        config: { code: ADMISSION_PLAN_CODE },
+        retries: 0,
+        inputMapping: {
+          person: "$ref:pick-person.output",
+          thread: "$ref:person-thread.output",
+          sends: "$ref:prior-sends.output",
+          campaignId: "$ref:flow_input.campaignId",
+        },
+      },
+      {
+        id: "team-membership",
+        type: "http.call",
+        config: { service: "crm", method: "POST", path: "/orgs/people/team-membership" },
+        retries: 1,
+        inputMapping: { body: "$ref:admission-plan.output.teamBody", skip: "$ref:admission-plan.output.skipTeam" },
+      },
       // Can the message leave at all? Decided before the model writes (no phone known = nothing drafted).
       {
         id: "reach-plan",
@@ -991,6 +1107,8 @@ export function buildColdWhatsappOutreachDag(): DAG {
           thread: "$ref:person-thread.output",
           sends: "$ref:prior-sends.output",
           campaignId: "$ref:flow_input.campaignId",
+          admission: "$ref:admission-plan.output",
+          team: "$ref:team-membership.output",
         },
       },
       // crm-service runs the send's own checks (phone, on WhatsApp, account connected) without sending: an
@@ -1126,7 +1244,11 @@ export function buildColdWhatsappOutreachDag(): DAG {
       },
       // The occurrence's truth (PUSHED-TRUTH-1015): every arm after the send states record-plan's delivery.
       endRun("end-run", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
-      endRun("end-run-followup", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
+      // A person not admitted (WA-WELCOME-STRATEGY-1017) is stated as such: final for the occurrence, never redelivered.
+      endRun("end-run-followup", { success: true, stopCampaign: false }, {
+        ...RECORDED_DELIVERY,
+        "body.personNotAdmitted": "$ref:record-plan.output.notAdmitted",
+      }),
       endRun("end-run-unreachable", { success: true, stopCampaign: false }, RECORDED_DELIVERY),
       // Its own end-run, never a shared one with the `none` arm: a node fed by an arm AND by a node inside another
       // arm is a convergence point, emitted top level, run on EVERY run after the branch's own end-run
@@ -1181,7 +1303,9 @@ export function buildColdWhatsappOutreachDag(): DAG {
         { from: `voice-sends-${n}`, to: n < VOICE_SAMPLE_PEOPLE ? `voice-thread-${n + 1}` : "read-history" },
       ]),
       { from: "read-history", to: "who-they-are" },
-      { from: "who-they-are", to: "reach-plan" },
+      { from: "who-they-are", to: "admission-plan" },
+      { from: "admission-plan", to: "team-membership" },
+      { from: "team-membership", to: "reach-plan" },
       { from: "reach-plan", to: "reach-check" },
       { from: "reach-check", to: "reach-verdict" },
       { from: "reach-verdict", to: "compose-message" },
