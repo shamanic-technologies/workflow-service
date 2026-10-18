@@ -132,7 +132,7 @@ describe("cold-whatsapp-outreach DAG", () => {
   });
 
   it("writes through chat-service /complete on Opus with a strict schema, never Haiku", () => {
-    const chat = dag.nodes.filter((n) => n.config?.service === "chat");
+    const chat = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
     expect(chat.map((n) => n.id)).toEqual(["draft-message"]);
     expect(chat[0].config?.body).toMatchObject({ provider: "anthropic", model: "opus", responseFormat: "json" });
     expect(MESSAGE_RESPONSE_SCHEMA.additionalProperties).toBe(false);

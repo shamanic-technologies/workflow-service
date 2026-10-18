@@ -49,6 +49,7 @@
  * No em dash or en dash ever reaches the person: the prompt bans them and `finalize-answer` rewrites any that slip
  * through, before the send.
  */
+import { withClientCommsVoice } from "./client-comms.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -283,7 +284,12 @@ export const SENT = "results['finalize-answer']?.decision == 'answer' && results
 /** email-gateway refused the email for this person. */
 export const REFUSED = "results['finalize-answer']?.decision == 'answer' && results['send-email']?.skipped == true";
 
+/** The form responder, its answer drafted in our voice (the `client-comms` skill, read live before `draft-answer`). */
 export function buildFormMeetingBookingDag(): DAG {
+  return withClientCommsVoice(formMeetingBookingDagUnvoiced(), "draft-answer");
+}
+
+function formMeetingBookingDagUnvoiced(): DAG {
   return {
     nodes: [
       {

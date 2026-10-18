@@ -88,7 +88,7 @@ describe("ai-meeting-booking DAG", () => {
   it("gives every chat step an output budget a thinking model can fit in", () => {
     expect(CHAT_STEP_MAX_TOKENS).toBeGreaterThanOrEqual(16_000);
     const chat = buildAiMeetingBookingDag(DAG_OPTS).nodes.filter(
-      (n) => (n.config as { service?: string } | undefined)?.service === "chat",
+      (n) => (n.config as { service?: string; path?: string } | undefined)?.service === "chat" && n.config?.path === "/complete",
     );
     expect(chat.map((n) => n.id).sort()).toEqual(["draft-reply", "list-questions"]);
     for (const n of chat) {
@@ -336,7 +336,7 @@ describe("ai-meeting-booking DAG", () => {
     expect(body.responseSchema).toBeTruthy();
     // No provider SDK. Exactly two LLM hops, both on chat-service /complete:
     // listing the questions, then drafting. Never anthropic/haiku.
-    const chat = dag.nodes.filter((n) => n.config?.service === "chat");
+    const chat = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
     expect(chat.map((n) => n.id).sort()).toEqual(["draft-reply", "list-questions"]);
     for (const n of chat) {
       expect(n.config).toMatchObject({ method: "POST", path: "/complete" });
@@ -1301,7 +1301,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     const order = [
       "prior-generation", "compose-questions-prompt", "list-questions", "plan-lookups",
       "offer-answers", "offer-user-fields", "brand-user-fields", "gather-facts",
-      "sender-reach-plan", "sender-reach", "compose-prompt", "draft-reply", "ground-draft", "check-answerable",
+      "sender-reach-plan", "sender-reach", "compose-prompt", "read-client-comms", "client-comms-voice", "draft-reply", "ground-draft", "check-answerable",
     ];
     for (let i = 0; i < order.length - 1; i++) {
       expect(dag.edges.some((e) => e.from === order[i] && e.to === order[i + 1])).toBe(true);
@@ -1891,7 +1891,7 @@ describe("a thread opened by the acquisition-questions sequence plays its game (
 describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)", () => {
   const chatBodies = (dag: DAG) =>
     dag.nodes
-      .filter((n) => (n.config as { service?: string } | undefined)?.service === "chat")
+      .filter((n) => (n.config as { service?: string } | undefined)?.service === "chat" && n.config?.path === "/complete")
       .map((n) => ({ id: n.id, body: (n.config as { body: Record<string, unknown> }).body }));
 
   it("keeps the Gemini cell's temperatures exactly as they were", () => {
