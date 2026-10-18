@@ -35,6 +35,7 @@
  *
  * No em dash or en dash ever reaches the person: the prompt bans them and `finalize` rewrites any that slip through.
  */
+import { withClientCommsVoice } from "./client-comms.js";
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { PERSON_THREAD_NODE_ID, PERSON_THREAD_QUERY_NODE_ID, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -1031,7 +1032,8 @@ function tail(opts: { readFigures: boolean; reactive: boolean }): { nodes: DAGNo
   for (const kind of FOLLOW_UP_END_KINDS) {
     edges.push({ from: "check-end", to: `end-run-${kind.replace(/_/g, "-")}`, condition: `results['outcome']?.endKind == '${kind}'` });
   }
-  return { nodes, edges };
+  // Our voice (the `client-comms` skill, read live) on the prompt `draft` writes from.
+  return withClientCommsVoice({ nodes, edges }, "draft");
 }
 
 /** The proactive chassis. */

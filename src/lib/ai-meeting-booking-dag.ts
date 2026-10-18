@@ -140,6 +140,7 @@
  * its CODE and never by its status.
  */
 
+import { readsClientComms, withClientCommsVoice } from "./client-comms.js";
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
@@ -2062,7 +2063,21 @@ export function isConversationResponder(dag: { nodes?: Array<{ id?: string }> } 
   return nodes.some((n) => n?.id === "conversation") && !nodes.some((n) => n?.id === "offer-documents");
 }
 
+/**
+ * True when a stored responder DAG drafts its reply without reading our voice (SOPHIE-COPILOT-WA-1018): the
+ * `client-comms` skill is read live before `draft-reply` (`withClientCommsVoice`, `client-comms.ts`).
+ */
+export function needsClientCommsVoice(dag: { nodes?: Array<{ id?: string }> } | null | undefined): boolean {
+  return (dag?.nodes ?? []).some((n) => n?.id === "draft-reply") && !readsClientComms(dag);
+}
+
+/** The responder, its reply written in our voice (the `client-comms` skill, read live before `draft-reply`). */
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
+  return withClientCommsVoice(buildAiMeetingBookingDagUnvoiced(opts), "draft-reply");
+}
+
+/** The responder before our voice is spliced in: the offer-document copy derives from it, then voices its own draft. */
+export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOptions): DAG {
   return {
     nodes: [
       {

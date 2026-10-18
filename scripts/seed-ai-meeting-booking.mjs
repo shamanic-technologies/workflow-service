@@ -36,6 +36,7 @@ import {
   buildAiMeetingBookingDag,
   isConversationResponder,
   needsCallRequest,
+  needsClientCommsVoice,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
   needsLeadsOnlyClaim,
@@ -430,7 +431,8 @@ async function main() {
         needsLeadsOnlyClaim(w.dag) ||
         needsPhoneOnlyPerson(w.dag) ||
         needsSenderPersona(w.dag) ||
-        needsWhatsappTakeover(w.dag))
+        needsWhatsappTakeover(w.dag) ||
+        needsClientCommsVoice(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }

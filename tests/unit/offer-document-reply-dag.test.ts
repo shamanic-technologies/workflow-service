@@ -4,7 +4,7 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   GROUND_DRAFT_CODE,
   REPLY_RESPONSE_SCHEMA,
-  buildAiMeetingBookingDag,
+  buildAiMeetingBookingDagUnvoiced,
   isConversationResponder,
 } from "../../src/lib/ai-meeting-booking-dag.js";
 import {
@@ -26,7 +26,8 @@ function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, 
 afterEach(() => vi.restoreAllMocks());
 
 const cell = { provider: "anthropic", model: "opus", omitTemperature: true };
-const parent = buildAiMeetingBookingDag(cell);
+// The responder before our voice: this copy splices its document step, then voices its own draft.
+const parent = buildAiMeetingBookingDagUnvoiced(cell);
 const dag = buildOfferDocumentReplyDag(cell);
 
 const docs = {
@@ -58,6 +59,8 @@ describe("the offer-document responder DAG", () => {
       "plan-document",
       "judge-document",
       "pick-document",
+      "read-client-comms",
+      "client-comms-voice",
     ]);
   });
 
@@ -70,7 +73,7 @@ describe("the offer-document responder DAG", () => {
         expect(mine.config).toEqual({ ...n.config, body: rest });
         expect(mine.inputMapping).toEqual({
           "body.message": "$ref:pick-document.output.message",
-          "body.systemPrompt": "$ref:pick-document.output.systemPrompt",
+          "body.systemPrompt": "$ref:client-comms-voice.output.systemPrompt",
           "body.responseSchema": "$ref:pick-document.output.responseSchema",
         });
       } else if (n.id === "ground-draft") {
@@ -85,7 +88,10 @@ describe("the offer-document responder DAG", () => {
     }
     const parentEdges = parent.edges.filter((e) => !(e.from === "compose-prompt" && e.to === "draft-reply"));
     for (const e of parentEdges) expect(dag.edges).toContainEqual(e);
-    expect(dag.edges).toContainEqual({ from: "pick-document", to: "draft-reply" });
+    expect(dag.edges).toContainEqual({ from: "pick-document", to: "read-client-comms" });
+    expect(dag.edges).toContainEqual({ from: "client-comms-voice", to: "draft-reply" });
+    // Our voice goes on the prompt the document step hands the writer.
+    expect(dag.nodes.find((n) => n.id === "client-comms-voice")?.inputMapping?.systemPrompt).toBe("$ref:pick-document.output.systemPrompt");
   });
 
   it("reads brand-service's list, asks Jev (skipped when no document can ride), never the writer model", () => {

@@ -72,6 +72,7 @@
  * condition nested in a branch as an ordinary module, which silently does nothing); every arm reads its evidence
  * with `?.`, because on another path the node it reads never ran.
  */
+import { withClientCommsVoice } from "./client-comms.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -886,7 +887,12 @@ const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record
 });
 const RECORDED_DELIVERY = { "body.delivery": "$ref:record-plan.output.delivery" };
 
+/** The writer, its message drafted in our voice (the `client-comms` skill, read live before `draft-message`). */
 export function buildColdWhatsappOutreachDag(): DAG {
+  return withClientCommsVoice(coldWhatsappOutreachDagUnvoiced(), "draft-message");
+}
+
+function coldWhatsappOutreachDagUnvoiced(): DAG {
   return {
     nodes: [
       {
