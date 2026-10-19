@@ -1752,7 +1752,9 @@ registry.registerPath({
     "Regenerates the DAG of an existing active workflow using an LLM. " +
     "If the new DAG signature matches the existing one, the workflow is updated in-place " +
     "(returns 200). If the signature changes, a new version is inserted in the same dynasty " +
-    "with creation_type='upgrade' and the predecessor is deprecated (returns 201).",
+    "with creation_type='upgrade' and the predecessor is deprecated (returns 201). " +
+    "A dynasty that is not retired but has no active version (orphaned: its head deprecated with no successor) " +
+    "is upgraded on its latest version, which is left deprecated and unchanged; the new version is always inserted (201).",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
   request: {
@@ -1776,7 +1778,7 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
-      description: "Workflow with the given slug is not active or does not exist",
+      description: "No version of the dynasty is active and it is retired, or the dynasty does not exist",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     422: {

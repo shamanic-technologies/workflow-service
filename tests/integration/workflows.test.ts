@@ -1736,6 +1736,75 @@ describe("POST /workflows/upgrade (workflowDynastySlug lookup)", () => {
     expect(res.body.error).toContain("no-such-dynasty");
   });
 
+  function orphanedHead(overrides: Record<string, unknown> = {}) {
+    return {
+      id: WF_ID,
+      orgId: "org-1",
+      workflowSlug: "sales-cold-email-outreach-nobelium-v5",
+      workflowName: "Sales Cold Email Outreach Nobelium v5",
+      workflowDynastySlug: "sales-cold-email-outreach-nobelium",
+      workflowDynastyName: "Sales Cold Email Outreach Nobelium",
+      workflowDynastySignatureName: "nobelium",
+      featureSlug: "sales-cold-email-outreach",
+      category: "sales",
+      channel: "email",
+      audienceType: "cold-outreach",
+      version: 5,
+      status: "deprecated",
+      workflowDynastyStatus: "active",
+      executableUntil: new Date("2026-10-06T16:26:48.120Z"),
+      executableUntilSource: "last_update",
+      signature: computeDAGSignature(VALID_LINEAR_DAG),
+      dag: VALID_LINEAR_DAG,
+      tags: [],
+      description: "v5, deprecated by the stale sweep with no successor",
+      windmillFlowPath: "f/workflows/test/nobelium_v5",
+      createdAt: new Date(),
+      updatedAt: new Date("2026-10-06T16:26:48.120Z"),
+      ...overrides,
+    };
+  }
+
+  it("upgrades an ORPHANED dynasty (not retired, no active version) on its latest version, leaving that version untouched", async () => {
+    const v4 = orphanedHead({ id: WF_EXISTING_ID, version: 4, workflowSlug: "sales-cold-email-outreach-nobelium-v4" });
+    const v5 = orphanedHead();
+    mockDbRows.push(v5);
+    mockSelectResponses.length = 0;
+    mockSelectResponses.push([], [v4, v5], []); // no active version, the lineage, no signature conflict
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({ workflowDynastySlug: "sales-cold-email-outreach-nobelium", dag: VALID_LINEAR_DAG });
+
+    // Same DAG signature as v5, still a NEW version: an orphaned version is never edited in place.
+    expect(res.status).toBe(201);
+    expect(res.body.workflow.action).toBe("upgraded");
+    expect(res.body.workflow.version).toBe(6);
+    expect(res.body.workflow.workflowSlug).toBe("sales-cold-email-outreach-nobelium-v6");
+    const created = mockDbRows.find((r) => r.workflowSlug === "sales-cold-email-outreach-nobelium-v6")!;
+    expect(created.creationType).toBe("upgrade");
+    expect(created.createdFromWorkflow).toBe(WF_ID);
+    expect(created.status ?? "active").toBe("active");
+    expect(created.executableUntil).toBeNull();
+    // v5 keeps its status, its stop and its last update.
+    expect(v5.status).toBe("deprecated");
+    expect(v5.executableUntil).toEqual(new Date("2026-10-06T16:26:48.120Z"));
+    expect(v5.updatedAt).toEqual(new Date("2026-10-06T16:26:48.120Z"));
+  });
+
+  it("still answers 404 on a RETIRED dynasty with no active version (un-retire first, on purpose)", async () => {
+    mockSelectResponses.length = 0;
+    mockSelectResponses.push([], [orphanedHead({ workflowDynastyStatus: "deprecated" })]);
+
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({ workflowDynastySlug: "sales-cold-email-outreach-nobelium", dag: VALID_LINEAR_DAG });
+
+    expect(res.status).toBe(404);
+  });
+
   it("returns 409 (not a raw 500) when the new signature collides with another active workflow in the same feature_slug", async () => {
     // Bug 2 repro: upgrading dynasty A to a DAG whose signature already belongs to
     // an active sibling B (same feature_slug) used to leak the raw Postgres

@@ -38,7 +38,7 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createMockDb(activeWorkflows: unknown[], runWorkflowIds: string[]) {
+function createMockDb(activeWorkflows: unknown[], runWorkflowIds: string[], ranDynasties: string[] = []) {
   let selectCallCount = 0;
 
   const updateWhereMock = vi.fn().mockResolvedValue(undefined);
@@ -54,6 +54,10 @@ function createMockDb(activeWorkflows: unknown[], runWorkflowIds: string[]) {
           if (callNum === 1) {
             // First select: active workflows
             return { where: vi.fn().mockResolvedValue(activeWorkflows) };
+          }
+          if (callNum === 3) {
+            // Third select: dynasties (of the unrun candidates) with a version that ran
+            return { where: vi.fn().mockResolvedValue(ranDynasties.map((dynasty) => ({ dynasty }))) };
           }
           // Second select: workflow IDs that have runs
           return {
@@ -126,6 +130,23 @@ describe("deprecateStaleWorkflows", () => {
 
     expect(result.deprecatedCount).toBe(2);
     expect(mockDb._updateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never deprecates an upgraded version whose earlier versions ran (2026-10-06: Nobelium v5, Ballad v6 left with no runnable version)", async () => {
+    const wfs = [
+      makeWorkflow({ id: "wf-nobelium-v5", workflowSlug: "sales-cold-email-outreach-nobelium-v5", workflowDynastySlug: "sales-cold-email-outreach-nobelium" }),
+      makeWorkflow({ id: "wf-never-ran", workflowSlug: "sales-cold-email-outreach-fjord", workflowDynastySlug: "sales-cold-email-outreach-fjord" }),
+      makeWorkflow({ id: "wf-runs", workflowSlug: "sales-cold-email-outreach-azalea" }),
+    ];
+    mockFetchActiveWorkflowSlugs.mockResolvedValue(new Set<string>());
+    // The head never ran itself; v1..v4 of its dynasty ran 389 times.
+    const mockDb = createMockDb(wfs, ["wf-runs"], ["sales-cold-email-outreach-nobelium"]);
+    const result = await deprecateStaleWorkflows(mockDb as any);
+
+    expect(result.deprecatedCount).toBe(1);
+    expect(mockDb._updateMock).toHaveBeenCalledTimes(1);
+    expect(wfs.find((w) => w.id === "wf-nobelium-v5")!.status).toBe("active");
+    expect(wfs.find((w) => w.id === "wf-never-ran")!.status).toBe("deprecated");
   });
 
   it("never deprecates the LAST active workflow of a channel (a sourcing pipe runs inside another run: zero runs of its own)", async () => {

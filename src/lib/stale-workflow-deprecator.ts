@@ -4,7 +4,7 @@
  */
 
 import { stopExecutable } from "./executable-until.js";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { workflows, workflowRuns } from "../db/schema.js";
 import type { db as DbInstance } from "../db/index.js";
 import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
@@ -62,8 +62,29 @@ export async function deprecateStaleWorkflows(
 
   const hasRuns = new Set(runRows.map((r) => r.workflowId));
 
-  // 4. Candidates = old enough + zero runs
-  const candidates = oldEnough.filter((wf) => !hasRuns.has(wf.id));
+  // 4. Candidates = old enough + zero runs, on the version AND on every earlier version of its dynasty. A version
+  // born by an upgrade starts at zero runs while its lineage carries thousands: judged alone it reads as stale, and
+  // deprecating it leaves the dynasty with no runnable version and no successor (2026-10-06 16:26:48 UTC: 19
+  // sales-cold-email-outreach heads upgraded on 09-29 went this way, Nobelium v5 and Ballad v6 among them, the
+  // cheapest per positive reply). This sweep retires workflows NOBODY ever ran, never a lineage that ran.
+  const unrun = oldEnough.filter((wf) => !hasRuns.has(wf.id));
+  const ranLineages = new Set<string>();
+  if (unrun.length > 0) {
+    const rows = await database
+      .select({ dynasty: workflows.workflowDynastySlug })
+      .from(workflows)
+      .where(
+        and(
+          inArray(workflows.workflowDynastySlug, [...new Set(unrun.map((wf) => wf.workflowDynastySlug))]),
+          sql`EXISTS (SELECT 1 FROM workflow_runs r WHERE r.workflow_id = ${workflows.id})`,
+        ),
+      );
+    for (const r of rows) ranLineages.add(r.dynasty);
+  }
+  for (const wf of unrun.filter((w) => ranLineages.has(w.workflowDynastySlug))) {
+    console.log(`[workflow-service] Keeping stale workflow "${wf.workflowSlug}" — an earlier version of its dynasty ran`);
+  }
+  const candidates = unrun.filter((wf) => !ranLineages.has(wf.workflowDynastySlug));
 
   if (candidates.length === 0) {
     return { deprecatedCount: 0, keptByCampaign: 0, skippedNoCampaignService: false };

@@ -1,0 +1,58 @@
+{
+ "type": "cold-email-v59",
+ "prompt": "You're writing a 3-email cold pitch sequence on behalf of a client. You represent a marketing agency that works with the client. The goal is to get a thoughtful reply.\n\n## The frame\nYou're someone close to the client's team writing personally to a prospect you've actually researched. Not a BDR working a list. You looked at this prospect's world, noticed something specific, and you have a hypothesis worth sharing.\n\n## Why this works\nSales is a relationship. Someone replies to a person who clearly wrote to them, and deletes anything that reads as written to a list. The observation is what proves you wrote to them, and the pitch only lands because it came first.\n\n## The output\nThree emails. Email 1 carries the full structure. Emails 2 and 3 are short follow-ups in the same thread (no new subject), spaced ~3 days and ~7 days later. Each follow-up adds a fresh angle or real reason to revisit, never restating the original pitch.\n\nSubject line on email 1 only. Specific and human. Often a question, sometimes naming the client and a pain. Not marketing.\n\n## Format\nEmail 1 has this shape:\n\n- Greeting on its own line: \"Hi [FirstName],\" or its equivalent in the email's language\n- Blank line\n- Observation paragraph: 2-4 sentences that show real homework. Mention specific things you noticed about the prospect's world (their company, their role, their industry, a pattern across their signals). Connect those signals into a hypothesis about a likely tension or challenge. End the paragraph with a question that makes the tension concrete, phrased as something only they can answer.\n- Blank line\n- Pitch paragraph: 1-2 sentences. Name the client. Say what they do in plain, operational language: what they actually handle, not what they \"enable\" or \"empower\". Frame it as: this is who I work with, this is what they do for people like you.\n- Blank line\n- CTA: a single short question that invites a real answer about their current situation. Not \"want a demo\" or \"want to chat\". Something diagnostic, checking whether your hypothesis is right.\n\nEmails 2 and 3 follow a similar aerated structure but shorter, usually one observation/angle paragraph and one short CTA. Same greeting style.\n\nDo not write a footer, signature block, contact details, or agency disclosure after the sign-off. That's added separately downstream.\n\n## The observation paragraph\nThis is the line that does the work. Get it wrong and the rest doesn't matter.\n\nPull from what's actually in the prospect data: their title, their company, their LinkedIn headline, their industry, any keywords. The strongest observations connect 2 or 3 signals into a single hypothesis. \"You're running X, and you're at a stage where Y, so I'm guessing the bottleneck is Z.\"\n\nThe hypothesis should feel like something a peer would say to another peer over coffee, not something a marketer would write. Concrete, slightly informal, mildly opinionated. The closing question of this paragraph should be phrased as if you genuinely want to know the answer.\n\nIf the prospect data is thin and you can't form a real multi-signal observation, write a simpler version: one specific thing you noticed, one hypothesis, one question. A simpler-but-true observation beats a fabricated multi-signal one.\n\nNever invent details about the prospect (additional ventures, past employers, recent moves) that aren't in the data. The whole format collapses if the observation is wrong.\n\n## The pitch paragraph\nName the client by name. Describe what they do in operational verbs: \"they handle\", \"they run\", \"they manage\". Avoid abstract value language (\"they enable\", \"they empower\", \"they transform\"). The prospect should be able to picture what actually happens when they engage the client.\n\nOne or two sentences max. The observation already did the persuasion work; this paragraph is just confirming who you're writing about and why.\n\n## The CTA\nA diagnostic question, not a meeting ask. The frame is: I have a hypothesis about your situation; help me check it.\n\nThe shape: a question that invites the prospect to either confirm or correct the hypothesis from your observation paragraph. It should give them a comfortable way to say \"yes that's the problem\" or \"no, we have that handled\".\n\nNever \"want to hop on a quick call\", \"open to a demo\", \"let me know if interested\". These are sales asks that signal you don't actually care about their answer.\n\n## Tone\nSenior, observant, conversational. The voice of someone who's seen a lot of similar situations and is pattern-matching out loud, not selling. Slightly informal: contractions, \"I'm guessing\" or \"I'm curious\", direct sentences.\n\nNever use an em dash (—) or an en dash (–) anywhere in the emails. Use a comma, a period, a colon or parentheses instead.\n\nWhat kills these emails is anything that reads as machine-written. Em dashes, marketing voice, AI tells (\"I noticed your impressive…\"), rule-of-three cadence, fake personalization (a flattering observation welded onto the pitch), vague superlatives, \"Most X…\" phrasings, and any sentence that could be sent to 1000 prospects unchanged.\n\n## Honesty floor\nUse only what's in the brand intel for the client side and only what's in the prospect data for the observation side. Don't invent the prospect's other ventures, past roles, or current challenges. Don't invent the client's capabilities, results, or guarantees. If you can't write a real observation paragraph, write a shorter, simpler one rather than a fabricated rich one.\n\n## Data hygiene\nApollo data comes in weird shapes: ALL CAPS company names, outdated employee counts, generic tech stack. Normalize names to title case. Skip weak signals that would sound robotic.\n\n---\n\nNow write the sequence for:\n\n## Prospect\n- Name: {{leadFirstName}} {{leadLastName}}\n- Title: {{leadTitle}}\n- LinkedIn Headline: {{leadHeadline}}\n- Company: {{leadCompanyName}}\n- Industry: {{leadCompanyIndustry}}\n- Company Size: {{leadCompanySize}}\n- Funding Stage: {{leadCompanyFundingStage}}\n- Company Description: {{leadCompanyDescription}}\n- Keywords: {{leadCompanyKeywords}}\n- Tech Stack: {{leadCompanyTechStack}}\n\n## Client\n- Name: {{clientName}}\n\n## Brand Intelligence\n{{brandExtractedFields}}\n\nOutput: the three emails, ready to send. Nothing else.\n",
+ "variables": [
+  {
+   "name": "leadFirstName",
+   "description": ""
+  },
+  {
+   "name": "leadLastName",
+   "description": ""
+  },
+  {
+   "name": "leadTitle",
+   "description": ""
+  },
+  {
+   "name": "leadHeadline",
+   "description": ""
+  },
+  {
+   "name": "leadCompanyName",
+   "description": ""
+  },
+  {
+   "name": "leadCompanyIndustry",
+   "description": ""
+  },
+  {
+   "name": "leadCompanySize",
+   "description": ""
+  },
+  {
+   "name": "leadCompanyFundingStage",
+   "description": ""
+  },
+  {
+   "name": "leadCompanyDescription",
+   "description": ""
+  },
+  {
+   "name": "leadCompanyKeywords",
+   "description": ""
+  },
+  {
+   "name": "leadCompanyTechStack",
+   "description": ""
+  },
+  {
+   "name": "clientName",
+   "description": ""
+  },
+  {
+   "name": "brandExtractedFields",
+   "description": ""
+  }
+ ]
+}
