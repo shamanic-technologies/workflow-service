@@ -3,6 +3,7 @@
  * and are not used by any active campaign.
  */
 
+import { stopExecutable } from "./executable-until.js";
 import { eq, inArray } from "drizzle-orm";
 import { workflows, workflowRuns } from "../db/schema.js";
 import type { db as DbInstance } from "../db/index.js";
@@ -168,7 +169,7 @@ export async function deprecateStaleWorkflows(
 
     await database
       .update(workflows)
-      .set({ status: "deprecated", updatedAt: new Date() })
+      .set({ status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
       .where(eq(workflows.id, wf.id));
     wf.status = "deprecated";
 

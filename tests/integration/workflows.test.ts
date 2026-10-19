@@ -48,9 +48,18 @@ Object.assign(mockDb, {
     },
   }),
   update: () => ({
-    set: (values: Record<string, unknown>) => ({
+    set: (raw: Record<string, unknown>) => ({
       where: () => {
         const row = mockDbRows[mockDbRows.length - 1];
+        // A drizzle SQL value (stopExecutable()'s COALESCE) is evaluated here the
+        // way Postgres would: keep the stored value, else now / 'recorded'.
+        const values = Object.fromEntries(
+          Object.entries(raw).map(([k, v]) =>
+            v && typeof v === "object" && "queryChunks" in v
+              ? [k, row?.[k] ?? (k.endsWith("Source") ? "recorded" : new Date())]
+              : [k, v],
+          ),
+        );
         if (row) Object.assign(row, values);
         return {
           returning: () => Promise.resolve([{ ...row, ...values }]),
@@ -1845,6 +1854,9 @@ describe("PUT /workflows/:id/status", () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("deprecated");
     expect(mockDbRows[0].status).toBe("deprecated");
+    // WF-VERSION-DATES-1019: the stop is recorded at the transition.
+    expect(mockDbRows[0].executableUntil).toBeInstanceOf(Date);
+    expect(mockDbRows[0].executableUntilSource).toBe("recorded");
   });
 
   it("is idempotent — re-applying the same status is a no-op success", async () => {

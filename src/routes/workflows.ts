@@ -8,6 +8,7 @@ import { requireApiKey } from "../middleware/auth.js";
 import { createRateLimit } from "../middleware/rate-limit.js";
 import { validateDAG, type DAG } from "../lib/dag-validator.js";
 import { dagToOpenFlow } from "../lib/dag-to-openflow.js";
+import { stopExecutable, STILL_EXECUTABLE } from "../lib/executable-until.js";
 import { getWindmillClient } from "../lib/windmill-client.js";
 import {
   CreateWorkflowSchema,
@@ -997,6 +998,7 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
         .set({
           workflowDynastyStatus: body.status,
           status: "deprecated",
+          ...stopExecutable(),
           updatedAt: new Date(),
         })
         .where(eq(workflows.workflowDynastySlug, workflowDynastySlug));
@@ -1004,7 +1006,7 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
       if (body.status === "active") {
         await tx
           .update(workflows)
-          .set({ status: "active", updatedAt: new Date() })
+          .set({ status: "active", ...STILL_EXECUTABLE, updatedAt: new Date() })
           .where(eq(workflows.id, head.id));
       }
     });
@@ -1105,7 +1107,15 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
 
     const [updated] = await db
       .update(workflows)
-      .set({ status: body.status, updatedAt: new Date() })
+      .set({
+        status: body.status,
+        // Executable again only when the dynasty is live too; otherwise the row
+        // still cannot run and keeps the instant it stopped.
+        ...(body.status === "active" && workflow.workflowDynastyStatus === "active"
+          ? STILL_EXECUTABLE
+          : stopExecutable()),
+        updatedAt: new Date(),
+      })
       .where(eq(workflows.id, workflow.id))
       .returning();
 

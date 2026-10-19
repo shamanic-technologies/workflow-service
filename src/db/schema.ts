@@ -46,6 +46,8 @@ export const workflows = pgTable(
     windmillWorkspace: text("windmill_workspace").notNull().default("prod"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    executableUntil: timestamp("executable_until", { withTimezone: true }),
+    executableUntilSource: text("executable_until_source"),
   },
   (table) => [
     uniqueIndex("idx_workflows_workflow_slug_unique").on(table.workflowSlug),

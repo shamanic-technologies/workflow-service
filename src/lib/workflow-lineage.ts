@@ -2,6 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { activeLegsOfDynasty, assignWorkflowToLeg } from "./catalogue-client.js";
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
+import { stopExecutable, executableUntilAtBirth } from "./executable-until.js";
 import type { DAG } from "./dag-validator.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
 import { getWindmillClient } from "./windmill-client.js";
@@ -142,7 +143,7 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
   await db.transaction(async (tx) => {
     await tx
       .update(workflows)
-      .set({ status: "deprecated", updatedAt: new Date() })
+      .set({ status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
       .where(eq(workflows.id, existing.id));
 
     const [row] = await tx
@@ -171,6 +172,7 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
         // un-retires it — the row would execute again while the operator who
         // retired it is told nothing.
         workflowDynastyStatus: existing.workflowDynastyStatus,
+        ...executableUntilAtBirth(existing.workflowDynastyStatus === "active", new Date()),
         creationType: "upgrade",
         createdFromWorkflow: existing.id,
         createdByUserId: userId,

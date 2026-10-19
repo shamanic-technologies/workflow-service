@@ -8,6 +8,16 @@ import {
 } from "../schemas.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
+import type { ExecutableUntilSource } from "../lib/executable-until.js";
+
+function executableUntilFields(w: { executableUntil: Date | null; executableUntilSource: string | null }) {
+  return {
+    executableUntil: w.executableUntil ? w.executableUntil.toISOString() : null,
+    executableUntilSource: w.executableUntil
+      ? ((w.executableUntilSource ?? null) as ExecutableUntilSource | null)
+      : null,
+  };
+}
 
 const router = Router();
 
@@ -72,6 +82,8 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
         featureSlug: w.featureSlug,
         createdForBrandId: w.createdForBrandId ?? null,
         upgradedTo: upgradedToById.get(w.id) ?? null,
+        createdAt: w.createdAt ? w.createdAt.toISOString() : null,
+        ...executableUntilFields(w),
       })),
     });
   } catch (err: unknown) {
@@ -116,6 +128,7 @@ router.get("/public/workflows/definitions", requireApiKey, async (req, res) => {
         description: w.description ?? null,
         dag: w.dag,
         createdAt: w.createdAt ? w.createdAt.toISOString() : null,
+        ...executableUntilFields(w),
       })),
     });
   } catch (err: unknown) {

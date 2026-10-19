@@ -722,6 +722,23 @@ export const PublicWorkflowItemSchema = z
     featureSlug: z.string().describe("Feature slug."),
     createdForBrandId: z.string().nullable().describe("Brand ID this workflow was created for, or null."),
     upgradedTo: z.string().uuid().nullable().describe("ID of the active workflow this one was upgraded to, computed from successor lineage. Null when this is the active row or no successor was found in the result set."),
+    createdAt: z.string().nullable().describe(
+      "ISO instant this version row was created. Reliable: set once at insert, never moved by a later edit. " +
+      "A version is executable from this instant unless it was born under a retired dynasty (then `executableUntil` equals it)."
+    ),
+    executableUntil: z.string().nullable().describe(
+      "ISO instant this version STOPPED being executable (its version status became 'deprecated' or its dynasty was retired), " +
+      "the earliest such transition. Null while the version is executable (status AND workflowDynastyStatus 'active'); " +
+      "cleared again if the version is re-activated, so it reports only the LAST stretch (an older stop/restart gap is not kept). " +
+      "To know whether a dynasty could run at instant T: one of its versions has createdAt <= T and (executableUntil null or > T). " +
+      "How reliable it is: see `executableUntilSource`."
+    ),
+    executableUntilSource: z.enum(["recorded", "successor_created", "last_update"]).nullable().describe(
+      "Where `executableUntil` comes from. 'recorded': written by this service at the transition (every stop since 2026-10-19), exact. " +
+      "'successor_created': backfilled for older rows from the creation of the upgrade that replaced this version (an upgrade deprecates its predecessor in the same transaction), exact to the second. " +
+      "'last_update': backfilled for older rows with no upgrade successor (a dynasty's last version, a per-version or stale retirement) from the row's updated_at, " +
+      "which a later edit of the already-deprecated row (bulk description/DAG repairs) could have moved LATER than the real stop: an upper bound. Null when `executableUntil` is null."
+    ),
   })
   .openapi("PublicWorkflowItem");
 
@@ -752,6 +769,8 @@ export const PublicWorkflowDefinitionItemSchema = z
     description: z.string().nullable().describe("Stored workflow description, or null."),
     dag: DAGSchema.describe("Full stored DAG of this version (what the workflow does)."),
     createdAt: z.string().nullable().describe("ISO timestamp the version was created."),
+    executableUntil: z.string().nullable().describe("ISO instant this version stopped being executable, null while it is. Same field and reliability as on GET /public/workflows (see `executableUntilSource`)."),
+    executableUntilSource: z.enum(["recorded", "successor_created", "last_update"]).nullable().describe("Reliability of `executableUntil`: 'recorded' exact, 'successor_created' exact (backfill), 'last_update' upper bound (backfill from updated_at). Null when `executableUntil` is null."),
   })
   .openapi("PublicWorkflowDefinitionItem");
 
