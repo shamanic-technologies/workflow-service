@@ -5,6 +5,7 @@
 
 import { eq } from "drizzle-orm";
 import { workflows } from "../db/schema.js";
+import { stopExecutable } from "./executable-until.js";
 import type { db as DbInstance } from "../db/index.js";
 import type { WindmillClient } from "./windmill-client.js";
 
@@ -43,7 +44,7 @@ export async function deprecateWorkflow(
 
   await database
     .update(workflows)
-    .set({ status: "deprecated", updatedAt: new Date() })
+    .set({ status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
     .where(eq(workflows.id, workflowId));
 
   if (!windmillClient || !wf.windmillFlowPath) {
