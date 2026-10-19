@@ -1,15 +1,15 @@
 import type { db as DbInstance } from "../db/index.js";
 import type { WindmillClient } from "./windmill-client.js";
-import { deprecateStaleWorkflows } from "./stale-workflow-deprecator.js";
 import { cleanupOrphanedWindmillFlows } from "./windmill-flow-cleanup.js";
 import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
 
 type Database = typeof DbInstance;
 
 /**
- * Re-runs the same cleanup the boot path runs once:
- *   1. Deprecate stale active workflows (>1 week old, zero runs, no active campaign).
- *   2. Delete Windmill flows of deprecated workflows no longer referenced by a campaign.
+ * Deletes the Windmill flows of deprecated workflows no longer referenced by a campaign. It never
+ * retires a workflow: a workflow that never ran is one to TEST, never one to deprecate (owner 2026-10-19,
+ * after an automatic "stale" sweep had deprecated the cheapest cold-email workflows, Nobelium and Ballad
+ * among them, leaving their dynasties with nothing to run).
  *
  * **Rides write traffic instead of a timer.** A retention sweep only has work to
  * do when something has been written, so `maybeRun()` is called from the write
@@ -17,9 +17,9 @@ type Database = typeof DbInstance;
  * the Neon compute on its own schedule for a sweep that, on a quiet service, has
  * nothing to collect — and a woken compute bills for a full idle timeout.
  *
- * Both steps independently survive failures of their downstream dependencies
- * (DB hiccup, campaign-service unreachable) — one bad sweep must not wedge the
- * gate, so `lastRunAt` advances even when a step fails.
+ * It survives failures of its downstream dependencies (DB hiccup, campaign-service
+ * unreachable): one bad sweep must not wedge the gate, so `lastRunAt` advances even
+ * when it fails.
  */
 export class PeriodicCleanup {
   /**
@@ -61,25 +61,6 @@ export class PeriodicCleanup {
   }
 
   async runOnce(): Promise<void> {
-    try {
-      const result = await deprecateStaleWorkflows(this.db);
-      if (result.deprecatedCount > 0) {
-        console.log(
-          `[workflow-service] PeriodicCleanup: deprecated ${result.deprecatedCount} stale workflows, kept ${result.keptByCampaign} by active campaign`,
-        );
-      }
-      if (result.skippedNoCampaignService) {
-        console.warn(
-          "[workflow-service] PeriodicCleanup: stale deprecation skipped — campaign-service unreachable",
-        );
-      }
-    } catch (err) {
-      console.error(
-        "[workflow-service] PeriodicCleanup: deprecateStaleWorkflows failed:",
-        err instanceof Error ? err.message : err,
-      );
-    }
-
     let activeSlugs: Set<string>;
     try {
       activeSlugs = await fetchActiveWorkflowSlugs();
