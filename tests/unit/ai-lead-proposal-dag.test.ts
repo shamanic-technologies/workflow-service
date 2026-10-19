@@ -159,6 +159,30 @@ describe("AI Lead Proposal DAG", () => {
     expect(holds(UNCLAIMED, { claimed: none })).toBe(true);
   });
 
+  it("a person lead-service keeps off the queue (a client with a sale on record: nothing_due) ends as a named, final not-admitted, never failed", async () => {
+    // Prod 2026-10-19 (andrew@voozaa.app, windmill 01a152e6): the claim answered exactly this.
+    const empty = { found: false, reason: "nothing_due", relationships: { policy: "pure_prospect", pending: [], refused: [] } };
+    const claimed = await loadMain(CLAIMED_CODE)({ skip: false }, empty, trigger(), ORG, BRAND);
+    expect(claimed).toMatchObject({ outcome: "not_admitted", notAdmitted: { reason: "nothing_due" }, request: null });
+    expect(holds(NOT_ADMITTED, { claimed })).toBe(true);
+    expect(holds(UNCLAIMED, { claimed })).toBe(false);
+    expect(byId.get("end-run-person-not-admitted")?.config?.body).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("a row another worker holds (all_claimed, e.g. a failed run's lease) still fails, so the redelivery claims them later", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const held = { found: false, reason: "all_claimed", relationships: { policy: "pure_prospect", pending: [], refused: [] } };
+    const claimed = await loadMain(CLAIMED_CODE)({ skip: false }, held, trigger(), ORG, BRAND);
+    expect(claimed.outcome).toBe("unclaimed");
+  });
+
+  it("a pure prospect is claimed whatever their past follow-up dates: the claim states only the relationship policy", async () => {
+    expect(Object.keys(byId.get("claim-own")?.config?.body as Record<string, unknown>)).toEqual(["relationships"]);
+    const prospect = { found: true, followup: { id: "row-9", leadId: "lead-1", email: "jo@example.com", followupCount: 3, dueAt: "2026-10-19T09:00:00.000Z" } };
+    const claimed = await loadMain(CLAIMED_CODE)({ skip: false }, prospect, trigger(), ORG, BRAND);
+    expect(claimed.outcome).toBe("ask");
+  });
+
   it("claimed someone else: nothing asked, their row left alone", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const other = { found: true, followup: { id: "row-2", leadId: "lead-2", email: "sam@other.com" } };

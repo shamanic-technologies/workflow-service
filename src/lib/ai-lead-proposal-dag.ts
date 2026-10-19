@@ -77,6 +77,16 @@ export async function main(trigger) {
 `.trim();
 
 /**
+ * lead-service's claim reason when NO row of the campaign is claimable. The trigger door makes the occurrence's
+ * person due on this campaign right before the dispatch (whatever follow-up date they had), so for that person it
+ * means lead-service excludes them from its queue on purpose (a `sale` / booked meeting on record: a customer; a
+ * thread handed to a person; a journalist), never "not due yet". Prod 2026-10-19: a client (sale on record) ended
+ * `failed` and was redelivered. Now final: `personNotAdmitted {reason: "nothing_due"}`. `all_claimed` (another
+ * worker holds the row, e.g. a failed run's lease) stays a failure, so the redelivery claims them once it lapses.
+ */
+export const QUEUE_EXCLUDED_REASON = "nothing_due";
+
+/**
  * What the claim means for this run, and the proactive-turn request when it is the trigger's person. Outcomes:
  * `ask` | `not_admitted` | `pending` | `nobody_due` | `other_person` | `unclaimed`. Never throws on an outcome;
  * throws on a broken input (a claimed row with no id, a brand or org that is not one UUID).
@@ -115,6 +125,12 @@ export async function main(plan, claim, trigger, orgId, brandId) {
     if (pending.some(isTriggerPerson)) {
       console.log("[ai-lead-proposal] relationship not judged yet, asked again later: " + String(triggerEmail ?? triggerPhone ?? triggerLeadId));
       return { ...base, outcome: "pending" };
+    }
+    // The door made them due right before this dispatch, so an EMPTY queue means lead-service keeps them off it
+    // for good (a booked meeting or a sale on record: a customer; a thread handed to a person...). Final, named.
+    if (claim?.reason === "${QUEUE_EXCLUDED_REASON}") {
+      console.log("[ai-lead-proposal] lead-service keeps " + String(triggerEmail ?? triggerPhone ?? triggerLeadId) + " off the queue (${QUEUE_EXCLUDED_REASON}): nothing asked");
+      return { ...base, outcome: "not_admitted", notAdmitted: { reason: "${QUEUE_EXCLUDED_REASON}" } };
     }
     console.error("[ai-lead-proposal] the occurrence's person was made due but nobody could be claimed (" + String(claim?.reason ?? "no reason") + ")");
     return { ...base, outcome: "unclaimed" };
