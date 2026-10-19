@@ -10,7 +10,6 @@ import {
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
 import type { WindmillClient } from "./windmill-client.js";
-import { deprecateStaleWorkflows } from "./stale-workflow-deprecator.js";
 import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
 import { cleanupOrphanedWindmillFlows } from "./windmill-flow-cleanup.js";
 
@@ -50,24 +49,6 @@ export async function validateAndUpgradeWorkflows(
       err instanceof Error ? err.message : err,
     );
     return;
-  }
-
-  // 0b. Deprecate stale workflows BEFORE validation — avoids paying for LLM upgrades on unused workflows
-  try {
-    const result = await deprecateStaleWorkflows(database);
-    if (result.deprecatedCount > 0) {
-      console.log(
-        `[workflow-service] Stale deprecation: ${result.deprecatedCount} deprecated, ${result.keptByCampaign} kept by active campaign`,
-      );
-    }
-    if (result.skippedNoCampaignService) {
-      console.warn("[workflow-service] Stale deprecation skipped — campaign-service unreachable");
-    }
-  } catch (err) {
-    console.warn(
-      "[workflow-service] Stale workflow deprecation failed (non-blocking):",
-      err instanceof Error ? err.message : err,
-    );
   }
 
   // 1. Fetch all active workflows
