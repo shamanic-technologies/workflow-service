@@ -141,10 +141,13 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
   // slot. Wrapping in a transaction guarantees both rows commit together.
   let created: WorkflowRow;
   await db.transaction(async (tx) => {
-    await tx
-      .update(workflows)
-      .set({ status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
-      .where(eq(workflows.id, existing.id));
+    // An orphaned predecessor (already deprecated, no successor) is left exactly as it is.
+    if (existing.status === "active") {
+      await tx
+        .update(workflows)
+        .set({ status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
+        .where(eq(workflows.id, existing.id));
+    }
 
     const [row] = await tx
       .insert(workflows)

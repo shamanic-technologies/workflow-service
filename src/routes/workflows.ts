@@ -356,7 +356,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     const runId = res.locals.runId as string;
     const dsHeaders = extractDownstreamHeaders(req);
 
-    const [existing] = await db
+    let [existing] = await db
       .select()
       .from(workflows)
       .where(
@@ -365,6 +365,25 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
           eq(workflows.status, "active"),
         )
       );
+
+    // A dynasty that is NOT retired but has no active version was orphaned (its head deprecated with no successor,
+    // e.g. the stale sweep of 2026-10-06): the upgrade builds on its LATEST version, which stays deprecated and keeps
+    // the instant it stopped running. A retired dynasty still answers 404: un-retire it first, on purpose.
+    let orphaned = false;
+    if (!existing) {
+      const lineage = await db
+        .select()
+        .from(workflows)
+        .where(eq(workflows.workflowDynastySlug, body.workflowDynastySlug));
+      const latest = lineage.reduce<(typeof lineage)[number] | undefined>(
+        (a, b) => (a && a.version >= b.version ? a : b),
+        undefined,
+      );
+      if (latest && latest.workflowDynastyStatus === "active") {
+        existing = latest;
+        orphaned = true;
+      }
+    }
 
     if (!existing) {
       res.status(404).json({ error: `Active workflow not found for dynasty "${body.workflowDynastySlug}"` });
@@ -430,8 +449,8 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
 
     const newSignature = computeDAGSignature(dag);
 
-    // Same signature → in-place update.
-    if (newSignature === existing.signature) {
+    // Same signature → in-place update (never on an orphaned version: it stays deprecated, a new version runs).
+    if (newSignature === existing.signature && !orphaned) {
       const openFlow = dagToOpenFlow(dag, existing.workflowSlug);
       const client = getWindmillClient();
       if (client && existing.windmillFlowPath) {
