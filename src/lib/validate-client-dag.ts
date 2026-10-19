@@ -4,6 +4,7 @@ import { extractHttpEndpoints } from "./extract-http-endpoints.js";
 import { fetchSpecsForServices } from "./api-registry-client.js";
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
 import type { DownstreamHeaders } from "./downstream-headers.js";
+import { findDeprecatedContent } from "./deprecated-content.js";
 
 /** A 400 body, ready to serialize, or null when the DAG is acceptable. */
 export interface ClientDagRejection {
@@ -53,6 +54,11 @@ export async function validateClientDag(
   const topology = validateDAG(dag);
   if (!topology.valid) {
     return { error: "Invalid DAG", details: topology.errors };
+  }
+
+  const deprecated = await findDeprecatedContent(dag, downstreamHeaders);
+  if (deprecated.length > 0) {
+    return { error: "DAG names a deprecated template or model", details: { deprecatedContent: deprecated } };
   }
 
   const httpEndpoints = extractHttpEndpoints(dag);
