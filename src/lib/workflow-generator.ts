@@ -25,6 +25,7 @@ import {
 } from "./catalogue-client.js";
 import { extractHttpEndpoints } from "./extract-http-endpoints.js";
 import { validateWorkflowEndpoints } from "./validate-workflow-endpoints.js";
+import { findDeprecatedContent } from "./deprecated-content.js";
 import type { DownstreamHeaders } from "./downstream-headers.js";
 import {
   chatServiceComplete,
@@ -312,6 +313,8 @@ export async function generateWorkflow(
       if (!validation.valid) return { errors: validation.errors };
       const fieldErrors = await endpointFieldErrors(dag, downstreamHeaders);
       if (fieldErrors.length) return { errors: fieldErrors };
+      const deprecated = await findDeprecatedContent(dag, downstreamHeaders);
+      if (deprecated.length) return { errors: deprecated.map((d) => ({ field: `nodes[${d.nodeId}].${d.field}`, message: d.reason })) };
       if (!description) return { errors: [{ field: "description", message: "Describe what the workflow does on its pipe." }] };
       return { value: { dag, description } };
     },

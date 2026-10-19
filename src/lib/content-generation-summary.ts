@@ -24,7 +24,7 @@ export interface ContentGenerationSummary {
  * therefore unknowable here — it yields null rather than the static base it
  * overrides, because the base is not what the run would use.
  */
-function literalBodyValue(
+export function literalBodyValue(
   node: DAG["nodes"][number],
   field: string,
 ): string | null {
