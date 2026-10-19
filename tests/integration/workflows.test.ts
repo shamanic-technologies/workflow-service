@@ -1878,6 +1878,60 @@ describe("POST /workflows/upgrade (workflowDynastySlug lookup)", () => {
   });
 });
 
+describe("POST /workflows/retire-by-content (TEMPLATE-MODEL-STATUS-1019)", () => {
+  const contentDag = (type: string, model: string) => ({
+    nodes: [{ id: "email-generate", type: "http.call", config: { service: "content-generation", path: "/generate", method: "POST", body: { type, model } } }],
+    edges: [],
+  });
+  const runnable = (slug: string, type: string, model: string) => ({
+    id: crypto.randomUUID(),
+    workflowSlug: `${slug}-v2`,
+    workflowDynastySlug: slug,
+    workflowDynastyName: slug,
+    featureSlug: "sales-cold-email-outreach",
+    version: 2,
+    status: "active",
+    workflowDynastyStatus: "active",
+    dag: contentDag(type, model),
+  });
+
+  beforeEach(() => {
+    mockDbRows.length = 0;
+    mockSelectResponses.length = 0;
+  });
+
+  it("dryRun lists every runnable workflow rendering the template and writes nothing", async () => {
+    const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "pro");
+    mockDbRows.push(ballad);
+    mockSelectResponses.push([ballad, runnable("sales-cold-email-outreach-azalea", "cold-email-v40", "pro")]);
+
+    const res = await request.post("/workflows/retire-by-content").set(AUTH).send({ promptType: "cold-email-v59", dryRun: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ dryRun: true, retired: 0 });
+    expect(res.body.workflows.map((w: { workflowDynastySlug: string }) => w.workflowDynastySlug)).toEqual(["sales-cold-email-outreach-ballad"]);
+    expect(ballad.status).toBe("active");
+  });
+
+  it("retires the whole dynasty on both axes", async () => {
+    const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "pro");
+    mockDbRows.push(ballad);
+    mockSelectResponses.push([ballad]);
+
+    const res = await request.post("/workflows/retire-by-content").set(AUTH).send({ model: "pro" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ dryRun: false, retired: 1 });
+    expect(ballad.status).toBe("deprecated");
+    expect(ballad.workflowDynastyStatus).toBe("deprecated");
+  });
+
+  it("400s unless exactly one of promptType or model is given", async () => {
+    expect((await request.post("/workflows/retire-by-content").set(AUTH).send({})).status).toBe(400);
+    expect((await request.post("/workflows/retire-by-content").set(AUTH).send({ promptType: "a", model: "b" })).status).toBe(400);
+  });
+});
+
 describe("PUT /workflows/:id/status", () => {
   const VERSION_ID = "00000000-0000-4000-8000-0000000005ff";
 
