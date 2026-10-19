@@ -9,7 +9,7 @@
  *   Nobelium  blind-discovery-email-v33 -> blind-discovery-email-v33-no-url
  *   Ballad    cold-email-v59            -> cold-email-v59-no-url-spaced
  *
- * Both dynasties were ORPHANED on 2026-10-06 16:26:48 UTC: the stale sweep deprecated
+ * Both dynasties were ORPHANED on 2026-10-06 16:26:48 UTC: the stale sweep (since deleted) deprecated
  * their head (zero runs on the head itself, thousands on the lineage) and left no
  * successor. POST /workflows/upgrade builds on such a dynasty's latest version and
  * leaves that version as it is.

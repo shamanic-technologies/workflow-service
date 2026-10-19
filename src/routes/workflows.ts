@@ -367,7 +367,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       );
 
     // A dynasty that is NOT retired but has no active version was orphaned (its head deprecated with no successor,
-    // e.g. the stale sweep of 2026-10-06): the upgrade builds on its LATEST version, which stays deprecated and keeps
+    // e.g. by the deleted stale sweep of 2026-10-06): the upgrade builds on its LATEST version, which stays deprecated and keeps
     // the instant it stopped running. A retired dynasty still answers 404: un-retire it first, on purpose.
     let orphaned = false;
     if (!existing) {
@@ -1059,8 +1059,8 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
 
 // PUT /workflows/:id/status — Retire (or un-retire) ONE version.
 //
-// The per-version `status` column is what the upgrade path and the stale-workflow
-// sweeper already write; until now nothing let an operator write it directly, so
+// The per-version `status` column is what the upgrade path writes; until this route
+// nothing let an operator write it directly, so
 // "retire this one workflow" was only reachable with a hand-written UPDATE against
 // the database. Retiring the only active version of a dynasty leaves the dynasty
 // with no executable version: execute-by-slug then answers 410 rather than falling
