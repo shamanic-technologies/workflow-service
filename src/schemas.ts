@@ -854,6 +854,36 @@ export const DynastyStatusResponseSchema = z
   })
   .openapi("DynastyStatusResponse");
 
+// --- Retire every workflow running a template or a model (POST /workflows/retire-by-content) ---
+
+export const RetireByContentRequestSchema = z
+  .object({
+    promptType: z.string().min(1).optional().describe("content-generation template type: retire every runnable workflow whose content call renders it."),
+    model: z.string().min(1).optional().describe("Writer model alias: retire every runnable workflow whose content call writes with it."),
+    featureSlug: z.string().min(1).optional().describe("Narrow to one channel. Absent = every channel."),
+    dryRun: z.boolean().optional().describe("true = list what would be retired, write nothing (the confirmation a staff member reads first)."),
+  })
+  .refine((b) => (b.promptType === undefined) !== (b.model === undefined), { message: "Exactly one of promptType or model is required" })
+  .openapi("RetireByContentRequest");
+
+export const RetireByContentResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    workflows: z
+      .array(
+        z.object({
+          workflowDynastySlug: z.string(),
+          workflowDynastyName: z.string(),
+          featureSlug: z.string(),
+          workflowSlug: z.string().describe("The version that was running (the dynasty's active version)."),
+          version: z.number().int(),
+        }),
+      )
+      .describe("Every workflow (dynasty) running the template or model: retired, or that would be on a dry run."),
+    retired: z.number().int().describe("Dynasties retired by this call (0 on a dry run)."),
+  })
+  .openapi("RetireByContentResponse");
+
 // --- Per-version status write (PUT /workflows/{id}/status) ---
 
 export const WorkflowStatusUpdateSchema = z
@@ -1322,6 +1352,28 @@ registry.registerPath({
       description: "No workflows found for this dynasty slug",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/retire-by-content",
+  summary: "Retire every workflow running a template or a model",
+  description:
+    "Staff action behind deprecating a content-generation template or a writer model (TEMPLATE-MODEL-STATUS-1019). " +
+    "Finds every RUNNABLE workflow (version active, dynasty active) whose content call renders `promptType` or writes " +
+    "with `model`, and retires each whole dynasty exactly like PUT /workflows/dynasty/{workflowDynastySlug}/status " +
+    "with 'deprecated'. `dryRun: true` lists them and writes nothing. There is no reverse: re-activating a template or " +
+    "a model brings no workflow back, each is re-activated by hand. Idempotent (a second call finds nothing left).",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    body: { required: true, content: { "application/json": { schema: RetireByContentRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Listed (dryRun) or retired", content: { "application/json": { schema: RetireByContentResponseSchema } } },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

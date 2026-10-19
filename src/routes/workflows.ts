@@ -16,6 +16,7 @@ import {
   CreateWorkflowFromDescriptionSchema,
   UpgradeWorkflowFromDescriptionSchema,
   DynastyStatusUpdateSchema,
+  RetireByContentRequestSchema,
   WorkflowStatusUpdateSchema,
 } from "../schemas.js";
 import {
@@ -64,6 +65,7 @@ import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
+import { rowsUsingContent } from "../lib/retire-by-content.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
 import { formatWorkflow } from "../lib/format-workflow.js";
 import {
@@ -1053,6 +1055,58 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
       return;
     }
     console.error("[workflow-service] PUT dynasty status error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /workflows/retire-by-content — retire every workflow running a template or a model
+// (TEMPLATE-MODEL-STATUS-1019). Each matching dynasty is retired exactly as the dynasty status route does it
+// (both axes, one transaction). No reverse on purpose: re-activating the template or model brings nothing back.
+router.post("/workflows/retire-by-content", requireApiKey, async (req, res) => {
+  try {
+    const body = RetireByContentRequestSchema.parse(req.body);
+    const target = body.promptType !== undefined ? { promptType: body.promptType } : { model: body.model! };
+    const runnable = await db
+      .select()
+      .from(workflows)
+      .where(
+        and(
+          eq(workflows.status, "active"),
+          eq(workflows.workflowDynastyStatus, "active"),
+          ...(body.featureSlug ? [eq(workflows.featureSlug, body.featureSlug)] : []),
+        ),
+      );
+    const matched = rowsUsingContent(runnable, target);
+    const listed = matched.map((w) => ({
+      workflowDynastySlug: w.workflowDynastySlug,
+      workflowDynastyName: w.workflowDynastyName,
+      featureSlug: w.featureSlug,
+      workflowSlug: w.workflowSlug,
+      version: w.version,
+    }));
+    if (body.dryRun || matched.length === 0) {
+      res.json({ dryRun: Boolean(body.dryRun), workflows: listed, retired: 0 });
+      return;
+    }
+    const dynasties = [...new Set(matched.map((w) => w.workflowDynastySlug))];
+    await db.transaction(async (tx) => {
+      for (const slug of dynasties) {
+        await tx
+          .update(workflows)
+          .set({ workflowDynastyStatus: "deprecated", status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
+          .where(eq(workflows.workflowDynastySlug, slug));
+      }
+    });
+    console.log(
+      `[workflow-service] retire-by-content ${JSON.stringify(target)}: retired ${dynasties.length} dynasties: ${dynasties.join(", ")}`,
+    );
+    res.json({ dryRun: false, workflows: listed, retired: dynasties.length });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "ZodError") {
+      res.status(400).json({ error: "Validation error", details: err });
+      return;
+    }
+    console.error("[workflow-service] POST retire-by-content error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
