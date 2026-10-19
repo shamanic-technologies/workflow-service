@@ -24,8 +24,25 @@ export interface PromptTemplate {
    * content-generation deploy that predates the catalog.
    */
   contextVariables?: PromptVariable[];
+  /** Catalogue status (TEMPLATE-MODEL-STATUS-1019): a deprecated template may not be named by a NEW workflow. */
+  status?: "active" | "deprecated";
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Status of every writer model alias content-generation accepts (`GET /internal/models`). A deprecated alias may
+ * not be named by a NEW workflow; stored ones keep generating.
+ */
+export async function fetchModelStatuses(): Promise<Map<string, "active" | "deprecated">> {
+  const { baseUrl, apiKey } = getConfig();
+  const res = await fetch(`${baseUrl}/internal/models`, { headers: { "x-api-key": apiKey }, signal: AbortSignal.timeout(600_000) });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`content-generation error: GET /internal/models -> ${res.status}: ${text}`);
+  }
+  const body = (await res.json()) as { models: Array<{ model: string; status: "active" | "deprecated" }> };
+  return new Map(body.models.map((m) => [m.model, m.status]));
 }
 
 function getConfig(): { baseUrl: string; apiKey: string } {
