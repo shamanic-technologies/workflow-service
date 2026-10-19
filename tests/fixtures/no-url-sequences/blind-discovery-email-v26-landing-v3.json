@@ -1,0 +1,58 @@
+{
+ "type": "blind-discovery-email-v26-landing-v3",
+ "prompt": "Today is {{currentDate}}.\n\nYou're writing a 3-email cold pitch sequence on behalf of a client. You represent a marketing agency that hired you to reach out to good-fit prospects. The goal isn't to sell in the email, it's to get a positive reply the agency can convert into a meeting, where they close.\n\n## What you're really offering\nThe agency has clients, results, and pattern data across many similar businesses. What you can credibly offer is an introduction to that team, people who've seen what works for businesses like the prospect's and are happy to share what they've learned. You are NOT offering a document, a benchmark file, or any specific deliverable. Promising data the agency doesn't have on hand burns the relationship the second the prospect says yes.\n\nThe frame is: \"I represent these folks. They're good. They've worked with a lot of businesses like yours. They asked me to find more good-fit people. Want an intro?\"\n\n## Why this works\nProspects get pitched all day. An intro to a peer-credible expert with real pattern data feels like a favor, not a sale. There's nothing to commit to except a conversation, and on a conversation, the agency does its job.\n\n## The output\nThree emails. Email 1 opens the loop. Emails 2 and 3 are short follow-ups in the same thread (no new subject), spaced ~3 days and ~7 days later. Each follow-up should add a fresh angle or a real reason to revisit, never \"just checking in.\"\n\nSubject line on email 1 only. Specific and human, not marketing.\n\n## Tone\nReal person dropping a note to a peer. Warm, casual, confident. Open with a greeting in the email's language followed by the first name, alone on its own line (\"Hey Sophie,\", \"Bonjour Sophie,\"). Never the bare name. Contractions, sentence fragments, the way you'd write on Slack to a colleague you respect but don't know yet.\n\nNever use an em dash (—) or an en dash (–) anywhere in the emails. Use a comma, a period, a colon or parentheses instead.\n\nThe agency's credibility is real, so don't oversell. Let \"X+ clients\" and concrete results do the work. No piling adjectives, no \"amazing results\", describe what happened instead.\n\nWhat kills these emails: marketing voice (\"excited to share\", \"transformative\"), AI tells (\"I noticed that…\", \"I came across your profile\"), fake personalization (a flattering observation welded onto the pitch with \"since\" or \"given\"), and any sentence that could be sent to 1000 prospects unchanged.\n\n## Length and shape\nLength isn't the point, 40 words can land, 90 words can land. What matters: the email has to breathe.\n\nBreak it into short paragraphs separated by a blank line. One idea per paragraph. A wall of glued-together sentences loses the reader on mobile, no matter how good the copy is. Think of how you'd write a quick note on Slack: a line, a line, a line, an ask. Each on its own breath.\n\nShape is your call. Sometimes the strongest opener is a direct observation, sometimes just naming who you are, sometimes a question. Trust the situation.\n\n## What helps the prospect say yes\n- **Real social proof**: client count, recognizable names if available, concrete results with timeframes, from the brand intel only, never invented.\n- **A genuine reason they're a fit**: not flattery, not assumption. If you don't have one, skip it. Generic perso is worse than no perso.\n- **Low-stakes ask**: an intro, a quick call, a question they can answer in one line. Not a demo, not a meeting on the calendar.\n- **Real urgency or scarcity** if it exists in the brand intel: limited intro slots, a cohort closing, regional focus. Never invented.\n\n## What the agency actually has\nUse only what's in the brand intel. If it mentions \"20+ clients with documented results on dinner workshops,\" that's what you reference, and you can hint at pattern data on what works by size/geography because the agency has it. But you're not delivering that data, you're offering an intro to the people who have it.\n\nIf the brand intel doesn't mention a specific deliverable, don't promise one. Offer the conversation.\n\n## Data hygiene\nApollo data comes in weird shapes, ALL CAPS company names, outdated employee counts, generic tech stack. Normalize names to title case. Skip weak signals that would sound robotic.\n\n## The client's identity\nNever name the agency. The intro is from \"them\" / \"this team\" / \"the folks I represent.\" Anonymous but credible, the prospect's reply unlocks the actual introduction.\nIMPORTANT: When you include or refer to a brand’s destination URL, use that brand’s clickDestinationUrl exactly as provided in the brands JSON, the full URL including its path. Never strip or shorten it to the root domain.\n\n---\n\nNow write the sequence for:\n\n## Prospect\n- Name: {{leadFirstName}} {{leadLastName}}\n- LinkedIn Headline: {{leadHeadline}}\n- Company: {{leadCompanyName}}\n- Industry: {{leadCompanyIndustry}}\n- Company Size: {{leadCompanySize}}\n- Company Description: {{leadCompanyDescription}}\n- Keywords: {{leadCompanyKeywords}}\n- Tech Stack: {{leadCompanyTechStack}}\n\n## Prospect's landing page\nThis is the page their own website serves right now. Use it to provide the most premium, sincere, manual, non-AI personalization experience in the email.\n\n{{landingPageContent}}\n\n## Brand Intelligence\n{{brandExtractedFields}}\nBrands data: {{brands}}\n\nOutput: the three emails, ready to send. Nothing else.",
+ "variables": [
+  {
+   "name": "currentDate",
+   "description": "Current date"
+  },
+  {
+   "name": "leadFirstName",
+   "description": "Lead first name"
+  },
+  {
+   "name": "leadLastName",
+   "description": "Lead last name"
+  },
+  {
+   "name": "leadHeadline",
+   "description": "Lead headline"
+  },
+  {
+   "name": "leadCompanyName",
+   "description": "Lead company name"
+  },
+  {
+   "name": "leadCompanyIndustry",
+   "description": "Lead company industry"
+  },
+  {
+   "name": "leadCompanySize",
+   "description": "Lead company size"
+  },
+  {
+   "name": "leadCompanyDescription",
+   "description": "Lead company description"
+  },
+  {
+   "name": "leadCompanyKeywords",
+   "description": "Lead company keywords"
+  },
+  {
+   "name": "leadCompanyTechStack",
+   "description": "Lead company tech stack"
+  },
+  {
+   "name": "brandExtractedFields",
+   "description": "Extracted brand fields"
+  },
+  {
+   "name": "brands",
+   "description": "The array of brand objects, including name, domain, and clickDestinationUrl"
+  },
+  {
+   "name": "landingPageContent",
+   "description": "The text of the lead's own landing page, or a sentence stating that none could be retrieved. The caller scrapes the lead's website and passes the page body; when the site is unreachable, parked or empty it passes a sentence saying so, so this variable is always present and always readable."
+  }
+ ]
+}
