@@ -151,6 +151,36 @@ describe("GET /public/workflows", () => {
     expect(res.status).toBe(400);
   });
 
+  it("serves createdAt + the instant each version stopped being executable (WF-VERSION-DATES-1019)", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-arc2", workflowSlug: "sales-cold-email-outreach-arcadia-v2", version: 2, status: "deprecated",
+        createdAt: new Date("2026-08-26T06:45:13.619Z"),
+        executableUntil: new Date("2026-09-24T10:46:19.905Z"), executableUntilSource: "last_update" }),
+      makeWorkflow({ id: "wf-bal6", workflowSlug: "sales-cold-email-outreach-ballad-v6", version: 6, status: "deprecated",
+        createdAt: new Date("2026-09-29T04:40:05.836Z"),
+        executableUntil: new Date("2026-10-06T16:26:48.131Z"), executableUntilSource: "last_update" }),
+      makeWorkflow({ id: "wf-aza8", workflowSlug: "sales-cold-email-outreach-azalea-v8", version: 8, status: "active",
+        createdAt: new Date("2026-10-17T15:31:22.176Z"), executableUntil: null, executableUntilSource: null }),
+    );
+
+    const res = await request.get("/public/workflows").set(API_KEY)
+      .query({ featureSlugs: "sales-cold-email-outreach", status: "all" });
+
+    expect(res.status).toBe(200);
+    const bySlug = Object.fromEntries(res.body.workflows.map((w: { workflowSlug: string }) => [w.workflowSlug, w]));
+    expect(bySlug["sales-cold-email-outreach-arcadia-v2"]).toMatchObject({
+      createdAt: "2026-08-26T06:45:13.619Z", executableUntil: "2026-09-24T10:46:19.905Z", executableUntilSource: "last_update",
+    });
+    expect(bySlug["sales-cold-email-outreach-ballad-v6"]).toMatchObject({
+      executableUntil: "2026-10-06T16:26:48.131Z", executableUntilSource: "last_update",
+    });
+    expect(bySlug["sales-cold-email-outreach-azalea-v8"]).toMatchObject({
+      createdAt: "2026-10-17T15:31:22.176Z", executableUntil: null, executableUntilSource: null,
+    });
+    // Existing fields untouched.
+    expect(bySlug["sales-cold-email-outreach-azalea-v8"]).toMatchObject({ status: "active", workflowDynastyStatus: "active", upgradedTo: null });
+  });
+
   it("returns workflows for given feature slugs (mock returns all rows)", async () => {
     const wf1 = makeWorkflow({ id: "wf-a1", featureSlug: "sales-v1", status: "active" });
     const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", workflowSlug: "sales-cold-outreach-alpha-v2", workflowName: "Sales Alpha v2", workflowDynastySlug: "sales-cold-outreach-alpha", workflowDynastyName: "Sales Cold Outreach Alpha" });
@@ -258,6 +288,9 @@ describe("GET /public/workflows", () => {
       featureSlug: "sales-cold-outreach-v2",
       createdForBrandId: "brand-123",
       upgradedTo: null,
+      createdAt: wf.createdAt.toISOString(),
+      executableUntil: null,
+      executableUntilSource: null,
     });
     // Must NOT include DAG or internal fields
     expect(w).not.toHaveProperty("dag");
