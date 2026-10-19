@@ -6,6 +6,7 @@ import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-d
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
 import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildEmailSendingDag } from "../../src/lib/email-sending-dag.js";
+import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
 import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildSourcingDag } from "../../src/lib/sourcing-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
@@ -28,6 +29,7 @@ const DAGS: Record<string, DAG> = {
   "ai-instant-call": buildAiInstantCallDag(),
   "ai-instant-call-email-only": buildAiInstantCallDag({ emailRepliesOnly: true }),
   "email-sending": buildEmailSendingDag(),
+  "ai-lead-proposal": buildAiLeadProposalDag(),
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   sourcing: buildSourcingDag(),
