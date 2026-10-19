@@ -78,10 +78,63 @@ describe("WF-NOBELIUM-BALLAD-UPGRADE-1019 DAGs", () => {
   });
 
   it("descriptions state the no-link and spacing rules (features-service judges tactics on them)", () => {
-    for (const t of TARGETS) {
+    for (const t of TARGETS.filter((x: { description?: string }) => x.description)) {
       expect(t.description).toContain("No email of the sequence, the first one or a follow-up, carries a link");
       expect(t.description).toContain("short paragraphs");
       expect(t.description).not.toMatch(/[–—]/);
+    }
+  });
+});
+
+// @ts-expect-error — plain .mjs ops script, no type declarations
+import { TEMPLATE_SPECS, deriveTemplate, planTarget, describeVariant, POSITIVE_REPLY_LEG, WEBSITE_VISIT_LEG } from "../../scripts/upgrade-no-url-sequences.mjs";
+
+describe("WF-NOBELIUM-BALLAD-UPGRADE-1019 extension: every orphaned Positive reply workflow", () => {
+  const sources = Object.keys(TEMPLATE_SPECS).map((type) => fixture(`${type}.json`));
+  const LINK_LICENCE = /clickDestinationUrl|destination URL|\{\{clientWebsite\}\}|\{\{brands\}\}|## URLs|Client URL|client's URL/;
+
+  it.each(sources.map((s) => [s.type, s]))("%s: the no-link twin states both rules, keeps no link licence, declares exactly its tokens", (_t, source) => {
+    const t = deriveTemplate(source, { keepLinks: false });
+    expect(t.type).toBe(`${source.type}-no-url-spaced`);
+    expect(t.prompt).toContain(NO_LINKS_BLOCK);
+    expect(t.prompt).toContain(SPACING_BLOCK);
+    expect(t.prompt).not.toMatch(LINK_LICENCE);
+    expect(t.prompt).not.toMatch(/20\+ clients/);
+    expect(t.variables.map((v: { name: string }) => v.name).sort()).toEqual(tokens(t.prompt));
+  });
+
+  it.each(sources.filter((s) => !s.type.startsWith("blind-")).map((s) => [s.type, s]))("%s: the spaced-only twin (Website visit leg) keeps the link rules and adds spacing", (_t, source) => {
+    const t = deriveTemplate(source, { keepLinks: true });
+    expect(t.type).toBe(`${source.type}-spaced`);
+    expect(t.prompt).toContain(SPACING_BLOCK);
+    expect(t.prompt).not.toContain(NO_LINKS_BLOCK);
+    expect(t.variables).toEqual(source.variables);
+  });
+
+  it("picks the variant from the legs features-service assigns, and refuses a dynasty still on both", () => {
+    const [nob, , tectonic] = TARGETS;
+    const v37 = fixture("cold-email-v37.json");
+    expect(planTarget(tectonic, v37, [POSITIVE_REPLY_LEG]).built.type).toBe("cold-email-v37-no-url-spaced");
+    expect(planTarget(tectonic, v37, [WEBSITE_VISIT_LEG]).built.type).toBe("cold-email-v37-spaced");
+    expect(() => planTarget(tectonic, v37, [POSITIVE_REPLY_LEG, WEBSITE_VISIT_LEG].sort())).toThrow(/not upgraded/);
+    // A blind template can never carry the client's link: a blind dynasty on the Website visit leg is refused.
+    const cirque = TARGETS.find((t: { dynasty: string }) => t.dynasty.endsWith("-cirque"));
+    expect(() => planTarget(cirque, fixture("blind-discovery-email-v21.json"), [WEBSITE_VISIT_LEG])).toThrow(/blind template/);
+    expect(deriveTemplate(v37, { keepLinks: false }).prompt).not.toMatch(/\d+(\.\d+)?x more|\d+%|Gong/);
+    // Nobelium: no link on both legs (owner decision), Lithium/Cerulean share its stored no-link template.
+    const v33 = fixture("blind-discovery-email-v33.json");
+    expect(planTarget(nob, v33, [POSITIVE_REPLY_LEG, WEBSITE_VISIT_LEG].sort()).built.type).toBe("blind-discovery-email-v33-no-url");
+    const lithium = TARGETS.find((t: { dynasty: string }) => t.dynasty.endsWith("-lithium"));
+    expect(planTarget(lithium, v33, [POSITIVE_REPLY_LEG]).built).toEqual(buildNobeliumTemplate(v33));
+    expect(planTarget(lithium, v33, [POSITIVE_REPLY_LEG]).dropVariables).toEqual(["brands"]);
+  });
+
+  it("descriptions say what the emails do, never a dash", () => {
+    for (const family of new Set(Object.values(TEMPLATE_SPECS).map((s: any) => s.family))) {
+      expect(describeVariant(family, false)).toContain("carries a link");
+      expect(describeVariant(family, true)).not.toContain("carries a link");
+      expect(describeVariant(family, true)).toContain("short paragraphs");
+      expect(describeVariant(family, false)).not.toMatch(/[–—]/);
     }
   });
 });

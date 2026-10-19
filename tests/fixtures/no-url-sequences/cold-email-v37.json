@@ -1,0 +1,34 @@
+{
+ "type": "cold-email-v37",
+ "prompt": "Today is 2026-03-17.\n\nYou're writing a 3-email cold outreach sequence on behalf of a sales rep. Your job is to get a reply — nothing else matters.\n\n## Output rule\nAlways respond with the 3 emails ready to send. Never respond with commentary, suggestions, analysis, or a discussion — only the emails themselves.\n\n## Sequence structure\n- **Email 1 (body):** The initial cold email.\n- **Email 2 (followup1):** A short follow-up sent ~3 days after email 1. Keep it to 2-3 sentences. Same thread — no new subject line.\n- **Email 3 (followup2):** A final follow-up sent ~7 days after email 2. Same thread — no new subject line.\n\n## Cold email frameworks\nUse your judgment to apply or combine these proven frameworks based on the context:\n\n**PAS (Problem-Agitate-Solution):** Identify a problem, amplify its consequences, present the solution. Example: \"Managing leads across spreadsheets is slowing your team down. Every hour spent on manual entry is an hour not closing deals. [Product] automates lead capture so your reps focus on selling.\"\n\n**BAB (Before-After-Bridge):** Describe the current pain (Before), paint the ideal future (After), position the solution as the bridge. Example: \"Right now, your SDRs spend 10+ hours weekly researching prospects. Imagine if they had instant access to verified contact data. That's exactly what [Product] delivers.\"\n\n**AIDA (Attention-Interest-Desire-Action):** Hook attention, build interest with value, create desire, end with CTA. Example: \"Companies like [Similar Company] increased response rates by 40%. We help sales teams personalize outreach at scale. Would it be worth a quick look?\"\n\n**SPIN (Situation-Problem-Implication-Need-Payoff):** Acknowledge the situation, surface problems, explore implications, highlight payoff. Example: \"Noticed [Company] is expanding into EMEA. Scaling outreach to new markets often means hiring more SDRs. What if you could 3x outreach without adding headcount?\"\n\n## Industry data (Gong research, 28M+ emails analyzed)\nThese findings should inform your choices:\n- Product pitches in cold emails reduce replies by 57%. Leading with the problem you solve instead of features you have performs significantly better.\n- \"Interest CTAs\" like \"thoughts?\" or \"worth exploring?\" generate 2x more replies than \"meeting CTAs\" like \"15 min call Thursday?\". Lower friction means higher response rates.\n- Buzzwords in subject lines reduce open rates by 17.9%. Plain, curiosity-driven subject lines outperform clever or jargon-heavy ones.\n- ROI claims, \"AI\" mentions, and jargon in first touch tend to trigger skepticism rather than interest.\n- Top-performing reps book 8.1x more meetings than average — the gap comes from email quality, not volume.\n\n## Length\nCold emails must be short. Email 1: max 3-4 sentences. Follow-ups: 1-2 sentences. Every sentence must earn its place — if it doesn't drive a reply, cut it. No backstory, no over-explaining, no filler. Get in, spark curiosity, get out.\n\n## Simplicity\nWrite like a human texting a smart friend. Short sentences. Plain words. If a sentence needs to be read twice to be understood, it's too complicated. The contrarian angle should hit instantly — not require a PhD to parse.\n\n## Tone\nGreet the recipient by first name — it's a real email from a real person, not a blog post. Keep it warm, direct, conversational.\n\n## Opening line (Email 1 only)\nGeneric compliments (\"Your work in X caught my attention\", \"I've been following your…\") pattern-match to template emails and get deleted fast. A contrarian angle works better: a bold, non-obvious observation that challenges something people in the recipient's world take for granted. The best contrarian angle sits at the intersection of (1) what the recipient cares about and (2) why the client's offering exists. If multiple angles are possible, choose the one that resonates most with the recipient's specific role or industry. The tone should feel like a peer sharing an uncomfortable truth, not a salesperson pitching.\n\n## CTA\nEnding with a soft, low-friction ask. \"Thoughts?\" or \"Worth a conversation?\" outperform hard asks like \"Can we book 15 min Tuesday?\" because they let the recipient engage without committing.\n\n## URLs\nIf you display a client URL in the email, you MUST use the exact, full destination URL as provided in the input (e.g., https://labcritics.com/advertise/). Do NOT strip it down to the root domain.\n\n## Identity protection\nKeeping the client anonymous increases most of the time conversion.\n\n## Scam filter\nCold emails live or die on trust. If it looks like a scam or MLM (specific dollar amounts, crypto terminology (tokens, chains, USDT, Web3), \"passive income\" language) then the user might dismiss. Exact compensation figures can look suspicious, but mentioning when the opportunity is a paid role or paid collaboration can drive interest.\n\n## Urgency\nUrgency, if you have any element about that, drives conversion. Using it in each email is relevant, especially in follow-ups.\n\n## Scarcity\nScarcity, if you have any element about that, drives conversion. Using it in each email is relevant, especially in follow-ups.\n\n## Social proof\nSocial proof, if you have any element about that, drives conversion. Using it in each email is relevant, especially in the main email.\n\n## Value for the audience\nValue for the audience is all the audience wants. Very important to be clear on those, especially on the main email.\n\n## Risk reversal\nRisk reversal, if you have any element about that, drives conversion. Using it in each email is relevant, especially in the follow-ups.\n\n---\n\nNow write the sequence for:\n\n## Recipient\n- Name: {{leadFirstName}} {{leadLastName}}\n- Title: {{leadTitle}}\n- Company: {{leadCompanyName}}\n- Industry: {{leadCompanyIndustry}}\n\n## Client\n- Company: {{clientCompanyName}}\n\n## Client Brand Profile (JSON — use this for value proposition, social proof, pain points, differentiators, CTA, urgency, scarcity, risk reversal, etc.)\n{{brandProfile}}",
+ "variables": [
+  {
+   "name": "leadFirstName",
+   "description": "Lead first name"
+  },
+  {
+   "name": "leadLastName",
+   "description": "Lead last name"
+  },
+  {
+   "name": "leadTitle",
+   "description": "Lead job title"
+  },
+  {
+   "name": "leadCompanyName",
+   "description": "Lead company name"
+  },
+  {
+   "name": "leadCompanyIndustry",
+   "description": "Lead company industry"
+  },
+  {
+   "name": "clientCompanyName",
+   "description": "Client company name"
+  },
+  {
+   "name": "brandProfile",
+   "description": "Client brand profile data"
+  }
+ ]
+}
