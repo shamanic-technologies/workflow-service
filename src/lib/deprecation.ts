@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import type { Request } from "express";
-import { workflows } from "../db/schema.js";
 
 // DEPRECATION-REASON-1020 (owner 2026-10-20): every deprecation states WHY, and WHO decided it
 // WHEN, so staff reading a deprecated workflow months later know why it stopped. Every write
@@ -10,32 +9,16 @@ import { workflows } from "../db/schema.js";
 /** What a deprecation recorded before reasons existed (or with none stated) reads. */
 export const NOT_SPECIFIED = "Not specified";
 
-/**
- * Transition (DEPRECATION-REASON-1020): the staff doors (dashboard Research, admin) do not send a
- * reason yet, so a deprecation WITHOUT one is still accepted, recorded "Not specified" (an earlier
- * reason on the row is kept), and logged loud. Flip to true once every caller sends one: the
- * status routes then answer 400 `deprecation_reason_required`.
- */
-export const REASON_REQUIRED = false;
-
 export interface DeprecationDecision {
-  /** Plain-language why. Undefined = none stated (transition only). */
-  reason: string | undefined;
+  /** Plain-language why (required: the status routes refuse a deprecation without one). */
+  reason: string;
   /** Who decided (staff email, a service name, `user:<id>`), null when unknown. */
   decidedBy: string | null;
 }
 
 /** `.set()` fields for a write that deprecates a row (version or dynasty). */
 export function recordDeprecation(d: DeprecationDecision) {
-  if (d.reason !== undefined) {
-    return { deprecationReason: d.reason, deprecatedBy: d.decidedBy, deprecatedAt: sql`now()` };
-  }
-  // No reason stated: keep a reason already recorded, never overwrite it with "Not specified".
-  return {
-    deprecationReason: sql`COALESCE(${workflows.deprecationReason}, ${NOT_SPECIFIED})`,
-    deprecatedBy: sql`CASE WHEN ${workflows.deprecationReason} IS NULL THEN ${d.decidedBy}::text ELSE ${workflows.deprecatedBy} END`,
-    deprecatedAt: sql`CASE WHEN ${workflows.deprecationReason} IS NULL THEN now() ELSE ${workflows.deprecatedAt} END`,
-  };
+  return { deprecationReason: d.reason, deprecatedBy: d.decidedBy, deprecatedAt: sql`now()` };
 }
 
 /** `.set()` fields for a write that makes a row executable again. */
@@ -84,12 +67,4 @@ export function servedDeprecation(w: {
     decidedBy: w.deprecatedBy ?? null,
     decidedAt: w.deprecatedAt ? w.deprecatedAt.toISOString() : null,
   };
-}
-
-/** Log a deprecation that stated no reason (the transition), so the missing callers are visible. */
-export function warnMissingReason(route: string, target: string, decidedBy: string | null): void {
-  console.warn(
-    `[workflow-service] [deprecation-reason-missing] ${route} deprecated "${target}" with no reason ` +
-      `(decidedBy=${decidedBy ?? "unknown"}); recorded "${NOT_SPECIFIED}". DEPRECATION-REASON-1020: callers must send \`reason\`.`,
-  );
 }
