@@ -1722,6 +1722,39 @@ describe("POST /workflows/upgrade (workflowDynastySlug lookup)", () => {
     expect(res.body.workflow.action).toBe("updated");
   });
 
+  it("keeps a one-leg copy's forkedForPipe when the upgraded DAG states none (ONE-LEG-FORKS-1020)", async () => {
+    const PIPE = "sales-cold-email-outreach|lead_found_to_conversation";
+    const copyDag = { ...VALID_LINEAR_DAG, forkedForPipe: PIPE };
+    mockDbRows.push({
+      id: WF_HTTP_ID,
+      orgId: "org-1",
+      workflowSlug: "sales-cold-email-outreach-eden",
+      workflowName: "Sales Cold Email Outreach Eden",
+      workflowDynastySlug: "sales-cold-email-outreach-eden",
+      workflowDynastyName: "Sales Cold Email Outreach Eden",
+      workflowDynastySignatureName: "eden",
+      featureSlug: "sales-cold-email-outreach",
+      version: 1,
+      status: "active",
+      signature: computeDAGSignature(copyDag),
+      dag: copyDag,
+      tags: [],
+      description: "copy",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // The seed sends the builder's DAG, which carries no mark: same steps, so the copy is updated in place.
+    const res = await request
+      .post("/workflows/upgrade")
+      .set(AUTH)
+      .send({ workflowDynastySlug: "sales-cold-email-outreach-eden", dag: VALID_LINEAR_DAG });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.action).toBe("updated");
+    expect(res.body.dag.forkedForPipe).toBe(PIPE);
+  });
+
   it("returns 404 when no active row matches the dynastySlug", async () => {
     const res = await request
       .post("/workflows/upgrade")

@@ -12,7 +12,7 @@ import { applyDagPatch, DagPatchError, type DagPatchOperation } from "../lib/dag
 import { validateClientDag } from "../lib/validate-client-dag.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { findSignatureConflict, signatureConflictBody, forkWorkflowRow } from "../lib/workflow-lineage.js";
-import { LegAssignmentError } from "../lib/catalogue-client.js";
+import { LegAssignmentError, PipeResolutionError, fetchPipe } from "../lib/catalogue-client.js";
 import { formatWorkflow } from "../lib/format-workflow.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
@@ -43,6 +43,14 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
   const userId = res.locals.userId as string;
   const runId = res.locals.runId as string;
 
+  if (body.pipeId) {
+    const refusal = await refusePipe(body.pipeId, source.featureSlug, extractDownstreamHeaders(req));
+    if (refusal) {
+      res.status(400).json({ error: refusal });
+      return;
+    }
+  }
+
   let dag: DAG;
   try {
     dag = applyDagPatch(source.dag as DAG, body.changes as DagPatchOperation[]);
@@ -53,6 +61,8 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
     }
     throw err;
   }
+  // The pipe the copy is forked for makes it its own workflow even when its steps are the source's.
+  if (body.pipeId) dag = { ...dag, forkedForPipe: body.pipeId };
 
   const signature = computeDAGSignature(dag);
   if (signature === source.signature) {
@@ -81,6 +91,7 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
     runId,
     description: body.description ?? source.description,
     tags: body.tags ?? (source.tags as string[]) ?? [],
+    pipeId: body.pipeId,
   });
   if ("nameConflict" in forked) {
     res.status(409).json(forked.nameConflict);
@@ -108,6 +119,27 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
     },
     changesApplied: body.changes.length,
   });
+}
+
+/** Why a copy cannot be forked for `pipeId` (null = it can): the pipe must exist and belong to the source's channel. */
+async function refusePipe(
+  pipeId: string,
+  featureSlug: string,
+  downstreamHeaders: ReturnType<typeof extractDownstreamHeaders>,
+): Promise<string | null> {
+  if (!pipeId.startsWith(`${featureSlug}|`)) {
+    return `Pipe "${pipeId}" is not a pipe of the source's channel "${featureSlug}": a copy is forked for a pipe of its own channel`;
+  }
+  try {
+    const pipe = await fetchPipe(pipeId, downstreamHeaders);
+    if (pipe.channelSlug !== featureSlug) {
+      return `Pipe "${pipeId}" belongs to channel "${pipe.channelSlug}", not to the source's channel "${featureSlug}"`;
+    }
+    return null;
+  } catch (err) {
+    if (err instanceof PipeResolutionError) return err.message;
+    throw err;
+  }
 }
 
 function handleError(res: Response, err: unknown): void {
