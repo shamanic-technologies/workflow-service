@@ -101,7 +101,7 @@ describe("deprecation writes", () => {
     db = drizzle(client);
   });
 
-  it("records reason, who and when; a later deprecation without a reason keeps it; re-activation clears it", async () => {
+  it("records reason, who and when; re-activation clears it", async () => {
     const id = await insert(client, { slug: "w", dynasty: "w", status: "active" });
 
     await db
@@ -113,26 +113,8 @@ describe("deprecation writes", () => {
     expect(first.by).toBe("staff@distribute.you");
     expect(first.at).not.toBeNull();
 
-    await db
-      .update(workflows)
-      .set({ workflowDynastyStatus: "deprecated", ...recordDeprecation({ reason: undefined, decidedBy: "someone-else" }) })
-      .where(eq(workflows.id, id));
-    expect(await deprecationOf(client, "w")).toEqual(first);
-
     await db.update(workflows).set({ status: "active", workflowDynastyStatus: "active", ...CLEAR_DEPRECATION }).where(eq(workflows.id, id));
     expect(await deprecationOf(client, "w")).toEqual({ reason: null, by: null, at: null });
-  });
-
-  it("a deprecation without a reason on a row with none records 'Not specified' with the real who and when", async () => {
-    const id = await insert(client, { slug: "w", dynasty: "w", status: "active" });
-    await db
-      .update(workflows)
-      .set({ status: "deprecated", ...recordDeprecation({ reason: undefined, decidedBy: "user:abc" }) })
-      .where(eq(workflows.id, id));
-    const d = await deprecationOf(client, "w");
-    expect(d.reason).toBe(NOT_SPECIFIED);
-    expect(d.by).toBe("user:abc");
-    expect(d.at).not.toBeNull();
   });
 });
 

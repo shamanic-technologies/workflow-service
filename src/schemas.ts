@@ -219,7 +219,7 @@ export const DeprecationSchema = z
   .object({
     reason: z.string().describe(
       "Why this workflow was deprecated, in plain words. 'Not specified' for workflows deprecated before 2026-10-20 " +
-      "(the reason was never recorded) or deprecated without one during the transition."
+      "(the reason was never recorded)."
     ),
     decidedBy: z.string().nullable().describe(
       "Who decided it: a staff email, 'workflow-service' for an automatic deprecation (an upgrade replacing this version), " +
@@ -237,8 +237,7 @@ const deprecationField = DeprecationSchema.nullable().describe(
 const DeprecationRequestFields = {
   reason: z.string().trim().min(1).max(2000).optional().describe(
     "REQUIRED when deprecating (DEPRECATION-REASON-1020): why, in plain words a staff member reads months later. " +
-    "Transition: a deprecation without one is still accepted and recorded 'Not specified' (an earlier reason is kept); " +
-    "it will be refused with 400 once every caller sends one. Ignored when activating."
+    "A deprecation without one is refused with 400 `deprecation_reason_required`. Ignored when activating."
   ),
   decidedBy: z.string().trim().min(1).max(320).optional().describe(
     "Who decided (staff email). Absent = the caller's x-email header, else 'user:<x-user-id>'."
