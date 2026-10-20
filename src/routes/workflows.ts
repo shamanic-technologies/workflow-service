@@ -66,6 +66,14 @@ import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
 import { rowsUsingContent } from "../lib/retire-by-content.js";
+import {
+  recordDeprecation,
+  CLEAR_DEPRECATION,
+  REASON_REQUIRED,
+  resolveDecidedBy,
+  servedDeprecation,
+  warnMissingReason,
+} from "../lib/deprecation.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
 import { formatWorkflow } from "../lib/format-workflow.js";
 import {
@@ -816,6 +824,7 @@ router.get("/workflows/summaries", requireApiKey, async (req, res) => {
         version: w.version,
         tags: w.tags ?? [],
         ...summarizeContentGeneration(w.dag as DAG | null),
+        deprecation: servedDeprecation(w),
         createdAt: w.createdAt?.toISOString() ?? null,
         updatedAt: w.updatedAt?.toISOString() ?? null,
       }))
@@ -987,6 +996,11 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
   try {
     const { workflowDynastySlug } = req.params;
     const body = DynastyStatusUpdateSchema.parse(req.body);
+    if (body.status === "deprecated" && body.reason === undefined && REASON_REQUIRED) {
+      res.status(400).json({ error: "A deprecation must state its reason", code: "deprecation_reason_required" });
+      return;
+    }
+    const decidedBy = resolveDecidedBy(req, body.decidedBy);
 
     // Existence check: unknown dynasty slug → 404.
     const lineage = await db
@@ -1013,6 +1027,10 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
       }
     }
 
+    if (body.status === "deprecated" && body.reason === undefined) {
+      warnMissingReason("PUT /workflows/dynasty/:slug/status", workflowDynastySlug, decidedBy);
+    }
+
     await db.transaction(async (tx) => {
       await tx
         .update(workflows)
@@ -1020,6 +1038,9 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
           workflowDynastyStatus: body.status,
           status: "deprecated",
           ...stopExecutable(),
+          // Retiring records the decision on every version; un-retiring leaves the
+          // older versions' own reasons alone (the head is cleared below).
+          ...(body.status === "deprecated" ? recordDeprecation({ reason: body.reason, decidedBy }) : {}),
           updatedAt: new Date(),
         })
         .where(eq(workflows.workflowDynastySlug, workflowDynastySlug));
@@ -1027,7 +1048,7 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
       if (body.status === "active") {
         await tx
           .update(workflows)
-          .set({ status: "active", ...STILL_EXECUTABLE, updatedAt: new Date() })
+          .set({ status: "active", ...STILL_EXECUTABLE, ...CLEAR_DEPRECATION, updatedAt: new Date() })
           .where(eq(workflows.id, head.id));
       }
     });
@@ -1089,11 +1110,25 @@ router.post("/workflows/retire-by-content", requireApiKey, async (req, res) => {
       return;
     }
     const dynasties = [...new Set(matched.map((w) => w.workflowDynastySlug))];
+    const decision = {
+      reason:
+        body.reason ??
+        (target.promptType !== undefined
+          ? `Uses deprecated template ${target.promptType}`
+          : `Uses deprecated model ${target.model}`),
+      decidedBy: resolveDecidedBy(req, body.decidedBy),
+    };
     await db.transaction(async (tx) => {
       for (const slug of dynasties) {
         await tx
           .update(workflows)
-          .set({ workflowDynastyStatus: "deprecated", status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
+          .set({
+            workflowDynastyStatus: "deprecated",
+            status: "deprecated",
+            ...stopExecutable(),
+            ...recordDeprecation(decision),
+            updatedAt: new Date(),
+          })
           .where(eq(workflows.workflowDynastySlug, slug));
       }
     });
@@ -1130,6 +1165,11 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
   }
   try {
     const body = WorkflowStatusUpdateSchema.parse(req.body);
+    if (body.status === "deprecated" && body.reason === undefined && REASON_REQUIRED) {
+      res.status(400).json({ error: "A deprecation must state its reason", code: "deprecation_reason_required" });
+      return;
+    }
+    const decidedBy = resolveDecidedBy(req, body.decidedBy);
 
     const [workflow] = await db
       .select()
@@ -1142,6 +1182,16 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
     }
 
     if (workflow.status === body.status) {
+      // Re-deprecating with a NEW reason records it; anything else is a no-op.
+      if (body.status === "deprecated" && body.reason !== undefined && body.reason !== workflow.deprecationReason) {
+        const [restated] = await db
+          .update(workflows)
+          .set({ ...recordDeprecation({ reason: body.reason, decidedBy }), updatedAt: new Date() })
+          .where(eq(workflows.id, workflow.id))
+          .returning();
+        res.json(formatWorkflow(restated));
+        return;
+      }
       res.json(formatWorkflow(workflow));
       return;
     }
@@ -1187,11 +1237,20 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
         ...(body.status === "active" && workflow.workflowDynastyStatus === "active"
           ? STILL_EXECUTABLE
           : stopExecutable()),
+        // Re-activating under a retired dynasty keeps the dynasty's decision (the row still cannot run).
+        ...(body.status === "deprecated"
+          ? recordDeprecation({ reason: body.reason, decidedBy })
+          : workflow.workflowDynastyStatus === "active"
+            ? CLEAR_DEPRECATION
+            : {}),
         updatedAt: new Date(),
       })
       .where(eq(workflows.id, workflow.id))
       .returning();
 
+    if (body.status === "deprecated" && body.reason === undefined) {
+      warnMissingReason("PUT /workflows/:id/status", workflow.workflowSlug, decidedBy);
+    }
     console.log(
       `[workflow-service] Workflow "${workflow.workflowSlug}" (${workflow.id}) set to status=${body.status}`,
     );

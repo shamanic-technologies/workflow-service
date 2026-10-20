@@ -1924,6 +1924,8 @@ describe("POST /workflows/retire-by-content (TEMPLATE-MODEL-STATUS-1019)", () =>
     expect(res.body).toMatchObject({ dryRun: false, retired: 1 });
     expect(ballad.status).toBe("deprecated");
     expect(ballad.workflowDynastyStatus).toBe("deprecated");
+    // DEPRECATION-REASON-1020: the door states its own reason when the caller gives none.
+    expect(ballad.deprecationReason).toBe("Uses deprecated model pro");
   });
 
   it("400s unless exactly one of promptType or model is given", async () => {
@@ -1980,6 +1982,52 @@ describe("PUT /workflows/:id/status", () => {
     // WF-VERSION-DATES-1019: the stop is recorded at the transition.
     expect(mockDbRows[0].executableUntil).toBeInstanceOf(Date);
     expect(mockDbRows[0].executableUntilSource).toBe("recorded");
+  });
+
+  it("serves why, who and when on the response (DEPRECATION-REASON-1020)", async () => {
+    const row = pushVersionRow();
+    mockSelectResponses.push([row]);
+
+    const res = await request
+      .put(`/workflows/${VERSION_ID}/status`)
+      .set(AUTH)
+      .send({ status: "deprecated", reason: "Worse reply rate than Vega", decidedBy: "kevin@distribute.you" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deprecation).toEqual({
+      reason: "Worse reply rate than Vega",
+      decidedBy: "kevin@distribute.you",
+      decidedAt: expect.any(String),
+    });
+    expect(res.body).not.toHaveProperty("deprecationReason");
+  });
+
+  it("re-deprecating with a new reason records it", async () => {
+    const row = pushVersionRow({ status: "deprecated", deprecationReason: "Not specified" });
+    mockSelectResponses.push([row]);
+
+    const res = await request
+      .put(`/workflows/${VERSION_ID}/status`)
+      .set(AUTH)
+      .send({ status: "deprecated", reason: "Real reason" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deprecation.reason).toBe("Real reason");
+    expect(mockDbRows[0].deprecationReason).toBe("Real reason");
+  });
+
+  it("an executable workflow serves no deprecation", async () => {
+    const row = pushVersionRow({ status: "deprecated", deprecationReason: "Why" });
+    mockSelectResponses.push([row], []); // id lookup, no other active version
+
+    const res = await request
+      .put(`/workflows/${VERSION_ID}/status`)
+      .set(AUTH)
+      .send({ status: "active" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deprecation).toBeNull();
+    expect(mockDbRows[0].deprecationReason).toBeNull();
   });
 
   it("is idempotent — re-applying the same status is a no-op success", async () => {
@@ -2123,6 +2171,53 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     // too or the dynasty keeps being offered as a candidate.
     expect(mockDbRows[0].workflowDynastyStatus).toBe("deprecated");
     expect(mockDbRows[0].status).toBe("deprecated");
+  });
+
+  it("records why, who and when on a retirement (DEPRECATION-REASON-1020)", async () => {
+    pushDynastyRow();
+
+    const res = await request
+      .put(`/workflows/dynasty/${DYNASTY}/status`)
+      .set({ ...AUTH, "x-email": "kevin@distribute.you" })
+      .send({ status: "deprecated", reason: "Catch-all copy of Azha" });
+
+    expect(res.status).toBe(200);
+    expect(mockDbRows[0].deprecationReason).toBe("Catch-all copy of Azha");
+    expect(mockDbRows[0].deprecatedBy).toBe("kevin@distribute.you");
+    expect(mockDbRows[0].deprecatedAt).toBeInstanceOf(Date);
+  });
+
+  it("a body decidedBy wins over the caller's headers", async () => {
+    pushDynastyRow();
+    await request
+      .put(`/workflows/dynasty/${DYNASTY}/status`)
+      .set(AUTH)
+      .send({ status: "deprecated", reason: "Why", decidedBy: "staff@distribute.you" });
+    expect(mockDbRows[0].deprecatedBy).toBe("staff@distribute.you");
+  });
+
+  it("refuses an empty reason", async () => {
+    pushDynastyRow();
+    const res = await request
+      .put(`/workflows/dynasty/${DYNASTY}/status`)
+      .set(AUTH)
+      .send({ status: "deprecated", reason: "   " });
+    expect(res.status).toBe(400);
+    expect(mockDbRows[0].status).toBe("active");
+  });
+
+  it("un-retiring clears the decision on the restored version", async () => {
+    pushDynastyRow({
+      status: "deprecated",
+      workflowDynastyStatus: "deprecated",
+      deprecationReason: "Why",
+      deprecatedBy: "k",
+      deprecatedAt: new Date(),
+    });
+    await request.put(`/workflows/dynasty/${DYNASTY}/status`).set(AUTH).send({ status: "active" });
+    expect(mockDbRows[0].deprecationReason).toBeNull();
+    expect(mockDbRows[0].deprecatedBy).toBeNull();
+    expect(mockDbRows[0].deprecatedAt).toBeNull();
   });
 
   it("un-retiring restores the highest version as the active one", async () => {

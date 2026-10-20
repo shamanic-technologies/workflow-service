@@ -48,6 +48,11 @@ export const workflows = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     executableUntil: timestamp("executable_until", { withTimezone: true }),
     executableUntilSource: text("executable_until_source"),
+    // DEPRECATION-REASON-1020: why, who and when a deprecation was decided. NULL while executable;
+    // rows deprecated before 2026-10-20 read 'Not specified' with no who/when.
+    deprecationReason: text("deprecation_reason"),
+    deprecatedBy: text("deprecated_by"),
+    deprecatedAt: timestamp("deprecated_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("idx_workflows_workflow_slug_unique").on(table.workflowSlug),

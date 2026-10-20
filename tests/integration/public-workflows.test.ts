@@ -181,6 +181,28 @@ describe("GET /public/workflows", () => {
     expect(bySlug["sales-cold-email-outreach-azalea-v8"]).toMatchObject({ status: "active", workflowDynastyStatus: "active", upgradedTo: null });
   });
 
+  it("serves why, who and when a version was deprecated (DEPRECATION-REASON-1020)", async () => {
+    mockWorkflowRows.push(
+      makeWorkflow({ id: "wf-ple", workflowSlug: "sales-cold-email-outreach-pleione", status: "deprecated", workflowDynastyStatus: "deprecated",
+        deprecationReason: "Catch-all copy of Sales Cold Email Outreach Azha", deprecatedBy: "kevin@distribute.you",
+        deprecatedAt: new Date("2026-10-20T17:14:41.111Z") }),
+      makeWorkflow({ id: "wf-old", workflowSlug: "sales-cold-email-outreach-old", status: "deprecated", deprecationReason: "Not specified" }),
+      makeWorkflow({ id: "wf-live", workflowSlug: "sales-cold-email-outreach-live", status: "active" }),
+    );
+
+    const res = await request.get("/public/workflows").set(API_KEY)
+      .query({ featureSlugs: "sales-cold-email-outreach", status: "all" });
+
+    const bySlug = Object.fromEntries(res.body.workflows.map((w: { workflowSlug: string }) => [w.workflowSlug, w]));
+    expect(bySlug["sales-cold-email-outreach-pleione"].deprecation).toEqual({
+      reason: "Catch-all copy of Sales Cold Email Outreach Azha",
+      decidedBy: "kevin@distribute.you",
+      decidedAt: "2026-10-20T17:14:41.111Z",
+    });
+    expect(bySlug["sales-cold-email-outreach-old"].deprecation).toEqual({ reason: "Not specified", decidedBy: null, decidedAt: null });
+    expect(bySlug["sales-cold-email-outreach-live"].deprecation).toBeNull();
+  });
+
   it("returns workflows for given feature slugs (mock returns all rows)", async () => {
     const wf1 = makeWorkflow({ id: "wf-a1", featureSlug: "sales-v1", status: "active" });
     const wf2 = makeWorkflow({ id: "wf-a2", featureSlug: "sales-v2", status: "active", workflowSlug: "sales-cold-outreach-alpha-v2", workflowName: "Sales Alpha v2", workflowDynastySlug: "sales-cold-outreach-alpha", workflowDynastyName: "Sales Cold Outreach Alpha" });
@@ -291,6 +313,7 @@ describe("GET /public/workflows", () => {
       createdAt: wf.createdAt.toISOString(),
       executableUntil: null,
       executableUntilSource: null,
+      deprecation: null,
     });
     // Must NOT include DAG or internal fields
     expect(w).not.toHaveProperty("dag");
