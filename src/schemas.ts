@@ -214,6 +214,37 @@ export const UpdateWorkflowSchema = z
     },
   });
 
+// DEPRECATION-REASON-1020: why a workflow stopped, who decided it, when.
+export const DeprecationSchema = z
+  .object({
+    reason: z.string().describe(
+      "Why this workflow was deprecated, in plain words. 'Not specified' for workflows deprecated before 2026-10-20 " +
+      "(the reason was never recorded) or deprecated without one during the transition."
+    ),
+    decidedBy: z.string().nullable().describe(
+      "Who decided it: a staff email, 'workflow-service' for an automatic deprecation (an upgrade replacing this version), " +
+      "or 'user:<id>' when only the caller's user id is known. Null when unknown (every pre-2026-10-20 'Not specified' row)."
+    ),
+    decidedAt: z.string().nullable().describe("ISO instant the deprecation was decided. Null when unknown (pre-2026-10-20 'Not specified' rows)."),
+  })
+  .openapi("WorkflowDeprecation");
+
+const deprecationField = DeprecationSchema.nullable().describe(
+  "Why, by whom and when this workflow was deprecated. Null while it is executable (status AND workflowDynastyStatus 'active'). " +
+  "A retired dynasty carries its retirement decision on every version; a version replaced by an upgrade says so."
+);
+
+const DeprecationRequestFields = {
+  reason: z.string().trim().min(1).max(2000).optional().describe(
+    "REQUIRED when deprecating (DEPRECATION-REASON-1020): why, in plain words a staff member reads months later. " +
+    "Transition: a deprecation without one is still accepted and recorded 'Not specified' (an earlier reason is kept); " +
+    "it will be refused with 400 once every caller sends one. Ignored when activating."
+  ),
+  decidedBy: z.string().trim().min(1).max(320).optional().describe(
+    "Who decided (staff email). Absent = the caller's x-email header, else 'user:<x-user-id>'."
+  ),
+};
+
 export const WorkflowResponseSchema = z
   .object({
     id: z.string().uuid().describe("Workflow UUID."),
@@ -248,6 +279,7 @@ export const WorkflowResponseSchema = z
       "The content-generation prompt template this workflow renders (e.g. 'cold-email'), read from the `type` field " +
       "of the DAG's content-generation POST /generate request body. Same derivation and same null cases as `contentModel`."
     ),
+    deprecation: deprecationField,
     status: z.enum(["active", "deprecated"]).describe("Per-version lifecycle status. Only active workflows can be executed. Within a dynasty the latest version is 'active' and predecessors are 'deprecated'. Set on demand via PUT /workflows/{id}/status. Distinct from `workflowDynastyStatus`."),
     workflowDynastyStatus: z.enum(["active", "deprecated"]).describe("Dynasty-level status. 'deprecated' means the entire lineage is retired: no version of it can be executed (execute returns 410) and it is not listed as an active candidate. Constant across all versions of a dynasty. Set via PUT /workflows/dynasty/{workflowDynastySlug}/status."),
     creationType: z.enum(["scratch", "upgrade", "fork"]).describe(
@@ -739,6 +771,7 @@ export const PublicWorkflowItemSchema = z
       "'last_update': backfilled for older rows with no upgrade successor (a dynasty's last version, a per-version or stale retirement) from the row's updated_at, " +
       "which a later edit of the already-deprecated row (bulk description/DAG repairs) could have moved LATER than the real stop: an upper bound. Null when `executableUntil` is null."
     ),
+    deprecation: deprecationField,
   })
   .openapi("PublicWorkflowItem");
 
@@ -771,6 +804,7 @@ export const PublicWorkflowDefinitionItemSchema = z
     createdAt: z.string().nullable().describe("ISO timestamp the version was created."),
     executableUntil: z.string().nullable().describe("ISO instant this version stopped being executable, null while it is. Same field and reliability as on GET /public/workflows (see `executableUntilSource`)."),
     executableUntilSource: z.enum(["recorded", "successor_created", "last_update"]).nullable().describe("Reliability of `executableUntil`: 'recorded' exact, 'successor_created' exact (backfill), 'last_update' upper bound (backfill from updated_at). Null when `executableUntil` is null."),
+    deprecation: deprecationField,
   })
   .openapi("PublicWorkflowDefinitionItem");
 
@@ -837,8 +871,10 @@ export const DynastyStatusUpdateSchema = z
     status: z.enum(["active", "deprecated"]).describe(
       "New dynasty-level status. 'deprecated' retires the entire lineage: no version of it " +
       "can be executed any more (every execute returns 410) and it stops being listed as an " +
-      "active candidate. 'active' un-retires it. Idempotent — re-applying the same status is a no-op success."
+      "active candidate. 'active' un-retires it. Idempotent — re-applying the same status is a no-op success " +
+      "(re-deprecating with a new `reason` records the new reason)."
     ),
+    ...DeprecationRequestFields,
   })
   .openapi("DynastyStatusUpdate");
 
@@ -862,6 +898,10 @@ export const RetireByContentRequestSchema = z
     model: z.string().min(1).optional().describe("Writer model alias: retire every runnable workflow whose content call writes with it."),
     featureSlug: z.string().min(1).optional().describe("Narrow to one channel. Absent = every channel."),
     dryRun: z.boolean().optional().describe("true = list what would be retired, write nothing (the confirmation a staff member reads first)."),
+    reason: z.string().trim().min(1).max(2000).optional().describe(
+      "Why these workflows are retired (DEPRECATION-REASON-1020). Absent = 'Uses deprecated template <promptType>' / 'Uses deprecated model <model>'."
+    ),
+    decidedBy: DeprecationRequestFields.decidedBy,
   })
   .refine((b) => (b.promptType === undefined) !== (b.model === undefined), { message: "Exactly one of promptType or model is required" })
   .openapi("RetireByContentRequest");
@@ -892,8 +932,9 @@ export const WorkflowStatusUpdateSchema = z
       "New per-version lifecycle status. 'deprecated' retires THIS version only: it can no " +
       "longer be executed by id, and it stops being the dynasty's execution target when " +
       "resolving by slug. 'active' restores it — rejected with 409 when another version of " +
-      "the same dynasty is already active. Idempotent."
+      "the same dynasty is already active. Idempotent (re-deprecating with a new `reason` records the new reason)."
     ),
+    ...DeprecationRequestFields,
   })
   .openapi("WorkflowStatusUpdate");
 
@@ -1196,6 +1237,7 @@ const WorkflowSummarySchema = z.object({
   tags: z.array(z.string()),
   contentModel: z.string().nullable().describe("Model of the content-generation call, derived from the DAG; null when it states none."),
   contentPromptType: z.string().nullable().describe("Prompt template of the content-generation call, derived from the DAG; null when it states none."),
+  deprecation: deprecationField,
   createdAt: z.string().nullable(),
   updatedAt: z.string().nullable(),
 }).openapi("WorkflowSummary");

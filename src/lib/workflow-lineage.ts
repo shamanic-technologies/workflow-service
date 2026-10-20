@@ -3,6 +3,7 @@ import { activeLegsOfDynasty, assignWorkflowToLeg } from "./catalogue-client.js"
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
 import { stopExecutable, executableUntilAtBirth } from "./executable-until.js";
+import { recordDeprecation, deprecationAtBirth } from "./deprecation.js";
 import type { DAG } from "./dag-validator.js";
 import { dagToOpenFlow } from "./dag-to-openflow.js";
 import { getWindmillClient } from "./windmill-client.js";
@@ -145,7 +146,15 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
     if (existing.status === "active") {
       await tx
         .update(workflows)
-        .set({ status: "deprecated", ...stopExecutable(), updatedAt: new Date() })
+        .set({
+          status: "deprecated",
+          ...stopExecutable(),
+          ...recordDeprecation({
+            reason: `Upgraded: replaced by version ${newVersion} (${newSlug}).`,
+            decidedBy: "workflow-service",
+          }),
+          updatedAt: new Date(),
+        })
         .where(eq(workflows.id, existing.id));
     }
 
@@ -176,6 +185,7 @@ export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise
         // retired it is told nothing.
         workflowDynastyStatus: existing.workflowDynastyStatus,
         ...executableUntilAtBirth(existing.workflowDynastyStatus === "active", new Date()),
+        ...deprecationAtBirth(existing.workflowDynastyStatus === "active", existing),
         creationType: "upgrade",
         createdFromWorkflow: existing.id,
         createdByUserId: userId,

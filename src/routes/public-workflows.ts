@@ -9,6 +9,7 @@ import {
 import { requireApiKey } from "../middleware/auth.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import type { ExecutableUntilSource } from "../lib/executable-until.js";
+import { servedDeprecation } from "../lib/deprecation.js";
 
 function executableUntilFields(w: { executableUntil: Date | null; executableUntilSource: string | null }) {
   return {
@@ -84,6 +85,7 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
         upgradedTo: upgradedToById.get(w.id) ?? null,
         createdAt: w.createdAt ? w.createdAt.toISOString() : null,
         ...executableUntilFields(w),
+        deprecation: servedDeprecation(w),
       })),
     });
   } catch (err: unknown) {
@@ -129,6 +131,7 @@ router.get("/public/workflows/definitions", requireApiKey, async (req, res) => {
         dag: w.dag,
         createdAt: w.createdAt ? w.createdAt.toISOString() : null,
         ...executableUntilFields(w),
+        deprecation: servedDeprecation(w),
       })),
     });
   } catch (err: unknown) {
