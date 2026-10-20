@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * Ops script: the workflow of the Cold WhatsApp Outreach pipes (`src/lib/cold-whatsapp-outreach-dag.ts`,
- * 2026-10-12). ONE workflow serves both pipes of the channel (same DAG, same precedent as
- * `ai-follow-up-email-algenib` on two legs): created ON the first pipe (`POST /workflows` with `pipeId` registers
- * it), then registered on every other pipe through features-service's register route (insert-if-absent).
+ * Ops script: the workflows of the Cold WhatsApp Outreach pipes (`src/lib/cold-whatsapp-outreach-dag.ts`,
+ * 2026-10-12). Every pipe of the channel runs the same steps, each through its OWN workflow: a workflow sits on ONE
+ * leg (owner 2026-10-19), so the other pipes run one-leg copies (`POST /workflows/{id}/fork` with `pipeId`,
+ * ONE-LEG-FORKS-1020), never the same dynasty registered twice.
  *
- * Idempotent: creates when the channel has no active workflow, upgrades an active one whose stored DAG is behind
- * the current one (in its own dynasty), skips a current one, and re-registers every pipe (a no-op when present).
+ * Idempotent: creates the first workflow ON the first pipe when the channel has none, upgrades every active one whose
+ * stored DAG is behind the current one (in its own dynasty, keeping a copy's `forkedForPipe`), skips a current one,
+ * and names any pipe of the channel no workflow serves (fork one onto it: never registered here).
  * Usage, from inside the workflow-service container:
  *   node seed-cold-whatsapp-outreach-workflow.mjs            # dry run
  *   node seed-cold-whatsapp-outreach-workflow.mjs --apply
@@ -22,6 +23,7 @@ import {
 } from "../dist/lib/cold-whatsapp-outreach-dag.js";
 
 import { computeDAGSignature } from "../dist/lib/dag-signature.js";
+import { keepForkMark } from "../dist/lib/fork-mark.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -63,49 +65,40 @@ const existing = await call(BASE_URL, API_KEY, "GET", `/workflows?featureSlug=${
 if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
 const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? []);
 
-let dynastySlug = null;
-if (rows.length > 1) throw new Error(`${slug}: ${rows.length} active workflows, expected at most one; resolve by hand`);
-if (rows.length === 1) {
-  const w = rows[0];
-  dynastySlug = w.workflowDynastySlug;
-  // Key-sorted: the stored DAG is jsonb, which reorders keys, so a raw stringify never matches.
-  if (computeDAGSignature(w.dag) === computeDAGSignature(current)) {
-    console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
-  } else if (!APPLY) {
-    console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
-  } else {
-    const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", {
-      workflowDynastySlug: w.workflowDynastySlug,
-      dag: current,
-      // The judged description must say what the DAG does (WA-FOLLOWUP-LOOP-1015: follow-ups until they answer).
-      description: COLD_WHATSAPP_OUTREACH_DESCRIPTION,
-    });
-    if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
-    console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${up.payload.workflowSlug} (${up.status})`);
-  }
-} else {
+if (rows.length === 0) {
   const body = { featureSlug: slug, pipeId: pipes[0], description: COLD_WHATSAPP_OUTREACH_DESCRIPTION, dag: current };
   if (!APPLY) {
     console.log(`${slug}: WOULD create on pipe ${pipes[0]}`);
   } else {
     const created = await call(BASE_URL, API_KEY, "POST", "/workflows", body);
     if (created.status !== 201) throw new Error(`create ${slug}: ${created.status} ${JSON.stringify(created.payload)}`);
-    dynastySlug = created.payload.workflowDynastySlug;
     console.log(`${slug}: created ${created.payload.workflowSlug} on ${pipes[0]}`);
   }
 }
 
-for (const pipeId of pipes) {
-  if (!dynastySlug || !APPLY) {
-    console.log(`${slug}: WOULD register ${dynastySlug ?? "(new dynasty)"} on ${pipeId}`);
-    continue;
+for (const w of rows) {
+  const target = keepForkMark(current, w.dag);
+  // Key-sorted: the stored DAG is jsonb, which reorders keys, so a raw stringify never matches.
+  if (computeDAGSignature(w.dag) === computeDAGSignature(target)) {
+    console.log(`${slug}: ${w.workflowSlug} is current (skipped)`);
+  } else if (!APPLY) {
+    console.log(`${slug}: WOULD upgrade ${w.workflowDynastySlug} (stored DAG is behind the current one)`);
+  } else {
+    const up = await call(BASE_URL, API_KEY, "POST", "/workflows/upgrade", {
+      workflowDynastySlug: w.workflowDynastySlug,
+      dag: target,
+      // The judged description must say what the DAG does (WA-FOLLOWUP-LOOP-1015: follow-ups until they answer).
+      description: COLD_WHATSAPP_OUTREACH_DESCRIPTION,
+    });
+    if (up.status !== 200 && up.status !== 201) throw new Error(`upgrade ${w.workflowDynastySlug}: ${up.status} ${JSON.stringify(up.payload)}`);
+    console.log(`${slug}: upgraded ${w.workflowDynastySlug} -> ${(up.payload.workflow ?? up.payload).workflowSlug} (${up.status})`);
   }
-  const reg = await call(FEATURES_URL, FEATURES_KEY, "POST", "/internal/workflow-leg-assignments/register", {
-    pipeId,
-    workflowDynastySlug: dynastySlug,
-    registeredBy: "workflow-service",
-    note: "seed-cold-whatsapp-outreach-workflow: one workflow serves every pipe of the channel",
-  });
-  if (reg.status !== 200 && reg.status !== 201) throw new Error(`register ${dynastySlug} on ${pipeId}: ${reg.status} ${JSON.stringify(reg.payload)}`);
-  console.log(`${slug}: ${dynastySlug} on ${pipeId} (${reg.status === 201 ? "registered" : "already there"})`);
+}
+
+const assigned = await call(FEATURES_URL, FEATURES_KEY, "GET", `/internal/workflow-leg-assignments?featureSlug=${encodeURIComponent(slug)}`);
+if (assigned.status !== 200) throw new Error(`assignments ${slug}: ${assigned.status} ${JSON.stringify(assigned.payload)}`);
+for (const pipeId of pipes) {
+  const serving = assigned.payload.assignments.filter((a) => `${slug}|${a.legKey}` === pipeId && a.state === "active");
+  if (serving.length === 0) console.log(`${slug}: NO workflow on ${pipeId}: fork one onto it (POST /workflows/{id}/fork {pipeId})`);
+  else console.log(`${slug}: ${pipeId} runs ${serving.map((a) => a.workflowDynastySlug).join(", ")}`);
 }

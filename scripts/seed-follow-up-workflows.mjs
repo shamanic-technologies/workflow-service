@@ -26,6 +26,7 @@ import {
   buildFollowUpReactiveDag,
 } from "../dist/lib/follow-up-dag.js";
 import { computeDAGSignature } from "../dist/lib/dag-signature.js";
+import { keepForkMark } from "../dist/lib/fork-mark.js";
 
 /** The legs whose dynasty serves the Copilot's instruction follow-ups: it reads the figures the instruction asks for. */
 const FIGURES_LEGS = ["signup_to_paid_client"];
@@ -71,17 +72,19 @@ const legsOf = new Map();
 for (const a of assigned.payload.assignments.filter((x) => x.state === "active")) {
   legsOf.set(a.workflowDynastySlug, [...(legsOf.get(a.workflowDynastySlug) ?? []), a.legKey]);
 }
+// A one-leg copy (ONE-LEG-FORKS-1020) keeps its `forkedForPipe`: the same steps on another pipe, its own signature.
+const storedDagOf = (dynasty) => rows.find((r) => r.workflowDynastySlug === dynasty)?.dag;
 const targets = [...legsOf].map(([dynasty, legs]) => {
   if (legs.includes(FOLLOW_UP_PROACTIVE_LEG_KEY)) {
     if (legs.length > 1) throw new Error(`${dynasty} serves the proactive leg AND ${legs.join(", ")}; resolve by hand`);
-    return { dynasty, legs, dag: buildFollowUpProactiveDag(), description: FOLLOW_UP_PROACTIVE_DESCRIPTION };
+    return { dynasty, legs, dag: keepForkMark(buildFollowUpProactiveDag(), storedDagOf(dynasty)), description: FOLLOW_UP_PROACTIVE_DESCRIPTION };
   }
   const figures = legs.some((l) => FIGURES_LEGS.includes(l));
   return {
     dynasty,
     legs,
     figures,
-    dag: buildFollowUpReactiveDag({ readFigures: figures }),
+    dag: keepForkMark(buildFollowUpReactiveDag({ readFigures: figures }), storedDagOf(dynasty)),
     description: figures ? FOLLOW_UP_REACTIVE_FIGURES_DESCRIPTION : FOLLOW_UP_REACTIVE_DESCRIPTION,
   };
 });
