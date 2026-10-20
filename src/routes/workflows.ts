@@ -44,6 +44,7 @@ function legAssignmentFailure(res: import("express").Response, err: LegAssignmen
   res.status(502).json({ error: err.message, reason: "leg_assignment_failed" });
 }
 import { computeDAGSignature } from "../lib/dag-signature.js";
+import { keepForkMark } from "../lib/fork-mark.js";
 import {
   pickWorkflowDynastySignatureName,
   workflowDynastySignatureNameToDisplay,
@@ -456,6 +457,9 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         dsHeaders,
       );
     }
+
+    // A one-leg copy stays a copy for its pipe (keepForkMark).
+    dag = keepForkMark(dag, existing.dag);
 
     const newSignature = computeDAGSignature(dag);
 

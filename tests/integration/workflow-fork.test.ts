@@ -251,6 +251,69 @@ describe("POST /workflows/:id/fork", () => {
   });
 });
 
+describe("POST /workflows/:id/fork with pipeId (ONE-LEG-FORKS-1020)", () => {
+  const PIPE = "sales-cold-email-outreach|lead_found_to_conversation";
+  const catalogued = (id: string) => ({
+    id, name: "Bird", line: "x", channelSlug: id.split("|")[0], channelName: "Cold Email",
+    legKey: id.split("|")[1], fromStep: "lead_found", toStep: "conversation",
+    mode: "proactive", triggerId: null, operatedBy: "us", runnable: true,
+  });
+  beforeEach(() => {
+    mockFetchPipe.mockReset();
+  });
+
+  it("copies the same steps as a new dynasty registered on THAT pipe only, never on the source's", async () => {
+    const source = sourceRow();
+    mockDbRows.push(source);
+    mockFetchPipe.mockImplementation(async (id: string) => catalogued(id));
+    mockActiveLegsOfDynasty.mockResolvedValue(["start_to_paid_client"]);
+    mockSelectResponses.push([source], [], [{ workflowDynastySignatureName: "lithium" }]);
+
+    const res = await request.post(`/workflows/${SOURCE_ID}/fork`).set(AUTH).send({ pipeId: PIPE });
+
+    expect(res.status).toBe(201);
+    const wf = res.body.workflow;
+    expect(wf.workflowDynastySlug).not.toBe(source.workflowDynastySlug);
+    expect(wf.creationType).toBe("fork");
+    expect(wf.createdFromWorkflow).toBe(SOURCE_ID);
+    expect(wf.dag).toEqual({ ...DAG_FIXTURE, forkedForPipe: PIPE });
+    expect(wf.signature).not.toBe(source.signature);
+    expect(mockActiveLegsOfDynasty).not.toHaveBeenCalled();
+    expect(mockAssignWorkflowToLeg).toHaveBeenCalledTimes(1);
+    expect(mockAssignWorkflowToLeg).toHaveBeenCalledWith(
+      expect.objectContaining({
+        featureSlug: "sales-cold-email-outreach",
+        legKey: "lead_found_to_conversation",
+        workflowDynastySlug: wf.workflowDynastySlug,
+      }),
+    );
+  });
+
+  it("400 for a pipe of another channel, nothing written", async () => {
+    const source = sourceRow();
+    mockSelectResponses.push([source]);
+    const res = await request
+      .post(`/workflows/${SOURCE_ID}/fork`)
+      .set(AUTH)
+      .send({ pipeId: "cold-whatsapp-outreach|lead_found_to_conversation" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not a pipe of the source's channel/);
+    expect(mockCreateFlow).not.toHaveBeenCalled();
+    expect(mockAssignWorkflowToLeg).not.toHaveBeenCalled();
+  });
+
+  it("400 for a pipe the catalogue does not know, nothing written", async () => {
+    const source = sourceRow();
+    mockSelectResponses.push([source]);
+    const { PipeResolutionError } = await import("../../src/lib/catalogue-client.js");
+    mockFetchPipe.mockRejectedValue(new PipeResolutionError(`No pipe "${PIPE}" in the features-service catalogue`));
+    const res = await request.post(`/workflows/${SOURCE_ID}/fork`).set(AUTH).send({ pipeId: PIPE });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/No pipe/);
+    expect(mockCreateFlow).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /workflows/dynasty/:slug/fork", () => {
   it("forks the dynasty's active version", async () => {
     const source = sourceRow();

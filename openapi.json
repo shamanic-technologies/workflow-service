@@ -441,6 +441,11 @@
           "onError": {
             "type": "string",
             "description": "Node ID of an error handler that runs when any node in the DAG fails (including validateResponse failures). Auto-injected parameters (available as script params, no inputMapping needed): failedNodeId (string) — the module ID of the step that failed; errorMessage (string) — the error message text. Can also access outputs from previously completed nodes via $ref syntax. Use this to call end-run with success: false. Tip: check errorMessage to distinguish expected stops (e.g. 'validation failed: expected found=true') from real errors."
+          },
+          "forkedForPipe": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The pipe (`<channel>|<leg>`) a one-leg copy was forked for (`POST /workflows/{id}/fork` with `pipeId`). Inert at run time: it only makes two copies of the same steps two workflows, one per pipe (a workflow sits on ONE leg, owner 2026-10-19). Which pipe a workflow serves is features-service's, never read from here. An upgrade that states none keeps its predecessor's."
           }
         },
         "required": [
@@ -2522,8 +2527,13 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowChange"
             },
-            "minItems": 1,
-            "description": "The stated change, applied in order to a copy of the source DAG. Everything it does not name is copied byte-identical. A change that leaves the DAG identical is refused (400)."
+            "default": [],
+            "description": "The stated change, applied in order to a copy of the source DAG. Everything it does not name is copied byte-identical. A change that leaves the DAG identical is refused (400). May be empty only with `pipeId`."
+          },
+          "pipeId": {
+            "type": "string",
+            "pattern": "^[^|]+\\|[^|]+$",
+            "description": "Fork the copy for ONE pipe (`<channel>|<leg>`) of the source's own channel: the copy is registered on that pipe only (never on the source's pipes) and its DAG states `forkedForPipe`, so a copy with the same steps is its own workflow (a workflow sits on ONE leg, owner 2026-10-19). Unknown pipe or another channel = 400."
           },
           "description": {
             "type": "string",
@@ -2538,9 +2548,6 @@
             "description": "The copy's tags. Defaults to the source's."
           }
         },
-        "required": [
-          "changes"
-        ],
         "additionalProperties": false
       },
       "ReadFiguresResponse": {

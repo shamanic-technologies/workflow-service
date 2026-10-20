@@ -112,6 +112,12 @@ export const DAGSchema = z
       "Use this to call end-run with success: false. " +
       "Tip: check errorMessage to distinguish expected stops (e.g. 'validation failed: expected found=true') from real errors."
     ),
+    forkedForPipe: z.string().min(1).optional().describe(
+      "The pipe (`<channel>|<leg>`) a one-leg copy was forked for (`POST /workflows/{id}/fork` with `pipeId`). " +
+      "Inert at run time: it only makes two copies of the same steps two workflows, one per pipe (a workflow sits " +
+      "on ONE leg, owner 2026-10-19). Which pipe a workflow serves is features-service's, never read from here. " +
+      "An upgrade that states none keeps its predecessor's."
+    ),
   })
   .openapi("DAG", {
     example: {
@@ -1019,9 +1025,14 @@ export const WorkflowChangeSchema = z
 
 export const ForkWorkflowRequestSchema = z
   .object({
-    changes: z.array(WorkflowChangeSchema).min(1).describe(
+    changes: z.array(WorkflowChangeSchema).default([]).describe(
       "The stated change, applied in order to a copy of the source DAG. Everything it does not name is copied " +
-      "byte-identical. A change that leaves the DAG identical is refused (400)."
+      "byte-identical. A change that leaves the DAG identical is refused (400). May be empty only with `pipeId`."
+    ),
+    pipeId: z.string().regex(/^[^|]+\|[^|]+$/).optional().describe(
+      "Fork the copy for ONE pipe (`<channel>|<leg>`) of the source's own channel: the copy is registered on that " +
+      "pipe only (never on the source's pipes) and its DAG states `forkedForPipe`, so a copy with the same steps " +
+      "is its own workflow (a workflow sits on ONE leg, owner 2026-10-19). Unknown pipe or another channel = 400."
     ),
     description: z.string().min(1).optional().describe(
       "The copy's description. Defaults to the source's. Say what the copy does differently in plain words: " +
@@ -1030,6 +1041,10 @@ export const ForkWorkflowRequestSchema = z
     tags: z.array(z.string()).optional().describe("The copy's tags. Defaults to the source's."),
   })
   .strict()
+  .refine((b) => b.changes.length > 0 || b.pipeId !== undefined, {
+    message: "State at least one change, or the pipeId the copy is forked for",
+    path: ["changes"],
+  })
   .openapi("ForkWorkflowRequest");
 
 export const ForkWorkflowResponseSchema = z

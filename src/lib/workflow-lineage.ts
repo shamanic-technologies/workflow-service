@@ -229,6 +229,11 @@ export interface ForkWorkflowParams {
   runId: string;
   description: string | null;
   tags: string[];
+  /**
+   * The ONE pipe the copy is forked for (`<channel>|<leg>`, already checked against the catalogue): the copy is
+   * registered there only. Absent = the copy serves its source's pipes.
+   */
+  pipeId?: string;
 }
 
 export type ForkResult =
@@ -340,14 +345,19 @@ export async function forkWorkflowRow(params: ForkWorkflowParams): Promise<ForkR
 
   // A fork serves its source's pipes, active at once (owner 2026-10-10, option A). The link lives in
   // features-service; a failure throws LegAssignmentError (the row exists, the route says so).
-  const legs = await activeLegsOfDynasty(existing.featureSlug, existing.workflowDynastySlug);
+  // A copy forked FOR a pipe serves that pipe only: a workflow sits on ONE leg (owner 2026-10-19).
+  const legs = params.pipeId
+    ? [params.pipeId.slice(params.pipeId.indexOf("|") + 1)]
+    : await activeLegsOfDynasty(existing.featureSlug, existing.workflowDynastySlug);
   for (const legKey of legs) {
     await assignWorkflowToLeg({
       featureSlug: existing.featureSlug,
       legKey,
       workflowDynastySlug: forked.workflowDynastySlug,
       decidedBy: `workflow-service (fork of ${existing.workflowDynastySlug} by user ${params.userId})`,
-      note: "A fork serves its source's pipes, active at once (owner 2026-10-10, option A).",
+      note: params.pipeId
+        ? `A copy of ${existing.workflowDynastySlug} forked for this pipe only: a workflow sits on one leg (owner 2026-10-19).`
+        : "A fork serves its source's pipes, active at once (owner 2026-10-10, option A).",
     });
   }
 

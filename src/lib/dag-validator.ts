@@ -18,6 +18,8 @@ export interface DAG {
   nodes: DAGNode[];
   edges: DAGEdge[];
   onError?: string;
+  /** The pipe a one-leg copy was forked for: inert at run time, see DAGSchema. */
+  forkedForPipe?: string;
 }
 
 export interface ValidationError {
