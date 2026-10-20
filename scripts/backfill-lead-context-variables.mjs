@@ -260,7 +260,8 @@ async function main() {
     const created = upgraded.workflow;
 
     if (p.shape === "retired") {
-      await call("PUT", `/workflows/dynasty/${slug}/status`, org, { status: "deprecated" });
+      // Re-park restates the decision the dynasty already carried (DEPRECATION-REASON-1020).
+      await call("PUT", `/workflows/dynasty/${slug}/status`, org, { status: "deprecated", reason: p.row.deprecation?.reason ?? "Not specified", decidedBy: p.row.deprecation?.decidedBy ?? undefined });
     }
 
     done += 1;

@@ -70,10 +70,8 @@ import { rowsUsingContent } from "../lib/retire-by-content.js";
 import {
   recordDeprecation,
   CLEAR_DEPRECATION,
-  REASON_REQUIRED,
   resolveDecidedBy,
   servedDeprecation,
-  warnMissingReason,
 } from "../lib/deprecation.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
 import { formatWorkflow } from "../lib/format-workflow.js";
@@ -1000,7 +998,7 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
   try {
     const { workflowDynastySlug } = req.params;
     const body = DynastyStatusUpdateSchema.parse(req.body);
-    if (body.status === "deprecated" && body.reason === undefined && REASON_REQUIRED) {
+    if (body.status === "deprecated" && body.reason === undefined) {
       res.status(400).json({ error: "A deprecation must state its reason", code: "deprecation_reason_required" });
       return;
     }
@@ -1031,10 +1029,6 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
       }
     }
 
-    if (body.status === "deprecated" && body.reason === undefined) {
-      warnMissingReason("PUT /workflows/dynasty/:slug/status", workflowDynastySlug, decidedBy);
-    }
-
     await db.transaction(async (tx) => {
       await tx
         .update(workflows)
@@ -1044,7 +1038,7 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
           ...stopExecutable(),
           // Retiring records the decision on every version; un-retiring leaves the
           // older versions' own reasons alone (the head is cleared below).
-          ...(body.status === "deprecated" ? recordDeprecation({ reason: body.reason, decidedBy }) : {}),
+          ...(body.status === "deprecated" ? recordDeprecation({ reason: body.reason!, decidedBy }) : {}),
           updatedAt: new Date(),
         })
         .where(eq(workflows.workflowDynastySlug, workflowDynastySlug));
@@ -1169,7 +1163,7 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
   }
   try {
     const body = WorkflowStatusUpdateSchema.parse(req.body);
-    if (body.status === "deprecated" && body.reason === undefined && REASON_REQUIRED) {
+    if (body.status === "deprecated" && body.reason === undefined) {
       res.status(400).json({ error: "A deprecation must state its reason", code: "deprecation_reason_required" });
       return;
     }
@@ -1190,7 +1184,7 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
       if (body.status === "deprecated" && body.reason !== undefined && body.reason !== workflow.deprecationReason) {
         const [restated] = await db
           .update(workflows)
-          .set({ ...recordDeprecation({ reason: body.reason, decidedBy }), updatedAt: new Date() })
+          .set({ ...recordDeprecation({ reason: body.reason!, decidedBy }), updatedAt: new Date() })
           .where(eq(workflows.id, workflow.id))
           .returning();
         res.json(formatWorkflow(restated));
@@ -1243,7 +1237,7 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
           : stopExecutable()),
         // Re-activating under a retired dynasty keeps the dynasty's decision (the row still cannot run).
         ...(body.status === "deprecated"
-          ? recordDeprecation({ reason: body.reason, decidedBy })
+          ? recordDeprecation({ reason: body.reason!, decidedBy })
           : workflow.workflowDynastyStatus === "active"
             ? CLEAR_DEPRECATION
             : {}),
@@ -1252,9 +1246,6 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
       .where(eq(workflows.id, workflow.id))
       .returning();
 
-    if (body.status === "deprecated" && body.reason === undefined) {
-      warnMissingReason("PUT /workflows/:id/status", workflow.workflowSlug, decidedBy);
-    }
     console.log(
       `[workflow-service] Workflow "${workflow.workflowSlug}" (${workflow.id}) set to status=${body.status}`,
     );

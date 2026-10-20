@@ -2007,7 +2007,7 @@ describe("PUT /workflows/:id/status", () => {
     const res = await request
       .put(`/workflows/${VERSION_ID}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("deprecated");
@@ -2033,6 +2033,15 @@ describe("PUT /workflows/:id/status", () => {
       decidedAt: expect.any(String),
     });
     expect(res.body).not.toHaveProperty("deprecationReason");
+  });
+
+  it("refuses a version retirement that states no reason", async () => {
+    const row = pushVersionRow();
+    mockSelectResponses.push([row]);
+    const res = await request.put(`/workflows/${VERSION_ID}/status`).set(AUTH).send({ status: "deprecated" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("deprecation_reason_required");
+    expect(mockDbRows[0].status).toBe("active");
   });
 
   it("re-deprecating with a new reason records it", async () => {
@@ -2070,7 +2079,7 @@ describe("PUT /workflows/:id/status", () => {
     const res = await request
       .put(`/workflows/${VERSION_ID}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("deprecated");
@@ -2119,7 +2128,7 @@ describe("PUT /workflows/:id/status", () => {
     const res = await request
       .put("/workflows/00000000-0000-4000-8000-00000000dead/status")
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(404);
   });
@@ -2128,7 +2137,7 @@ describe("PUT /workflows/:id/status", () => {
     const res = await request
       .put("/workflows/not-a-uuid/status")
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(400);
   });
@@ -2178,7 +2187,7 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     const res = await request
       .put(`/workflows/dynasty/${DYNASTY}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -2196,7 +2205,7 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     const res = await request
       .put(`/workflows/dynasty/${DYNASTY}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(200);
     // Both axes, not just the dynasty one: every consumer that picks a workflow
@@ -2227,6 +2236,20 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
       .set(AUTH)
       .send({ status: "deprecated", reason: "Why", decidedBy: "staff@distribute.you" });
     expect(mockDbRows[0].deprecatedBy).toBe("staff@distribute.you");
+  });
+
+  it("refuses a retirement that states no reason", async () => {
+    pushDynastyRow();
+    const res = await request.put(`/workflows/dynasty/${DYNASTY}/status`).set(AUTH).send({ status: "deprecated" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("deprecation_reason_required");
+    expect(mockDbRows[0].status).toBe("active");
+  });
+
+  it("un-retiring needs no reason", async () => {
+    pushDynastyRow({ status: "deprecated", workflowDynastyStatus: "deprecated" });
+    const res = await request.put(`/workflows/dynasty/${DYNASTY}/status`).set(AUTH).send({ status: "active" });
+    expect(res.status).toBe(200);
   });
 
   it("refuses an empty reason", async () => {
@@ -2279,7 +2302,7 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     const dep = await request
       .put(`/workflows/dynasty/${DYNASTY}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
     expect(dep.status).toBe(200);
 
     // ?status=all, because the default listing is the RUNNABLE set and a retired
@@ -2306,14 +2329,14 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     const first = await request
       .put(`/workflows/dynasty/${DYNASTY}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
     expect(first.status).toBe(200);
     expect(first.body.status).toBe("deprecated");
 
     const second = await request
       .put(`/workflows/dynasty/${DYNASTY}/status`)
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
     expect(second.status).toBe(200);
     expect(second.body.status).toBe("deprecated");
   });
@@ -2322,7 +2345,7 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     const res = await request
       .put("/workflows/dynasty/does-not-exist/status")
       .set(AUTH)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(404);
   });
@@ -2342,7 +2365,7 @@ describe("PUT /workflows/dynasty/:workflowDynastySlug/status", () => {
     const res = await request
       .put(`/workflows/dynasty/${DYNASTY}/status`)
       .set(IDENTITY)
-      .send({ status: "deprecated" });
+      .send({ status: "deprecated", reason: "Test retirement" });
 
     expect(res.status).toBe(401);
   });
