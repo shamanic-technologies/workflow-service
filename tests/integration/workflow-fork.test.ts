@@ -43,6 +43,7 @@ const { mockFetchPromptTemplate, mockCreatePromptVersion } = vi.hoisted(() => ({
   mockCreatePromptVersion: vi.fn(),
 }));
 vi.mock("../../src/lib/content-generation-client.js", () => ({
+  fetchTemplateDynasties: vi.fn().mockResolvedValue([]),
   fetchPromptTemplate: mockFetchPromptTemplate,
   fetchPromptTemplates: vi.fn().mockResolvedValue(new Map()),
   createPromptVersion: mockCreatePromptVersion,

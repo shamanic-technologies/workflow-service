@@ -284,6 +284,11 @@ export const WorkflowResponseSchema = z
       "The content-generation prompt template this workflow renders (e.g. 'cold-email'), read from the `type` field " +
       "of the DAG's content-generation POST /generate request body. Same derivation and same null cases as `contentModel`."
     ),
+    contentTemplateDynasty: z.string().nullable().describe(
+      "TPL-DYNASTY-1021-WF: the content-generation template DYNASTY this workflow writes with. Every run reads the dynasty's " +
+      "CURRENT head (GET /internal/template-dynasties/{slug}/head), so a new head version reaches it with no new workflow version; " +
+      "`contentPromptType` is then the head the DAG was last written against. Null when the workflow pins a template version."
+    ),
     deprecation: deprecationField,
     status: z.enum(["active", "deprecated"]).describe("Per-version lifecycle status. Only active workflows can be executed. Within a dynasty the latest version is 'active' and predecessors are 'deprecated'. Set on demand via PUT /workflows/{id}/status. Distinct from `workflowDynastyStatus`."),
     workflowDynastyStatus: z.enum(["active", "deprecated"]).describe("Dynasty-level status. 'deprecated' means the entire lineage is retired: no version of it can be executed (execute returns 410) and it is not listed as an active candidate. Constant across all versions of a dynasty. Set via PUT /workflows/dynasty/{workflowDynastySlug}/status."),
@@ -1310,6 +1315,7 @@ const WorkflowSummarySchema = z.object({
   tags: z.array(z.string()),
   contentModel: z.string().nullable().describe("Model of the content-generation call, derived from the DAG; null when it states none."),
   contentPromptType: z.string().nullable().describe("Prompt template of the content-generation call, derived from the DAG; null when it states none."),
+  contentTemplateDynasty: z.string().nullable().describe("Template dynasty the workflow writes with (its live head each run); null when it pins a template version."),
   deprecation: deprecationField,
   createdAt: z.string().nullable(),
   updatedAt: z.string().nullable(),

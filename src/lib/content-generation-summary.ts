@@ -1,4 +1,5 @@
 import type { DAG } from "./dag-validator.js";
+import { TEMPLATE_HEAD_TYPE_REF, templateDynastyOf } from "./template-dynasty.js";
 
 /**
  * The two facts a workflow list row wants to display: which chat-service model
@@ -13,6 +14,8 @@ import type { DAG } from "./dag-validator.js";
 export interface ContentGenerationSummary {
   contentModel: string | null;
   contentPromptType: string | null;
+  /** The template dynasty the workflow writes with (its live head each run), null when it pins a version. */
+  contentTemplateDynasty: string | null;
 }
 
 /**
@@ -29,7 +32,9 @@ export function literalBodyValue(
   field: string,
 ): string | null {
   const mapped = node.inputMapping?.[`body.${field}`];
-  if (typeof mapped === "string") {
+  // A template DYNASTY's head read at run time (template-dynasty.ts): the static base is the head the DAG was last
+  // written against, which is what validators and the template label read.
+  if (typeof mapped === "string" && !(field === "type" && mapped === TEMPLATE_HEAD_TYPE_REF)) {
     return mapped.startsWith("$ref:") ? null : mapped;
   }
 
@@ -65,5 +70,6 @@ export function summarizeContentGeneration(dag: DAG | null | undefined): Content
   return {
     contentModel: collapse(nodes.map((n) => literalBodyValue(n, "model"))),
     contentPromptType: collapse(nodes.map((n) => literalBodyValue(n, "type"))),
+    contentTemplateDynasty: templateDynastyOf(dag),
   };
 }
