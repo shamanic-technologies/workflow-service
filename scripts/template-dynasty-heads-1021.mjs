@@ -52,12 +52,38 @@ export function neutralise(prompt) {
   return out;
 }
 
-/** SPACING_BLOCK + the greeting line before the template's input section (its last `---` rule), once. */
-export function withSpacing(prompt) {
+/**
+ * The dynasties the spacing rule goes to: every one an ACTIVE workflow writes with (owner-validated mapping,
+ * 2026-10-21). A dynasty no workflow runs is left alone.
+ */
+export const SPACED_DYNASTIES = [
+  "cold-click-website-click-named", "cold-reply-free-offer-named", "cold-reply-intro-offer-blind", "cold-reply-observation-named",
+  "cold-click-page-click-named", "cold-click-recommendation-stack-named", "cold-click-brand-first-stack-named",
+  "cold-reply-three-line-reply-named", "cold-click-three-line-click-named", "cold-reply-contrarian-opener-named",
+  "cold-reply-website-click-named", "cold-click-brand-first-link-named", "feedback-reply-feedback-gift-blind",
+  "feedback-reply-feedback-gift-named", "feedback-reply-diagnosis-gift-named", "cold-click-intro-offer-blind",
+  // 4c names it explicitly, though no workflow runs it today.
+  "cold-click-contrarian-opener-named",
+];
+
+/**
+ * Dynasties whose signature rules out a greeting line ("No greeting", a stack of one-line beats, exactly three lines):
+ * they get the spacing rule WITHOUT the greeting line, so the fix respects what makes the dynasty unique.
+ */
+export const NO_GREETING_LINE = new Set([
+  "cold-click-recommendation-stack-named",
+  "cold-click-brand-first-stack-named",
+  "cold-click-brand-first-link-named",
+  "cold-reply-three-line-reply-named",
+  "cold-click-three-line-click-named",
+]);
+
+/** SPACING_BLOCK (+ the greeting line unless the dynasty rules one out) before the input section (last `---`), once. */
+export function withSpacing(prompt, { greeting = true } = {}) {
   if (prompt.includes(SPACING_MARKER)) return prompt;
   const at = prompt.lastIndexOf("\n---\n");
   if (at === -1) throw new Error("no `---` input separator to place the spacing rule before");
-  return `${prompt.slice(0, at)}\n\n${SPACING_BLOCK}\n\n${GREETING_LINE}\n${prompt.slice(at)}`;
+  return `${prompt.slice(0, at)}\n\n${SPACING_BLOCK}${greeting ? `\n\n${GREETING_LINE}` : ""}\n${prompt.slice(at)}`;
 }
 
 export const READ_ALL_CLIENT_INFO = `## Read everything the client told us
@@ -93,7 +119,7 @@ export function planHead(slug, headPrompt) {
   const fix = FIXES[slug];
   let p = headPrompt;
   if (fix && !p.includes(fix.marker)) p = fix.build(p);
-  p = withSpacing(p);
+  if (SPACED_DYNASTIES.includes(slug)) p = withSpacing(p, { greeting: !NO_GREETING_LINE.has(slug) });
   if (p === headPrompt) return null;
   return neutralise(p);
 }
@@ -148,7 +174,11 @@ async function run() {
           console.log(`${d.slug}: would add a head after ${head.body.template.type} (${delta >= 0 ? "+" : ""}${delta} chars${FIXES[d.slug] ? ", fix " + d.slug : ", spacing"})`);
           continue;
         }
-        const r = await call("POST", `/internal/template-dynasties/${d.slug}/versions`, { prompt, variables: head.body.template.variables });
+        const r = await call("POST", `/internal/template-dynasties/${d.slug}/versions`, {
+          prompt,
+          // Exactly the {{tokens}} the text uses (content-generation refuses a declared-but-unused one; dropping is fine).
+          variables: head.body.template.variables.filter((v) => prompt.includes(`{{${v.name}}}`)),
+        });
         if (r.status !== 201) failures.push(`${d.slug}: ${r.status} ${JSON.stringify(r.body).slice(0, 1500)}`);
         else console.log(`${d.slug}: new head ${r.body.template.type} (after ${head.body.template.type})`);
       } catch (err) {
