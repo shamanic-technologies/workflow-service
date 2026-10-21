@@ -194,6 +194,11 @@
             "nullable": true,
             "description": "The content-generation prompt template this workflow renders (e.g. 'cold-email'), read from the `type` field of the DAG's content-generation POST /generate request body. Same derivation and same null cases as `contentModel`."
           },
+          "contentTemplateDynasty": {
+            "type": "string",
+            "nullable": true,
+            "description": "TPL-DYNASTY-1021-WF: the content-generation template DYNASTY this workflow writes with. Every run reads the dynasty's CURRENT head (GET /internal/template-dynasties/{slug}/head), so a new head version reaches it with no new workflow version; `contentPromptType` is then the head the DAG was last written against. Null when the workflow pins a template version."
+          },
           "deprecation": {
             "$ref": "#/components/schemas/WorkflowDeprecation"
           },
@@ -276,6 +281,7 @@
           "version",
           "contentModel",
           "contentPromptType",
+          "contentTemplateDynasty",
           "deprecation",
           "status",
           "workflowDynastyStatus",
@@ -677,6 +683,11 @@
             "nullable": true,
             "description": "Prompt template of the content-generation call, derived from the DAG; null when it states none."
           },
+          "contentTemplateDynasty": {
+            "type": "string",
+            "nullable": true,
+            "description": "Template dynasty the workflow writes with (its live head each run); null when it pins a template version."
+          },
           "deprecation": {
             "$ref": "#/components/schemas/WorkflowDeprecation"
           },
@@ -703,6 +714,7 @@
           "tags",
           "contentModel",
           "contentPromptType",
+          "contentTemplateDynasty",
           "deprecation",
           "createdAt",
           "updatedAt"

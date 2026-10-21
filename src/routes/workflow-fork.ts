@@ -12,7 +12,8 @@ import { applyDagPatch, DagPatchError, type DagPatchOperation } from "../lib/dag
 import { validateClientDag } from "../lib/validate-client-dag.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { findSignatureConflict, signatureConflictBody, forkWorkflowRow } from "../lib/workflow-lineage.js";
-import { LegAssignmentError, PipeResolutionError, fetchPipe } from "../lib/catalogue-client.js";
+import { LegAssignmentError, PipeResolutionError, fetchPipe, activeLegsOfDynasty } from "../lib/catalogue-client.js";
+import { refuseIfPipeDuplicate } from "../lib/pipe-duplicate.js";
 import { formatWorkflow } from "../lib/format-workflow.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
@@ -81,6 +82,12 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
     res.status(409).json(signatureConflictBody(conflicting));
     return;
   }
+
+  // TPL-DYNASTY-1021-WF: one workflow per template dynasty + model on the pipe(s) the copy will serve.
+  const legKeys = body.pipeId
+    ? [body.pipeId.slice(body.pipeId.indexOf("|") + 1)]
+    : await activeLegsOfDynasty(source.featureSlug, source.workflowDynastySlug, extractDownstreamHeaders(req));
+  if (await refuseIfPipeDuplicate(res, { featureSlug: source.featureSlug, legKeys, dag })) return;
 
   const forked = await forkWorkflowRow({
     existing: source,

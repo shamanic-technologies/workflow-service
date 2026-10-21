@@ -86,6 +86,7 @@ vi.mock("../../src/lib/key-service-client.js", () => ({
 // Mock content-generation client (for template contract validation)
 const mockFetchPromptTemplates = vi.fn().mockResolvedValue(new Map());
 vi.mock("../../src/lib/content-generation-client.js", () => ({
+  fetchTemplateDynasties: vi.fn().mockResolvedValue([]),
   fetchPromptTemplate: vi.fn().mockResolvedValue(null),
   fetchPromptTemplates: (...args: unknown[]) =>
     mockFetchPromptTemplates(...args),
@@ -1329,7 +1330,10 @@ describe("PUT /workflows/:id — update (metadata, same-sig DAG, or fork)", () =
 
   it("assigns a fork to every leg its source actively serves, in features-service", async () => {
     mockAssignWorkflowToLeg.mockClear();
-    mockActiveLegsOfDynasty.mockResolvedValueOnce(["lead_found_to_conversation", "lead_found_to_website_visit"]);
+    // Read twice: the duplicate-on-pipe guard (TPL-DYNASTY-1021-WF), then the fork's leg registration.
+    mockActiveLegsOfDynasty
+      .mockResolvedValueOnce(["lead_found_to_conversation", "lead_found_to_website_visit"])
+      .mockResolvedValueOnce(["lead_found_to_conversation", "lead_found_to_website_visit"]);
     const existingWf = {
       id: WF_DAG_REJECT_ID,
       orgId: "org-1",

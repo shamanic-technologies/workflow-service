@@ -58,6 +58,7 @@ import { fetchSpecsForServices } from "../lib/api-registry-client.js";
 import { fetchPromptTemplates } from "../lib/content-generation-client.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { validateClientDag } from "../lib/validate-client-dag.js";
+import { refuseIfPipeDuplicate } from "../lib/pipe-duplicate.js";
 import { computeWorkflowScores, aggregateSectionStats, handleExternalServiceError } from "../lib/workflow-scoring.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { classifyWorkflowError } from "../lib/classify-workflow-error.js";
@@ -214,6 +215,9 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
       });
       return;
     }
+
+    // TPL-DYNASTY-1021-WF: one workflow per template dynasty + model on a pipe.
+    if (await refuseIfPipeDuplicate(res, { featureSlug: body.featureSlug, legKeys: [generated.pipe.legKey], dag })) return;
 
     // New dynasty — pick a unique workflow_dynasty_signature_name. Names are
     // burned for life within a feature_slug (any status, any org), so deprecated
@@ -521,6 +525,16 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
       return;
     }
 
+    // TPL-DYNASTY-1021-WF: one workflow per template dynasty + model on a pipe (its own lineage excluded).
+    if (
+      await refuseIfPipeDuplicate(res, {
+        featureSlug: existing.featureSlug,
+        legKeys: await activeLegsOfDynasty(existing.featureSlug, existing.workflowDynastySlug, dsHeaders),
+        dag,
+        ownDynastySlug: existing.workflowDynastySlug,
+      })
+    ) return;
+
     // New signature → upgrade in same dynasty: bump version, deprecate predecessor.
     const created = await upgradeWorkflowRow({
       existing,
@@ -623,6 +637,9 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
       res.status(400).json(rejection);
       return;
     }
+
+    // TPL-DYNASTY-1021-WF: one workflow per template dynasty + model on a pipe.
+    if (statedLegKey && (await refuseIfPipeDuplicate(res, { featureSlug: body.featureSlug, legKeys: [statedLegKey], dag }))) return;
 
     // Compute signature and naming
     const signature = computeDAGSignature(body.dag);
@@ -1583,6 +1600,15 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       res.status(409).json(signatureConflictBody(conflicting));
       return;
     }
+
+    // TPL-DYNASTY-1021-WF: the copy serves its source's pipes; one workflow per template dynasty + model there.
+    if (
+      await refuseIfPipeDuplicate(res, {
+        featureSlug: existing.featureSlug,
+        legKeys: await activeLegsOfDynasty(existing.featureSlug, existing.workflowDynastySlug, extractDownstreamHeaders(req)),
+        dag,
+      })
+    ) return;
 
     const forkResult = await forkWorkflowRow({
       existing,
