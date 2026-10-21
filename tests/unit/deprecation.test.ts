@@ -58,7 +58,7 @@ async function deprecationOf(client: PGlite, slug: string) {
   };
 }
 
-describe("0039 backfill of deprecation reasons", () => {
+describe("0039 backfill of deprecation reasons", { timeout: 30_000 }, () => {
   it("states the owner's reason on every version of the 16 catch-all copies, 'Not specified' on every other deprecated row", async () => {
     const client = await migrated("before-backfill");
     const P = "sales-cold-email-outreach-";

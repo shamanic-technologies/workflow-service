@@ -1152,6 +1152,58 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     );
   });
 
+  // TPL-DYNASTY-1021-WF: a dynasty merged into another one on the same pipe forwards to the survivor's active
+  // version, so a campaign still holding the absorbed slug keeps running.
+  it("forwards a merged dynasty's slug to its survivor's active version", async () => {
+    mockSelectResponses.push(
+      [],  // 1. active-only lookup by workflow_slug → not found
+      [{   // 2. any-status lookup → the absorbed (merged, deprecated) dynasty
+        id: WF_DEAD_ID,
+        workflowSlug: "azalea-flow-v8",
+        workflowName: "Azalea Flow v8",
+        workflowDynastySlug: "azalea-flow",
+        workflowDynastyName: "Azalea Flow",
+        version: 8,
+        status: "deprecated",
+        workflowDynastyStatus: "deprecated",
+      }],
+      [],  // 3. active-in-dynasty lookup → none (merged away)
+      [{ a: "azalea-flow", s: "mebsuta-flow" }],  // 4. open merges
+      [{   // 5. active version of the survivor dynasty
+        id: WF_NEW_ID,
+        workflowSlug: "mebsuta-flow-v5",
+        workflowName: "Mebsuta Flow v5",
+        workflowDynastySlug: "mebsuta-flow",
+        workflowDynastyName: "Mebsuta Flow",
+        version: 5,
+        status: "active",
+        workflowDynastyStatus: "active",
+        windmillFlowPath: "f/workflows/org_1/mebsuta_flow",
+        windmillWorkspace: "prod",
+        dag: VALID_LINEAR_DAG,
+      }],
+    );
+
+    const res = await request
+      .post("/workflows/by-slug/azalea-flow-v8/execute")
+      .set(AUTH)
+      .send({ inputs: {} });
+
+    expect(res.status).toBe(201);
+    expect(mockRunFlow).toHaveBeenCalledWith("f/workflows/org_1/mebsuta_flow", expect.objectContaining({ orgId: "org-1" }));
+  });
+
+  it("still answers 410 for a fully deprecated dynasty that is merged into nothing", async () => {
+    mockSelectResponses.push(
+      [],
+      [{ id: WF_DEAD_ID, workflowSlug: "gone-flow", workflowName: "Gone", workflowDynastySlug: "gone-flow", workflowDynastyName: "Gone", version: 1, status: "deprecated" }],
+      [],
+      [],  // open merges: none
+    );
+    const res = await request.post("/workflows/by-slug/gone-flow/execute").set(AUTH).send({ inputs: {} });
+    expect(res.status).toBe(410);
+  });
+
   it("returns 410 when the dynasty has no active version", async () => {
     mockSelectResponses.push(
       [],  // 1. active-only lookup by workflow_slug → not found

@@ -314,6 +314,7 @@ describe("GET /public/workflows", () => {
       executableUntil: null,
       executableUntilSource: null,
       deprecation: null,
+      mergedIntoDynastySlug: null,
     });
     // Must NOT include DAG or internal fields
     expect(w).not.toHaveProperty("dag");
