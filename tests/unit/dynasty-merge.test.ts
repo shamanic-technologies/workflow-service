@@ -126,6 +126,18 @@ describe("dynasty merge (PGlite)", () => {
     expect(await openMergeOf(db, AZALEA)).toBeDefined();
   });
 
+  // Regression (2026-10-21 pilot): stored stops carry MICROseconds; a snapshot through a JS Date restored them
+  // rounded to the millisecond.
+  it("un-merge restores timestamps to the microsecond", async () => {
+    await client.exec(`UPDATE workflows SET executable_until = '2026-10-17 15:31:22.176025+00', deprecated_at = '2026-10-17 15:31:22.176025+00' WHERE workflow_slug = '${AZALEA}-v7'`);
+    const text = async () => (await client.query<{ e: string; d: string }>(`SELECT executable_until::text e, deprecated_at::text d FROM workflows WHERE workflow_slug = '${AZALEA}-v7'`)).rows[0];
+    const before = await text();
+    await applyMerge(db, { absorbed: await lineage(AZALEA), survivor: await lineage(MEBSUTA), legKeys: ["x"], reason: "dup", decidedBy: null });
+    await applyUnmerge(db, (await openMergeOf(db, AZALEA))!, { reason: "undo", decidedBy: null });
+    expect(await text()).toEqual(before);
+    expect(before.e).toContain(".176025");
+  });
+
   it("the database refuses two open merges of one absorbed dynasty", async () => {
     const args = { absorbed: await lineage(AZALEA), survivor: await lineage(MEBSUTA), legKeys: ["x"], reason: "dup", decidedBy: null };
     await applyMerge(db, args);
