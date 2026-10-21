@@ -38,7 +38,8 @@ describe("TPL-DYNASTY-1021-WF withTemplateDynasty", () => {
   it("keeps the head it was written against as the static base readers and validators check", () => {
     expect(summarizeContentGeneration(switched)).toMatchObject({ contentPromptType: "blind-discovery-email-v21-no-url-spaced", contentTemplateDynasty: "cold-reply-intro-offer-blind" });
     expect(extractTemplateRefs(switched).map((r) => r.templateType)).toEqual(["blind-discovery-email-v21-no-url-spaced"]);
-    expect(contentRefsOf(switched)[0].promptType).toBe("blind-discovery-email-v21-no-url-spaced");
+    // TPL-DYNASTY-1021-WF3: the deprecated-content check never judges a version on a dynasty-following call.
+    expect(contentRefsOf(switched)[0].promptType).toBeNull();
   });
 
   it("is idempotent: re-pointing never splices twice", () => {

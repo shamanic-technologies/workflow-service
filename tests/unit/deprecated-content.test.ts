@@ -9,6 +9,7 @@ vi.mock("../../src/lib/content-generation-client.js", () => ({
 
 import { findDeprecatedContent, contentRefsOf } from "../../src/lib/deprecated-content.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
+import { withTemplateDynasty } from "../../src/lib/template-dynasty.js";
 
 const dag = (type: string, model: string): DAG =>
   ({
@@ -45,5 +46,20 @@ describe("findDeprecatedContent (TEMPLATE-MODEL-STATUS-1019)", () => {
 
   it("reads only the content call's literals", () => {
     expect(contentRefsOf(dag("cold-email-v59", "pro"))).toEqual([{ nodeId: "email-generate", promptType: "cold-email-v59", model: "pro" }]);
+  });
+
+  it("never refuses a call following its template dynasty's head, whatever version its static base names (TPL-DYNASTY-1021-WF3)", async () => {
+    fetchPromptTemplate.mockResolvedValue({ type: "cold-email-v59", status: "deprecated" });
+    fetchModelStatuses.mockResolvedValue(new Map([["pro", "active"]]));
+    const d = withTemplateDynasty(dag("cold-email-v59", "pro"), "cold-email", "cold-email-v59");
+    expect(await findDeprecatedContent(d)).toEqual([]);
+    expect(fetchPromptTemplate).not.toHaveBeenCalled();
+    expect(contentRefsOf(d)).toEqual([{ nodeId: "email-generate", promptType: null, model: "pro" }]);
+  });
+
+  it("still refuses a deprecated MODEL on a dynasty-following call", async () => {
+    fetchModelStatuses.mockResolvedValue(new Map([["pro", "deprecated"]]));
+    const d = withTemplateDynasty(dag("cold-email-v59", "pro"), "cold-email", "cold-email-v59");
+    expect((await findDeprecatedContent(d)).map((i) => i.field)).toEqual(["body.model"]);
   });
 });

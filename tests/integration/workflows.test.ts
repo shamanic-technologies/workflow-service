@@ -1950,6 +1950,25 @@ describe("POST /workflows/retire-by-content (TEMPLATE-MODEL-STATUS-1019)", () =>
     expect(ballad.status).toBe("active");
   });
 
+  it("never retires a workflow following its template dynasty for a deprecated version; a pinned one is (TPL-DYNASTY-1021-WF3)", async () => {
+    const mebsuta = runnable("sales-cold-email-outreach-mebsuta", "cold-email-v59", "pro");
+    mebsuta.dag = {
+      nodes: [...mebsuta.dag.nodes, { id: "template-head", type: "http.call", config: { service: "content-generation", method: "GET", path: "/internal/template-dynasties/{slug}/head", params: { slug: "cold-email" } } } as never],
+      edges: [{ from: "template-head", to: "email-generate" } as never],
+    };
+    (mebsuta.dag.nodes[0] as Record<string, unknown>).inputMapping = { "body.type": "$ref:template-head.output.template.type" };
+    const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "pro");
+    mockDbRows.push(mebsuta, ballad);
+    mockSelectResponses.push([mebsuta, ballad]);
+
+    const res = await request.post("/workflows/retire-by-content").set(AUTH).send({ promptType: "cold-email-v59" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.workflows.map((w: { workflowDynastySlug: string }) => w.workflowDynastySlug)).toEqual(["sales-cold-email-outreach-ballad"]);
+    expect(res.body.retired).toBe(1);
+    expect(mebsuta.status).toBe("active");
+  });
+
   it("retires the whole dynasty on both axes", async () => {
     const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "pro");
     mockDbRows.push(ballad);
