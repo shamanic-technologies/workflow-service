@@ -1,4 +1,4 @@
-import { eq, and, isNull, inArray } from "drizzle-orm";
+import { eq, and, isNull, inArray, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { db } from "../db/index.js";
 import { workflows, workflowDynastyMerges, type Workflow, type WorkflowDynastyMerge } from "../db/schema.js";
@@ -28,29 +28,37 @@ export interface PriorVersionState {
   deprecatedAt: string | null;
 }
 
-export function snapshotVersion(w: Workflow): PriorVersionState {
-  return {
-    id: w.id,
-    status: w.status,
-    workflowDynastyStatus: w.workflowDynastyStatus,
-    executableUntil: w.executableUntil ? w.executableUntil.toISOString() : null,
-    executableUntilSource: w.executableUntilSource ?? null,
-    deprecationReason: w.deprecationReason ?? null,
-    deprecatedBy: w.deprecatedBy ?? null,
-    deprecatedAt: w.deprecatedAt ? w.deprecatedAt.toISOString() : null,
-  };
+/**
+ * Every version's status fields, read INSIDE the merge transaction. Timestamps are kept as Postgres text: a JS Date
+ * rounds to the millisecond and the stored values carry microseconds, so a round trip through Date would not restore
+ * them exactly (seen on the 2026-10-21 pilot).
+ */
+export async function snapshotLineage(database: AnyPgDb, dynastySlug: string): Promise<PriorVersionState[]> {
+  return database
+    .select({
+      id: workflows.id,
+      status: workflows.status,
+      workflowDynastyStatus: workflows.workflowDynastyStatus,
+      executableUntil: sql<string | null>`${workflows.executableUntil}::text`,
+      executableUntilSource: workflows.executableUntilSource,
+      deprecationReason: workflows.deprecationReason,
+      deprecatedBy: workflows.deprecatedBy,
+      deprecatedAt: sql<string | null>`${workflows.deprecatedAt}::text`,
+    })
+    .from(workflows)
+    .where(eq(workflows.workflowDynastySlug, dynastySlug));
 }
 
-/** `.set()` fields restoring one version exactly as the snapshot recorded it. */
+/** `.set()` fields restoring one version exactly as the snapshot recorded it (timestamps cast back from text). */
 export function restoreVersionFields(s: PriorVersionState) {
   return {
     status: s.status,
     workflowDynastyStatus: s.workflowDynastyStatus,
-    executableUntil: s.executableUntil ? new Date(s.executableUntil) : null,
+    executableUntil: s.executableUntil === null ? null : sql`${s.executableUntil}::timestamptz`,
     executableUntilSource: s.executableUntilSource,
     deprecationReason: s.deprecationReason,
     deprecatedBy: s.deprecatedBy,
-    deprecatedAt: s.deprecatedAt ? new Date(s.deprecatedAt) : null,
+    deprecatedAt: s.deprecatedAt === null ? null : sql`${s.deprecatedAt}::timestamptz`,
   };
 }
 
@@ -147,6 +155,7 @@ export async function applyMerge(
   const absorbedSlug = p.absorbed[0].workflowDynastySlug;
   const deprecationReason = mergeDeprecationReason(p.survivor[0], p.reason);
   return database.transaction(async (tx) => {
+    const prior = await snapshotLineage(tx as unknown as AnyPgDb, absorbedSlug);
     const [merge] = await tx
       .insert(workflowDynastyMerges)
       .values({
@@ -156,7 +165,7 @@ export async function applyMerge(
         legKeys: [...p.legKeys].sort(),
         reason: p.reason,
         decidedBy: p.decidedBy,
-        absorbedPriorState: p.absorbed.map(snapshotVersion),
+        absorbedPriorState: prior,
       })
       .returning();
     // Both axes deprecated, the stop recorded (an earlier one kept), the survivor named in the reason. A version
