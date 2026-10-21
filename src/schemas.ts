@@ -777,6 +777,12 @@ export const PublicWorkflowItemSchema = z
       "which a later edit of the already-deprecated row (bulk description/DAG repairs) could have moved LATER than the real stop: an upper bound. Null when `executableUntil` is null."
     ),
     deprecation: deprecationField,
+    mergedIntoDynastySlug: z.string().nullable().describe(
+      "TPL-DYNASTY-1021-WF: the FINAL survivor dynasty slug this row's dynasty is currently merged into " +
+      "(chains A into B into C resolved here: C), null when it is not merged or was un-merged. Same value on every version of the dynasty. " +
+      "A merged dynasty is a duplicate of its survivor on the same pipe (same template dynasty, same writer model): pool its stats into the survivor's. " +
+      "The merge record: GET /public/workflows/dynasty-merges."
+    ),
   })
   .openapi("PublicWorkflowItem");
 
@@ -894,6 +900,59 @@ export const DynastyStatusResponseSchema = z
     ),
   })
   .openapi("DynastyStatusResponse");
+
+// --- Dynasty merge (TPL-DYNASTY-1021-WF) ---
+
+export const DynastyMergeRequestSchema = z
+  .object({
+    intoWorkflowDynastySlug: z.string().min(1).describe("The SURVIVOR dynasty: same channel and same pipe (features-service leg assignments), executable."),
+    reason: z.string().trim().min(1).max(2000).describe("Why (required), e.g. 'Same template dynasty and same model on the same pipe'."),
+    decidedBy: DeprecationRequestFields.decidedBy,
+  })
+  .openapi("DynastyMergeRequest");
+
+export const DynastyUnmergeRequestSchema = z
+  .object({
+    reason: z.string().trim().min(1).max(2000).describe("Why the merge is undone (required)."),
+    decidedBy: DeprecationRequestFields.decidedBy,
+  })
+  .openapi("DynastyUnmergeRequest");
+
+export const DynastyMergeSchema = z
+  .object({
+    id: z.string().uuid(),
+    absorbedDynastySlug: z.string().describe("The dynasty merged away (deprecated on both axes while the merge is open)."),
+    survivorDynastySlug: z.string().describe("The dynasty it was merged into."),
+    finalSurvivorDynastySlug: z.string().nullable().describe("The survivor through every open merge (A into B into C = C); null once un-merged."),
+    featureSlug: z.string(),
+    legKeys: z.array(z.string()).describe("The pipe (leg keys on featureSlug) both dynasties served when merged."),
+    reason: z.string(),
+    decidedBy: z.string().nullable(),
+    mergedAt: z.string(),
+    unmergedAt: z.string().nullable().describe("Null while the merge is open."),
+    unmergedBy: z.string().nullable(),
+    unmergeReason: z.string().nullable(),
+  })
+  .openapi("DynastyMerge");
+
+export const DynastyMergeResponseSchema = z
+  .object({
+    merge: DynastyMergeSchema,
+    deprecatedVersions: z.number().int().optional().describe("Merge: how many absorbed versions were deprecated."),
+    restoredVersions: z.number().int().optional().describe("Un-merge: how many versions were restored to their exact prior state."),
+  })
+  .openapi("DynastyMergeResponse");
+
+export const DynastyMergesQuerySchema = z
+  .object({
+    featureSlug: z.string().optional().describe("Narrow to one channel."),
+    state: z.enum(["open", "all"]).optional().describe("'open' (default) = merges in force; 'all' includes un-merged ones."),
+  })
+  .openapi("DynastyMergesQuery");
+
+export const DynastyMergesResponseSchema = z
+  .object({ merges: z.array(DynastyMergeSchema) })
+  .openapi("DynastyMergesResponse");
 
 // --- Retire every workflow running a template or a model (POST /workflows/retire-by-content) ---
 
@@ -1408,6 +1467,72 @@ registry.registerPath({
       description: "No workflows found for this dynasty slug",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/dynasty/{workflowDynastySlug}/merge",
+  summary: "Merge a duplicate dynasty into its survivor on the same pipe",
+  description:
+    "TPL-DYNASTY-1021-WF. Two active dynasties on the same pipe writing with the same template dynasty and model are one workflow: " +
+    "this absorbs `workflowDynastySlug` into `intoWorkflowDynastySlug`. Never across two pipes: both must be on the same channel AND " +
+    "actively assigned to the same leg(s) in features-service (409 `merge_across_pipes`). Non-destructive: no history is rewritten " +
+    "(runs, emails, leads keep the absorbed slug); every absorbed version is deprecated on both axes with the reason " +
+    "'Merged into <survivor>: <reason>', its prior status fields are kept on the merge record, and execute-by-slug forwards the absorbed " +
+    "slug to the survivor's active version, so a campaign holding it keeps running. Reversible: POST .../unmerge. " +
+    "409 `already_merged`, `survivor_merged`, `survivor_not_executable`, `absorbed_not_executable`; 400 `merge_into_itself`.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    params: z.object({ workflowDynastySlug: z.string() }),
+    body: { required: true, content: { "application/json": { schema: DynastyMergeRequestSchema } } },
+  },
+  responses: {
+    201: { description: "Merged", content: { "application/json": { schema: DynastyMergeResponseSchema } } },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Unknown dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Refused (code names why)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/workflows/dynasty/{workflowDynastySlug}/unmerge",
+  summary: "Undo a dynasty merge, restoring the exact prior state",
+  description:
+    "TPL-DYNASTY-1021-WF. Restores every version of the absorbed dynasty exactly as the merge recorded it (status, dynasty status, " +
+    "executableUntil, deprecation) and closes the merge record (kept, with who/when/why). The Windmill flow of every version that runs " +
+    "again is restored first (502 if it cannot be). 404 `not_merged` when no merge is open.",
+  tags: ["Workflows"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    params: z.object({ workflowDynastySlug: z.string() }),
+    body: { required: true, content: { "application/json": { schema: DynastyUnmergeRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Un-merged", content: { "application/json": { schema: DynastyMergeResponseSchema } } },
+    404: { description: "Not merged", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "A recorded version no longer exists", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "Windmill flow restore failed", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/public/workflows/dynasty-merges",
+  summary: "Public: every dynasty merge record",
+  description:
+    "Service-to-service (x-api-key, no identity). TPL-DYNASTY-1021-WF: who was merged into whom, on which pipe, why, by whom, when, " +
+    "and whether it was undone. Stats readers pool an absorbed dynasty into `finalSurvivorDynastySlug` (also served per row on " +
+    "GET /public/workflows as `mergedIntoDynastySlug`).",
+  tags: ["Public"],
+  security: [{ apiKey: [] }],
+  request: { query: DynastyMergesQuerySchema },
+  responses: {
+    200: { description: "Merge records", content: { "application/json": { schema: DynastyMergesResponseSchema } } },
   },
 });
 

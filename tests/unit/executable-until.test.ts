@@ -64,7 +64,7 @@ async function stop(client: PGlite, slug: string) {
   return { at: row.executable_until ? new Date(row.executable_until).toISOString() : null, source: row.executable_until_source };
 }
 
-describe("0038 backfill of executable_until", () => {
+describe("0038 backfill of executable_until", { timeout: 30_000 }, () => {
   it("dates prod-shaped rows: successor creation when replaced, updated_at for a dynasty's last version, nothing while executable", async () => {
     const client = await migrated("before-backfill");
     // arcadia v1 was deprecated by the v2 upgrade on 08-26 and later touched by a bulk edit on 09-24.

@@ -47,7 +47,7 @@ Every email, email 1 AND each follow-up, is written in short paragraphs separate
 
 When a thought needs more, split it into two paragraphs. Never glue several sentences into one block: a wall of text loses the reader on mobile.`;
 
-function edit(text, anchor, replacement) {
+export function edit(text, anchor, replacement) {
   if (!text.includes(anchor)) throw new Error(`anchor not found in source template: ${JSON.stringify(anchor.slice(0, 80))}`);
   if (text.indexOf(anchor) !== text.lastIndexOf(anchor)) throw new Error(`anchor not unique: ${JSON.stringify(anchor.slice(0, 80))}`);
   return text.replace(anchor, () => replacement);
@@ -325,7 +325,7 @@ export function retemplateDag(dag, fromType, toType, dropVariables) {
 
 const WS = process.env.WORKFLOW_SERVICE_LOCAL_URL ?? "http://localhost:8080";
 
-async function call(base, key, method, path, body, identity) {
+export async function call(base, key, method, path, body, identity) {
   const res = await fetch(`${base}${path}`, {
     method,
     headers: { "content-type": "application/json", "x-api-key": key, ...(identity ?? {}) },
