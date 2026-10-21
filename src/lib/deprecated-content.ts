@@ -2,6 +2,7 @@ import type { DAG } from "./dag-validator.js";
 import { literalBodyValue } from "./content-generation-summary.js";
 import { fetchModelStatuses, fetchPromptTemplate } from "./content-generation-client.js";
 import type { DownstreamHeaders } from "./downstream-headers.js";
+import { followsTemplateDynasty } from "./template-dynasty.js";
 
 // TEMPLATE-MODEL-STATUS-1019 (owner 2026-10-19): a template or a writer model staff DEPRECATED may not come back
 // through a new workflow, an upgrade or a fork. content-generation owns the status; this is the write-time
@@ -15,11 +16,15 @@ export interface DeprecatedContentIssue {
   reason: string;
 }
 
-/** Every literal template type / model alias a content-generation `/generate` node states. */
+/**
+ * Every literal template type / model alias a content-generation `/generate` node states. A call following its
+ * template DYNASTY's live head states no template version (`promptType: null`, TPL-DYNASTY-1021-WF3): a deprecated
+ * version of that dynasty never refuses, blocks or retires it. Its model is still a literal and still judged.
+ */
 export function contentRefsOf(dag: DAG): Array<{ nodeId: string; promptType: string | null; model: string | null }> {
-  return dag.nodes
+  return (dag?.nodes ?? [])
     .filter((n) => n.type === "http.call" && n.config?.service === "content-generation" && n.config?.path === "/generate")
-    .map((n) => ({ nodeId: n.id, promptType: literalBodyValue(n, "type"), model: literalBodyValue(n, "model") }));
+    .map((n) => ({ nodeId: n.id, promptType: followsTemplateDynasty(n) ? null : literalBodyValue(n, "type"), model: literalBodyValue(n, "model") }));
 }
 
 /**

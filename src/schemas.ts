@@ -963,7 +963,7 @@ export const DynastyMergesResponseSchema = z
 
 export const RetireByContentRequestSchema = z
   .object({
-    promptType: z.string().min(1).optional().describe("content-generation template type: retire every runnable workflow whose content call renders it."),
+    promptType: z.string().min(1).optional().describe("content-generation template type: retire every runnable workflow whose content call PINS it. A workflow writing with a template dynasty's live head is never retired by one of that dynasty's versions (TPL-DYNASTY-1021-WF3)."),
     model: z.string().min(1).optional().describe("Writer model alias: retire every runnable workflow whose content call writes with it."),
     featureSlug: z.string().min(1).optional().describe("Narrow to one channel. Absent = every channel."),
     dryRun: z.boolean().optional().describe("true = list what would be retired, write nothing (the confirmation a staff member reads first)."),

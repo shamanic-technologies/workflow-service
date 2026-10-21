@@ -25,6 +25,15 @@ export const TEMPLATE_HEAD_TYPE_REF = `$ref:${TEMPLATE_HEAD_NODE_ID}.output.temp
 const isGenerate = (n: DAGNode) => n.type === "http.call" && n.config?.service === "content-generation" && n.config?.path === "/generate";
 const isHeadRead = (n: DAGNode) => n.id === TEMPLATE_HEAD_NODE_ID && n.config?.service === "content-generation" && n.config?.path === TEMPLATE_HEAD_PATH;
 
+/**
+ * True when this content call renders its template dynasty's LIVE head (TPL-DYNASTY-1021-WF3): its static
+ * `config.body.type` is only the head as of the last write, so a deprecated VERSION (an "Upgraded" one included) says
+ * nothing about it. Such a call stops only with the whole template dynasty (its head read fails, nothing is written).
+ */
+export function followsTemplateDynasty(node: DAGNode): boolean {
+  return node.inputMapping?.["body.type"] === TEMPLATE_HEAD_TYPE_REF;
+}
+
 /** The template dynasty a DAG writes with, or null when it pins a template version (or writes no email). */
 export function templateDynastyOf(dag: { nodes?: DAGNode[] } | null | undefined): string | null {
   const head = (dag?.nodes ?? []).find(isHeadRead);
