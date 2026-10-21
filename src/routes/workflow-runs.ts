@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { db } from "../db/index.js";
+import { finalSurvivor, loadOpenMerges } from "../lib/dynasty-merge.js";
 import { workflows, workflowRuns } from "../db/schema.js";
 import { requireApiKey, requireExecutionHeaders } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
@@ -358,7 +359,7 @@ router.post(
         // feature_slug+signature_name WHERE status='active'). Forks branch into a
         // NEW dynasty_slug, so the active row sharing THIS dynasty_slug is the
         // terminal version of the upgrade chain.
-        const [activeInDynasty] = await db
+        let [activeInDynasty] = await db
           .select()
           .from(workflows)
           .where(
@@ -367,6 +368,23 @@ router.post(
               eq(workflows.status, "active"),
             )
           );
+
+        // TPL-DYNASTY-1021-WF: a dynasty merged into another one forwards to its (final) survivor's active
+        // version, so a campaign still holding the absorbed slug keeps running the same pipe's workflow.
+        if (!activeInDynasty) {
+          const survivorSlug = finalSurvivor(known.workflowDynastySlug, await loadOpenMerges());
+          if (survivorSlug) {
+            [activeInDynasty] = await db
+              .select()
+              .from(workflows)
+              .where(and(eq(workflows.workflowDynastySlug, survivorSlug), eq(workflows.status, "active")));
+            if (activeInDynasty) {
+              console.log(
+                `[workflow-service] Execute by slug: "${req.params.slug}" is merged into "${survivorSlug}", forwarded to "${activeInDynasty.workflowSlug}"`,
+              );
+            }
+          }
+        }
 
         if (!activeInDynasty) {
           // Dynasty fully deprecated — no live version to run.

@@ -101,6 +101,30 @@ export const workflowRuns = pgTable(
   ]
 );
 
+// TPL-DYNASTY-1021-WF: a dynasty merged into another one on the same pipe (src/lib/dynasty-merge.ts).
+export const workflowDynastyMerges = pgTable(
+  "workflow_dynasty_merges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    absorbedDynastySlug: text("absorbed_dynasty_slug").notNull(),
+    survivorDynastySlug: text("survivor_dynasty_slug").notNull(),
+    featureSlug: text("feature_slug").notNull(),
+    legKeys: jsonb("leg_keys").notNull(),
+    reason: text("reason").notNull(),
+    decidedBy: text("decided_by"),
+    mergedAt: timestamp("merged_at", { withTimezone: true }).notNull().defaultNow(),
+    absorbedPriorState: jsonb("absorbed_prior_state").notNull(),
+    unmergedAt: timestamp("unmerged_at", { withTimezone: true }),
+    unmergedBy: text("unmerged_by"),
+    unmergeReason: text("unmerge_reason"),
+  },
+  (table) => [
+    uniqueIndex("idx_dynasty_merges_open_absorbed").on(table.absorbedDynastySlug).where(sql`unmerged_at IS NULL`),
+    index("idx_dynasty_merges_survivor").on(table.survivorDynastySlug),
+  ]
+);
+
+export type WorkflowDynastyMerge = typeof workflowDynastyMerges.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type NewWorkflow = typeof workflows.$inferInsert;
 export type WorkflowRun = typeof workflowRuns.$inferSelect;

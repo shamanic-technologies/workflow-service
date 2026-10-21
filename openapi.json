@@ -768,6 +768,154 @@
           "status"
         ]
       },
+      "DynastyMerge": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "absorbedDynastySlug": {
+            "type": "string",
+            "description": "The dynasty merged away (deprecated on both axes while the merge is open)."
+          },
+          "survivorDynastySlug": {
+            "type": "string",
+            "description": "The dynasty it was merged into."
+          },
+          "finalSurvivorDynastySlug": {
+            "type": "string",
+            "nullable": true,
+            "description": "The survivor through every open merge (A into B into C = C); null once un-merged."
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "legKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The pipe (leg keys on featureSlug) both dynasties served when merged."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "decidedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "mergedAt": {
+            "type": "string"
+          },
+          "unmergedAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "Null while the merge is open."
+          },
+          "unmergedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "unmergeReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "absorbedDynastySlug",
+          "survivorDynastySlug",
+          "finalSurvivorDynastySlug",
+          "featureSlug",
+          "legKeys",
+          "reason",
+          "decidedBy",
+          "mergedAt",
+          "unmergedAt",
+          "unmergedBy",
+          "unmergeReason"
+        ]
+      },
+      "DynastyMergeResponse": {
+        "type": "object",
+        "properties": {
+          "merge": {
+            "$ref": "#/components/schemas/DynastyMerge"
+          },
+          "deprecatedVersions": {
+            "type": "integer",
+            "description": "Merge: how many absorbed versions were deprecated."
+          },
+          "restoredVersions": {
+            "type": "integer",
+            "description": "Un-merge: how many versions were restored to their exact prior state."
+          }
+        },
+        "required": [
+          "merge"
+        ]
+      },
+      "DynastyMergeRequest": {
+        "type": "object",
+        "properties": {
+          "intoWorkflowDynastySlug": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The SURVIVOR dynasty: same channel and same pipe (features-service leg assignments), executable."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "Why (required), e.g. 'Same template dynasty and same model on the same pipe'."
+          },
+          "decidedBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 320,
+            "description": "Who decided (staff email). Absent = the caller's x-email header, else 'user:<x-user-id>'."
+          }
+        },
+        "required": [
+          "intoWorkflowDynastySlug",
+          "reason"
+        ]
+      },
+      "DynastyUnmergeRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "Why the merge is undone (required)."
+          },
+          "decidedBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 320,
+            "description": "Who decided (staff email). Absent = the caller's x-email header, else 'user:<x-user-id>'."
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "DynastyMergesResponse": {
+        "type": "object",
+        "properties": {
+          "merges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DynastyMerge"
+            }
+          }
+        },
+        "required": [
+          "merges"
+        ]
+      },
       "RetireByContentResponse": {
         "type": "object",
         "properties": {
@@ -2040,6 +2188,11 @@
           },
           "deprecation": {
             "$ref": "#/components/schemas/WorkflowDeprecation"
+          },
+          "mergedIntoDynastySlug": {
+            "type": "string",
+            "nullable": true,
+            "description": "TPL-DYNASTY-1021-WF: the FINAL survivor dynasty slug this row's dynasty is currently merged into (chains A into B into C resolved here: C), null when it is not merged or was un-merged. Same value on every version of the dynasty. A merged dynasty is a duplicate of its survivor on the same pipe (same template dynasty, same writer model): pool its stats into the survivor's. The merge record: GET /public/workflows/dynasty-merges."
           }
         },
         "required": [
@@ -2057,7 +2210,8 @@
           "createdAt",
           "executableUntil",
           "executableUntilSource",
-          "deprecation"
+          "deprecation",
+          "mergedIntoDynastySlug"
         ]
       },
       "PublicWorkflowsResponse": {
@@ -3601,6 +3755,350 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasty/{workflowDynastySlug}/merge": {
+      "post": {
+        "summary": "Merge a duplicate dynasty into its survivor on the same pipe",
+        "description": "TPL-DYNASTY-1021-WF. Two active dynasties on the same pipe writing with the same template dynasty and model are one workflow: this absorbs `workflowDynastySlug` into `intoWorkflowDynastySlug`. Never across two pipes: both must be on the same channel AND actively assigned to the same leg(s) in features-service (409 `merge_across_pipes`). Non-destructive: no history is rewritten (runs, emails, leads keep the absorbed slug); every absorbed version is deprecated on both axes with the reason 'Merged into <survivor>: <reason>', its prior status fields are kept on the merge record, and execute-by-slug forwards the absorbed slug to the survivor's active version, so a campaign holding it keeps running. Reversible: POST .../unmerge. 409 `already_merged`, `survivor_merged`, `survivor_not_executable`, `absorbed_not_executable`; 400 `merge_into_itself`.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workflowDynastySlug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DynastyMergeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Merged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynastyMergeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown dynasty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused (code names why)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dynasty/{workflowDynastySlug}/unmerge": {
+      "post": {
+        "summary": "Undo a dynasty merge, restoring the exact prior state",
+        "description": "TPL-DYNASTY-1021-WF. Restores every version of the absorbed dynasty exactly as the merge recorded it (status, dynasty status, executableUntil, deprecation) and closes the merge record (kept, with who/when/why). The Windmill flow of every version that runs again is restored first (502 if it cannot be). 404 `not_merged` when no merge is open.",
+        "tags": [
+          "Workflows"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workflowDynastySlug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DynastyUnmergeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Un-merged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynastyMergeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not merged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A recorded version no longer exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Windmill flow restore failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/workflows/dynasty-merges": {
+      "get": {
+        "summary": "Public: every dynasty merge record",
+        "description": "Service-to-service (x-api-key, no identity). TPL-DYNASTY-1021-WF: who was merged into whom, on which pipe, why, by whom, when, and whether it was undone. Stats readers pool an absorbed dynasty into `finalSurvivorDynastySlug` (also served per row on GET /public/workflows as `mergedIntoDynastySlug`).",
+        "tags": [
+          "Public"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Narrow to one channel."
+            },
+            "required": false,
+            "description": "Narrow to one channel.",
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "all"
+              ],
+              "description": "'open' (default) = merges in force; 'all' includes un-merged ones."
+            },
+            "required": false,
+            "description": "'open' (default) = merges in force; 'all' includes un-merged ones.",
+            "name": "state",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Merge records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynastyMergesResponse"
                 }
               }
             }

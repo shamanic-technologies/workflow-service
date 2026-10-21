@@ -1,8 +1,10 @@
 import { Router } from "express";
-import { eq, and, or, inArray, asc } from "drizzle-orm";
+import { eq, and, or, inArray, asc, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { workflows } from "../db/schema.js";
+import { workflows, workflowDynastyMerges } from "../db/schema.js";
+import { loadOpenMerges, finalSurvivor, formatMerge } from "../lib/dynasty-merge.js";
 import {
+  DynastyMergesQuerySchema,
   PublicWorkflowsQuerySchema,
   PublicWorkflowDefinitionsQuerySchema,
 } from "../schemas.js";
@@ -57,6 +59,7 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
     }
 
     const rows = await db.select().from(workflows).where(and(...conditions));
+    const openMerges = await loadOpenMerges();
 
     // Build a forward map: deprecated row id -> successor id (whichever upgrade
     // points back via created_from_workflow). Computed from the same row set so
@@ -86,10 +89,35 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
         createdAt: w.createdAt ? w.createdAt.toISOString() : null,
         ...executableUntilFields(w),
         deprecation: servedDeprecation(w),
+        mergedIntoDynastySlug: finalSurvivor(w.workflowDynastySlug, openMerges),
       })),
     });
   } catch (err: unknown) {
     console.error("[workflow-service] GET /public/workflows error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /public/workflows/dynasty-merges — every dynasty merge record (TPL-DYNASTY-1021-WF)
+router.get("/public/workflows/dynasty-merges", requireApiKey, async (req, res) => {
+  try {
+    const query = DynastyMergesQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      res.status(400).json({ error: "Validation error", details: query.error });
+      return;
+    }
+    const conditions = [];
+    if (query.data.featureSlug) conditions.push(eq(workflowDynastyMerges.featureSlug, query.data.featureSlug));
+    if ((query.data.state ?? "open") === "open") conditions.push(isNull(workflowDynastyMerges.unmergedAt));
+    const rows = await db
+      .select()
+      .from(workflowDynastyMerges)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(asc(workflowDynastyMerges.mergedAt));
+    const openMerges = await loadOpenMerges();
+    res.json({ merges: rows.map((m) => formatMerge(m, openMerges)) });
+  } catch (err: unknown) {
+    console.error("[workflow-service] GET /public/workflows/dynasty-merges error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
