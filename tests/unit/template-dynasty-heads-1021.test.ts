@@ -32,6 +32,14 @@ describe("TPL-DYNASTY-1021-WF head fixes", () => {
     }
   });
 
+  it("a dynasty whose signature rules out a greeting gets the spacing rule without the greeting line; an idle dynasty is untouched", () => {
+    const src = fixture("cold-email-v40.json");
+    const stack = planHead("cold-click-recommendation-stack-named", src.prompt);
+    expect(stack).toContain(SPACING_BLOCK);
+    expect(stack).not.toContain("stays alone on its own line");
+    expect(planHead("cold-reply-pain-question-blind", src.prompt)).toBeNull();
+  });
+
   it("spacing goes in once, before the input section, for any other head", () => {
     const src = fixture("cold-email-v40.json");
     const p = withSpacing(src.prompt);
