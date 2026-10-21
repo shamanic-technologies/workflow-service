@@ -166,3 +166,73 @@ export async function createPromptVersion(
 
   return { template: (await res.json()) as PromptTemplate, created: res.status === 201 };
 }
+
+// --- Template dynasties (TPL-DYNASTY-1021): content-generation owns the catalogue ----------------------------
+
+export interface TemplateDynasty {
+  slug: string;
+  name: string;
+  description: string;
+  signature: string;
+  identity: "blind" | "named";
+  featureSlug: string;
+  legKey: string;
+  head: string | null;
+  versions: Array<{ type: string; position: number; status?: string; addedAt?: string }>;
+}
+
+/** Every template dynasty of one pipe (feature x leg). Throws on any failure: never a guess. */
+export async function fetchTemplateDynasties(featureSlug: string, legKey: string): Promise<TemplateDynasty[]> {
+  const { baseUrl, apiKey } = getConfig();
+  const res = await fetch(
+    `${baseUrl}/internal/template-dynasties?featureSlug=${encodeURIComponent(featureSlug)}&legKey=${encodeURIComponent(legKey)}`,
+    { headers: { "x-api-key": apiKey }, signal: AbortSignal.timeout(600_000) },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`content-generation error: GET /internal/template-dynasties -> ${res.status}: ${text}`);
+  }
+  return ((await res.json()) as { dynasties: TemplateDynasty[] }).dynasties;
+}
+
+/** The dynasty's head template (the one every workflow on it writes with). Throws on any failure. */
+export async function fetchTemplateDynastyHead(slug: string): Promise<{ dynasty: TemplateDynasty; template: PromptTemplate }> {
+  const { baseUrl, apiKey } = getConfig();
+  const res = await fetch(`${baseUrl}/internal/template-dynasties/${encodeURIComponent(slug)}/head`, {
+    headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(600_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`content-generation error: GET /internal/template-dynasties/${slug}/head -> ${res.status}: ${text}`);
+  }
+  return (await res.json()) as { dynasty: TemplateDynasty; template: PromptTemplate };
+}
+
+/**
+ * A new head version of a dynasty (content-generation names its type). The refusal (twin text, a variable the head
+ * does not declare, a non-neutral or revealing text) is returned as-is so the caller can relay it.
+ */
+export async function addTemplateDynastyVersion(
+  slug: string,
+  prompt: string,
+  variables: PromptVariable[],
+): Promise<{ ok: true; template: PromptTemplate } | { ok: false; status: number; body: unknown }> {
+  const { baseUrl, apiKey } = getConfig();
+  const res = await fetch(`${baseUrl}/internal/template-dynasties/${encodeURIComponent(slug)}/versions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": apiKey },
+    body: JSON.stringify({ prompt, variables }),
+    signal: AbortSignal.timeout(600_000),
+  });
+  const text = await res.text();
+  let body: unknown = text;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // non-JSON refusal: relayed as text
+  }
+  if (res.status === 201 || res.status === 200) return { ok: true, template: (body as { template: PromptTemplate }).template };
+  if (res.status >= 500) throw new Error(`content-generation error: POST /internal/template-dynasties/${slug}/versions -> ${res.status}: ${text}`);
+  return { ok: false, status: res.status, body };
+}

@@ -25,6 +25,7 @@ describe("summarizeContentGeneration", () => {
     expect(summarizeContentGeneration(dag)).toEqual({
       contentModel: "deepseek-pro",
       contentPromptType: "cold-email",
+      contentTemplateDynasty: null,
     });
   });
 
@@ -64,6 +65,7 @@ describe("summarizeContentGeneration", () => {
     expect(summarizeContentGeneration(dag)).toEqual({
       contentModel: null,
       contentPromptType: "cold-email",
+      contentTemplateDynasty: null,
     });
   });
 
@@ -75,6 +77,7 @@ describe("summarizeContentGeneration", () => {
     expect(summarizeContentGeneration(dag)).toEqual({
       contentModel: null,
       contentPromptType: null,
+      contentTemplateDynasty: null,
     });
   });
 
@@ -90,6 +93,7 @@ describe("summarizeContentGeneration", () => {
     expect(summarizeContentGeneration(dag)).toEqual({
       contentModel: null,
       contentPromptType: "cold-email",
+      contentTemplateDynasty: null,
     });
   });
 
@@ -110,6 +114,7 @@ describe("summarizeContentGeneration", () => {
     expect(summarizeContentGeneration(dag)).toEqual({
       contentModel: null,
       contentPromptType: "cold-email",
+      contentTemplateDynasty: null,
     });
   });
 
@@ -122,14 +127,15 @@ describe("summarizeContentGeneration", () => {
       },
     ] as unknown as DAG["nodes"]);
 
-    expect(summarizeContentGeneration(dag)).toEqual({ contentModel: null, contentPromptType: null });
+    expect(summarizeContentGeneration(dag)).toEqual({ contentModel: null, contentPromptType: null, contentTemplateDynasty: null });
   });
 
   it("tolerates a missing or empty dag", () => {
-    expect(summarizeContentGeneration(null)).toEqual({ contentModel: null, contentPromptType: null });
+    expect(summarizeContentGeneration(null)).toEqual({ contentModel: null, contentPromptType: null, contentTemplateDynasty: null });
     expect(summarizeContentGeneration({ nodes: [], edges: [] })).toEqual({
       contentModel: null,
       contentPromptType: null,
+      contentTemplateDynasty: null,
     });
   });
 });

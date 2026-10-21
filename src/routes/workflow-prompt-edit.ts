@@ -10,7 +10,8 @@ import { PromptEditRequestSchema } from "../schemas.js";
 import type { DAG } from "../lib/dag-validator.js";
 import { computeDAGSignature } from "../lib/dag-signature.js";
 import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
-import { fetchPromptTemplate, createPromptVersion } from "../lib/content-generation-client.js";
+import { fetchPromptTemplate, createPromptVersion, fetchTemplateDynastyHead, addTemplateDynastyVersion } from "../lib/content-generation-client.js";
+import { templateDynastyOf } from "../lib/template-dynasty.js";
 import { checkPromptVariableContract, repointPromptTemplate } from "../lib/prompt-edit.js";
 import { validateClientDag } from "../lib/validate-client-dag.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
@@ -78,6 +79,51 @@ async function handlePromptEdit(
         : `Dynasty "${source.workflowDynastySlug}" has no active version to upgrade.`,
       activeWorkflowId: active?.id ?? null,
       activeWorkflowSlug: active?.workflowSlug ?? null,
+    });
+    return;
+  }
+
+  // TPL-DYNASTY-1021-WF: a workflow writing with a template DYNASTY renders its live head, so an edit is a new head
+  // version of that dynasty (every workflow on it gets the fix, no workflow version), never a repointed DAG.
+  const templateDynasty = templateDynastyOf(source.dag as DAG);
+  if (templateDynasty) {
+    if (body.action === "fork") {
+      res.status(409).json({
+        error:
+          `"${source.workflowSlug}" writes with template dynasty "${templateDynasty}": a prompt edit is a new version of that ` +
+          `dynasty (action "upgrade"), which every workflow on it writes with. A different email is a different template dynasty.`,
+        code: "template_dynasty_workflow",
+      });
+      return;
+    }
+    let head;
+    try {
+      head = await fetchTemplateDynastyHead(templateDynasty);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    if (body.prompt === head.template.prompt) {
+      res.status(400).json({ error: "The edited prompt is identical to the current one; nothing to change." });
+      return;
+    }
+    const headBreak = checkPromptVariableContract(head.template.prompt, body.prompt);
+    if (headBreak) {
+      res.status(422).json(headBreak);
+      return;
+    }
+    const added = await addTemplateDynastyVersion(templateDynasty, body.prompt, head.template.variables);
+    if (!added.ok) {
+      const refusal = added.body as { error?: string; code?: string };
+      res.status(422).json({ error: refusal?.error ?? `content-generation refused the new version (${added.status})`, code: refusal?.code ?? null });
+      return;
+    }
+    noteWorkflowWrite();
+    res.status(201).json({
+      action: "upgraded",
+      workflow: formatWorkflow(source),
+      sourceWorkflow: { id: source.id, workflowSlug: source.workflowSlug, workflowDynastySlug: source.workflowDynastySlug, version: source.version },
+      promptTemplate: { previousType: head.template.type, type: added.template.type },
     });
     return;
   }

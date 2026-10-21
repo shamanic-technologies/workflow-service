@@ -5,6 +5,9 @@ import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
 const mockDbRows: Record<string, unknown>[] = [];
 const mockSelectResponses: Record<string, unknown>[][] = [];
 
+// The duplicate-on-pipe guard reads content-generation + features-service: covered by tests/unit/template-dynasty.test.ts.
+vi.mock("../../src/lib/pipe-duplicate.js", () => ({ refuseIfPipeDuplicate: vi.fn().mockResolvedValue(false) }));
+
 vi.mock("../../src/db/index.js", () => {
   const mockDb: Record<string, unknown> = {
     insert: () => ({
