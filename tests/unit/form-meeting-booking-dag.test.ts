@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { LEG_BEST_LLM_MODEL_REF, LEG_BEST_LLM_PROVIDER_REF } from "../../src/lib/leg-best-writer.js";
 import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
@@ -148,7 +149,10 @@ describe("form -> meeting booked DAG", () => {
   it("writes through chat-service /complete on Opus with a strict schema", () => {
     const chat = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
     expect(chat.map((n) => n.id)).toEqual(["draft-answer"]);
-    expect(chat[0].config?.body).toMatchObject({ provider: "anthropic", model: "opus", responseFormat: "json" });
+    // BEST-TPL-LLM-1022: the writer states no LLM; each run writes with the leg's best (features-service).
+    expect(chat[0].config?.body).toMatchObject({ responseFormat: "json" });
+    expect(chat[0].config?.body).not.toHaveProperty("model");
+    expect(chat[0].inputMapping).toMatchObject({ "body.model": LEG_BEST_LLM_MODEL_REF, "body.provider": LEG_BEST_LLM_PROVIDER_REF });
     expect(ANSWER_RESPONSE_SCHEMA.additionalProperties).toBe(false);
     expect([...ANSWER_RESPONSE_SCHEMA.required].sort()).toEqual(Object.keys(ANSWER_RESPONSE_SCHEMA.properties).sort());
   });

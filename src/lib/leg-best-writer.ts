@@ -162,3 +162,97 @@ export function freeUnstatedWriter(dag: DAG): DAG {
 export function freeGeneratedWriter(dag: DAG): DAG {
   return dag.nodes.filter(isGenerate).length === 1 ? withLegBestWriter(dag) : dag;
 }
+
+export const LLM_PICK_NODE_ID = "llm-pick";
+export const LLM_PLAN_NODE_ID = "llm-plan";
+export const LEG_BEST_LLM_MODEL_REF = `$ref:${LLM_PLAN_NODE_ID}.output.model`;
+export const LEG_BEST_LLM_PROVIDER_REF = `$ref:${LLM_PLAN_NODE_ID}.output.provider`;
+
+/**
+ * features-service's `llmUnavailableReason` codes that mean the campaign's STRATEGY leaves no LLM: such a run writes
+ * nothing (a strategy excluding an LLM never gets it). Any other null (a leg not measured per writer yet) keeps the LLM
+ * the workflow states, loudly.
+ */
+export const STRATEGY_EXCLUSION_REASONS = ["strategy_allows_none"] as const;
+
+/**
+ * The LLM pick for a chat-service `/complete` writer (a pipe with an LLM and no template). A run whose writer is
+ * skipped (nobody to write to) plans nothing. A strategy leaving no LLM THROWS (nothing written); a leg features-service
+ * does not rank yet writes with `fallback`, the LLM the workflow states, logged as such. Returns the LLM actually used.
+ */
+export function llmPlanCode(fallback: { provider: string; model: string }): string {
+  return `export async function main(pick, skip) {
+  if (skip === true) return { skipped: true, provider: null, model: null, picked: false };
+  const leg = pick && pick.legKey ? pick.legKey : "unknown leg";
+  const l = pick ? pick.llm : null;
+  if (!l || typeof l.model !== "string" || l.model.length === 0 || typeof l.provider !== "string" || l.provider.length === 0) {
+    const reason = (pick && pick.llmUnavailableReason) || "features-service served none";
+    if (${JSON.stringify([...STRATEGY_EXCLUSION_REASONS])}.includes(reason)) {
+      throw new Error("[llm-plan] the campaign's strategy leaves no LLM on " + leg + ": " + reason + ". Nothing is written.");
+    }
+    const fallback = ${JSON.stringify(fallback)};
+    console.warn("[llm-plan] " + leg + " has no ranked LLM yet (" + reason + "): writing with the workflow's own " + fallback.provider + "/" + fallback.model);
+    return { skipped: false, provider: fallback.provider, model: fallback.model, picked: false, reason, legKey: pick && pick.legKey ? pick.legKey : null };
+  }
+  console.log("[llm-plan] " + leg + (pick.strategyId ? " (strategy " + pick.strategyId + ")" : "") + ": LLM " + l.provider + "/" + l.model +
+    " (place " + l.place + ", " + (l.isMature ? "mature" : "learning") + ", $" + l.spentUsd + " spent, " + l.outcomes + " outcomes)");
+  return { skipped: false, provider: l.provider, model: l.model, picked: true, legKey: pick.legKey ?? null, strategyId: pick.strategyId ?? null };
+}`;
+}
+
+const isComplete = (n: DAGNode) => n.type === "http.call" && n.config?.service === "chat" && n.config?.path === "/complete";
+
+/** True when the chat writer `nodeId` writes with its leg's best LLM, picked per run. */
+export function writesWithLegBestLlm(dag: { nodes?: DAGNode[] } | null | undefined, nodeId: string): boolean {
+  const node = (dag?.nodes ?? []).find((n) => n.id === nodeId);
+  return !!node && node.inputMapping?.["body.model"] === LEG_BEST_LLM_MODEL_REF && (dag?.nodes ?? []).some((n) => n.id === LLM_PICK_NODE_ID);
+}
+
+/**
+ * The DAG whose chat-service `/complete` writer `nodeId` writes with the LLM features-service ranks best on the leg
+ * (BEST-TPL-LLM-1022): `llm-pick` -> `llm-plan` spliced into every edge running into it, its static
+ * `body.provider`/`body.model` replaced by the plan's (and no `temperature`, which a picked model may refuse); the
+ * stated LLM becomes the plan's fallback for a leg not ranked yet. The writer's `skip` mapping (if any) rides both, so
+ * a run with nobody to write to asks nothing. Idempotent. Only the WRITER is picked: a reading/classifying call keeps its model.
+ */
+export function withLegBestLlm(dag: DAG, nodeId: string): DAG {
+  const node = dag.nodes.find((n) => n.id === nodeId);
+  if (!node || !isComplete(node)) throw new Error(`withLegBestLlm: "${nodeId}" is not a chat-service /complete call`);
+  if (writesWithLegBestLlm(dag, nodeId)) return dag;
+  if (dag.nodes.some((n) => n.id === LLM_PICK_NODE_ID || n.id === LLM_PLAN_NODE_ID)) throw new Error("withLegBestLlm: the DAG already picks an LLM for another writer");
+  const stated = node.config?.body as Record<string, unknown> | undefined;
+  if (typeof stated?.provider !== "string" || typeof stated?.model !== "string") {
+    throw new Error(`withLegBestLlm: "${nodeId}" states no provider/model to write with while its leg is not ranked`);
+  }
+  const skip: Record<string, string> = node.inputMapping?.skip ? { skip: node.inputMapping.skip } : {};
+  const pick: DAGNode = {
+    id: LLM_PICK_NODE_ID,
+    type: "http.call",
+    config: { service: "features", method: "GET", path: WRITER_PICK_PATH },
+    inputMapping: { "query.workflowSlug": "$ref:flow_input.workflowSlug", "query.campaignId": "$ref:flow_input.campaignId", ...skip },
+    retries: 2,
+  };
+  const plan: DAGNode = {
+    id: LLM_PLAN_NODE_ID,
+    type: "script",
+    config: { code: llmPlanCode({ provider: stated.provider, model: stated.model }) },
+    retries: 0,
+    inputMapping: { pick: `$ref:${LLM_PICK_NODE_ID}.output`, ...skip },
+  };
+  // `temperature` goes too: chat-service refuses it on models that take no sampling parameter, and any may be picked.
+  const body = withoutKeys(node.config?.body as Record<string, unknown> | undefined, ["provider", "model", "temperature"]);
+  const picked: DAGNode = {
+    ...node,
+    config: { ...node.config, body },
+    inputMapping: { ...node.inputMapping, "body.provider": LEG_BEST_LLM_PROVIDER_REF, "body.model": LEG_BEST_LLM_MODEL_REF },
+  };
+  return {
+    ...dag,
+    nodes: dag.nodes.flatMap((n) => (n.id === nodeId ? [pick, plan, picked] : [n])),
+    edges: [
+      ...dag.edges.map((e) => (e.to === nodeId ? { ...e, to: LLM_PICK_NODE_ID } : e)),
+      { from: LLM_PICK_NODE_ID, to: LLM_PLAN_NODE_ID },
+      { from: LLM_PLAN_NODE_ID, to: nodeId },
+    ],
+  };
+}

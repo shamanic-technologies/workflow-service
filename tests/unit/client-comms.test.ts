@@ -3,6 +3,7 @@
  * Sophie parle (MCP, API, Copilot, WA, Email, etc) »): every writer reads chat-service's `client-comms` skill LIVE,
  * right before its model call, and writes in that voice. A staff edit of the skill reaches the very next message.
  */
+import { LLM_PICK_NODE_ID, LLM_PLAN_NODE_ID } from "../../src/lib/leg-best-writer.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -90,7 +91,9 @@ describe.each(WRITERS)("$name reads client-comms live before it writes", (w) => 
     const read = node(w.dag, CLIENT_COMMS_READ_NODE_ID);
     expect(read.config).toEqual({ service: "chat", method: "GET", path: "/internal/skills/{slug}", params: { slug: "client-comms" } });
     expect(read.config).not.toHaveProperty("tolerateFailure");
-    expect(w.dag.edges.filter((e) => e.to === w.draft)).toEqual([{ from: CLIENT_COMMS_VOICE_NODE_ID, to: w.draft }]);
+    // BEST-TPL-LLM-1022: the voice runs into the leg's LLM pick, which runs into the writer.
+    expect(w.dag.edges.filter((e) => e.to === LLM_PICK_NODE_ID)).toEqual([{ from: CLIENT_COMMS_VOICE_NODE_ID, to: LLM_PICK_NODE_ID }]);
+    expect(w.dag.edges.filter((e) => e.to === w.draft)).toEqual([{ from: LLM_PLAN_NODE_ID, to: w.draft }]);
     expect(w.dag.edges).toContainEqual({ from: CLIENT_COMMS_READ_NODE_ID, to: CLIENT_COMMS_VOICE_NODE_ID });
     expect(node(w.dag, w.draft).inputMapping?.["body.systemPrompt"]).toBe(`$ref:${CLIENT_COMMS_VOICE_NODE_ID}.output.systemPrompt`);
     expect(node(w.dag, CLIENT_COMMS_VOICE_NODE_ID).inputMapping?.skill).toBe(`$ref:${CLIENT_COMMS_READ_NODE_ID}.output`);

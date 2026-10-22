@@ -73,6 +73,7 @@
  * with `?.`, because on another path the node it reads never ran.
  */
 import { withClientCommsVoice } from "./client-comms.js";
+import { withLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -763,7 +764,10 @@ export const CHANNEL_UNREACHABLE_CODES = ["no_phone_known", "not_on_whatsapp"] a
  * before this node.
  */
 export const RECORD_PLAN_CODE = `
-export async function main(person, send, currentDate, reach, final) {
+// The LLM the writer actually used this run (llm-plan: the leg's pick, else the workflow's own).
+let WRITER_MODEL = null;
+export async function main(person, send, currentDate, reach, final, writer) {
+  WRITER_MODEL = writer && typeof writer.model === "string" ? writer.model : null;
   const out = plan(person, send, currentDate, reach, final);
   // A look that decided to send nothing (later, stop) states no delivery: nothing was attempted.
   if (out.decided === true) {
@@ -834,7 +838,7 @@ function plan(person, send, currentDate, reach, final) {
   if (person?.kind === "followup") {
     // Sent: acted, due again at the model's date (the queue row is the date's only store).
     // BEST-TPL-LLM-1022: the act names the LLM that wrote it, so features-service can measure it per leg.
-    if (!refused) return { action: "record", outcome: "sent", body: { kind: "acted", nextDueAt: nextAt(), llmAlias: ${JSON.stringify(COLD_WHATSAPP_LLM.model)} } };
+    if (!refused) return { action: "record", outcome: "sent", body: { kind: "acted", nextDueAt: nextAt(), llmAlias: WRITER_MODEL ?? ${JSON.stringify(COLD_WHATSAPP_LLM.model)} } };
     // The brand's WhatsApp cannot write (not linked, not connected, no account automation may write from): nothing
     // was sent, the person stays followed up, at the model's date, else (refused before any draft) a recheck later.
     if (${JSON.stringify(BRAND_SIDE_REFUSAL_CODES)}.includes(code)) {
@@ -890,7 +894,7 @@ const RECORDED_DELIVERY = { "body.delivery": "$ref:record-plan.output.delivery" 
 
 /** The writer, its message drafted in our voice (the `client-comms` skill, read live before `draft-message`). */
 export function buildColdWhatsappOutreachDag(): DAG {
-  return withClientCommsVoice(coldWhatsappOutreachDagUnvoiced(), "draft-message");
+  return withLegBestLlm(withClientCommsVoice(coldWhatsappOutreachDagUnvoiced(), "draft-message"), "draft-message");
 }
 
 function coldWhatsappOutreachDagUnvoiced(): DAG {
@@ -1209,6 +1213,7 @@ function coldWhatsappOutreachDagUnvoiced(): DAG {
           send: "$ref:send-whatsapp.output",
           currentDate: "$ref:flow_input.currentDate",
           reach: "$ref:reach-verdict.output",
+          writer: "$ref:llm-plan.output",
           final: "$ref:finalize-message.output",
         },
       },
