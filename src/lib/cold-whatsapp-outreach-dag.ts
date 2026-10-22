@@ -381,10 +381,14 @@ export const WEBSITE_VISIT_SOURCES = ["posthog", "gohighlevel"] as const;
 /**
  * Not a refusal: no visit is on record YET, but a source that could hold one was not really read (crm-service had
  * not joined the person there: `empty` with nothing asked, a failed or not-ready read, a re-read still running).
- * Nothing is drafted or sent; the row is looked at again `ADMISSION_RECHECK_HOURS` later, and admitted or refused then.
- * (2026-10-22: Albin, 3 PostHog visits, was refused for good on a PostHog read that asked nothing.)
+ * Nothing is drafted or sent; the row is looked at again and admitted or refused then: the FIRST look (the occurrence
+ * itself) again `ADMISSION_FIRST_RECHECK_MINUTES` later, any later look `ADMISSION_RECHECK_HOURS` later.
+ * (2026-10-22: Albin, 3 PostHog visits, was refused for good on a PostHog read that asked nothing: he had signed up
+ * 4 min before, and crm-service mirrors PostHog every 15 min. WA-WELCOME-VISIT-RACE-1022: the welcome is owed
+ * « instantanément », so the first recheck waits one mirror pass plus margin, never 6 hours.)
  */
 export const ADMISSION_RECHECK_CODE = "website_visit_unconfirmed";
+export const ADMISSION_FIRST_RECHECK_MINUTES = 20;
 export const ADMISSION_RECHECK_HOURS = 6;
 
 /**
@@ -427,7 +431,8 @@ export async function main(person, thread, sends, campaignId) {
       return name + ": " + String(r.status) + (r.error ? " (" + String(r.error) + ")" : "");
     }).filter(Boolean);
     if (unread.length) {
-      const dueAt = new Date(Date.now() + ${ADMISSION_RECHECK_HOURS} * 3600000).toISOString();
+      const waitMs = person.kind === "occurrence" ? ${ADMISSION_FIRST_RECHECK_MINUTES} * 60000 : ${ADMISSION_RECHECK_HOURS} * 3600000;
+      const dueAt = new Date(Date.now() + waitMs).toISOString();
       const reason = "no visit is on record yet, but " + unread.join("; ") + ": looked at again at " + dueAt;
       console.log("[cold-whatsapp-outreach] " + who + " not decided yet (${ADMISSION_RECHECK_CODE}): " + reason);
       return { gated: true, skipTeam: true, teamBody: null, code: "${ADMISSION_RECHECK_CODE}", notAdmitted: null, recheck: { dueAt, reason } };
