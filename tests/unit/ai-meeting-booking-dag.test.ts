@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { needsLlmAliasOnActs } from "../../src/lib/ai-meeting-booking-dag.js";
+import { LEG_BEST_LLM_MODEL_REF, LEG_BEST_LLM_PROVIDER_REF } from "../../src/lib/leg-best-writer.js";
 import { WHO_NOT_KNOWN } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
@@ -332,8 +333,11 @@ describe("ai-meeting-booking DAG", () => {
     const draft = byId.get("draft-reply");
     expect(draft?.config).toMatchObject({ service: "chat", method: "POST", path: "/complete" });
     const body = draft?.config?.body as Record<string, unknown>;
-    expect(body.provider).toBe("google");
-    expect(body.model).toBe("pro");
+    // BEST-TPL-LLM-1022: the writer states no LLM; each run writes with the leg's best (features-service).
+    expect(body.provider).toBeUndefined();
+    expect(body.model).toBeUndefined();
+    expect(draft?.inputMapping?.["body.model"]).toBe(LEG_BEST_LLM_MODEL_REF);
+    expect(draft?.inputMapping?.["body.provider"]).toBe(LEG_BEST_LLM_PROVIDER_REF);
     expect(body.responseSchema).toBeTruthy();
     // No provider SDK. Exactly two LLM hops, both on chat-service /complete:
     // listing the questions, then drafting. Never anthropic/haiku.
@@ -1302,7 +1306,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     const order = [
       "prior-generation", "compose-questions-prompt", "list-questions", "plan-lookups",
       "offer-answers", "offer-user-fields", "brand-user-fields", "gather-facts",
-      "sender-reach-plan", "sender-reach", "compose-prompt", "read-client-comms", "client-comms-voice", "draft-reply", "ground-draft", "check-answerable",
+      "sender-reach-plan", "sender-reach", "compose-prompt", "read-client-comms", "client-comms-voice", "llm-pick", "llm-plan", "draft-reply", "ground-draft", "check-answerable",
     ];
     for (let i = 0; i < order.length - 1; i++) {
       expect(dag.edges.some((e) => e.from === order[i] && e.to === order[i + 1])).toBe(true);
@@ -1899,7 +1903,8 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
     const bodies = chatBodies(buildAiMeetingBookingDag({ provider: "google", model: "pro" }));
     expect(bodies.map((b) => [b.id, b.body.temperature])).toEqual([
       ["list-questions", 0],
-      ["draft-reply", 0.4],
+      // BEST-TPL-LLM-1022: the writer's LLM is picked per run, and a picked model may refuse sampling.
+      ["draft-reply", undefined],
     ]);
   });
 
@@ -1908,8 +1913,9 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
     expect(bodies).toHaveLength(2);
     for (const b of bodies) {
       expect(b.body).not.toHaveProperty("temperature");
-      expect(b.body.provider).toBe("anthropic");
-      expect(b.body.model).toBe("opus");
+      // The writer's LLM is the leg's pick (BEST-TPL-LLM-1022); the question listing keeps the cell's.
+      expect(b.body.provider).toBe(b.id === "draft-reply" ? undefined : "anthropic");
+      expect(b.body.model).toBe(b.id === "draft-reply" ? undefined : "opus");
       expect(b.body.responseSchema).toBeTruthy();
     }
   });
@@ -1925,7 +1931,9 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
             ? { ...n, config: { ...(n.config as object), body: null } }
             : n.id === "record-followup"
               ? { ...n, config: { ...(n.config as object), body: { kind: "acted" } } }
-              : n,
+              : n.id === "llm-plan"
+                ? { ...n, config: null } // its fallback is the cell's own LLM (BEST-TPL-LLM-1022)
+                : n,
         ),
       });
     expect(strip(opus)).toBe(strip(gemini));

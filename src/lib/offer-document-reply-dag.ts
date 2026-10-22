@@ -31,11 +31,13 @@
  * Spend: Jev is declared by chat-service on this run, the send by instantly-service. Nothing here spends.
  */
 import { withClientCommsVoice } from "./client-comms.js";
+import { withLegBestLlm } from "./leg-best-writer.js";
 import type { DAG, DAGNode } from "./dag-validator.js";
 import {
   GROUND_DRAFT_CODE,
   REPLY_RESPONSE_SCHEMA,
   buildAiMeetingBookingDagUnvoiced,
+  withActNamingWriter,
   type AiMeetingBookingDagOptions,
 } from "./ai-meeting-booking-dag.js";
 
@@ -292,5 +294,5 @@ export function buildOfferDocumentReplyDag(opts: AiMeetingBookingDagOptions): DA
     throw new Error("offer-document-reply: the parent DAG no longer has a compose-prompt -> draft-reply edge to splice into");
   }
   // Our voice (the `client-comms` skill, read live) goes on the prompt the document step hands the writer.
-  return withClientCommsVoice({ ...parent, nodes, edges }, "draft-reply");
+  return withActNamingWriter(withLegBestLlm(withClientCommsVoice({ ...parent, nodes, edges }, "draft-reply"), "draft-reply"));
 }
