@@ -373,9 +373,28 @@ export const NOT_ADMITTED_CODES = {
 } as const;
 
 /**
+ * The timeline sources a website visit can come from (PostHog `visit`, a CRM `website_visit` funnel event).
+ * ADMISSION-RECHECK-1023: "no visit" is final only when each of them was really READ.
+ */
+export const WEBSITE_VISIT_SOURCES = ["posthog", "gohighlevel"] as const;
+
+/**
+ * Not a refusal: no visit is on record YET, but a source that could hold one was not really read (crm-service had
+ * not joined the person there: `empty` with nothing asked, a failed or not-ready read, a re-read still running).
+ * Nothing is drafted or sent; the row is looked at again `ADMISSION_RECHECK_HOURS` later, and admitted or refused then.
+ * (2026-10-22: Albin, 3 PostHog visits, was refused for good on a PostHog read that asked nothing.)
+ */
+export const ADMISSION_RECHECK_CODE = "website_visit_unconfirmed";
+export const ADMISSION_RECHECK_HOURS = 6;
+
+/**
  * WHO a message a trigger made due may reach (a run answering an occurrence, or the deferred look of one: a row this
  * campaign never sent anything to), decided off their merged thread BEFORE any model spend:
- *  - no visit to the brand's website on record = not admitted (`no_website_visit`);
+ *  - no visit to the brand's website on record = not admitted (`no_website_visit`), but ONLY when every source a
+ *    visit can come from (`WEBSITE_VISIT_SOURCES`) was really read: `ok`, `empty` with something asked, or
+ *    `not_connected` (nothing will ever come from it). Any other state (`empty` with nothing asked, failed, not
+ *    ready, stale, still re-reading, absent) = looked at again later (`recheck`, `ADMISSION_RECHECK_CODE`), never a
+ *    final refusal on a read that did not happen;
  *  - a message FROM them on any channel (`REPLY_SOURCES`: a visit, a click or a product use is not a message) = not
  *    admitted (`person_wrote`): they are already talking with the brand, a welcome would read as a bot;
  *  - otherwise crm-service is asked whether they are our staff or the brand's own team (`team-membership`, the next
@@ -396,7 +415,25 @@ export async function main(person, thread, sends, campaignId) {
     return { gated: true, skipTeam: true, teamBody: null, code, notAdmitted: { reason: code + ": " + reason } };
   };
   const visited = items.some((i) => i?.kind === "event" && ${JSON.stringify(WEBSITE_VISIT_STEPS)}.includes(i?.event?.step));
-  if (!visited) return refuse("${NOT_ADMITTED_CODES.noWebsiteVisit}", "no visit to the brand's website is on record for this person");
+  if (!visited) {
+    // An ABSENCE is final only off a source really read (ADMISSION-RECHECK-1023).
+    const sources = Array.isArray(thread.sources) ? thread.sources : [];
+    const unread = ${JSON.stringify(WEBSITE_VISIT_SOURCES)}.map((name) => {
+      const r = sources.find((x) => x?.source === name);
+      if (!r) return name + ": not in the answer";
+      if (r.refreshing === true) return name + ": still re-reading";
+      if (r.status === "ok" || r.status === "not_connected") return null;
+      if (r.status === "empty") return Array.isArray(r.asked) && r.asked.length > 0 ? null : name + ": empty with nothing asked";
+      return name + ": " + String(r.status) + (r.error ? " (" + String(r.error) + ")" : "");
+    }).filter(Boolean);
+    if (unread.length) {
+      const dueAt = new Date(Date.now() + ${ADMISSION_RECHECK_HOURS} * 3600000).toISOString();
+      const reason = "no visit is on record yet, but " + unread.join("; ") + ": looked at again at " + dueAt;
+      console.log("[cold-whatsapp-outreach] " + who + " not decided yet (${ADMISSION_RECHECK_CODE}): " + reason);
+      return { gated: true, skipTeam: true, teamBody: null, code: "${ADMISSION_RECHECK_CODE}", notAdmitted: null, recheck: { dueAt, reason } };
+    }
+    return refuse("${NOT_ADMITTED_CODES.noWebsiteVisit}", "no visit to the brand's website is on record for this person");
+  }
   const wrote = items.find((i) => i?.kind === "message" && i?.direction === "inbound" && ${JSON.stringify(REPLY_SOURCES)}.includes(i?.source));
   if (wrote) return refuse("${NOT_ADMITTED_CODES.personWrote}", "they already wrote to the brand (" + String(wrote.channel ?? wrote.source) + ", " + String(wrote.at ?? "date unknown") + ")");
   const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -437,6 +474,8 @@ export async function main(person, thread, sends, campaignId, admission, team) {
   if (admission?.gated === true) {
     const owedRow = person?.kind === "followup";
     const notAdmitted = (code, reason) => ({ skip: true, code, skipIfReplied: false, owed: owedRow, reason, notAdmitted: { reason: code + ": " + reason } });
+    // Not decided yet (a visit source not really read): nothing drafted, the row looked at again (ADMISSION-RECHECK-1023).
+    if (admission.recheck) return { skip: true, code: admission.code, skipIfReplied: false, owed: owedRow, reason: admission.recheck.reason, recheck: admission.recheck };
     if (admission.notAdmitted) return { ...notAdmitted(admission.code, admission.notAdmitted.reason), notAdmitted: admission.notAdmitted };
     if (!team || team.notCalled === true || typeof team.staff !== "boolean" || typeof team.ownTeam !== "boolean") {
       throw new Error("reach-plan: crm-service did not say whether this person is our staff or the brand's own team; nobody is welcomed blind");
@@ -777,6 +816,11 @@ function plan(person, send, currentDate, reach, final) {
   // A person a trigger made due who is not a new contact of the brand (WA-WELCOME-STRATEGY-1017): nothing was
   // drafted or sent, the row is stopped, and the run tells campaign-service the person was not admitted (final for
   // this occurrence, never redelivered). No delivery: nothing was attempted.
+  // Admission not decided yet (ADMISSION-RECHECK-1023): nothing drafted or sent, never stopped, the row due again.
+  if (reach?.recheck && (person?.kind === "occurrence" || person?.kind === "followup")) {
+    if (typeof reach.recheck.dueAt !== "string" || !reach.recheck.dueAt) throw new Error("record-plan: an admission recheck carries no date");
+    return { action: "record", outcome: "recheck", decided: true, code: String(reach.code), body: { kind: "scheduled", dueAt: reach.recheck.dueAt } };
+  }
   if (reach?.notAdmitted && (person?.kind === "occurrence" || person?.kind === "followup")) {
     return {
       action: "record",
