@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { needsLlmAliasOnActs } from "../../src/lib/ai-meeting-booking-dag.js";
 import { WHO_NOT_KNOWN } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
@@ -1913,7 +1914,7 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
     }
   });
 
-  it("differs from the Gemini DAG in the two chat bodies and nowhere else", () => {
+  it("differs from the Gemini DAG in the two chat bodies and the LLM its act names, nowhere else", () => {
     const gemini = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
     const opus = buildAiMeetingBookingDag({ provider: "anthropic", model: "opus", omitTemperature: true });
     const strip = (dag: DAG) =>
@@ -1922,10 +1923,16 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
         nodes: dag.nodes.map((n) =>
           (n.config as { service?: string } | undefined)?.service === "chat"
             ? { ...n, config: { ...(n.config as object), body: null } }
-            : n,
+            : n.id === "record-followup"
+              ? { ...n, config: { ...(n.config as object), body: { kind: "acted" } } }
+              : n,
         ),
       });
     expect(strip(opus)).toBe(strip(gemini));
+    // BEST-TPL-LLM-1022: the act names the LLM that wrote the reply.
+    expect((gemini.nodes.find((n) => n.id === "record-followup")!.config!.body as Record<string, unknown>).llmAlias).toBe("pro");
+    expect((opus.nodes.find((n) => n.id === "record-followup")!.config!.body as Record<string, unknown>).llmAlias).toBe("opus");
+    expect(needsLlmAliasOnActs(gemini)).toBe(false);
     expect(JSON.stringify(opus)).not.toBe(JSON.stringify(gemini));
   });
 });

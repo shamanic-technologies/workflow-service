@@ -37,6 +37,7 @@ import {
   isConversationResponder,
   needsCallRequest,
   needsClientCommsVoice,
+  needsLlmAliasOnActs,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
   needsLeadsOnlyClaim,
@@ -432,7 +433,8 @@ async function main() {
         needsPhoneOnlyPerson(w.dag) ||
         needsSenderPersona(w.dag) ||
         needsWhatsappTakeover(w.dag) ||
-        needsClientCommsVoice(w.dag))
+        needsClientCommsVoice(w.dag) ||
+        needsLlmAliasOnActs(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
