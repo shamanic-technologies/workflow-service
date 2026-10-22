@@ -6,6 +6,7 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   COLD_WHATSAPP_OUTREACH_LEG_KEYS,
   ADMISSION_PLAN_CODE,
+  ADMISSION_FIRST_RECHECK_MINUTES,
   ADMISSION_RECHECK_HOURS,
   WEBSITE_VISIT_SOURCES,
   COLD_WHATSAPP_OUTREACH_DESCRIPTION,
@@ -1002,9 +1003,34 @@ describe("a message a trigger made due reaches only a new contact of the brand (
         const plan = await recheckOf(sources);
         expect(plan).toMatchObject({ gated: true, skipTeam: true, teamBody: null, code: "website_visit_unconfirmed", notAdmitted: null });
         const due = Date.parse(plan.recheck.dueAt);
-        expect(due).toBeGreaterThanOrEqual(before + ADMISSION_RECHECK_HOURS * 3600000);
-        expect(due).toBeLessThan(before + ADMISSION_RECHECK_HOURS * 3600000 + 60000);
+        expect(due).toBeGreaterThanOrEqual(before + ADMISSION_FIRST_RECHECK_MINUTES * 60000);
+        expect(due).toBeLessThan(before + ADMISSION_FIRST_RECHECK_MINUTES * 60000 + 60000);
       }
+    }));
+
+    it("WA-WELCOME-VISIT-RACE-1022: Albin's ordering, the visit mirrored after the trigger, is welcomed at the next look", quiet(async () => {
+      // 15:31 signup + phone given, 15:35 the occurrence runs: PostHog not joined yet (empty, nothing asked).
+      const first = await admit(occ, { items: [], person: {}, sources: sourcesWith({ status: "empty", asked: [] }) }, { sends: [] }, "c-1");
+      expect(first).toMatchObject({ code: "website_visit_unconfirmed", notAdmitted: null });
+      // the first recheck lands right after one PostHog mirror pass (every 15 min), never hours later
+      expect(ADMISSION_FIRST_RECHECK_MINUTES).toBeGreaterThan(15);
+      expect(ADMISSION_FIRST_RECHECK_MINUTES).toBeLessThanOrEqual(30);
+      const row = { ...occ, kind: "followup", email: "a@x.com", dueAt: first.recheck.dueAt };
+      // next look: the mirror joined him, his visits are on the thread
+      const next = await admit(row, { items: [visit], person: { phones: [] }, sources: sourcesWith({ status: "ok", items: 3, asked: ["ph-1"] }) }, { sends: [] }, "c-1");
+      expect(next).toMatchObject({ gated: true, code: null, skipTeam: false, notAdmitted: null });
+      // a person who truly never visited (PostHog read with him asked) is still refused at that look
+      const never = await admit(row, { items: [], person: {}, sources: sourcesWith({ status: "empty", asked: ["ph-1"] }) }, { sends: [] }, "c-1");
+      expect(never).toMatchObject({ code: "no_website_visit", notAdmitted: { reason: expect.stringContaining("no_website_visit") } });
+    }));
+
+    it("a later look still not read is looked at again hours later, not every 20 minutes", quiet(async () => {
+      const row = { ...occ, kind: "followup", email: "a@x.com", dueAt: "2026-10-22T15:55:56Z" };
+      const before = Date.now();
+      const plan = await admit(row, { items: [], person: {}, sources: sourcesWith({ status: "empty", asked: [] }) }, { sends: [] }, "c-1");
+      const due = Date.parse(plan.recheck.dueAt);
+      expect(due).toBeGreaterThanOrEqual(before + ADMISSION_RECHECK_HOURS * 3600000);
+      expect(due).toBeLessThan(before + ADMISSION_RECHECK_HOURS * 3600000 + 60000);
     }));
 
     it("a recheck drafts and sends nothing, never stops the row: it is due again at the recheck date, with no delivery and no personNotAdmitted", quiet(async () => {
