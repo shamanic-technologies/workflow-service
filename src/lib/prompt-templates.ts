@@ -1,4 +1,5 @@
 import { NODE_TYPE_REGISTRY } from "./node-type-registry.js";
+import { DESCRIPTION_RULES } from "./plain-description.js";
 import { LEAD_CONTEXT_PATHS } from "./lead-context-variables.js";
 import type { CataloguePipe, CatalogueStep, CataloguePipeSummary } from "./catalogue-client.js";
 import type { DiscoveredService, DiscoverServiceEndpointsResponse } from "./api-registry-client.js";
@@ -391,7 +392,7 @@ You MUST respond with a JSON object matching this exact shape:
 
 \`\`\`json
 {
-  "description": "Human-readable description of what this workflow does on its pipe (1-2 sentences)",
+  "description": "What this workflow does on its pipe: ${DESCRIPTION_RULES}",
   "dag": "the DAG serialized as ONE JSON string"
 }
 \`\`\`

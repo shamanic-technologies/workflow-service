@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { plainDescription } from "../lib/plain-description.js";
 import { eq, and, or, sql } from "drizzle-orm";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -429,7 +430,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         return;
       }
       dag = clientDag;
-      resolvedDescription = body.description ?? existing.description ?? "";
+      resolvedDescription = plainDescription(body.description ?? existing.description ?? "");
       // category/channel/audienceType are LLM-inferred fields; with a client-supplied DAG
       // there is nothing to infer from, so inherit the existing dynasty's values.
       resolvedCategory = existing.category;
@@ -713,7 +714,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         await client.createFlow({
           path: flowPath,
           summary: workflowSlug,
-          description: body.description,
+          description: plainDescription(body.description),
           value: openFlow.value,
           schema: openFlow.schema,
         });
@@ -735,7 +736,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         workflowName,
         workflowDynastySlug,
         workflowDynastyName,
-        description: body.description,
+        description: plainDescription(body.description),
         category: body.category,
         channel: body.channel,
         audienceType: body.audienceType,
@@ -1543,7 +1544,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     // --- Case 1: No DAG provided — metadata-only in-place update ---
     if (!body.dag) {
       const updates: Record<string, unknown> = { updatedAt: new Date() };
-      if (body.description !== undefined) updates.description = body.description;
+      if (body.description !== undefined) updates.description = plainDescription(body.description);
       if (body.tags !== undefined) updates.tags = body.tags;
 
       const [updated] = await db
@@ -1571,7 +1572,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     // --- Case 2: Same signature — no structural change, update in-place ---
     if (newSignature === existing.signature) {
       const updates: Record<string, unknown> = { updatedAt: new Date(), dag: dag };
-      if (body.description !== undefined) updates.description = body.description;
+      if (body.description !== undefined) updates.description = plainDescription(body.description);
       if (body.tags !== undefined) updates.tags = body.tags;
 
       const openFlow = dagToOpenFlow(dag, existing.workflowSlug);
@@ -1624,7 +1625,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
       flowScopeOrgId: orgId,
       userId: res.locals.userId as string,
       runId: res.locals.runId as string,
-      description: body.description ?? existing.description,
+      description: plainDescription(body.description ?? existing.description),
       tags: body.tags ?? (existing.tags as string[]) ?? [],
     });
     if ("nameConflict" in forkResult) {

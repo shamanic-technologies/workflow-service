@@ -965,8 +965,8 @@ describe("a message a trigger made due reaches only a new contact of the brand (
   });
 
   it("the judged description states the three skips", () => {
-    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/no visit to the brand's website/);
-    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/already wrote a message/);
-    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/staff or the brand's own team/);
+    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/a visit to the brand's website/);
+    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/never wrote to the brand on any channel/);
+    expect(COLD_WHATSAPP_OUTREACH_DESCRIPTION).toMatch(/neither our staff nor the brand's own team/);
   });
 });

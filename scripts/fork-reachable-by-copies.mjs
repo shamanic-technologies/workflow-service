@@ -14,7 +14,7 @@
  * Env: WORKFLOW_SERVICE_API_KEY (required), BASE_URL (default localhost:8080), ORG_ID, USER_ID, RUN_ID (a REAL
  * staff run: runs-service rejects an unknown parent run).
  */
-import { reachableByChanges, reachableByDescription, reachableByOf, isReachableByCopy, normalizeMethods } from "../dist/lib/reachable-by-copy.js";
+import { reachableByChanges, reachableByDescription, reachableByOf, normalizeMethods } from "../dist/lib/reachable-by-copy.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -44,7 +44,8 @@ async function call(method, path, body) {
 const listed = await call("GET", `/workflows?featureSlug=${encodeURIComponent(CHANNEL)}&status=active`);
 if (listed.status !== 200) throw new Error(`list ${CHANNEL}: ${listed.status} ${JSON.stringify(listed.payload)}`);
 const rows = Array.isArray(listed.payload) ? listed.payload : (listed.payload.workflows ?? []);
-const generic = rows.filter((w) => !isReachableByCopy(w.description));
+// A copy is told apart by what its DAG states, never by its description (descriptions are rewritten for people).
+const generic = rows.filter((w) => reachableByOf(w.dag) === null);
 if (generic.length !== 1) throw new Error(`${CHANNEL}: expected exactly one generic active workflow, found ${generic.length}`);
 const source = (await call("GET", `/workflows/${generic[0].id}`)).payload;
 console.log(`${APPLY ? "=== APPLY ===" : "=== DRY RUN ==="} source ${source.workflowSlug} (dynasty ${source.workflowDynastySlug})`);
@@ -53,7 +54,7 @@ const out = [];
 for (const methods of SETS) {
   const changes = reachableByChanges(source.dag, methods);
   const description = reachableByDescription(source.description, methods);
-  const existing = rows.find((w) => isReachableByCopy(w.description) && reachableByOf(w.dag)?.join(",") === methods.join(","));
+  const existing = rows.find((w) => reachableByOf(w.dag)?.join(",") === methods.join(","));
   if (existing) {
     console.log(`reachableBy ${methods.join("+")}: already ${existing.workflowSlug} (${existing.id})`);
     out.push({ reachableBy: methods, workflowSlug: existing.workflowSlug, workflowDynastySlug: existing.workflowDynastySlug, id: existing.id });

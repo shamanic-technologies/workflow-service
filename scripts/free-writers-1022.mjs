@@ -7,7 +7,7 @@
  *   1. ask features-service for the leg's pick (`GET /internal/writer-pick?workflowSlug=`): a leg with no template or
  *      no LLM to pick (no template dynasty on the pipe, ranking not built...) is REPORTED and left as it is, since a
  *      freed workflow would then write nothing;
- *   2. UPGRADE the dynasty (new version, never a fork) to the freed DAG, its description stating the new rule;
+ *   2. UPGRADE the dynasty (new version, never a fork) to the freed DAG, its description kept;
  *   3. a 409 "same DAG signature" means another dynasty became the SAME workflow once freed (it differed only by the
  *      template/LLM it pinned): this dynasty is MERGED into it (non-destructive, reversible, execute forwards). When
  *      that twin serves ANOTHER pipe (merge refused `merge_across_pipes`), the freed DAG states its own pipe
@@ -23,17 +23,9 @@
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_FEATURES = ["sales-cold-email-outreach", "feedback-request-cold-email-outreach", "pr-cold-email-outreach", "sales-crm-email-outreach"];
-export const FREED_SENTENCE = "Writes each email with the template and the LLM ranked best on its leg at run time (lowest cost per outcome, narrowed by the campaign strategy).";
-
 /** The DAG stating the pipe it serves (inert at run time): keeps two pipes' identical steps two workflows. */
 export function markedForPipe(dag, pipeId) {
   return dag.forkedForPipe ? dag : { ...dag, forkedForPipe: pipeId };
-}
-
-/** The description of the freed version: the old one, plus the rule, once. */
-export function freedDescription(description) {
-  const d = (description ?? "").trim();
-  return d.includes(FREED_SENTENCE) ? d : `${d}${d ? " " : ""}${FREED_SENTENCE}`;
 }
 
 async function call(base, key, method, path, body, identity) {
@@ -108,7 +100,7 @@ async function run() {
           continue;
         }
         const upgrade = async (d) => {
-          const r = await call(WS, WS_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: dynasty, dag: d, description: freedDescription(wf.description) }, identity(wf.orgId));
+          const r = await call(WS, WS_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: dynasty, dag: d }, identity(wf.orgId));
           await new Promise((res) => setTimeout(res, 7000)); // createRateLimit: 10 per minute per org
           return r;
         };

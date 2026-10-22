@@ -65,9 +65,7 @@ export const FORM_MEETING_BOOKING_LEG_KEY = "form_submitted_to_meeting_booked";
 export const FORM_MEETING_BOOKING_PIPE_ID = `${FORM_MEETING_BOOKING_FEATURE_SLUG}|${FORM_MEETING_BOOKING_LEG_KEY}`;
 
 export const FORM_MEETING_BOOKING_DESCRIPTION =
-  "Answers a person who just filled a form in the brand's CRM, within minutes: a short, warm, direct answer to " +
-  "what they asked, written from their form answers and what the client told us, inviting them to book a meeting " +
-  "with the brand's booking link. Sent by email as a new thread, and on WhatsApp too when the brand has it linked.";
+  "Answers a person who just filled a form in the brand's CRM within minutes, by email in a new thread and on WhatsApp when the brand has it linked: a short, warm answer to what they asked, inviting them to book a meeting.";
 
 /** The model the answer is written with, through chat-service. Always-thinking: no temperature. */
 export const FORM_MEETING_BOOKING_LLM = { provider: "anthropic", model: "opus" } as const;

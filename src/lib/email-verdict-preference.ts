@@ -21,8 +21,7 @@ export const CATCH_ALL_COPY_SENTENCE =
 
 export const NO_EMAIL_VERDICT_MARKER = "No email verdict preference:";
 export const NO_EMAIL_VERDICT_SENTENCE =
-  `${NO_EMAIL_VERDICT_MARKER} its lead serve takes the people as the Lead Sourcing pipe kept them, ` +
-  "with the email checks the client chose there.";
+  `${NO_EMAIL_VERDICT_MARKER} writes to the people the lead sourcing kept, with the email checks the client chose there.`;
 
 const SERVE_PATHS = ["/orgs/buffer/next", "/buffer/next"];
 type Node = DAG["nodes"][number];

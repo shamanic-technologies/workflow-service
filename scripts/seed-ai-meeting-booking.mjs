@@ -86,14 +86,7 @@ export function cellForDag(dag) {
 }
 
 export const DESCRIPTION =
-  "Answers one prospect who showed sales interest and is owed our next message. " +
-  "Answers leads only: every follow-up claim asks lead-service for pure prospects of the brand " +
-  "(relationships pure_prospect), so a personal contact, a customer, team member, investor, partner, " +
-  "supplier or advisor of the brand is refused by lead-service and never answered. " +
-  "Claims them from the campaign's follow-up queue, reads what they wrote and what we already sent, " +
-  "answers the question they actually asked, proposes two concrete slots in their own timezone read " +
-  "from the offer's booking page, sends it as a reply in their existing thread from " +
-  "the mailbox that contacted them, and then records the answer and when the next one is owed.";
+  "Answers one prospect who showed sales interest and is owed our next message, in their own thread on the channel they last wrote on: answers what they asked, proposes two times from the offer's booking page in their timezone, and keeps following up until they book or say no. Leads only (pure_prospect): never answers a personal contact, a customer, a team member, an investor, a partner, a supplier or an advisor of the brand.";
 
 function headers() {
   return {

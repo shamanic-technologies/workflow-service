@@ -111,20 +111,7 @@ export const COLD_WHATSAPP_OUTREACH_LEG_KEYS = [
 export const coldWhatsappPipeIdOf = (legKey: string): string => `${COLD_WHATSAPP_OUTREACH_FEATURE_SLUG}|${legKey}`;
 
 export const COLD_WHATSAPP_OUTREACH_DESCRIPTION =
-  "Writes to one person per run on WhatsApp, from the brand's own linked WhatsApp number, to start a real " +
-  "conversation: a short first message written from the campaign's instruction, then follow-ups in the same " +
-  "conversation until they answer, each at a moment the model judges right from the whole thread (it may also wait, " +
-  "or stop on their own words), with no fixed count and no fixed delay. The brand's team takes over as soon as they " +
-  "answer, on any channel. A person we cannot reach on WhatsApp is named and left to the email path. On a run that " +
-  "answers a trigger occurrence (a person just gave their WhatsApp number, a signup not followed by a payment), it " +
-  "owes that person ONE message and never follows up after it: the model still judges the right moment from the " +
-  "whole thread and the hour where they are, and may wait to a later date it picks (they stay owed) when we wrote " +
-  "last and they have not answered, or it is not a sensible hour for them. A person known only by their phone is " +
-  "written to by phone, greeted by the first name they gave. On such a trigger run it writes ONLY to a new contact " +
-  "of the brand, and skips before any AI spend: a person with no visit to the brand's website on record; a person " +
-  "who already wrote a message to the brand on any channel (email, WhatsApp, LinkedIn; a visit or a click alone " +
-  "does not skip them); and our own staff or the brand's own team (its linked WhatsApp numbers, its sales rep, the " +
-  "members of its organization).";
+  "Starts a real WhatsApp conversation with one person per run from the brand's own number, written from the campaign's instruction, then follows up in the same conversation at moments it judges right until they answer, when the brand's team takes over. On a trigger (a number given, a signup not paid) it sends one message only, and only to a new contact: someone with a visit to the brand's website who never wrote to the brand on any channel and is neither our staff nor the brand's own team.";
 
 /** The model the message is written with, through chat-service. Always-thinking: no temperature. */
 export const COLD_WHATSAPP_LLM = { provider: "anthropic", model: "opus" } as const;

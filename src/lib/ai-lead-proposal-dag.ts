@@ -57,13 +57,7 @@ export const HOT_LEAD_PROPOSED_REASON = "hot_lead_proposed";
 export const HOT_LEAD_NO_COPILOT_USER_REASON = "hot_lead_no_copilot_user";
 
 export const AI_LEAD_PROPOSAL_DESCRIPTION =
-  "When a lead of the brand writes to it and wants to do business (Hot Lead), asks the brand's assistant in the " +
-  "Copilot to write ONE short message to the brand's own team: who the person is, what they wrote, and one concrete " +
-  "proposal of what we could set up for them, ending with a request for the team's go. Nothing is sent to the person " +
-  "and nothing is set up until a person of the team says go in that thread. Its claim calls lead-service POST " +
-  '/orgs/campaigns/{campaignId}/followups/claim-next with relationships set to "pure_prospect", so it acts only for ' +
-  "leads of the brand: a person lead-service refuses (a personal contact, a customer, team member, investor, partner, " +
-  "supplier or advisor of the brand) ends the run with personNotAdmitted.";
+  "When a lead of the brand writes and wants to do business, asks the brand's Copilot to send the brand's team one short message (who they are, what they wrote, one concrete proposal) and sends nothing to the person until the team says go. Leads only: never acts for a personal contact, a customer, a team member, an investor, a partner, a supplier or an advisor of the brand.";
 
 /** Whether this run carries an occurrence naming a person: a run that does not claims nobody. Pure. */
 export const PLAN_CLAIM_CODE = `
