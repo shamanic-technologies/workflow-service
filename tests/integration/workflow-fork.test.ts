@@ -205,6 +205,32 @@ describe("POST /workflows/:id/fork", () => {
     expect(res.body.workflow.description).toBe("cold email");
   });
 
+  it("409 when the new name collides, read through drizzle's DrizzleQueryError wrapper (drizzle-orm >= 0.44)", async () => {
+    const { DrizzleQueryError } = await import("drizzle-orm");
+    const source = sourceRow();
+    mockDbRows.push(source);
+    mockSelectResponses.push([source], [], []);
+    const realInsert = mockDb.insert;
+    mockDb.insert = () => ({
+      values: () => ({
+        returning: () => Promise.reject(new DrizzleQueryError("insert into workflows ...", [], Object.assign(
+          new Error('duplicate key value violates unique constraint "workflows_slug_unique"'),
+          { code: "23505", detail: "Key (workflow_slug)=(x) already exists." },
+        ))),
+      }),
+    });
+    try {
+      const res = await request.post(`/workflows/${SOURCE_ID}/fork`).set(AUTH).send({ changes: CHANGE });
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({
+        error: "A workflow with this name already exists",
+        detail: "Key (workflow_slug)=(x) already exists.",
+      });
+    } finally {
+      mockDb.insert = realInsert;
+    }
+  });
+
   it("409 naming the existing copy when the changed DAG already exists", async () => {
     const source = sourceRow();
     mockSelectResponses.push([source], [{ id: "00000000-0000-4000-8000-0000000000b2", workflowSlug: "sales-cold-email-outreach-vega" }]);
