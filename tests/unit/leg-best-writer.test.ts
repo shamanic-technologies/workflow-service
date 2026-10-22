@@ -16,7 +16,7 @@ import {
   freeGeneratedWriter,
 } from "../../src/lib/leg-best-writer.js";
 // @ts-expect-error: plain .mjs ops script
-import { freedDescription, FREED_SENTENCE } from "../../scripts/free-writers-1022.mjs";
+import { freedDescription, FREED_SENTENCE, markedForPipe } from "../../scripts/free-writers-1022.mjs";
 import { summarizeContentGeneration } from "../../src/lib/content-generation-summary.js";
 import { extractTemplateRefs } from "../../src/lib/validate-template-contracts.js";
 import { contentRefsOf } from "../../src/lib/deprecated-content.js";
@@ -179,5 +179,16 @@ describe("BEST-TPL-LLM-1022 fleet upgrade (scripts/free-writers-1022.mjs)", () =
       expect(validateDAG(freed).valid).toBe(true);
       expect(computeDAGSignature(freed)).toBe(computeDAGSignature(withLegBestWriter(nobelium)));
     }
+  });
+});
+
+describe("BEST-TPL-LLM-1022 same steps on two pipes", () => {
+  it("a freed DAG twin of another pipe's states its own pipe, so its signature differs; an already marked one is kept", () => {
+    const freed = withLegBestWriter(nobelium);
+    const marked = markedForPipe(freed, "sales-cold-email-outreach|lead_found_to_conversation");
+    expect(marked.forkedForPipe).toBe("sales-cold-email-outreach|lead_found_to_conversation");
+    expect(computeDAGSignature(marked)).not.toBe(computeDAGSignature(freed));
+    expect(markedForPipe(marked, "other|leg")).toBe(marked);
+    expect(validateDAG(marked).valid).toBe(true);
   });
 });
