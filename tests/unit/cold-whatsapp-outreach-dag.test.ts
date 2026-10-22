@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { LEG_BEST_LLM_MODEL_REF, LEG_BEST_LLM_PROVIDER_REF } from "../../src/lib/leg-best-writer.js";
 import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
@@ -134,7 +135,10 @@ describe("cold-whatsapp-outreach DAG", () => {
   it("writes through chat-service /complete on Opus with a strict schema, never Haiku", () => {
     const chat = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
     expect(chat.map((n) => n.id)).toEqual(["draft-message"]);
-    expect(chat[0].config?.body).toMatchObject({ provider: "anthropic", model: "opus", responseFormat: "json" });
+    // BEST-TPL-LLM-1022: the writer states no LLM; each run writes with the leg's best (features-service).
+    expect(chat[0].config?.body).toMatchObject({ responseFormat: "json" });
+    expect(chat[0].config?.body).not.toHaveProperty("model");
+    expect(chat[0].inputMapping).toMatchObject({ "body.model": LEG_BEST_LLM_MODEL_REF, "body.provider": LEG_BEST_LLM_PROVIDER_REF });
     expect(MESSAGE_RESPONSE_SCHEMA.additionalProperties).toBe(false);
     expect([...MESSAGE_RESPONSE_SCHEMA.required].sort()).toEqual(Object.keys(MESSAGE_RESPONSE_SCHEMA.properties).sort());
     expect(JSON.stringify(dag)).not.toMatch(/haiku/i);
@@ -704,7 +708,7 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
   const quietThread = { person: { phones: ["+33600000000"] }, items: [ourFirst] };
 
   /** One look: claim a due row, read, decide, send (or not), record. Returns what lead-service is told. */
-  async function look(dueAt: string, thread: unknown, draftJson: Record<string, unknown> | null) {
+  async function look(dueAt: string, thread: unknown, draftJson: Record<string, unknown> | null, writer?: unknown) {
     const claim = { found: true, followup: { id: "row-1", leadId: "l-1", email: "ana@x.com", brandId: "b-1", dueAt } };
     const person = await pick(claim, detail, undefined, noOccurrence);
     const r = await reach(person, thread, sends, campaignId);
@@ -712,9 +716,16 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
     const draft = r.skip === true ? { ok: false, skipped: true, notCalled: true } : { json: draftJson };
     const final = await fin(draft, person, campaignId, r, undefined);
     const send = final.skipSend === true ? { ok: false, skipped: true, notCalled: true } : { ok: true, status: "sent" };
-    const rec = await record(person, send, "2026-10-15", r, final);
+    const rec = await record(person, send, "2026-10-15", r, final, writer);
     return { person, reach: r, final, send, record: rec };
   }
+
+  it("BEST-TPL-LLM-1022: a sent look names the LLM the writer actually used (the leg's pick)", async () => {
+    const next = "2026-10-26T10:00:00.000Z";
+    const out = await look("2026-10-14T09:00:00Z", quietThread, { decision: "write", message: "Ana, still keen?", nextFollowUpAt: next, reason: "quiet" }, { model: "flash-lite", provider: "google", picked: true });
+    expect(out.record.body).toMatchObject({ kind: "acted", llmAlias: "flash-lite" });
+    expect(dag.nodes.find((n) => n.id === "record-plan")?.inputMapping?.writer).toBe("$ref:llm-plan.output");
+  });
 
   it("a follow-up look carries its due date from the queue claim", async () => {
     const p = await pick({ found: true, followup: { id: "row-1", leadId: "l-1", email: "ana@x.com", brandId: "b-1", dueAt: "2026-10-13T09:00:00Z" } }, detail, undefined, noOccurrence);

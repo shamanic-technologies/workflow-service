@@ -14,6 +14,13 @@ import {
   LEG_BEST_TEMPLATE_DYNASTY_REF,
   freeUnstatedWriter,
   freeGeneratedWriter,
+  withLegBestLlm,
+  writesWithLegBestLlm,
+  LLM_PICK_NODE_ID,
+  LLM_PLAN_NODE_ID,
+  llmPlanCode,
+  LEG_BEST_LLM_MODEL_REF,
+  LEG_BEST_LLM_PROVIDER_REF,
 } from "../../src/lib/leg-best-writer.js";
 // @ts-expect-error: plain .mjs ops script
 import { freedDescription, FREED_SENTENCE, markedForPipe } from "../../scripts/free-writers-1022.mjs";
@@ -190,5 +197,50 @@ describe("BEST-TPL-LLM-1022 same steps on two pipes", () => {
     expect(computeDAGSignature(marked)).not.toBe(computeDAGSignature(freed));
     expect(markedForPipe(marked, "other|leg")).toBe(marked);
     expect(validateDAG(marked).valid).toBe(true);
+  });
+});
+
+describe("BEST-TPL-LLM-1022 chat writers (withLegBestLlm)", () => {
+  const chatDag: DAG = {
+    nodes: [
+      { id: "compose", type: "script", config: { code: "export async function main() { return {}; }" } },
+      { id: "draft", type: "http.call", config: { service: "chat", method: "POST", path: "/complete", body: { provider: "anthropic", model: "opus", temperature: 0.4, responseFormat: "json" } }, inputMapping: { "body.message": "$ref:compose.output.message", skip: "$ref:compose.output.skip" } },
+    ],
+    edges: [{ from: "compose", to: "draft" }],
+  };
+  const picked = withLegBestLlm(chatDag, "draft");
+  const draft = picked.nodes.find((n) => n.id === "draft")!;
+
+  it("picks the writer's LLM per run; the writer states none, nor a temperature the pick may refuse", () => {
+    expect(draft.config!.body).toEqual({ responseFormat: "json" });
+    expect(draft.inputMapping).toMatchObject({ "body.provider": LEG_BEST_LLM_PROVIDER_REF, "body.model": LEG_BEST_LLM_MODEL_REF });
+    expect(picked.edges).toEqual([{ from: "compose", to: LLM_PICK_NODE_ID }, { from: LLM_PICK_NODE_ID, to: LLM_PLAN_NODE_ID }, { from: LLM_PLAN_NODE_ID, to: "draft" }]);
+    expect(picked.nodes.find((n) => n.id === LLM_PICK_NODE_ID)!.inputMapping).toMatchObject({ skip: "$ref:compose.output.skip", "query.workflowSlug": "$ref:flow_input.workflowSlug" });
+    expect(writesWithLegBestLlm(picked, "draft")).toBe(true);
+    expect(withLegBestLlm(picked, "draft")).toBe(picked);
+    expect(validateDAG(picked).valid).toBe(true);
+    expect(() => dagToOpenFlow(picked, "x")).not.toThrow();
+  });
+
+  const plan = async (pick: unknown, skip?: boolean) => {
+    const main = new Function(llmPlanCode({ provider: "anthropic", model: "opus" }).replace("export async function main", "return async function main"))() as (p: unknown, s?: boolean) => Promise<Record<string, unknown>>;
+    return main(pick, skip);
+  };
+
+  it("passes the picked provider + model on; a skipped writer plans nothing", async () => {
+    await expect(plan({ ...servedPick, llm: { ...servedPick.llm, provider: "google", model: "flash-lite" } })).resolves.toMatchObject({ provider: "google", model: "flash-lite", picked: true, skipped: false });
+    await expect(plan(null, true)).resolves.toEqual({ skipped: true, provider: null, model: null, picked: false });
+  });
+
+  it("a strategy leaving no LLM throws: nothing is written, never the workflow's own", async () => {
+    await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: "strategy_allows_none" })).rejects.toThrow(/strategy leaves no LLM.*strategy_allows_none/);
+  });
+
+  it("a leg features-service does not rank yet writes with the workflow's own LLM, and says so", async () => {
+    await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: "internal_pipe_not_measured_per_writer" })).resolves.toMatchObject({ provider: "anthropic", model: "opus", picked: false, reason: "internal_pipe_not_measured_per_writer" });
+  });
+
+  it("refuses a node that is not a chat /complete call", () => {
+    expect(() => withLegBestLlm(chatDag, "compose")).toThrow(/not a chat-service/);
   });
 });

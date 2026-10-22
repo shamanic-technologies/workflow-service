@@ -141,6 +141,7 @@
  */
 
 import { readsClientComms, withClientCommsVoice } from "./client-comms.js";
+import { LEG_BEST_LLM_MODEL_REF, withLegBestLlm, writesWithLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
@@ -2078,9 +2079,24 @@ export function needsLlmAliasOnActs(dag: { nodes?: Array<{ id?: string; config?:
   return !!rec && body?.kind === "acted" && typeof body.llmAlias !== "string";
 }
 
+/** True when a stored responder DAG's `draft-reply` still states its own LLM (BEST-TPL-LLM-1022: the leg picks it). */
+export function needsLegBestLlm(dag: DAG | null | undefined): boolean {
+  return (dag?.nodes ?? []).some((n) => n?.id === "draft-reply") && !writesWithLegBestLlm(dag, "draft-reply");
+}
+
+/** The sent reply's act names the LLM the writer actually used (the leg's pick, else the workflow's own). */
+export function withActNamingWriter(dag: DAG): DAG {
+  return {
+    ...dag,
+    nodes: dag.nodes.map((n) =>
+      n.id === "record-followup" ? { ...n, inputMapping: { ...n.inputMapping, "body.llmAlias": LEG_BEST_LLM_MODEL_REF } } : n,
+    ),
+  };
+}
+
 /** The responder, its reply written in our voice (the `client-comms` skill, read live before `draft-reply`). */
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
-  return withClientCommsVoice(buildAiMeetingBookingDagUnvoiced(opts), "draft-reply");
+  return withActNamingWriter(withLegBestLlm(withClientCommsVoice(buildAiMeetingBookingDagUnvoiced(opts), "draft-reply"), "draft-reply"));
 }
 
 /** The responder before our voice is spliced in: the offer-document copy derives from it, then voices its own draft. */

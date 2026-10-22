@@ -61,6 +61,9 @@ describe("the offer-document responder DAG", () => {
       "pick-document",
       "read-client-comms",
       "client-comms-voice",
+      // BEST-TPL-LLM-1022: the writer's LLM is the leg's pick.
+      "llm-pick",
+      "llm-plan",
     ]);
   });
 
@@ -68,13 +71,16 @@ describe("the offer-document responder DAG", () => {
     for (const n of parent.nodes) {
       const mine = dag.nodes.find((m) => m.id === n.id)!;
       if (n.id === "draft-reply") {
-        const { responseSchema, ...rest } = (n.config!.body as Record<string, unknown>);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { responseSchema, provider, model, temperature, ...rest } = (n.config!.body as Record<string, unknown>);
         expect(responseSchema).toEqual(REPLY_RESPONSE_SCHEMA);
         expect(mine.config).toEqual({ ...n.config, body: rest });
         expect(mine.inputMapping).toEqual({
           "body.message": "$ref:pick-document.output.message",
           "body.systemPrompt": "$ref:client-comms-voice.output.systemPrompt",
           "body.responseSchema": "$ref:pick-document.output.responseSchema",
+          "body.provider": "$ref:llm-plan.output.provider",
+          "body.model": "$ref:llm-plan.output.model",
         });
       } else if (n.id === "ground-draft") {
         expect(mine.config).toEqual({ ...n.config, code: GROUND_DRAFT_WITH_DOCUMENT_CODE });
@@ -82,6 +88,9 @@ describe("the offer-document responder DAG", () => {
       } else if (n.id === "send-reply") {
         expect(mine.config).toEqual(n.config);
         expect(mine.inputMapping).toEqual({ ...n.inputMapping, "body.attachments": "$ref:pick-document.output.attachments" });
+      } else if (n.id === "record-followup") {
+        // BEST-TPL-LLM-1022: the act names the LLM the writer actually used.
+        expect(mine).toEqual({ ...n, inputMapping: { ...n.inputMapping, "body.llmAlias": "$ref:llm-plan.output.model" } });
       } else {
         expect(mine).toEqual(n);
       }
@@ -89,7 +98,8 @@ describe("the offer-document responder DAG", () => {
     const parentEdges = parent.edges.filter((e) => !(e.from === "compose-prompt" && e.to === "draft-reply"));
     for (const e of parentEdges) expect(dag.edges).toContainEqual(e);
     expect(dag.edges).toContainEqual({ from: "pick-document", to: "read-client-comms" });
-    expect(dag.edges).toContainEqual({ from: "client-comms-voice", to: "draft-reply" });
+    expect(dag.edges).toContainEqual({ from: "client-comms-voice", to: "llm-pick" });
+    expect(dag.edges).toContainEqual({ from: "llm-plan", to: "draft-reply" });
     // Our voice goes on the prompt the document step hands the writer.
     expect(dag.nodes.find((n) => n.id === "client-comms-voice")?.inputMapping?.systemPrompt).toBe("$ref:pick-document.output.systemPrompt");
   });

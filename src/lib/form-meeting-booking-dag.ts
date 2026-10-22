@@ -50,6 +50,7 @@
  * through, before the send.
  */
 import { withClientCommsVoice } from "./client-comms.js";
+import { withLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -286,7 +287,7 @@ export const REFUSED = "results['finalize-answer']?.decision == 'answer' && resu
 
 /** The form responder, its answer drafted in our voice (the `client-comms` skill, read live before `draft-answer`). */
 export function buildFormMeetingBookingDag(): DAG {
-  return withClientCommsVoice(formMeetingBookingDagUnvoiced(), "draft-answer");
+  return withLegBestLlm(withClientCommsVoice(formMeetingBookingDagUnvoiced(), "draft-answer"), "draft-answer");
 }
 
 function formMeetingBookingDagUnvoiced(): DAG {
