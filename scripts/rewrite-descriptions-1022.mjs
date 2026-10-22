@@ -97,7 +97,7 @@ async function run() {
   }
   console.log(`${rows.length} workflows, ${todo.length} to rewrite, ${groups.size} distinct (description, shape) groups`);
 
-  const system = `You write the one description a workflow shows to the staff who pick workflows. ${DESCRIPTION_RULES} Facts about the platform: a content-generation /generate call writes a whole email SEQUENCE (the first email and its follow-ups, their number and spacing set by the template picked each run) and email-gateway /orgs/send sends that sequence, so such a workflow sends a cold email sequence with follow-ups, never "a single email with no follow-ups"; a chat-service /complete call is the model writing one message. No internal words (buffer, run, node, campaign service, unit); when the workflow finds nobody it simply stops for now, never say it pauses or stops a campaign. Read the DAG to learn what it actually does; the old description may be stale, internal or wrong, keep only what the DAG confirms plus any rule about who it reaches. Answer JSON {"description": "..."}.`;
+  const system = `You write the one description a workflow shows to the staff who pick workflows. ${DESCRIPTION_RULES} Facts about the platform: a content-generation /generate call writes a whole email SEQUENCE (the first email and its follow-ups, their number and spacing set by the template picked each run) and email-gateway /orgs/send sends that sequence, so such a workflow sends a cold email sequence with follow-ups, never "a single email with no follow-ups"; a chat-service /complete call is the model writing one message. No internal words (buffer, run, node, campaign service, unit); when the workflow finds nobody it simply stops for now, never say it pauses or stops a campaign. Read the DAG to learn what it actually does; the old description may be stale, internal or wrong, keep only what the DAG confirms plus any rule about who it reaches. Write AT MOST TWO sentences (join rules with commas or a colon), and never the word "template". Answer JSON {"description": "..."}.`;
   const schema = { type: "object", additionalProperties: false, required: ["description"], properties: { description: { type: "string" } } };
   const report = { written: 0, skippedOk: rows.length - todo.length, failed: [] };
   const CACHE = arg("--cache");
@@ -108,7 +108,7 @@ async function run() {
     const w = members[0];
     let description = typeof cache[key] === "string" && descriptionProblem(cache[key]) === null ? cache[key] : null;
     let problem = "no answer";
-    for (let attempt = 0; attempt < 2 && description === null && !APPLY_CACHED_ONLY; attempt++) {
+    for (let attempt = 0; attempt < 3 && description === null && !APPLY_CACHED_ONLY; attempt++) {
       const message = `Channel: ${w.featureSlug}\nOld description: ${w.description ?? "(none)"}\nDAG: ${JSON.stringify(dagShape(w.dag))}${attempt ? `\nYour previous answer was refused: ${problem}. Fix that.` : ""}`;
       const res = await call(CHAT, CHAT_KEY, "POST", "/complete", { provider: "anthropic", model: "sonnet", systemPrompt: system, message, responseFormat: "json", responseSchema: schema, maxTokens: 400 }, ours);
       if (res.status !== 200) {
