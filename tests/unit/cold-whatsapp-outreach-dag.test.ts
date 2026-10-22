@@ -729,7 +729,8 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
     expect(out.record).toEqual({
       action: "record",
       outcome: "sent",
-      body: { kind: "acted", nextDueAt: new Date(Date.parse(next)).toISOString() },
+      // BEST-TPL-LLM-1022: the act names the LLM that wrote it.
+      body: { kind: "acted", nextDueAt: new Date(Date.parse(next)).toISOString(), llmAlias: "opus" },
       delivery: { state: "delivered" },
     });
     const toRecord = dag.edges.find((e) => e.from === "check-record" && e.to === "record-followup")!;
