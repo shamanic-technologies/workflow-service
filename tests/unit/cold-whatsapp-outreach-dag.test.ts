@@ -6,6 +6,8 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   COLD_WHATSAPP_OUTREACH_LEG_KEYS,
   ADMISSION_PLAN_CODE,
+  ADMISSION_RECHECK_HOURS,
+  WEBSITE_VISIT_SOURCES,
   COLD_WHATSAPP_OUTREACH_DESCRIPTION,
   COMPOSE_MESSAGE_PROMPT_CODE,
   CRM_WHATSAPP_SEND,
@@ -915,8 +917,14 @@ describe("a message a trigger made due reaches only a new contact of the brand (
     expect(out).toMatchObject({ skip: false, code: null, reachBody: { brandId: "b-1", phone: "+33600000001" } });
   }));
 
+  // Every visit source really read and holding nothing (ADMISSION-RECHECK-1023).
+  const readEmpty = [
+    { source: "posthog", status: "empty", items: 0, asked: ["ph-1"], refreshing: false },
+    { source: "gohighlevel", status: "not_connected", items: 0, asked: [], refreshing: false },
+  ];
+
   it("no visit on record: skipped, crm-service not asked", quiet(async () => {
-    const plan = await admit(occ, { items: [], person: {} }, { sends: [] }, "c-1");
+    const plan = await admit(occ, { items: [], person: {}, sources: readEmpty }, { sends: [] }, "c-1");
     expect(plan).toMatchObject({ gated: true, skipTeam: true, teamBody: null, code: "no_website_visit" });
     const out = await reach(occ, {}, { sends: [] }, "c-1", plan, { ok: false, skipped: true, notCalled: true });
     expect(out).toMatchObject({ skip: true, code: "no_website_visit", notAdmitted: { reason: expect.stringContaining("no_website_visit") } });
@@ -945,7 +953,7 @@ describe("a message a trigger made due reaches only a new contact of the brand (
     expect(await admit({ kind: "followup", email: "a@x.com" }, { items: [] }, sent, "c-1")).toMatchObject({ gated: false });
     // The deferred look of an occurrence (nothing of this campaign was sent) is gated like the occurrence.
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await admit({ kind: "followup", email: "a@x.com", brandId: "b-1" }, { items: [] }, { sends: [] }, "c-1")).toMatchObject({ gated: true, code: "no_website_visit" });
+    expect(await admit({ kind: "followup", email: "a@x.com", brandId: "b-1" }, { items: [], sources: readEmpty }, { sends: [] }, "c-1")).toMatchObject({ gated: true, code: "no_website_visit" });
     spy.mockRestore();
   });
 
@@ -962,6 +970,66 @@ describe("a message a trigger made due reaches only a new contact of the brand (
       body: { kind: "stopped", reason: "whatsapp_own_team" },
     });
     expect(holds("results['record-plan']?.action == 'record'", { "record-plan": rec })).toBe(true);
+  });
+
+  describe("a refusal on the ABSENCE of a visit is final only off a source really read (ADMISSION-RECHECK-1023)", () => {
+    const sourcesWith = (posthog: Record<string, unknown> | null) => [
+      ...(posthog ? [{ source: "posthog", items: 0, asked: [], refreshing: false, ...posthog }] : []),
+      { source: "gohighlevel", status: "not_connected", items: 0, asked: [], refreshing: false },
+    ];
+    const recheckOf = async (sources: unknown) => admit(occ, { items: [], person: {}, sources }, { sends: [] }, "c-1");
+
+    it("read and empty (something asked), read ok, or not connected: refused for good, as before", quiet(async () => {
+      for (const ph of [{ status: "empty", asked: ["ph-1"] }, { status: "ok", items: 2, asked: ["ph-1"] }, { status: "not_connected" }]) {
+        const plan = await recheckOf(sourcesWith(ph));
+        expect(plan).toMatchObject({ gated: true, code: "no_website_visit", notAdmitted: { reason: expect.stringContaining("no_website_visit") } });
+        expect(plan.recheck).toBeUndefined();
+      }
+    }));
+
+    it("empty with nothing asked, failed, not ready, still re-reading, or absent: looked at again later, never refused", quiet(async () => {
+      const unread = [
+        sourcesWith({ status: "empty", asked: [] }), // 2026-10-22 Albin: crm-service had not joined his PostHog contact yet
+        sourcesWith({ status: "failed", error: "timeout" }),
+        sourcesWith({ status: "not_ready" }),
+        sourcesWith({ status: "stale", asked: ["ph-1"] }),
+        sourcesWith({ status: "empty", asked: ["ph-1"], refreshing: true }),
+        sourcesWith(null),
+        undefined,
+      ];
+      for (const sources of unread) {
+        const before = Date.now();
+        const plan = await recheckOf(sources);
+        expect(plan).toMatchObject({ gated: true, skipTeam: true, teamBody: null, code: "website_visit_unconfirmed", notAdmitted: null });
+        const due = Date.parse(plan.recheck.dueAt);
+        expect(due).toBeGreaterThanOrEqual(before + ADMISSION_RECHECK_HOURS * 3600000);
+        expect(due).toBeLessThan(before + ADMISSION_RECHECK_HOURS * 3600000 + 60000);
+      }
+    }));
+
+    it("a recheck drafts and sends nothing, never stops the row: it is due again at the recheck date, with no delivery and no personNotAdmitted", quiet(async () => {
+      for (const person of [occ, { ...occ, kind: "followup", email: "a@x.com", dueAt: "2026-10-22T15:35:56Z" }]) {
+        const plan = await admit(person, { items: [], person: {}, sources: sourcesWith({ status: "empty", asked: [] }) }, { sends: [] }, "c-1");
+        const reachOut = await reach(person, {}, { sends: [] }, "c-1", plan, { ok: false, skipped: true, notCalled: true });
+        expect(reachOut).toMatchObject({ skip: true, code: "website_visit_unconfirmed", recheck: plan.recheck });
+        expect(reachOut.notAdmitted).toBeUndefined();
+        const verdict = await loadMain(REACH_VERDICT_CODE)(reachOut, { ok: false, skipped: true, notCalled: true });
+        const fin = await loadMain(FINALIZE_MESSAGE_CODE)({ ok: false, skipped: true, notCalled: true }, person, "c-1", verdict);
+        expect(fin).toMatchObject({ skipSend: true, sendBody: null });
+        const rec = await loadMain(RECORD_PLAN_CODE)(person, { ok: false, skipped: true, notCalled: true }, "2026-10-22", verdict, fin);
+        expect(rec).toEqual({ action: "record", outcome: "recheck", code: "website_visit_unconfirmed", body: { kind: "scheduled", dueAt: plan.recheck.dueAt } });
+        expect(holds("results['record-plan']?.action == 'record'", { "record-plan": rec })).toBe(true);
+      }
+    }));
+
+    it("a visit on record admits whatever the sources say (a presence needs no completeness)", quiet(async () => {
+      const plan = await admit(occ, { items: [visit], person: { phones: [] }, sources: sourcesWith({ status: "empty", asked: [] }) }, { sends: [] }, "c-1");
+      expect(plan).toMatchObject({ code: null, skipTeam: false, notAdmitted: null });
+    }));
+
+    it("every visit source is a timeline source the gate reads", () => {
+      expect([...WEBSITE_VISIT_SOURCES]).toEqual(["posthog", "gohighlevel"]);
+    });
   });
 
   it("the judged description states the three skips", () => {
