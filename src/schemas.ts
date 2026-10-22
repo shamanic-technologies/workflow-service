@@ -1314,6 +1314,13 @@ const WorkflowSummarySchema = z.object({
   workflowDynastyName: z.string(),
   featureSlug: z.string(),
   description: z.string().nullable().describe("What this workflow does, in plain words."),
+  siblingLine: z.string().nullable().describe(
+    "WF-SHORT-LINE-1023, display only: a fragment of at most 10 words saying ONLY what sets this workflow's dynasty apart from the other workflows on the same pipe (never the pipe, leg or channel, a template, an LLM, a version or a date). " +
+      "Null when the dynasty is the only workflow on its pipe, when its pipe's lines are not written yet (at most ~10 min after a change), or when it sits on several pipes with different lines (read `siblingLines`).",
+  ),
+  siblingLines: z.array(z.object({ legKey: z.string(), line: z.string() })).describe(
+    "The dynasty's line per pipe it sits on (features-service leg assignments, any state), one entry per leg; empty when none is written.",
+  ),
   status: z.string().describe("Per-version lifecycle: active (latest of its dynasty) or deprecated."),
   workflowDynastyStatus: z.string().describe("Whole-lineage status: deprecated = retired, never runs."),
   version: z.number().int(),

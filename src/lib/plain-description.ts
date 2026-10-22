@@ -29,7 +29,7 @@ export function plainDescription(text: string | null | undefined): string | null
     .trim();
 }
 
-const FORBIDDEN = /\b(opus|sonnet|haiku|gemini|gpt|glm|fable|deepseek|claude|llm|model|template|prompt|test|experiment|v\d+|20\d\d-\d\d)/i;
+export const FORBIDDEN = /\b(opus|sonnet|haiku|gemini|gpt|glm|fable|deepseek|claude|llm|model|template|prompt|test|experiment|v\d+|20\d\d-\d\d)/i;
 
 /** Why a description breaks the rules, or null when it reads right. */
 export function descriptionProblem(text: string): string | null {
