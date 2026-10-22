@@ -169,11 +169,11 @@ export const LEG_BEST_LLM_MODEL_REF = `$ref:${LLM_PLAN_NODE_ID}.output.model`;
 export const LEG_BEST_LLM_PROVIDER_REF = `$ref:${LLM_PLAN_NODE_ID}.output.provider`;
 
 /**
- * features-service's `llmUnavailableReason` codes that mean the campaign's STRATEGY leaves no LLM: such a run writes
- * nothing (a strategy excluding an LLM never gets it). Any other null (a leg not measured per writer yet) keeps the LLM
+ * features-service's `llmUnavailableReason` codes that mean the campaign's STRATEGY leaves no LLM (features v0.179.342
+ * list): such a run writes nothing (a strategy excluding an LLM never gets it). Any other null (a leg not measured per writer yet) keeps the LLM
  * the workflow states, loudly.
  */
-export const STRATEGY_EXCLUSION_REASONS = ["strategy_allows_none"] as const;
+export const STRATEGY_EXCLUSION_REASONS = ["strategy_excludes_every_candidate", "play_not_catalogued_on_pipe"] as const;
 
 /**
  * The LLM pick for a chat-service `/complete` writer (a pipe with an LLM and no template). A run whose writer is
