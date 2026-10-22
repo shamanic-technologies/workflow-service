@@ -68,3 +68,19 @@ describe("every description a seed or copy writes reads right", async () => {
     });
   }
 });
+
+describe("pipe siblings read apart (describe-siblings-1022)", async () => {
+  // @ts-expect-error: plain .mjs ops script
+  const { siblingDiffs } = await import("../../scripts/describe-siblings-1022.mjs");
+  const dag = (extra: Record<string, unknown>) => ({ nodes: [{ id: "serve", type: "http.call", config: { service: "lead", method: "POST", path: "/orgs/buffer/next", body: { ...extra } } }], edges: [] });
+  it("keeps only what each sibling does differently, and names equal ones as twins", () => {
+    const { own, twins } = siblingDiffs([
+      { workflowDynastySlug: "a", dag: dag({ excludeEmailedWithin: "3_months" }) },
+      { workflowDynastySlug: "b", dag: dag({}) },
+      { workflowDynastySlug: "c", dag: dag({}) },
+    ]);
+    expect(own[0].own).toEqual(['serve.body.excludeEmailedWithin = "3_months"']);
+    expect(own[1].own).toEqual([]);
+    expect(twins).toEqual([["b", "c"]]);
+  });
+});
