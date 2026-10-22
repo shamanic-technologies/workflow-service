@@ -11,6 +11,7 @@ import {
   pickWorkflowDynastySignatureName,
   workflowDynastySignatureNameToDisplay,
 } from "./workflow-dynasty-signature-name.js";
+import { pgErrorOf } from "./pg-error.js";
 
 /**
  * The two lineage writes that turn a DAG into a NEW workflow row next to an
@@ -328,11 +329,13 @@ export async function forkWorkflowRow(params: ForkWorkflowParams): Promise<ForkR
       .returning();
     forked = row;
   } catch (dbErr: unknown) {
-    if (dbErr instanceof Error && "code" in dbErr && (dbErr as { code?: string }).code === "23505") {
+    // drizzle-orm >= 0.44 wraps the driver error in DrizzleQueryError: read the postgres error.
+    const pg = pgErrorOf(dbErr);
+    if (dbErr instanceof Error && pg.code === "23505") {
       return {
         nameConflict: {
           error: "A workflow with this name already exists",
-          detail: (dbErr as { detail?: string }).detail,
+          detail: pg.detail,
         },
       };
     }
