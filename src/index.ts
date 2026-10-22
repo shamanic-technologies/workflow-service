@@ -6,6 +6,7 @@ import { workflowRuns } from "./db/schema.js";
 import { getWindmillClient } from "./lib/windmill-client.js";
 import { JobPoller, setJobPoller } from "./lib/job-poller.js";
 import { PeriodicCleanup, setPeriodicCleanup } from "./lib/periodic-cleanup.js";
+import { SiblingLineRefresher, setSiblingLineRefresher } from "./lib/sibling-line-refresher.js";
 import { requireIdentity } from "./middleware/auth.js";
 import { checkApiRegistryHealth, validateAndUpgradeWorkflows } from "./lib/startup-validator.js";
 import { assertEnvironmentConsistency } from "./lib/env-safety.js";
@@ -146,6 +147,14 @@ async function boot(): Promise<void> {
     console.log("Windmill not configured (WINDMILL_SERVER_URL / WINDMILL_SERVER_API_KEY missing) — job poller disabled");
   }
 
+  // WF-SHORT-LINE-1023: each pipe's short lines (what sets each workflow apart from its siblings). Rides workflow
+  // writes and run dispatches at most every 10 min, plus one sweep a minute after boot so a deploy fills every pipe.
+  if (process.env.FEATURES_SERVICE_URL && process.env.CHAT_SERVICE_URL) {
+    const siblingLines = new SiblingLineRefresher(db, 10 * 60 * 1000);
+    setSiblingLineRefresher(siblingLines);
+    setTimeout(() => siblingLines.maybeRun(), 60_000).unref();
+  }
+
   // Validate & upgrade workflows last — the service already serves traffic
   // while upgrades run (they take minutes and cost LLM calls).
   if (process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY) {
@@ -178,6 +187,7 @@ if (process.env.NODE_ENV !== "test") {
     console.log(`[workflow-service] ${signal} received — shutting down`);
     // PeriodicCleanup owns no timer to clear — it sweeps on write traffic.
     setPeriodicCleanup(null);
+    setSiblingLineRefresher(null);
     process.exit(0);
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));

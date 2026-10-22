@@ -7,6 +7,7 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -129,3 +130,32 @@ export type Workflow = typeof workflows.$inferSelect;
 export type NewWorkflow = typeof workflows.$inferInsert;
 export type WorkflowRun = typeof workflowRuns.$inferSelect;
 export type NewWorkflowRun = typeof workflowRuns.$inferInsert;
+
+// WF-SHORT-LINE-1023: what sets each dynasty apart from its siblings on one pipe (src/lib/sibling-line-refresher.ts).
+export const workflowSiblingLines = pgTable(
+  "workflow_sibling_lines",
+  {
+    featureSlug: text("feature_slug").notNull(),
+    legKey: text("leg_key").notNull(),
+    workflowDynastySlug: text("workflow_dynasty_slug").notNull(),
+    line: text("line").notNull(),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.featureSlug, table.legKey, table.workflowDynastySlug] }),
+    index("idx_sibling_lines_dynasty").on(table.workflowDynastySlug),
+  ]
+);
+
+export const workflowSiblingLinePipes = pgTable(
+  "workflow_sibling_line_pipes",
+  {
+    featureSlug: text("feature_slug").notNull(),
+    legKey: text("leg_key").notNull(),
+    siblingsKey: text("siblings_key").notNull(),
+    state: text("state").notNull(),
+    problem: text("problem"),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.featureSlug, table.legKey] })]
+);

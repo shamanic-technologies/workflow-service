@@ -2,6 +2,7 @@ import type { db as DbInstance } from "../db/index.js";
 import type { WindmillClient } from "./windmill-client.js";
 import { cleanupOrphanedWindmillFlows } from "./windmill-flow-cleanup.js";
 import { fetchActiveWorkflowSlugs } from "./campaign-client.js";
+import { noteSiblingLinesMaybeStale } from "./sibling-line-refresher.js";
 
 type Database = typeof DbInstance;
 
@@ -109,4 +110,6 @@ export function setPeriodicCleanup(cleanup: PeriodicCleanup | null): void {
  */
 export function noteWorkflowWrite(): void {
   sharedCleanup?.maybeRun();
+  // WF-SHORT-LINE-1023: the same traffic keeps every pipe's short lines true.
+  noteSiblingLinesMaybeStale();
 }

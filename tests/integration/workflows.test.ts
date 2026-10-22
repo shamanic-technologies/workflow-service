@@ -2532,4 +2532,22 @@ describe("GET /workflows/summaries — what each workflow does, without its DAG"
     expect(res.body.workflows[0]).not.toHaveProperty("dag");
     expect(JSON.stringify(res.body).length).toBeLessThan(5_000);
   });
+
+  it("serves each dynasty's short sibling line (WF-SHORT-LINE-1023), null when none is written", async () => {
+    mockSelectResponses.push(
+      [row("ai-meeting-booking-torcular-v2", 2)],
+      [{ featureSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked", workflowDynastySlug: "ai-meeting-booking-torcular", line: "Attaches the best offer document" }],
+    );
+    const res = await request.get("/workflows/summaries?featureSlug=ai-meeting-booking").set(AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.workflows[0]).toMatchObject({
+      description: "Attaches the most relevant offer document to the email reply.",
+      siblingLine: "Attaches the best offer document",
+      siblingLines: [{ legKey: "conversation_to_meeting_booked", line: "Attaches the best offer document" }],
+    });
+
+    mockSelectResponses.push([row("ai-meeting-booking-torcular-v2", 2)], []);
+    const none = await request.get("/workflows/summaries?featureSlug=ai-meeting-booking").set(AUTH);
+    expect(none.body.workflows[0]).toMatchObject({ siblingLine: null, siblingLines: [] });
+  });
 });
