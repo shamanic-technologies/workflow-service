@@ -233,11 +233,13 @@ describe("BEST-TPL-LLM-1022 chat writers (withLegBestLlm)", () => {
   });
 
   it("a strategy leaving no LLM throws: nothing is written, never the workflow's own", async () => {
-    await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: "strategy_allows_none" })).rejects.toThrow(/strategy leaves no LLM.*strategy_allows_none/);
+    for (const reason of ["strategy_excludes_every_candidate", "play_not_catalogued_on_pipe"]) {
+      await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: reason })).rejects.toThrow(new RegExp(`strategy leaves no LLM.*${reason}`));
+    }
   });
 
   it("a leg features-service does not rank yet writes with the workflow's own LLM, and says so", async () => {
-    await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: "internal_pipe_not_measured_per_writer" })).resolves.toMatchObject({ provider: "anthropic", model: "opus", picked: false, reason: "internal_pipe_not_measured_per_writer" });
+    await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: "no_sequence_recorded_on_pipe" })).resolves.toMatchObject({ provider: "anthropic", model: "opus", picked: false, reason: "no_sequence_recorded_on_pipe" });
   });
 
   it("refuses a node that is not a chat /complete call", () => {
