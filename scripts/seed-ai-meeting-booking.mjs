@@ -6,11 +6,10 @@
  * meeting: it performs the `conversation_to_meeting_booked` leg of an offer.
  * Everything underneath it already runs; this is the thing that runs.
  *
- * ONE dynasty PER MODEL CELL (`CELLS`), identical DAGs otherwise. It began as one
- * Gemini dynasty; the owner asked on 2026-10-10 for a second on Claude Opus 5.5 so
- * the two ROIs on the `conversation_to_meeting_booked` pipe can be compared. Each
- * dynasty is repaired with ITS OWN cell: upgrading every stale dynasty with one
- * cell would silently turn the Opus arm back into the Gemini one.
+ * ONE cell (`CELLS`). It once ran one dynasty per model (Gemini and Opus, owner 2026-10-10, to compare ROIs);
+ * since BEST-TPL-LLM-1022 (owner 2026-10-22) a workflow fixes no LLM: the reply's writer takes its leg's best LLM per
+ * run, the cell's model only lists the questions and is the writer's fallback while the leg is not ranked. The Gemini
+ * dynasty (rhodium) was merged into the Opus one (avior). Never add a cell per model again.
  *
  * IDEMPOTENCE — enforced HERE as well as by the route. `POST /workflows` answers
  * a clean 409 on a duplicate signature, but a 409 per already-covered cell is
@@ -72,7 +71,6 @@ const ORG_ID = process.env.ORG_ID ?? "f0420eb5-8f72-4f0a-a150-f473746df1e6";
  * `omitTemperature` on that cell; the Gemini cell keeps its 0 / 0.4.
  */
 export const CELLS = [
-  { provider: "google", model: "pro" },
   { provider: "anthropic", model: "opus", omitTemperature: true },
 ];
 
