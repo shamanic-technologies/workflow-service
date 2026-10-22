@@ -32,8 +32,7 @@ export const FRESH_CONTACTS_FEATURE_SLUGS = [
 export const FRESH_CONTACTS_MARKER = "Fresh contacts only:";
 
 export const FRESH_CONTACTS_SENTENCE =
-  `${FRESH_CONTACTS_MARKER} its lead serve skips anyone this brand emailed in the last 3 months ` +
-  `(lead-service buffer/next, ${FRESH_CONTACTS_FIELD} "${FRESH_CONTACTS_WINDOW}"), so it only writes to people the brand has not emailed for 3 months.`;
+  `${FRESH_CONTACTS_MARKER} never writes to anyone this brand emailed in the last 3 months.`;
 
 const SERVE_PATHS = ["/orgs/buffer/next", "/buffer/next"];
 type Node = DAG["nodes"][number];

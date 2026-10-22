@@ -36,9 +36,7 @@ export const SOURCE_LEG_KEY = "start_to_lead_found";
 export const sourcingPipeIdOf = (channelSlug: string): string => `${channelSlug}|${SOURCE_LEG_KEY}`;
 
 export const SOURCING_DESCRIPTION =
-  "Finds leads on its own, one per run, inside its campaign's caps: checks the campaign may run, serves the next " +
-  "person from this source's lists (Lead Sourcing: from the sources human-service chose for the brand), qualified " +
-  "before anything is paid, and hands them to Lead found. Emails nobody.";
+  "Finds one qualified lead per run from this source's lists, within its campaign's caps, and hands them to Lead found without writing to anyone.";
 
 /** The run-scoped identity headers every `/end-run` names (same mapping as every campaign DAG). */
 const END_RUN_HEADERS = {
@@ -75,8 +73,8 @@ export const BUSINESS_ONLY_SOURCING_CHANNELS = ["sourcing-crm-contacts"] as cons
 
 export const BUSINESS_ONLY_SOURCING_DESCRIPTION =
   SOURCING_DESCRIPTION +
-  " Business contacts only: never serves a person the brand knows personally or as a team member, investor, " +
-  "advisor, partner or supplier, nor anyone whose relationship to the brand was never judged.";
+  " Business contacts only: never a person the brand knows personally or as a team member, investor, advisor, " +
+  "partner or supplier, nor anyone whose relationship to the brand was never judged.";
 
 /** The serve's body change that makes a sourcing DAG business-only, as a JSON Patch on the default DAG. */
 export const BUSINESS_ONLY_CHANGES = [
@@ -109,10 +107,7 @@ export const RETIRED_POPULATIONS: Record<string, string> = { contacted_pure_pros
 export const LEAD_FOLLOW_UP_DUE_SOURCING_CHANNELS = ["lead-sourcing"] as const;
 
 export const LEAD_FOLLOW_UP_DUE_SOURCING_DESCRIPTION =
-  "Lead follow-up due: finds, one per run, inside its campaign's caps, a lead the brand already knows whose next " +
-  "follow-up date has passed, the most overdue first, and hands them to Lead found again each time their date " +
-  "passes. Never a paying client, a personal contact, or anyone who opted out, unsubscribed or was disqualified. " +
-  "Buys nobody new and writes to nobody: the follow-up pipe after it does.";
+  "Lead follow-up due: finds one known lead per run whose follow-up date has passed, most overdue first, within its campaign's caps, and hands them to Lead found again, buying nobody new and writing to nobody. Never a paying client, a personal contact, or anyone who opted out, unsubscribed or was disqualified.";
 
 export const LEAD_FOLLOW_UP_DUE_CHANGES = [
   { op: "add", path: "/nodes/serve-lead/config/body", value: { population: LEAD_FOLLOW_UP_DUE_POPULATION } },

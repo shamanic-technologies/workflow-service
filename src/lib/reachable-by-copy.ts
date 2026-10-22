@@ -23,7 +23,7 @@ export type ContactMethod = (typeof CONTACT_METHODS)[number];
 const SERVE_PATHS = ["/orgs/buffer/next", "/buffer/next"];
 
 /** The plain-words marker every copy's description carries; the seed and the fork script read it. */
-export const REACHABLE_BY_MARKER = "Reachable-by copy.";
+export const REACHABLE_BY_MARKER = "Finds only people";
 
 const METHOD_WORDS: Record<ContactMethod, string> = {
   email: "people with a deliverable email address",
@@ -81,10 +81,8 @@ export function reachableByOf(dag: DAG): ContactMethod[] | null {
 /** PURE: the copy's description: the source's own, then who the copy finds, in plain words. */
 export function reachableByDescription(sourceDescription: string | null | undefined, methods: readonly string[]): string {
   const value = normalizeMethods(methods);
-  const who = value.map((m) => METHOD_WORDS[m]).join(" AND ");
-  const sentence =
-    `${REACHABLE_BY_MARKER} Identical to the original except WHO it finds: only ${who}. ` +
-    `Its lead-serving step asks lead-service for people reachable by ${value.join(" and ")}; anyone else is left for another strategy.`;
+  const who = value.map((m) => METHOD_WORDS[m].replace(/^people /, "")).join(" and ");
+  const sentence = `${REACHABLE_BY_MARKER} ${who}, leaving anyone else to another workflow.`;
   const base = (sourceDescription ?? "").trim();
   return base === "" ? sentence : `${base} ${sentence}`;
 }

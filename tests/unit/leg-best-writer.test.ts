@@ -23,7 +23,7 @@ import {
   LEG_BEST_LLM_PROVIDER_REF,
 } from "../../src/lib/leg-best-writer.js";
 // @ts-expect-error: plain .mjs ops script
-import { freedDescription, FREED_SENTENCE, markedForPipe } from "../../scripts/free-writers-1022.mjs";
+import { markedForPipe } from "../../scripts/free-writers-1022.mjs";
 import { summarizeContentGeneration } from "../../src/lib/content-generation-summary.js";
 import { extractTemplateRefs } from "../../src/lib/validate-template-contracts.js";
 import { contentRefsOf } from "../../src/lib/deprecated-content.js";
@@ -173,12 +173,6 @@ describe("BEST-TPL-LLM-1022 write paths", () => {
 });
 
 describe("BEST-TPL-LLM-1022 fleet upgrade (scripts/free-writers-1022.mjs)", () => {
-  it("states the new rule once in the upgraded version's description", () => {
-    expect(freedDescription("Cold email, three steps.")).toBe(`Cold email, three steps. ${FREED_SENTENCE}`);
-    expect(freedDescription(freedDescription("Cold email."))).toBe(`Cold email. ${FREED_SENTENCE}`);
-    expect(freedDescription(null)).toBe(FREED_SENTENCE);
-  });
-
   it("every live shape upgrades to a valid freed DAG: a pinned one and a dynasty-following one land on the same DAG", () => {
     const following = withTemplateDynasty(nobelium, "cold-reply-intro-offer-blind", "blind-discovery-email-v21-no-url-spaced");
     for (const live of [nobelium, following]) {

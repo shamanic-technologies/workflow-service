@@ -90,7 +90,7 @@ describe("AI Lead Proposal DAG", () => {
   it("claims leads of the brand only (the tactic the leads-only strategy requires), stated in the body literal", () => {
     expect(byId.get("claim-own")?.config?.body).toEqual({ relationships: ANSWERS_LEADS_ONLY_POLICY });
     expect(ANSWERS_LEADS_ONLY_POLICY).toBe("pure_prospect");
-    expect(AI_LEAD_PROPOSAL_DESCRIPTION).toContain('relationships set to "pure_prospect"');
+    expect(AI_LEAD_PROPOSAL_DESCRIPTION).toMatch(/Leads only: never acts for a personal contact/);
   });
 
   it("closes the row strictly after the ask, with a named reason per outcome", () => {

@@ -119,25 +119,13 @@ export const FOLLOW_UP_ROW_REASONS = {
 } as const;
 
 export const FOLLOW_UP_PROACTIVE_DESCRIPTION =
-  "Follows up the brand's leads whose follow-up date has passed, one per run, on the best channel of the Unibox: " +
-  "reads the person's whole thread on every channel and whether a message to them is already queued. If one is " +
-  "queued it sends nothing and moves their date past it. Otherwise it decides whether now is the right moment: it " +
-  "writes one follow-up on WhatsApp when the brand's WhatsApp can reach them, else by email in their last thread, " +
-  "or it waits until a later date it picks from the thread. Every run leaves the next follow-up date on the lead. " +
-  "Only their own words saying no, an unsubscribe, a disqualification or a payment end the follow-ups.";
+  "Follows up each lead whose follow-up date has passed, one per run, on WhatsApp when the brand can reach them there, else by email in their last thread, at the moment their thread says is right, always leaving their next follow-up date. Only their own no, an unsubscribe, a disqualification or a payment ends the follow-ups.";
 
 export const FOLLOW_UP_REACTIVE_DESCRIPTION =
-  "Follows up ONE person the moment something happens with them (a reply, a visit, a signup, a form, a meeting, or " +
-  "any other lead event), on the best channel of the Unibox: claims them from the campaign's own queue, reads their " +
-  "whole thread on every channel and whether a message to them is already queued. If one is queued it sends nothing " +
-  "and moves their date past it. Otherwise it decides whether now is the right moment: it writes on WhatsApp when " +
-  "the brand's WhatsApp can reach them, else by email in their last thread, or it waits until a later date it picks " +
-  "from the thread. Every run leaves the next follow-up date on the lead.";
+  "Follows up one person as soon as something happens with them (a reply, a visit, a signup, a form, a meeting), on WhatsApp when the brand can reach them there, else by email in their last thread, at the moment their thread says is right, never doubling a message already queued and always leaving their next follow-up date.";
 
 export const FOLLOW_UP_REACTIVE_FIGURES_DESCRIPTION =
-  FOLLOW_UP_REACTIVE_DESCRIPTION +
-  " When the campaign carries an instruction, it first reads the figures the instruction asks for, from the " +
-  "person's own account or public data, and writes from them.";
+  "Follows up one person as soon as something happens with them (a reply, a visit, a signup, a form, a meeting), on WhatsApp when the brand can reach them there, else by email in their last thread, at the moment their thread says is right, never doubling a message already queued and always leaving their next follow-up date. When the campaign gives an instruction, it first reads the figures that instruction asks for, from the person's own account or public data.";
 
 /** The model's answer: one schema for both channels; `finalize` holds each channel to its own fields. */
 export const FOLLOW_UP_RESPONSE_SCHEMA = {

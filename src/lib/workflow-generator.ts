@@ -1,4 +1,5 @@
 import { validateDAG, type DAG } from "./dag-validator.js";
+import { plainDescription } from "./plain-description.js";
 import {
   buildSystemPrompt,
   buildRetryUserMessage,
@@ -308,7 +309,7 @@ export async function generateWorkflow(
       } catch (err) {
         return { errors: [{ field: "dag", message: `dag must be ONE JSON string that JSON.parse reads as the DAG object (${(err as Error).message}).` }] };
       }
-      const description = typeof json.description === "string" ? json.description : "";
+      const description = typeof json.description === "string" ? plainDescription(json.description) : "";
       const validation = validateDAG(dag);
       if (!validation.valid) return { errors: validation.errors };
       const fieldErrors = await endpointFieldErrors(dag, downstreamHeaders);

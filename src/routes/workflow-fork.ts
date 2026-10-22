@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { plainDescription } from "../lib/plain-description.js";
 import { freeUnstatedWriter } from "../lib/leg-best-writer.js";
 import type { z } from "zod";
 import { eq, and } from "drizzle-orm";
@@ -99,7 +100,7 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
     flowScopeOrgId: source.orgId,
     userId,
     runId,
-    description: body.description ?? source.description,
+    description: plainDescription(body.description ?? source.description),
     tags: body.tags ?? (source.tags as string[]) ?? [],
     pipeId: body.pipeId,
   });
