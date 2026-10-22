@@ -60,11 +60,7 @@ export const AI_INSTANT_CALL_PIPE_IDS = [
 ] as const;
 
 export const AI_INSTANT_CALL_DESCRIPTION =
-  "Rings the brand's sales rep the moment a prospect replies with interest or fills in a form: says who it is and " +
-  "what they wrote or answered, and connects the rep to them on a keypress when we have their number (the phone " +
-  "they gave, or one Apollo reveals within 90 seconds). A positive reply occurrence carries item {replyText, " +
-  "priorMessages: [{direction: outbound|inbound, text}] newest-first}; a form occurrence carries item {formName, " +
-  "answers}. One call per person per occurrence, nobody due = no call.";
+  "Rings the brand's sales rep the moment a prospect replies with interest or fills in a form, says who they are and what they wrote, and connects the rep to them on a keypress when their number is known (given, or revealed within 90 seconds), once per person per event.";
 
 /** How long the call waits for Apollo to deliver the number before ringing anyway. */
 export const PHONE_REVEAL_WAIT_SECONDS = 90;
@@ -424,8 +420,8 @@ export const REPLY_CHANNEL_UNKNOWN_REASON = "reply_channel_unknown";
 
 export const EMAIL_REPLIES_ONLY_DESCRIPTION =
   AI_INSTANT_CALL_DESCRIPTION +
-  " Rings only on a positive reply received by email: a reply received on WhatsApp or any other channel, or one " +
-  "whose channel is not stated, rings nobody and the run ends as a skip. A form fill rings as always.";
+  " Rings only on a positive reply received by email (a reply on any other channel, or on none stated, rings nobody); " +
+  "a form fill rings as always.";
 
 /** Whether the triggering reply may ring: by email, or not a reply at all (a form). Pure, never throws. */
 export const REPLY_CHANNEL_CODE = `

@@ -62,9 +62,7 @@ export const INDUSTRY_UPDATE_LEG_KEY = "start_to_industry_update_video";
 export const INDUSTRY_UPDATE_PIPE_ID = `${SOCIAL_POST_FEATURE_SLUG}|${INDUSTRY_UPDATE_LEG_KEY}`;
 
 export const INDUSTRY_UPDATE_DESCRIPTION =
-  `Once a day, finds the top news in ${INDUSTRY_NAME}, picks the best stories (at least ${MIN_SOLID_STORIES}, ` +
-  `else nothing that day), renders the news bulletin video and publishes it once on X and once on LinkedIn with ` +
-  "every person and company named tagged. The people who engage count on the step Industry update video.";
+  "Once a day, picks the top stories in Revenue Automation & Done-For-You (at least two, else nothing that day), renders a news bulletin video and publishes it once on X and once on LinkedIn, tagging every person and company named.";
 
 /** The model the picks and the copy are written with, through chat-service. */
 export const INDUSTRY_UPDATE_LLM = { provider: "anthropic", model: "opus" } as const;

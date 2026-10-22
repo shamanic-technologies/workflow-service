@@ -207,7 +207,7 @@ describe("buildSystemPrompt", () => {
   });
 
   it("asks for description + dag only", () => {
-    expect(prompt).toMatch(/"description": "Human-readable description[^"]*",\n {2}"dag": "the DAG serialized as ONE JSON string"/);
+    expect(prompt).toMatch(/"description": "What this workflow does on its pipe: [^"]*",\n {2}"dag": "the DAG serialized as ONE JSON string"/);
   });
 });
 

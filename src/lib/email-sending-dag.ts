@@ -49,9 +49,7 @@ export const EMAIL_SENDING_LEG_KEY = "start_to_conversation";
 export const EMAIL_SENDING_PIPE_ID = `${EMAIL_SENDING_FEATURE_SLUG}|${EMAIL_SENDING_LEG_KEY}`;
 
 export const EMAIL_SENDING_DESCRIPTION =
-  "Sends an email the client wrote and pushed through the API, exactly as written (their subject, their body), " +
-  "to the person they named, from our domains and inboxes. Nothing is rewritten. Replies land in the Unibox like " +
-  "any campaign reply.";
+  "Sends an email the client wrote and pushed through the API, exactly as written, to the person they named from our inboxes, with replies landing in the Unibox like any campaign reply.";
 
 /** Stored on the queue row once the email went out: stopped, so the next pushed email to them is sent too. */
 export const PUSHED_EMAIL_SENT_REASON = "pushed_email_sent";
