@@ -9,7 +9,9 @@
  *      freed workflow would then write nothing;
  *   2. UPGRADE the dynasty (new version, never a fork) to the freed DAG, its description stating the new rule;
  *   3. a 409 "same DAG signature" means another dynasty became the SAME workflow once freed (it differed only by the
- *      template/LLM it pinned): this dynasty is MERGED into it (non-destructive, reversible, execute forwards).
+ *      template/LLM it pinned): this dynasty is MERGED into it (non-destructive, reversible, execute forwards). When
+ *      that twin serves ANOTHER pipe (merge refused `merge_across_pipes`), the freed DAG states its own pipe
+ *      (`forkedForPipe`, inert) and the upgrade is retried: one workflow per pipe.
  * Idempotent: a dynasty already freed is skipped; an already-merged one answers 409 already_merged.
  *
  * Usage (inside the workflow-service container, after `npm run build`):
@@ -22,6 +24,11 @@ import { pathToFileURL } from "node:url";
 
 export const DEFAULT_FEATURES = ["sales-cold-email-outreach", "feedback-request-cold-email-outreach", "pr-cold-email-outreach", "sales-crm-email-outreach"];
 export const FREED_SENTENCE = "Writes each email with the template and the LLM ranked best on its leg at run time (lowest cost per outcome, narrowed by the campaign strategy).";
+
+/** The DAG stating the pipe it serves (inert at run time): keeps two pipes' identical steps two workflows. */
+export function markedForPipe(dag, pipeId) {
+  return dag.forkedForPipe ? dag : { ...dag, forkedForPipe: pipeId };
+}
 
 /** The description of the freed version: the old one, plus the rule, once. */
 export function freedDescription(description) {
@@ -100,8 +107,12 @@ async function run() {
           report.freed.push(line);
           continue;
         }
-        const up = await call(WS, WS_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: dynasty, dag, description: freedDescription(wf.description) }, identity(wf.orgId));
-        await new Promise((r) => setTimeout(r, 7000)); // createRateLimit: 10 per minute per org
+        const upgrade = async (d) => {
+          const r = await call(WS, WS_KEY, "POST", "/workflows/upgrade", { workflowDynastySlug: dynasty, dag: d, description: freedDescription(wf.description) }, identity(wf.orgId));
+          await new Promise((res) => setTimeout(res, 7000)); // createRateLimit: 10 per minute per org
+          return r;
+        };
+        let up = await upgrade(dag);
         if (up.status === 200 || up.status === 201) {
           console.log(`freed ${line} -> ${up.body.workflow?.workflowSlug ?? "(in place)"}`);
           report.freed.push(line);
@@ -114,6 +125,16 @@ async function run() {
           if (m.status === 201) {
             console.log(`merged ${dynasty} into ${twin.workflowDynastySlug}`);
             report.merged.push(`${dynasty} -> ${twin.workflowDynastySlug}`);
+          } else if (m.status === 409 && m.body?.code === "merge_across_pipes") {
+            // The same steps serving ANOTHER pipe: not a twin. Its freed DAG states its own pipe (the inert one-leg mark,
+            // ONE-LEG-FORKS-1020), so both live, one per pipe.
+            up = await upgrade(markedForPipe(dag, pick.body.pipeId));
+            if (up.status === 200 || up.status === 201) {
+              console.log(`freed ${line} (marked for ${pick.body.pipeId}) -> ${up.body.workflow?.workflowSlug ?? "(in place)"}`);
+              report.freed.push(line);
+            } else {
+              note(`same steps as ${twin.workflowDynastySlug} on another pipe, marked upgrade refused ${up.status}: ${JSON.stringify(up.body).slice(0, 300)}`);
+            }
           } else {
             note(`twin of ${twin.workflowDynastySlug}, merge refused ${m.status}: ${JSON.stringify(m.body).slice(0, 300)}`);
           }
