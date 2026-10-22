@@ -199,6 +199,10 @@
             "nullable": true,
             "description": "TPL-DYNASTY-1021-WF: the content-generation template DYNASTY this workflow writes with. Every run reads the dynasty's CURRENT head (GET /internal/template-dynasties/{slug}/head), so a new head version reaches it with no new workflow version; `contentPromptType` is then the head the DAG was last written against. Null when the workflow pins a template version."
           },
+          "writesWithLegBest": {
+            "type": "boolean",
+            "description": "BEST-TPL-LLM-1022: true when the workflow states no template and no LLM: every run writes with the template dynasty and the LLM features-service ranks best on the workflow's leg (lowest $/outcome, narrowed by the campaign strategy's tactics). `contentModel`, `contentPromptType` and `contentTemplateDynasty` are then null: what wrote each email is recorded per generation by content-generation."
+          },
           "deprecation": {
             "$ref": "#/components/schemas/WorkflowDeprecation"
           },
@@ -282,6 +286,7 @@
           "contentModel",
           "contentPromptType",
           "contentTemplateDynasty",
+          "writesWithLegBest",
           "deprecation",
           "status",
           "workflowDynastyStatus",
@@ -688,6 +693,10 @@
             "nullable": true,
             "description": "Template dynasty the workflow writes with (its live head each run); null when it pins a template version."
           },
+          "writesWithLegBest": {
+            "type": "boolean",
+            "description": "True when the workflow states no template and no LLM: each run writes with its leg's best (features-service)."
+          },
           "deprecation": {
             "$ref": "#/components/schemas/WorkflowDeprecation"
           },
@@ -715,6 +724,7 @@
           "contentModel",
           "contentPromptType",
           "contentTemplateDynasty",
+          "writesWithLegBest",
           "deprecation",
           "createdAt",
           "updatedAt"

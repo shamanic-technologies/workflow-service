@@ -1,5 +1,6 @@
 import type { DAG } from "./dag-validator.js";
 import { TEMPLATE_HEAD_TYPE_REF, templateDynastyOf } from "./template-dynasty.js";
+import { writesWithLegBest } from "./leg-best-writer.js";
 
 /**
  * The two facts a workflow list row wants to display: which chat-service model
@@ -16,6 +17,8 @@ export interface ContentGenerationSummary {
   contentPromptType: string | null;
   /** The template dynasty the workflow writes with (its live head each run), null when it pins a version. */
   contentTemplateDynasty: string | null;
+  /** BEST-TPL-LLM-1022: the workflow states no template and no LLM; each run writes with its leg's best (features-service). */
+  writesWithLegBest: boolean;
 }
 
 /**
@@ -71,5 +74,6 @@ export function summarizeContentGeneration(dag: DAG | null | undefined): Content
     contentModel: collapse(nodes.map((n) => literalBodyValue(n, "model"))),
     contentPromptType: collapse(nodes.map((n) => literalBodyValue(n, "type"))),
     contentTemplateDynasty: templateDynastyOf(dag),
+    writesWithLegBest: writesWithLegBest(dag),
   };
 }
