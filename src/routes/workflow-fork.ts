@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { freeUnstatedWriter } from "../lib/leg-best-writer.js";
 import type { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -64,6 +65,8 @@ async function handleFork(req: Request, res: Response, source: WorkflowRow, body
   }
   // The pipe the copy is forked for makes it its own workflow even when its steps are the source's.
   if (body.pipeId) dag = { ...dag, forkedForPipe: body.pipeId };
+  // BEST-TPL-LLM-1022: a change removing the content call's template lets the leg choose (template + LLM per run).
+  dag = freeUnstatedWriter(dag);
 
   const signature = computeDAGSignature(dag);
   if (signature === source.signature) {

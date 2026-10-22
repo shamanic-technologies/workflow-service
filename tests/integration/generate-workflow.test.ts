@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { VALID_LINEAR_DAG } from "../helpers/fixtures.js";
+import { freeGeneratedWriter } from "../../src/lib/leg-best-writer.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
+// BEST-TPL-LLM-1022: a generated workflow is stored freed (its leg picks template + LLM per run).
+const GENERATED_DAG = freeGeneratedWriter(VALID_LINEAR_DAG as unknown as DAG);
 
 // Mock DB. Same pattern as workflows.test.ts: optional queue overrides .where() responses.
 const mockDbRows: Record<string, unknown>[] = [];
@@ -158,7 +162,7 @@ describe("POST /workflows/create", () => {
     expect(res.body.workflow.action).toBe("created");
     expect(res.body.workflow.featureSlug).toBe("cold-email-outreach");
     expect(res.body.workflow.workflowSlug).toContain("cold-email-outreach-");
-    expect(res.body.dag).toEqual(VALID_LINEAR_DAG);
+    expect(res.body.dag).toEqual(GENERATED_DAG);
     expect(res.body.generatedDescription).toBe("Search leads, generate email, send");
     expect(res.body.workflow.pipe).toEqual(PIPE);
     expect(res.body.workflow).not.toHaveProperty("pipeId");
@@ -511,7 +515,7 @@ describe("POST /workflows/upgrade", () => {
 
   it("upgrades in-place when LLM returns the same signature", async () => {
     const { computeDAGSignature } = await import("../../src/lib/dag-signature.js");
-    const sig = computeDAGSignature(VALID_LINEAR_DAG);
+    const sig = computeDAGSignature(GENERATED_DAG);
 
     mockDbRows.push({
       id: "00000000-0000-4000-8000-000000000222",

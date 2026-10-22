@@ -67,6 +67,7 @@ import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
+import { freeGeneratedWriter, freeUnstatedWriter } from "../lib/leg-best-writer.js";
 import { rowsUsingContent } from "../lib/retire-by-content.js";
 import {
   recordDeprecation,
@@ -172,8 +173,10 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
       dsHeaders,
     );
 
-    const dag = generated.dag as DAG;
-    const signature = computeDAGSignature(generated.dag);
+    // BEST-TPL-LLM-1022: a generated workflow never fixes its template nor its LLM; each run writes with its leg's best.
+    const dag = freeGeneratedWriter(generated.dag as DAG);
+    generated.dag = dag;
+    const signature = computeDAGSignature(dag);
 
     // Idempotent match: same (orgId, featureSlug, signature) returns existing row.
     const [existingMatch] = await db
@@ -418,12 +421,14 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     let generatedPipe: GeneratedPipe | null = null;
 
     if (body.dag) {
-      const rejection = await validateClientDag(body.dag as DAG, dsHeaders);
+      // BEST-TPL-LLM-1022: a content call naming no template lets the leg choose (template + LLM per run).
+      const clientDag = freeUnstatedWriter(body.dag as DAG);
+      const rejection = await validateClientDag(clientDag, dsHeaders);
       if (rejection) {
         res.status(400).json(rejection);
         return;
       }
-      dag = body.dag as DAG;
+      dag = clientDag;
       resolvedDescription = body.description ?? existing.description ?? "";
       // category/channel/audienceType are LLM-inferred fields; with a client-supplied DAG
       // there is nothing to infer from, so inherit the existing dynasty's values.
@@ -440,7 +445,8 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
         },
         dsHeaders,
       );
-      dag = generated.dag as DAG;
+      // BEST-TPL-LLM-1022: never fixes its template nor its LLM.
+      dag = freeGeneratedWriter(generated.dag as DAG);
       resolvedDescription = generated.description;
       // Legacy provenance tags stay what the dynasty already says; the pipe is the new identity.
       resolvedCategory = existing.category;
@@ -614,7 +620,8 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
   try {
     const body = CreateWorkflowSchema.parse(req.body);
     const orgId = res.locals.orgId as string;
-    const dag = body.dag as DAG;
+    // BEST-TPL-LLM-1022: a content call naming no template lets the leg choose (template + LLM per run).
+    const dag = freeUnstatedWriter(body.dag as DAG);
 
     // A stated pipe is read from the catalogue BEFORE anything is written: it must exist, belong to
     // this featureSlug's channel and be platform-worked. Its toStep is the step the workflow produces.
@@ -642,7 +649,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     if (statedLegKey && (await refuseIfPipeDuplicate(res, { featureSlug: body.featureSlug, legKeys: [statedLegKey], dag }))) return;
 
     // Compute signature and naming
-    const signature = computeDAGSignature(body.dag);
+    const signature = computeDAGSignature(dag);
 
     // Conflict guard: an active workflow in the same feature_slug may already
     // hold this signature (partial unique index idx_workflows_active_sig =
@@ -736,7 +743,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
         signature,
         workflowDynastySignatureName,
         version: 1,
-        dag: body.dag,
+        dag: dag,
         windmillFlowPath: flowPath,
         createdByUserId: res.locals.userId as string,
         createdByRunId: res.locals.runId as string,
@@ -1552,18 +1559,18 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     // --- DAG provided — validate it ---
     // Covers both branches below: the same-signature in-place update and the
     // fork. Both store the DAG verbatim, so both need the full gate.
-    const dag = body.dag as DAG;
+    const dag = freeUnstatedWriter(body.dag as DAG);
     const rejection = await validateClientDag(dag, extractDownstreamHeaders(req));
     if (rejection) {
       res.status(400).json(rejection);
       return;
     }
 
-    const newSignature = computeDAGSignature(body.dag);
+    const newSignature = computeDAGSignature(dag);
 
     // --- Case 2: Same signature — no structural change, update in-place ---
     if (newSignature === existing.signature) {
-      const updates: Record<string, unknown> = { updatedAt: new Date(), dag: body.dag };
+      const updates: Record<string, unknown> = { updatedAt: new Date(), dag: dag };
       if (body.description !== undefined) updates.description = body.description;
       if (body.tags !== undefined) updates.tags = body.tags;
 
