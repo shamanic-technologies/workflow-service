@@ -833,7 +833,8 @@ function plan(person, send, currentDate, reach, final) {
   }
   if (person?.kind === "followup") {
     // Sent: acted, due again at the model's date (the queue row is the date's only store).
-    if (!refused) return { action: "record", outcome: "sent", body: { kind: "acted", nextDueAt: nextAt() } };
+    // BEST-TPL-LLM-1022: the act names the LLM that wrote it, so features-service can measure it per leg.
+    if (!refused) return { action: "record", outcome: "sent", body: { kind: "acted", nextDueAt: nextAt(), llmAlias: ${JSON.stringify(COLD_WHATSAPP_LLM.model)} } };
     // The brand's WhatsApp cannot write (not linked, not connected, no account automation may write from): nothing
     // was sent, the person stays followed up, at the model's date, else (refused before any draft) a recheck later.
     if (${JSON.stringify(BRAND_SIDE_REFUSAL_CODES)}.includes(code)) {

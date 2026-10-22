@@ -2071,6 +2071,13 @@ export function needsClientCommsVoice(dag: { nodes?: Array<{ id?: string }> } | 
   return (dag?.nodes ?? []).some((n) => n?.id === "draft-reply") && !readsClientComms(dag);
 }
 
+/** True when a stored responder DAG records its sent reply without naming the LLM that wrote it (BEST-TPL-LLM-1022). */
+export function needsLlmAliasOnActs(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const rec = (dag?.nodes ?? []).find((n) => n?.id === "record-followup");
+  const body = rec?.config?.body as Record<string, unknown> | undefined;
+  return !!rec && body?.kind === "acted" && typeof body.llmAlias !== "string";
+}
+
 /** The responder, its reply written in our voice (the `client-comms` skill, read live before `draft-reply`). */
 export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG {
   return withClientCommsVoice(buildAiMeetingBookingDagUnvoiced(opts), "draft-reply");
@@ -2654,7 +2661,8 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           service: "lead",
           method: "POST",
           path: "/orgs/leads/{id}/followups",
-          body: { kind: "acted" },
+          // BEST-TPL-LLM-1022: which LLM wrote the reply, so features-service can measure it per leg.
+          body: { kind: "acted", llmAlias: opts.model },
         },
         retries: 0,
         inputMapping: {
