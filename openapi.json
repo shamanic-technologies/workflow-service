@@ -661,6 +661,30 @@
             "nullable": true,
             "description": "What this workflow does, in plain words."
           },
+          "siblingLine": {
+            "type": "string",
+            "nullable": true,
+            "description": "WF-SHORT-LINE-1023, display only: a fragment of at most 10 words saying ONLY what sets this workflow's dynasty apart from the other workflows on the same pipe (never the pipe, leg or channel, a template, an LLM, a version or a date). Null when the dynasty is the only workflow on its pipe, when its pipe's lines are not written yet (at most ~10 min after a change), or when it sits on several pipes with different lines (read `siblingLines`)."
+          },
+          "siblingLines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "legKey": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "legKey",
+                "line"
+              ]
+            },
+            "description": "The dynasty's line per pipe it sits on (features-service leg assignments, any state), one entry per leg; empty when none is written."
+          },
           "status": {
             "type": "string",
             "description": "Per-version lifecycle: active (latest of its dynasty) or deprecated."
@@ -717,6 +741,8 @@
           "workflowDynastyName",
           "featureSlug",
           "description",
+          "siblingLine",
+          "siblingLines",
           "status",
           "workflowDynastyStatus",
           "version",

@@ -66,6 +66,7 @@ import { classifyWorkflowError } from "../lib/classify-workflow-error.js";
 import { invalidateSpecWatcherCache } from "../lib/spec-watcher.js";
 import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
+import { readSiblingLines, singleSiblingLine } from "../lib/sibling-line-refresher.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
 import { freeGeneratedWriter, freeUnstatedWriter } from "../lib/leg-best-writer.js";
@@ -837,6 +838,7 @@ router.get("/workflows/summaries", requireApiKey, async (req, res) => {
       ? await db.select().from(workflows).where(and(...conditions))
       : await db.select().from(workflows);
 
+    const siblingLines = await readSiblingLines(db, rows.map((w) => w.workflowDynastySlug));
     const summaries = rows
       .map((w) => ({
         id: w.id,
@@ -846,6 +848,8 @@ router.get("/workflows/summaries", requireApiKey, async (req, res) => {
         workflowDynastyName: w.workflowDynastyName,
         featureSlug: w.featureSlug,
         description: w.description ?? null,
+        siblingLine: singleSiblingLine(siblingLines.get(w.workflowDynastySlug)),
+        siblingLines: siblingLines.get(w.workflowDynastySlug) ?? [],
         status: w.status,
         workflowDynastyStatus: w.workflowDynastyStatus,
         version: w.version,
