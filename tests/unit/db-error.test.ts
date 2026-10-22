@@ -1,10 +1,23 @@
 import { describe, it, expect } from "vitest";
+import { DrizzleQueryError } from "drizzle-orm";
 import {
   describeDbConstraintFailure,
   constraintErrorResponse,
 } from "../../src/lib/db-error.js";
 
 describe("describeDbConstraintFailure", () => {
+  it("reads the postgres error through drizzle's DrizzleQueryError wrapper (drizzle-orm >= 0.44)", () => {
+    const wrapped = new DrizzleQueryError("insert into workflows ...", [], Object.assign(
+      new Error('null value in column "audience_type" violates not-null constraint'),
+      { code: "23502", table_name: "workflows", column_name: "audience_type" },
+    ));
+    const failure = describeDbConstraintFailure(wrapped);
+    expect(failure).not.toBeNull();
+    expect(failure!.code).toBe("23502");
+    expect(failure!.field).toBe("audienceType");
+    expect(constraintErrorResponse(wrapped)?.details.column).toBe("audience_type");
+  });
+
   it("names the request field behind a NOT NULL violation", () => {
     const failure = describeDbConstraintFailure({
       code: "23502",

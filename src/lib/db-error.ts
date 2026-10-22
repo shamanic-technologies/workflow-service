@@ -1,3 +1,5 @@
+import { pgErrorOf } from "./pg-error.js";
+
 /**
  * Turns a Postgres constraint violation into a caller-actionable 400.
  *
@@ -36,7 +38,8 @@ function readString(source: Record<string, unknown>, key: string): string | null
 
 export function describeDbConstraintFailure(err: unknown): DbConstraintFailure | null {
   if (!err || typeof err !== "object") return null;
-  const source = err as Record<string, unknown>;
+  // drizzle-orm >= 0.44 wraps the driver error in DrizzleQueryError: read the postgres error.
+  const source = pgErrorOf(err) as Record<string, unknown>;
   const code = readString(source, "code");
   if (code !== NOT_NULL_VIOLATION && code !== CHECK_VIOLATION) return null;
 
