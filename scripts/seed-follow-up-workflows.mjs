@@ -88,6 +88,12 @@ const targets = [...legsOf].map(([dynasty, legs]) => {
     description: figures ? FOLLOW_UP_REACTIVE_FIGURES_DESCRIPTION : FOLLOW_UP_REACTIVE_DESCRIPTION,
   };
 });
+// Two dynasties on DIFFERENT legs built to the same steps are not twins: an unmarked one-leg dynasty colliding with
+// another states its own pipe (the inert one-leg mark), so each keeps its own signature.
+for (const t of targets) {
+  const twin = targets.some((o) => o !== t && computeDAGSignature(o.dag) === computeDAGSignature(t.dag));
+  if (twin && !t.dag.forkedForPipe && t.legs.length === 1) t.dag = { ...t.dag, forkedForPipe: `${slug}|${t.legs[0]}` };
+}
 const sigs = targets.map((t) => computeDAGSignature(t.dag));
 if (new Set(sigs).size !== sigs.length) throw new Error(`two dynasties would share one DAG: ${targets.map((t) => `${t.dynasty} (${t.legs})`).join("; ")}`);
 
