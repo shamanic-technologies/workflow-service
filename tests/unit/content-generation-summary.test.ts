@@ -26,6 +26,7 @@ describe("summarizeContentGeneration", () => {
       contentModel: "deepseek-pro",
       contentPromptType: "cold-email",
       contentTemplateDynasty: null,
+      writesWithLegBest: false,
     });
   });
 
@@ -66,6 +67,7 @@ describe("summarizeContentGeneration", () => {
       contentModel: null,
       contentPromptType: "cold-email",
       contentTemplateDynasty: null,
+      writesWithLegBest: false,
     });
   });
 
@@ -78,6 +80,7 @@ describe("summarizeContentGeneration", () => {
       contentModel: null,
       contentPromptType: null,
       contentTemplateDynasty: null,
+      writesWithLegBest: false,
     });
   });
 
@@ -94,6 +97,7 @@ describe("summarizeContentGeneration", () => {
       contentModel: null,
       contentPromptType: "cold-email",
       contentTemplateDynasty: null,
+      writesWithLegBest: false,
     });
   });
 
@@ -115,6 +119,7 @@ describe("summarizeContentGeneration", () => {
       contentModel: null,
       contentPromptType: "cold-email",
       contentTemplateDynasty: null,
+      writesWithLegBest: false,
     });
   });
 
@@ -127,15 +132,16 @@ describe("summarizeContentGeneration", () => {
       },
     ] as unknown as DAG["nodes"]);
 
-    expect(summarizeContentGeneration(dag)).toEqual({ contentModel: null, contentPromptType: null, contentTemplateDynasty: null });
+    expect(summarizeContentGeneration(dag)).toEqual({ contentModel: null, contentPromptType: null, contentTemplateDynasty: null, writesWithLegBest: false });
   });
 
   it("tolerates a missing or empty dag", () => {
-    expect(summarizeContentGeneration(null)).toEqual({ contentModel: null, contentPromptType: null, contentTemplateDynasty: null });
+    expect(summarizeContentGeneration(null)).toEqual({ contentModel: null, contentPromptType: null, contentTemplateDynasty: null, writesWithLegBest: false });
     expect(summarizeContentGeneration({ nodes: [], edges: [] })).toEqual({
       contentModel: null,
       contentPromptType: null,
       contentTemplateDynasty: null,
+      writesWithLegBest: false,
     });
   });
 });
