@@ -207,7 +207,7 @@ describe("composing the answer", () => {
     expect(system).toContain("answers the form they just filled in to reach");
     expect(system).toContain("The WhatsApp text opens the same way.");
     expect(system).toContain("A name that differs from the email address, or a request outside the offer, is NOT a reason");
-    expect(system).toContain("End it with Joe");
+    expect(system).toContain("End the last bubble with Joe");
     expect(system).not.toMatch(/agency(?! or a third party)/i);
     expect(system + message).not.toMatch(/[–—]/);
   });
@@ -241,6 +241,7 @@ describe("finalizing the answer", () => {
       whatsappText: "Hi Jo, book here",
       idempotencyKey: "form-meeting-booking:row-1:2026-10-12T15:00:00.000Z",
       whatsappIdempotencyKey: "form-meeting-booking:row-1:2026-10-12T15:00:00.000Z:whatsapp",
+      whatsappBody: { email: person.email, brandId: person.brandId, text: "Hi Jo, book here", idempotencyKey: "form-meeting-booking:row-1:2026-10-12T15:00:00.000Z:whatsapp" },
     });
   });
 

@@ -72,14 +72,14 @@
  * condition nested in a branch as an ordinary module, which silently does nothing); every arm reads its evidence
  * with `?.`, because on another path the node it reads never ran.
  */
-import { withClientCommsVoice } from "./client-comms.js";
-import { withLegBestLlm } from "./leg-best-writer.js";
+import { GENERATE_WHATSAPP_PATH, withLegBestWhatsappTemplate } from "./whatsapp-template-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
+import { BUBBLE_SEND_FN, HAND_TYPED_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
 import {
   LOCAL_TIME_FN,
   NEXT_DATE_FN,
@@ -116,6 +116,12 @@ export const COLD_WHATSAPP_OUTREACH_DESCRIPTION =
 /** The model the message is written with, through chat-service. Always-thinking: no temperature. */
 export const COLD_WHATSAPP_LLM = { provider: "anthropic", model: "opus" } as const;
 
+/**
+ * The template variable carrying the whole voice block (the sending account's persona, else how the owner writes):
+ * content-generation-service's WhatsApp template contract (WA-TEMPLATES-1023).
+ */
+export const WHATSAPP_VOICE_RULES_VARIABLE = "voiceRules";
+
 /** Stored on the queue row when the person's own words end the follow-ups (decision `stop`). */
 export const WHATSAPP_FOLLOW_UP_STOPPED_REASON = "whatsapp_follow_up_stopped";
 
@@ -142,23 +148,6 @@ export const HUMAN_IN_CONVERSATION_CODE = "human_in_conversation";
 
 /** Stored on the queue row once the message answering an occurrence went out: handed, permanent, one message. */
 export const WHATSAPP_OCCURRENCE_SENT_REASON = "whatsapp_occurrence_sent";
-
-/** The model's answer: the decision, the message, one sentence on what it is for, and the next look's date. */
-export const MESSAGE_RESPONSE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    decision: {
-      type: "string",
-      enum: [...RIGHT_MOMENT_DECISIONS],
-      description: "write = send the message now; later = not the right moment (or not a sensible hour where they are), nothing is sent and they are looked at again at nextFollowUpAt; stop = their own words end it. A first message to a new person is always write.",
-    },
-    message: { type: "string", description: "The WhatsApp message, plain text, exactly as the person will read it. Empty unless decision is write." },
-    reason: { type: "string", description: "One sentence: what this message is trying to learn or start, or why later or stop." },
-    ...NEXT_DATE_SCHEMA_PROPERTIES,
-  },
-  required: ["decision", "message", "reason", "nextFollowUpAt", "nextFollowUpWhy"],
-} as const;
 
 /**
  * Who this run writes to, from whichever path ran: the claimed queue row (lead-detail read) or the newly served
@@ -310,8 +299,10 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
     return { ids: new Set(rows.map((x) => x?.eventId).filter(Boolean)), texts: new Set(rows.map((x) => clip(x?.text, 4000)).filter(Boolean)) };
   };
   const isBot = (i, bot) => i.source === "matrix" && (bot.ids.has(i.ref?.eventId) || bot.texts.has(clip(i.text, 4000)));
-  // What the OWNER typed himself: his personal channels, outbound, not sent by our software.
-  const ownerTyped = (i, bot) => i.kind === "message" && i.direction === "outbound" && (i.source === "gmail" || i.source === "matrix") && !isBot(i, bot) && clip(i.text, 10);
+  // What the OWNER typed himself: his personal channels, outbound, not sent by our software, never part of an
+  // automated burst (an agent writing through his account: WA-BUBBLES-1023, his hand-typed bubbles only).
+  const handOf = (items) => new Set(handTyped(items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix")));
+  const ownerTyped = (i, bot, hand) => i.kind === "message" && i.direction === "outbound" && (i.source === "gmail" || (i.source === "matrix" && hand.has(i))) && !isBot(i, bot) && clip(i.text, 10);
   const day = (at) => (typeof at === "string" ? at.slice(0, 16).replace("T", " ") : "date unknown");
 
   const bot = botOf(sends);
@@ -326,14 +317,16 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
   };
   const lines = messages.slice(-60).map((i) =>
     day(i.at) + " | " + i.channel + " | " + label(i) + ": " + (i.subject && i.channel === "email" ? "[" + clip(i.subject, 80) + "] " : "") + clip(i.text, 500));
-  const events = items.filter((i) => i.kind === "event").slice(-8).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (i.event?.step ?? "event") + " (" + i.source + ")");
+  // What they did, in crm-service's own words (its \`text\`: "Get started step done · step: offer · ..."), the step name only when it states none.
+  const events = items.filter((i) => i.kind === "event").slice(-30).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (clip(i.text, 300) || (i.event?.step ?? "event")) + " (" + i.source + ")");
   const last = messages[messages.length - 1] ?? null;
 
   // His chat voice (WhatsApp, LinkedIn: what this message is) first; his emails only when he never chatted.
   const chat = [];
   const mail = [];
   const take = (i, who) => (i.source === "matrix" ? chat : mail).push(who + ", " + i.channel + ": " + clip(i.text, 300));
-  const own = messages.filter((i) => ownerTyped(i, bot));
+  const hand = handOf(items);
+  const own = messages.filter((i) => ownerTyped(i, bot, hand));
   for (const i of own.slice(-25)) take(i, "to this person");
   const seen = new Set([thread.person?.personId]);
   for (const [v, s] of [[v1, s1], [v2, s2], [v3, s3], [v4, s4]]) {
@@ -341,7 +334,8 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
     if (!Array.isArray(v?.items) || !pid || seen.has(pid)) continue;
     seen.add(pid);
     const b = botOf(s);
-    for (const i of v.items.filter((x) => ownerTyped(x, b)).slice(-12)) take(i, "to someone else");
+    const h = handOf(v.items);
+    for (const i of v.items.filter((x) => ownerTyped(x, b, h)).slice(-12)) take(i, "to someone else");
   }
   const voice = chat.length ? chat : mail;
 
@@ -355,6 +349,8 @@ export async function main(thread, sends, v1, s1, v2, s2, v3, s3, v4, s4) {
     voiceLines: voice,
   };
 }
+
+${HAND_TYPED_FN}
 `.trim();
 
 /** Timeline event steps that are a visit to the brand's website (PostHog `visit`, a CRM `website_visit` fact). */
@@ -612,55 +608,51 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const contactPhone = (lead.contacts ?? []).find((c) => c?.channel === "phone" && present(c.value))?.value;
   const localTime = localTimeLines(nowIso, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: person.phone ?? contactPhone });
 
-  const systemPrompt = [
-    persona
+  // The pieces of the writer's system prompt that depend on this run. The prompt itself is the pipe's WhatsApp
+  // template (content-generation-service), never text held here (WA-BUBBLES-1023).
+  const lines = (arr) => arr.filter((l) => typeof l === "string" && l !== "").join("\\n");
+  const variables = {
+    writerRole: persona
       ? "You are " + persona.name + (persona.role ? ", " + persona.role : "") + " at " + brandName + ". You write ONE WhatsApp message to one person, from " + brandName + "'s WhatsApp number, as yourself."
       : "You are " + (senderName ? senderName + ", " + senderRole + " of " + brandName : "the founder of " + brandName) + ". You write ONE WhatsApp message to one person, from the brand's own WhatsApp number, exactly as " + owner + " would type it himself.",
-    "",
-    persona
-      ? "WHAT " + brandName.toUpperCase() + " WANTS FROM THIS CONVERSATION (a strategy, not a script): a real conversation, not a sale. " + brandName + " wants to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so we can compare with what we see elsewhere), what they think of " + brandName + ", what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift. Pick the ONE angle that fits where the conversation is, and ask at most ONE easy question they can answer in a line (one question mark, never two questions joined by \\"and\\")."
-      : "WHAT " + owner.toUpperCase() + " WANTS FROM THIS CONVERSATION (a strategy, not a script): a real conversation, not a sale. He wants to get to know them: what they want to grow, what they already tried to get there, whether they know what a new customer costs them (so he can compare with what he sees elsewhere), what they think of " + brandName + ", what questions they have. A call is welcome if they want one. A useful tip that could make them more revenue is the best gift. Pick the ONE angle that fits where the conversation is, and ask at most ONE easy question they can answer in a line (one question mark, never two questions joined by \\"and\\").",
-    "",
-    "WHERE THE CONVERSATION STANDS: THE THREAD below is every message ever exchanged with this person, on every channel (email, WhatsApp, LinkedIn), oldest first, plus a few events (signup, visits).",
-    talked
+    ownerName: persona ? persona.name : owner,
+    brandName,
+    conversationStance: talked
       ? "They ALREADY talked with us. This is NOT a first contact: never introduce yourself, never say who you are or what " + brandName + " is, never thank them for signing up as if it were news. Pick the conversation back up from where it stopped, like a friend reopening a chat: answer anything they asked that was left unanswered, follow up on the last thing that was still alive, or bring a new angle that fits what they told us. Refer to what was actually said."
       : who.state === "known"
         ? "No message with them is on record, but the brand ALREADY KNOWS them (WHO THEY ARE TO US below). This is NOT a cold first contact: " + (persona ? "write to them as someone " + brandName + " knows" : "write as " + owner + " writing to someone he knows") + ", never an introduction."
         : who.state === "possibly_known"
           ? "No message with them is on record, and nobody confirmed yet whether " + (persona ? brandName : owner) + " knows them. Write so it reads right either way: a light word on who you are is fine, never a pitch to a stranger, never claim you never met."
-          : "Nobody from " + brandName + " ever exchanged a message with them. This is a FIRST message: say who you are in a few words and why you write to them, personally.",
-    "",
-    who.strategy,
-    persona
+          : "Nobody from " + brandName + " ever exchanged a message with them. This is a FIRST message: who you are fits in a few words of the first bubble (" + (persona ? persona.name : owner) + " from " + brandName + "), never what " + brandName + " does.",
+    relationshipStrategy: who.strategy,
+    automatedLinesRule: persona
       ? "Lines marked [automated WhatsApp] are earlier messages from this number, sent as you: stay consistent with them, never repeat them. Lines marked [automated cold email] or [AI Copilot] were sent by our software: the person saw them, so they are part of the history. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it."
       : "Lines marked [automated ...] or [AI Copilot] were sent by our software, not typed by " + owner + ": the person saw them, so they are part of the history, but they are NEVER a model of how " + owner + " writes. If one was a clumsy cold introduction, do not repeat it, and do not make a big deal of it.",
-    ...(followup && !owed ? [
-      "THIS IS A FOLLOW-UP LOOK. Our campaign already wrote to them on WhatsApp (the [automated WhatsApp] lines in THE THREAD) and they have not answered since, on any channel. There is no fixed number of follow-ups and no fixed delay: we keep following up, each time at the moment you judge right, until they answer.",
-      ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
-      "If you write: do not repeat an earlier message and do not guilt them. Give them a different, lighter reason to answer, or a short tip, and make it easy to say no.",
-      "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all. Never stop on silence: silence is why we follow up.",
-      ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))},
-      ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))},
-    ] : []),
-    person.kind === "first" ? "Set decision to write: this message goes out now. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))} + " That date is the first follow-up look, in case they do not answer. Any day or time you put in the message is in their timezone (THEIR LOCAL TIME), never UTC." : "",
-    ...(whyNow.length ? [${JSON.stringify(WHY_NOW_STRATEGY)}] : []),
-    ...(oneMessage ? [
-      "A FACT MADE THIS MESSAGE DUE (WHY WE WRITE NOW), and it is still yours to judge WHEN it goes out.",
-      ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
-      ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))},
-      "If you write, this is the ONE message this fact gets: there is no follow-up after it, so leave nextFollowUpAt and nextFollowUpWhy empty.",
-      "If you choose later, nothing is sent, the message stays owed, and this person is looked at again at nextFollowUpAt. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))},
-      "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all.",
-    ] : []),
-    "",
-    ...(persona
+    timingRules: lines([
+      ...(followup && !owed ? [
+        "THIS IS A FOLLOW-UP LOOK. Our campaign already wrote to them on WhatsApp (the [automated WhatsApp] lines in THE THREAD) and they have not answered since, on any channel. There is no fixed number of follow-ups and no fixed delay: we keep following up, each time at the moment you judge right, until they answer.",
+        ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
+        "If you write: do not repeat an earlier message and do not guilt them. Give them a different, lighter reason to answer, or a short tip, and make it easy to say no.",
+        "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all. Never stop on silence: silence is why we follow up.",
+        ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))},
+        ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))},
+      ] : []),
+      person.kind === "first" ? "Set decision to write: this message goes out now. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))} + " That date is the first follow-up look, in case they do not answer. Any day or time you put in the message is in their timezone (THEIR LOCAL TIME), never UTC." : "",
+      ...(oneMessage ? [
+        "A FACT MADE THIS MESSAGE DUE (WHY WE WRITE NOW), and it is still yours to judge WHEN it goes out.",
+        ${JSON.stringify(rightMomentStrategy(WHATSAPP_MEDIUM))},
+        ${JSON.stringify(localTimeStrategy(WHATSAPP_MEDIUM))},
+        "If you write, this is the ONE message this fact gets (its bubbles together are that one message): there is no follow-up after it, so leave nextFollowUpAt and nextFollowUpWhy empty.",
+        "If you choose later, nothing is sent, the message stays owed, and this person is looked at again at nextFollowUpAt. " + ${JSON.stringify(nextDateStrategy(WHATSAPP_MEDIUM))},
+        "Set decision to stop ONLY when their own words in THE THREAD asked us to stop or showed they are not a fit at all.",
+      ] : []),
+    ]),
+    whyNowRule: whyNow.length ? ${JSON.stringify(WHY_NOW_STRATEGY)} : "",
+    // The whole voice block: the persona of the sending account, else how the owner writes (his own typed messages).
+    VOICE_RULES_KEY: lines(persona
       ? [...personaLines(persona, brandName), "Write in the language they use with us in THE THREAD; with no thread, write in English."]
-      : ["HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people). Copy his length, his tone, his greeting habits (or the lack of them), his punctuation and capitalisation, his emoji use (none if he uses none), whether he signs. If he writes several short lines, you may too (separate them with a line break). Write in the language he uses with THIS person in the thread; with no thread, write in English."]),
-    "If an INSTRUCTION is given below, it is the campaign's own brief: follow it. It wins over the angle you would have picked, never over " + (persona ? "YOUR OWN INSTRUCTIONS" : "his voice") + ". It was written for the whole campaign without knowing this person: where it assumes something THE THREAD or WHO THEY ARE TO US contradicts (that you never talked, that they are a stranger, that they just signed up, which language to use), THE THREAD and WHO THEY ARE TO US win.",
-    (persona ? "Keep it short" : "Keep it as short as he would") + ", never more than 60 words. No sales pitch, no links unless the instruction gives one, no filler, no \\"I hope this finds you well\\".",
-    "State only what the THREAD, the INSTRUCTION or the FACTS say. Never invent a figure, a price, a promise, a result or a customer.",
-    "Never use an em dash or an en dash. Use a comma or a period.",
-  ].filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\\n");
+      : ["HOW " + owner.toUpperCase() + " WRITES: learn it from HIS OWN MESSAGES below (to this person first, then to other people), the ones he typed himself on his phone. Copy his tone, his greeting habits (or the lack of them), whether he signs. Write in the language he uses with THIS person in the thread; with no thread, write in English."]),
+  };
 
   const last = history.lastMessage;
   const message = [
@@ -693,10 +685,12 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
     ...(history.threadLines.length ? history.threadLines : ["(no message ever exchanged)"]),
     ...(history.eventLines?.length ? ["", "RECENT EVENTS:", ...history.eventLines] : []),
     ...(last ? ["", "THE CONVERSATION STOPPED HERE: " + last.from + " wrote last, " + String(last.at ?? "date unknown").slice(0, 10) + ": " + last.text] : []),
-    ...(persona ? [] : ["", "HIS OWN MESSAGES (how " + owner + " writes):", ...history.voiceLines.map((l) => "- " + l)]),
+    ...(persona
+      ? (history.voiceLines.length ? ["", "THE MESSAGES TYPED BY PEOPLE OF " + brandName.toUpperCase() + " (their rhythm only, never their identity):", ...history.voiceLines.map((l) => "- " + l)] : [])
+      : ["", "HIS OWN MESSAGES (how " + owner + " writes):", ...history.voiceLines.map((l) => "- " + l)]),
   ].join("\\n");
 
-  return { systemPrompt, message };
+  return { variables, message };
 }
 
 ${WHY_NOW_FN}
@@ -704,7 +698,7 @@ ${WHY_NOW_FN}
 ${LOCAL_TIME_FN}
 
 ${SENDER_PERSONA_FN}
-`.trim();
+`.trim().replace("VOICE_RULES_KEY", WHATSAPP_VOICE_RULES_VARIABLE);
 
 /**
  * Holds the model to its contract before anything is sent. A follow-up look may decide `later` (nothing sent, the
@@ -722,7 +716,8 @@ export async function main(draft, person, campaignId, reach, trigger) {
   if (reach?.skip === true) {
     return { skipped: true, skipSend: true, decision: null, code: reach.code ?? null, text: null, idempotencyKey: null, skipIfReplied: false, sendBody: null };
   }
-  const json = draft?.json ?? {};
+  // content-generation's /generate-whatsapp answers the decision at top level (message = the bubbles, one empty line apart).
+  const json = draft?.json ?? draft ?? {};
   const followup = person?.kind === "followup";
   // ONE message a fact made due, now (an occurrence) or deferred by an earlier look (a row this campaign never wrote).
   const oneMessage = person?.kind === "occurrence" || (followup && reach?.owed === true);
@@ -775,14 +770,17 @@ export async function main(draft, person, campaignId, reach, trigger) {
     skipIfReplied,
     ...next,
     // Never a null field (crm-service 400s it): a person known only by phone is sent to by phone.
-    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, text, idempotencyKey, skipIfReplied, ...(phone ? { phone } : {}) },
+    // Several bubbles = crm-service's \`messages\`, delivered in order and paced like a person typing (WA-BUBBLES-1023).
+    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, ...bubbleSendFields(text), idempotencyKey, skipIfReplied, ...(phone ? { phone } : {}) },
   };
 }
 
 SEND_KEY_FN
 
 NEXT_DATE_FN_TEXT
-`.trim().replace("SEND_KEY_FN", OCCURRENCE_SEND_KEY_FN).replace("NEXT_DATE_FN_TEXT", NEXT_DATE_FN);
+
+BUBBLE_SEND_TEXT
+`.trim().replace("SEND_KEY_FN", OCCURRENCE_SEND_KEY_FN).replace("NEXT_DATE_FN_TEXT", NEXT_DATE_FN).replace("BUBBLE_SEND_TEXT", BUBBLE_SEND_FN);
 
 /**
  * crm-service refusals that are about the CHANNEL, not the person: the person is released to the brand's pipes that
@@ -928,9 +926,9 @@ const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record
 });
 const RECORDED_DELIVERY = { "body.delivery": "$ref:record-plan.output.delivery" };
 
-/** The writer, its message drafted in our voice (the `client-comms` skill, read live before `draft-message`). */
+/** The writer: the pipe's best WhatsApp template + LLM, written by content-generation in our voice (WA-BUBBLES-1023). */
 export function buildColdWhatsappOutreachDag(): DAG {
-  return withLegBestLlm(withClientCommsVoice(coldWhatsappOutreachDagUnvoiced(), "draft-message"), "draft-message");
+  return withLegBestWhatsappTemplate(coldWhatsappOutreachDagUnvoiced(), "draft-message");
 }
 
 function coldWhatsappOutreachDagUnvoiced(): DAG {
@@ -1194,25 +1192,23 @@ function coldWhatsappOutreachDagUnvoiced(): DAG {
           reach: "$ref:reach-verdict.output",
         },
       },
+      // content-generation writes with the pipe's WhatsApp template (its head) and the leg's best LLM, both picked
+      // per run by features-service (withLegBestWhatsappTemplate), our client-comms voice added there.
       {
         id: "draft-message",
         type: "http.call",
         config: {
-          service: "chat",
+          service: "content-generation",
           method: "POST",
-          path: "/complete",
-          body: {
-            provider: COLD_WHATSAPP_LLM.provider,
-            model: COLD_WHATSAPP_LLM.model,
-            responseFormat: "json",
-            responseSchema: MESSAGE_RESPONSE_SCHEMA,
-            maxTokens: CHAT_STEP_MAX_TOKENS,
-          },
+          path: GENERATE_WHATSAPP_PATH,
+          body: { featureSlug: COLD_WHATSAPP_OUTREACH_FEATURE_SLUG },
         },
         retries: 0,
         inputMapping: {
-          "body.message": "$ref:compose-message.output.message",
-          "body.systemPrompt": "$ref:compose-message.output.systemPrompt",
+          "body.context": "$ref:compose-message.output.message",
+          "body.variables": "$ref:compose-message.output.variables",
+          "body.workflowSlug": "$ref:flow_input.workflowSlug",
+          "body.campaignId": "$ref:flow_input.campaignId",
           skip: "$ref:reach-verdict.output.skip",
         },
       },
@@ -1249,7 +1245,7 @@ function coldWhatsappOutreachDagUnvoiced(): DAG {
           send: "$ref:send-whatsapp.output",
           currentDate: "$ref:flow_input.currentDate",
           reach: "$ref:reach-verdict.output",
-          writer: "$ref:llm-plan.output",
+          writer: "$ref:writer-plan.output",
           final: "$ref:finalize-message.output",
         },
       },

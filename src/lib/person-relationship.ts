@@ -127,7 +127,8 @@ export async function main(relationshipRead, served, timeline) {
   const messages = items.filter((i) => i?.kind === "message" && i.source !== "api" && clip(i.text, 10));
   const threadLines = messages.slice(-40).map((i) =>
     day(i.at) + " | " + i.channel + " | " + who(i) + ": " + (i.subject && i.channel === "email" ? "[" + clip(i.subject, 80) + "] " : "") + clip(i.text, 400));
-  const eventLines = items.filter((i) => i?.kind === "event").slice(-8).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (i.event?.step ?? "event") + " (" + i.source + ")");
+  // What they did, in crm-service's own words (its \`text\`), the step name only when it states none.
+  const eventLines = items.filter((i) => i?.kind === "event").slice(-30).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (clip(i.text, 300) || (i.event?.step ?? "event")) + " (" + i.source + ")");
   const talked = messages.length > 0;
 
   const knownTags = tags.filter((t) => KNOWN.includes(t));

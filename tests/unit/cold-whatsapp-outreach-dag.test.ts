@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { LEG_BEST_LLM_MODEL_REF, LEG_BEST_LLM_PROVIDER_REF } from "../../src/lib/leg-best-writer.js";
+import { GENERATE_WHATSAPP_PATH, WHATSAPP_WRITER_PLAN_CODE } from "../../src/lib/whatsapp-template-writer.js";
 import { withWho } from "../helpers/who.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
@@ -14,7 +14,6 @@ import {
   CRM_WHATSAPP_SEND,
   FINALIZE_MESSAGE_CODE,
   HISTORY_PLAN_CODE,
-  MESSAGE_RESPONSE_SCHEMA,
   READ_HISTORY_CODE,
   VOICE_SAMPLE_PEOPLE,
   PICK_PERSON_CODE,
@@ -30,6 +29,9 @@ import {
 } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { OCCURRENCE_PLAN_CODE } from "../../src/lib/occurrence-fact.js";
 import { WHATSAPP_MEDIUM, nextDateStrategy, rightMomentStrategy } from "../../src/lib/right-moment.js";
+
+/** WA-BUBBLES-1023: the writer's system prompt is the pipe's WhatsApp template; the run states only its variables. */
+const promptOf = (out: any): string => Object.values((out?.variables ?? {}) as Record<string, string>).join("\n");
 
 const inDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString();
 
@@ -135,16 +137,43 @@ describe("cold-whatsapp-outreach DAG", () => {
     expect(byId.get("record-followup")?.inputMapping?.["params.id"]).toBe("$ref:pick-person.output.rowId");
   });
 
-  it("writes through chat-service /complete on Opus with a strict schema, never Haiku", () => {
-    const chat = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
-    expect(chat.map((n) => n.id)).toEqual(["draft-message"]);
-    // BEST-TPL-LLM-1022: the writer states no LLM; each run writes with the leg's best (features-service).
-    expect(chat[0].config?.body).toMatchObject({ responseFormat: "json" });
-    expect(chat[0].config?.body).not.toHaveProperty("model");
-    expect(chat[0].inputMapping).toMatchObject({ "body.model": LEG_BEST_LLM_MODEL_REF, "body.provider": LEG_BEST_LLM_PROVIDER_REF });
-    expect(MESSAGE_RESPONSE_SCHEMA.additionalProperties).toBe(false);
-    expect([...MESSAGE_RESPONSE_SCHEMA.required].sort()).toEqual(Object.keys(MESSAGE_RESPONSE_SCHEMA.properties).sort());
-    expect(JSON.stringify(dag)).not.toMatch(/haiku/i);
+  it("WA-BUBBLES-1023: writes with the pipe's best WhatsApp template and best LLM, no prompt text and no model of its own", () => {
+    expect(dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete")).toEqual([]);
+    const writer = byId.get("draft-message")!;
+    expect(writer.config).toMatchObject({ service: "content-generation", method: "POST", path: GENERATE_WHATSAPP_PATH });
+    expect(writer.config?.body).toEqual({ featureSlug: "cold-whatsapp-outreach" });
+    expect(writer.inputMapping).toMatchObject({
+      "body.type": "$ref:template-head.output.template.type",
+      "body.model": "$ref:writer-plan.output.model",
+      "body.context": "$ref:compose-message.output.message",
+      "body.variables": "$ref:compose-message.output.variables",
+      skip: "$ref:reach-verdict.output.skip",
+    });
+    // pick -> plan -> head -> writer, each skipped on a run with nobody to write to.
+    expect(dag.edges).toEqual(expect.arrayContaining([
+      { from: "compose-message", to: "writer-pick" },
+      { from: "writer-pick", to: "writer-plan" },
+      { from: "writer-plan", to: "template-head" },
+      { from: "template-head", to: "draft-message" },
+    ]));
+    for (const id of ["writer-pick", "writer-plan", "template-head"]) expect(byId.get(id)?.inputMapping?.skip).toBe("$ref:reach-verdict.output.skip");
+    expect(JSON.stringify(dag)).not.toMatch(/haiku|"opus"/i);
+  });
+
+  it("a pick with no template or no LLM writes nothing; an idle run plans nothing", async () => {
+    const plan = loadMain(WHATSAPP_WRITER_PLAN_CODE);
+    await expect(plan({ legKey: "start_to_signup", template: null, templateUnavailableReason: "none_ranked", llm: { model: "opus" } }, false)).rejects.toThrow(/no WhatsApp template.*none_ranked/);
+    await expect(plan({ legKey: "start_to_signup", template: { templateDynastySlug: "whatsapp-signup-honest-read" }, llm: null }, false)).rejects.toThrow(/no LLM/);
+    expect(await plan(undefined, true)).toMatchObject({ skipped: true });
+    expect(await plan({ legKey: "l", template: { templateDynastySlug: "t" }, llm: { model: "opus", provider: "anthropic" } }, false)).toMatchObject({ templateDynastySlug: "t", model: "opus" });
+  });
+
+  it("reads content-generation's answer at top level and sends its bubbles as separate messages", async () => {
+    const fin = loadMain(FINALIZE_MESSAGE_CODE);
+    const person = { kind: "first", step: 1, email: "ana@x.com", leadId: "l-1", brandId: "b-1" };
+    const out = await fin({ id: "g-1", decision: "write", bubbles: ["Hi Ana", "quick read on Acme", "who buys from you today?"], message: "Hi Ana\n\nquick read on Acme\n\nwho buys from you today?", reason: "r", nextFollowUpAt: inDays(3), nextFollowUpWhy: "w" }, person, "c-1", { skip: false }, undefined);
+    expect(out.sendBody).toMatchObject({ messages: ["Hi Ana", "quick read on Acme", "who buys from you today?"] });
+    expect(out.sendBody).not.toHaveProperty("text");
   });
 });
 
@@ -292,11 +321,8 @@ describe("composing the message", () => {
 
   it("explains the strategy, follows the instruction verbatim, and writes as the brand's rep", async () => {
     const out = await compose(first, "Ask what they tried to grow signups.", offer, brand, rep, facts, fresh, "2026-10-12");
-    const system = out.systemPrompt as string;
-    expect(system).toContain("WHAT KEVIN WANTS FROM THIS CONVERSATION");
+    const system = promptOf(out);
     expect(system).toContain("Kevin, founder of Distribute.you");
-    expect(system).toContain("ONE easy question");
-    expect(system).toContain("Never use an em dash");
     expect(system).not.toMatch(/[–—]/);
     const message = out.message as string;
     expect(message).toContain("Ask what they tried to grow signups.");
@@ -307,15 +333,15 @@ describe("composing the message", () => {
 
   it("a person never written to gets a first message, still in the owner's voice", async () => {
     const out = await compose(first, null, offer, brand, rep, facts, fresh, "2026-10-12");
-    expect(out.systemPrompt as string).toContain("This is a FIRST message");
-    expect(out.systemPrompt as string).not.toContain("NOT a first contact");
+    expect(promptOf(out)).toContain("This is a FIRST message");
+    expect(promptOf(out)).not.toContain("NOT a first contact");
     expect(out.message as string).toContain("(no message ever exchanged)");
     expect(out.message as string).toContain("HIS OWN MESSAGES (how Kevin writes):\n- to someone else, whatsapp: yo ça dit quoi");
   });
 
   it("a person with a prior thread gets a continuation from where it stopped, never a re-introduction", async () => {
     const out = await compose(first, null, offer, brand, rep, facts, talked, "2026-10-12");
-    const system = out.systemPrompt as string;
+    const system = promptOf(out);
     expect(system).toContain("This is NOT a first contact: never introduce yourself");
     expect(system).toContain("Pick the conversation back up from where it stopped");
     expect(system).toContain("Write in the language he uses with THIS person");
@@ -331,7 +357,7 @@ describe("composing the message", () => {
 
   it("a follow-up look plays the shared right-moment game: no fixed count, no fixed delay, stop only on their words", async () => {
     const out = await compose({ ...first, kind: "followup", step: 2 }, null, offer, brand, rep, facts, talked, "2026-10-12");
-    const system = out.systemPrompt as string;
+    const system = promptOf(out);
     expect(system).toContain("THIS IS A FOLLOW-UP LOOK");
     expect(system).toContain(rightMomentStrategy(WHATSAPP_MEDIUM));
     expect(system).toContain(nextDateStrategy(WHATSAPP_MEDIUM));
@@ -345,9 +371,9 @@ describe("composing the message", () => {
 
   it("a first message writes and states the first follow-up look's date", async () => {
     const out = await compose(first, null, offer, brand, rep, facts, fresh, "2026-10-12");
-    expect(out.systemPrompt as string).toContain("Set decision to write: this message goes out now.");
-    expect(out.systemPrompt as string).toContain("That date is the first follow-up look");
-    expect(out.systemPrompt as string).not.toContain("THIS IS A FOLLOW-UP LOOK");
+    expect(promptOf(out)).toContain("Set decision to write: this message goes out now.");
+    expect(promptOf(out)).toContain("That date is the first follow-up look");
+    expect(promptOf(out)).not.toContain("THIS IS A FOLLOW-UP LOOK");
   });
 
   it("never writes without a brand name, an offer name, or the history", async () => {
@@ -467,9 +493,9 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
     );
     expect(out.message as string).toContain("WHY WE WRITE NOW:\nTrigger: Signup Not Paid");
     expect(out.message as string).toContain("minutes = 1440");
-    expect(out.systemPrompt as string).toContain("this is the ONE message this fact gets");
-    expect(out.systemPrompt as string).not.toContain("This is the ONE follow-up");
-    expect((out.systemPrompt as string) + (out.message as string)).not.toMatch(/[–—]/);
+    expect(promptOf(out)).toContain("this is the ONE message this fact gets");
+    expect(promptOf(out)).not.toContain("This is the ONE follow-up");
+    expect((promptOf(out)) + (out.message as string)).not.toMatch(/[–—]/);
 
     const fin = loadMain(FINALIZE_MESSAGE_CODE);
     const sent = await fin({ json: { decision: "write", message: "Hi Kevin", nextFollowUpAt: "" } }, p, "c-1", { skip: false }, trigger);
@@ -727,7 +753,7 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
     const next = "2026-10-26T10:00:00.000Z";
     const out = await look("2026-10-14T09:00:00Z", quietThread, { decision: "write", message: "Ana, still keen?", nextFollowUpAt: next, reason: "quiet" }, { model: "flash-lite", provider: "google", picked: true });
     expect(out.record.body).toMatchObject({ kind: "acted", llmAlias: "flash-lite" });
-    expect(dag.nodes.find((n) => n.id === "record-plan")?.inputMapping?.writer).toBe("$ref:llm-plan.output");
+    expect(dag.nodes.find((n) => n.id === "record-plan")?.inputMapping?.writer).toBe("$ref:writer-plan.output");
   });
 
   it("a follow-up look carries its due date from the queue claim", async () => {
@@ -817,10 +843,6 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
     expect(out.record).toMatchObject({ outcome: "sent", body: { kind: "acted" } });
   });
 
-  it("the model's answer carries a decision and the next date, the shared right-moment contract", () => {
-    expect(MESSAGE_RESPONSE_SCHEMA.properties.decision.enum).toEqual(["write", "later", "stop"]);
-    expect(MESSAGE_RESPONSE_SCHEMA.required).toEqual(expect.arrayContaining(["decision", "nextFollowUpAt", "nextFollowUpWhy"]));
-  });
 });
 
 describe("greeting a person who just gave their WhatsApp number, known only by that phone (WA-WELCOME-WORKFLOW-1015)", () => {
@@ -874,7 +896,7 @@ describe("greeting a person who just gave their WhatsApp number, known only by t
     );
     expect(composed.message as string).toContain("Name: Marie Curie");
     expect(composed.message as string).toContain("First name they gave us: Marie");
-    expect(composed.systemPrompt as string).toContain("this is the ONE message this fact gets");
+    expect(promptOf(composed)).toContain("this is the ONE message this fact gets");
 
     const reach = await loadMain(REACH_PLAN_CODE)(p, { items: [], person: { phones: [] } }, { sends: [] }, "c-1");
     expect(reach).toMatchObject({ skip: false });
