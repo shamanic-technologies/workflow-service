@@ -1784,6 +1784,18 @@ export function needsWhatsappTakeover(dag: { nodes?: Array<{ id?: string; config
   return !Array.isArray(codes) || !WHATSAPP_TAKEOVER_CODES.every((c) => codes.includes(c));
 }
 
+/**
+ * The stored DAG answers on WhatsApp in ONE block (WA-BUBBLES-1023): its WhatsApp form of the reply is not split into
+ * bubbles, or its writer is not told that each <p> is a bubble. The seed upgrades it.
+ */
+export function needsWhatsappBubbles(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const finalize = nodes.find((n) => n?.id === "finalize-reply");
+  if (!finalize) return false;
+  const code = (n: { config?: Record<string, unknown> } | undefined) => String(n?.config?.code ?? "");
+  return !code(finalize).includes("bubbleSendFields") || !nodes.some((n) => code(n).includes("HOW IT LANDS ON THEIR PHONE"));
+}
+
 export const FEATURE_SLUG = "ai-meeting-booking";
 
 /**

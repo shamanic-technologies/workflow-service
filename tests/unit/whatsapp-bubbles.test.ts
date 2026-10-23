@@ -61,3 +61,14 @@ describe("hand-typed voice", () => {
     ]);
   });
 });
+
+describe("the meeting-booking seed upgrades a responder still answering WhatsApp in one block", () => {
+  it("needsWhatsappBubbles: false on the current DAG, true on a stored one without bubbles", async () => {
+    const { buildAiMeetingBookingDag, needsWhatsappBubbles } = await import("../../src/lib/ai-meeting-booking-dag.js");
+    const dag = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
+    expect(needsWhatsappBubbles(dag)).toBe(false);
+    const old = { nodes: dag.nodes.map((n) => (n.id === "finalize-reply" ? { ...n, config: { code: "export async function main() { return { whatsappBody: { text } }; }" } } : n)) };
+    expect(needsWhatsappBubbles(old)).toBe(true);
+    expect(needsWhatsappBubbles({ nodes: [] })).toBe(false);
+  });
+});

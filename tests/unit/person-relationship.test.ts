@@ -248,7 +248,9 @@ describe("every writer puts who they are to us in front of the model", () => {
 
   async function prompt(code: string, args: unknown[]): Promise<string> {
     const out = await loadMain(code)(...args);
-    return `${out?.systemPrompt}\n${out?.message}`;
+    // The cold WhatsApp writer states its prompt pieces as template variables (WA-BUBBLES-1023).
+    const system = out?.variables ? Object.values(out.variables as Record<string, string>).join("\n") : out?.systemPrompt;
+    return `${system}\n${out?.message}`;
   }
 
   it("cold WhatsApp outreach: a known person with no thread is never introduced as a stranger", async () => {

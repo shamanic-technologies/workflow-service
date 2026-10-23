@@ -78,7 +78,7 @@ describe("a persona on the sending account: the writer speaks as it", () => {
     const verdict = await loadMain(REACH_VERDICT_CODE)({ skip: false, code: null, owed: false }, { reachable: true, to: "+33600000000", fromAccount: "@sophie", persona: SOPHIE });
     expect(verdict.persona).toEqual(SOPHIE);
     const out = await composeWhatsapp(verdict, { ...a.history, voiceLines: [] });
-    const system = out.systemPrompt as string;
+    const system = Object.values(out.variables as Record<string, string>).join("\n");
     expect(system).toContain("You are Sophie, AI assistant at ");
     expect(system).toContain("never say or imply you are a human");
     expect(system).toContain(SOPHIE.instructions);
