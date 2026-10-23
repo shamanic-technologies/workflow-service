@@ -46,6 +46,7 @@ import {
   needsPhoneOnlyPerson,
   needsSenderPersona,
   needsWhatsappTakeover,
+  needsWhatsappBubbles,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 
@@ -425,6 +426,7 @@ async function main() {
         needsPhoneOnlyPerson(w.dag) ||
         needsSenderPersona(w.dag) ||
         needsWhatsappTakeover(w.dag) ||
+        needsWhatsappBubbles(w.dag) ||
         needsClientCommsVoice(w.dag) ||
         needsLlmAliasOnActs(w.dag) ||
         needsLegBestLlm(w.dag))

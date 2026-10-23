@@ -42,6 +42,7 @@ import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai
 import { PERSON_THREAD_NODE_ID, PERSON_THREAD_QUERY_NODE_ID, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
+import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
 import {
   EMAIL_MEDIUM,
   FOLLOW_UP_SEND_REFUSAL_CODES,
@@ -135,7 +136,7 @@ export const FOLLOW_UP_RESPONSE_SCHEMA = {
     decision: { type: "string", enum: ["write", "later", "stop", "cannot_write"] },
     subject: { type: "string", description: "Email only: the subject line. Empty on WhatsApp and unless decision is write." },
     bodyHtml: { type: "string", description: "Email only: the body as simple HTML paragraphs. Empty on WhatsApp and unless decision is write." },
-    message: { type: "string", description: "WhatsApp only: the plain text message. Empty on email and unless decision is write." },
+    message: { type: "string", description: "WhatsApp only: the plain text message, its bubbles in order separated by one empty line. Empty on email and unless decision is write." },
     ...NEXT_DATE_SCHEMA_PROPERTIES,
     reason: {
       type: "string",
@@ -505,7 +506,7 @@ export async function main(person, channel, offer, brand, facts, history, figure
     "THE GAME. We follow up every lead until they say yes, no or stop. Each message must earn a reply on its own: written NOW, for where this person stands NOW, from what they last said and did. Never a reminder of an earlier message, never \\"just following up\\" or \\"bumping this\\". Pick ONE thing that moves them one step: answer what they were waiting for, a useful fact about what we offer, a simpler next step, or a plain question about their situation. End with ONE easy question they can answer in a line.",
     "Read the thread like the person who wrote it on our side. If they asked something, answer it if the FACTS hold the answer. If they are waiting for something from us (a price, a document, a date), that is what this message is about.",
     wa
-      ? "THE CHANNEL is WhatsApp: the message continues our WhatsApp conversation with them, from the same number, in the language and tone of that conversation. Two to four short sentences, no greeting line of its own, no sign off, plain text, no links unless the facts give one."
+      ? "THE CHANNEL is WhatsApp: the message continues our WhatsApp conversation with them, from the same number, in the language and tone of that conversation. No greeting line of its own, no sign off, plain text, no links unless the facts give one. " + ${JSON.stringify(whatsappBubblesStrategy("persona"))}
       : "THE CHANNEL is email: the email is a reply in the last email thread we have with them, from the same mailbox, so never re-introduce us. Under 120 words. Greet them by first name when you have it. No sign off or signature block: ours is added below your text. bodyHtml is simple HTML, <p> paragraphs only. The subject is short and plain, never \\"Re:\\" or \\"Follow-up\\".",
     // The sending WhatsApp account's own persona (SOPHIE-WA-1016): none = the prompt of before.
     ...(wa && channel.persona ? personaLines(channel.persona, brandName) : []),
@@ -604,7 +605,8 @@ export async function main(draft, person, channel, campaignId) {
     const text = undash(json.message);
     if (!text) throw new Error("finalize: decision write on WhatsApp with an empty message");
     if (text !== String(json.message ?? "").trim()) console.error("[follow-up] the draft used a dash the person must never read; rewritten before the send");
-    const whatsappBody = { brandId: person.brandId, text, idempotencyKey: person.sendKey };
+    // Several bubbles = crm-service's \`messages\` (WA-BUBBLES-1023), one = \`text\` as before.
+    const whatsappBody = { brandId: person.brandId, ...bubbleSendFields(text), idempotencyKey: person.sendKey };
     if (channel.email) whatsappBody.email = channel.email;
     if (channel.phone) whatsappBody.phone = channel.phone;
     if (channel.fromAccount) whatsappBody.fromAccount = channel.fromAccount;
@@ -632,6 +634,8 @@ export async function main(draft, person, channel, campaignId) {
 }
 
 ${NEXT_DATE_FN}
+
+${BUBBLE_SEND_FN}
 `.trim();
 
 /**

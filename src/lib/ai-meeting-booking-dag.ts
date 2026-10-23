@@ -145,6 +145,7 @@ import { LEG_BEST_LLM_MODEL_REF, withLegBestLlm, writesWithLegBestLlm } from "./
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
+import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
 /**
@@ -433,14 +434,17 @@ export async function main(draft, followup, trigger) {
     whatsappBody: {
       ...(email !== null ? { email } : phone !== null ? { phone } : {}),
       brandId: followup.brandId,
-      text,
+      // One <p> per bubble (WA-BUBBLES-1023): several = crm-service's \`messages\`, one = \`text\` as before.
+      ...bubbleSendFields(text),
       idempotencyKey: whatsappIdempotencyKey,
     },
   };
 }
 
 SEND_KEY_FN
-`.trim().replace("SEND_KEY_FN", OCCURRENCE_SEND_KEY_FN);
+
+BUBBLE_SEND_TEXT
+`.trim().replace("SEND_KEY_FN", OCCURRENCE_SEND_KEY_FN).replace("BUBBLE_SEND_TEXT", BUBBLE_SEND_FN);
 
 /**
  * A conversation on a chat channel that the responder hands over is announced to
@@ -1496,13 +1500,15 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
         "Their last message came on " + replyChannel + ", so your reply goes out there, in the same chat, from the same number our earlier " + replyChannel + " messages came from.",
         ...personaLines(persona, personaBrand),
         "Write it as a chat message from you, " + persona.name + ": short, plain, in the language of that chat. No subject, no greeting block, no signature.",
-        "Put each paragraph in its own <p> (it is sent as plain text). A link is written out in full.",
+        ${JSON.stringify(whatsappBubblesStrategy("persona", "paragraph"))},
+        "It is sent as plain text. A link is written out in full.",
         "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
       ]
     : [
         "Their last message came on " + replyChannel + ", so your reply goes out there, in the same chat, from the same number our earlier " + replyChannel + " messages came from.",
         "Write it as a chat message from that person: short, plain, the language and tone of our earlier messages in that chat. No subject, no greeting block, no signature.",
-        "Put each paragraph in its own <p> (it is sent as plain text). A link is written out in full.",
+        ${JSON.stringify(whatsappBubblesStrategy("persona", "paragraph"))},
+        "It is sent as plain text. A link is written out in full.",
         "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
       ];
 
@@ -1776,6 +1782,18 @@ export function needsWhatsappTakeover(dag: { nodes?: Array<{ id?: string; config
   if (!send) return false;
   const codes = send.config?.skipOnRefusalCodes;
   return !Array.isArray(codes) || !WHATSAPP_TAKEOVER_CODES.every((c) => codes.includes(c));
+}
+
+/**
+ * The stored DAG answers on WhatsApp in ONE block (WA-BUBBLES-1023): its WhatsApp form of the reply is not split into
+ * bubbles, or its writer is not told that each <p> is a bubble. The seed upgrades it.
+ */
+export function needsWhatsappBubbles(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const finalize = nodes.find((n) => n?.id === "finalize-reply");
+  if (!finalize) return false;
+  const code = (n: { config?: Record<string, unknown> } | undefined) => String(n?.config?.code ?? "");
+  return !code(finalize).includes("bubbleSendFields") || !nodes.some((n) => code(n).includes("HOW IT LANDS ON THEIR PHONE"));
 }
 
 export const FEATURE_SLUG = "ai-meeting-booking";

@@ -18,6 +18,7 @@ import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
+import { GENERATE_WHATSAPP_PATH } from "../../src/lib/whatsapp-template-writer.js";
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildAiMeetingBookingDag, needsClientCommsVoice } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
@@ -37,13 +38,6 @@ const WRITERS: Array<{ name: string; dag: DAG; draft: string; compose: string; a
   { name: "follow-up (served)", dag: buildFollowUpProactiveDag(), draft: "draft", compose: "compose", args: () => followUpArgs() },
   { name: "follow-up (claimed)", dag: buildFollowUpReactiveDag({ readFigures: false }), draft: "draft", compose: "compose", args: () => followUpArgs() },
   { name: "follow-up (claimed, figures)", dag: buildFollowUpReactiveDag({ readFigures: true }), draft: "draft", compose: "compose", args: () => followUpArgs() },
-  {
-    name: "cold WhatsApp outreach",
-    dag: buildColdWhatsappOutreachDag(),
-    draft: "draft-message",
-    compose: "compose-message",
-    args: () => [a.person, a.instruction, a.offer, a.brand, a.rep, a.facts, a.history, a.currentDate, a.occurrence, a.triggerType, a.who, { skip: false, owed: false }],
-  },
   {
     name: "form meeting booking",
     dag: buildFormMeetingBookingDag(),
@@ -163,5 +157,13 @@ describe("the voice step", () => {
       expect(src, f).not.toContain("How we talk to a person");
       expect(src, f).not.toContain("revenue made easy. A message wins");
     }
+  });
+});
+
+describe("cold WhatsApp outreach: content-generation adds our voice to its WhatsApp template (WA-BUBBLES-1023)", () => {
+  it("reads no skill itself and writes through /generate-whatsapp", () => {
+    const dag = buildColdWhatsappOutreachDag();
+    expect(dag.nodes.some((n) => n.id === "read-client-comms" || n.id === "client-comms-voice")).toBe(false);
+    expect(dag.nodes.find((n) => n.id === "draft-message")?.config).toMatchObject({ service: "content-generation", path: GENERATE_WHATSAPP_PATH });
   });
 });

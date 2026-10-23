@@ -9,7 +9,6 @@ import { describe, it, expect } from "vitest";
 import {
   COMPOSE_MESSAGE_PROMPT_CODE,
   FINALIZE_MESSAGE_CODE,
-  MESSAGE_RESPONSE_SCHEMA,
   REACH_PLAN_CODE,
   REACH_VERDICT_CODE,
   RECORD_PLAN_CODE,
@@ -43,11 +42,9 @@ const inDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString();
 
 describe("a trigger-made WhatsApp judges the right moment and their local time (replay of the 2026-10-16 case)", () => {
   it("the model may answer later, and is given the right-moment game and their local time", async () => {
-    expect(MESSAGE_RESPONSE_SCHEMA.properties.decision.enum).toEqual(["write", "later", "stop"]);
-    expect(MESSAGE_RESPONSE_SCHEMA.properties.decision.description).not.toMatch(/Only a follow-up look may be later/);
-
+    // WA-BUBBLES-1023: the decision schema is content-generation's (/generate-whatsapp); the run states the game pieces.
     const out = await compose();
-    const system = out.systemPrompt as string;
+    const system = Object.values(out.variables as Record<string, string>).join("\n");
     const message = out.message as string;
     expect(system).toContain(rightMomentStrategy(WHATSAPP_MEDIUM));
     expect(system).toContain(localTimeStrategy(WHATSAPP_MEDIUM));
@@ -111,8 +108,8 @@ describe("the deferred look: a row this campaign never wrote to is still owed", 
       { ...a.person, ...person, lead: a.person.lead }, a.instruction, a.offer, a.brand, a.rep, a.facts, a.history, a.currentDate,
       { answering: false, skipTriggerRead: true }, { notCalled: true }, a.who, { skip: false, owed: true },
     );
-    expect(out.systemPrompt as string).toContain("this is the ONE message this fact gets");
-    expect(out.systemPrompt as string).not.toContain("THIS IS A FOLLOW-UP LOOK");
+    expect(Object.values(out.variables as Record<string, string>).join("\n")).toContain("this is the ONE message this fact gets");
+    expect(Object.values(out.variables as Record<string, string>).join("\n")).not.toContain("THIS IS A FOLLOW-UP LOOK");
     expect(out.message as string).toContain("An earlier look judged it was not the right moment");
 
     const reach = { skip: false, owed: true, skipIfReplied: false };

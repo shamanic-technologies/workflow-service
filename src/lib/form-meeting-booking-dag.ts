@@ -56,6 +56,7 @@ import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-da
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 import { CRM_WHATSAPP_SEND, WHATSAPP_REFUSAL_CODES } from "./cold-whatsapp-outreach-dag.js";
 import { DELIVERED, OCCURRENCE_SEND_REFUSAL_CODES, refusedDelivery } from "./occurrence-delivery.js";
+import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
 
 export const FORM_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
 
@@ -88,7 +89,7 @@ export const ANSWER_RESPONSE_SCHEMA = {
     bodyHtml: { type: "string", description: "The email body as simple HTML paragraphs. Empty when decision is no_reply_owed." },
     whatsappText: {
       type: "string",
-      description: "The same answer as a short WhatsApp message, plain text. Empty when decision is no_reply_owed.",
+      description: "The same answer as a WhatsApp message, plain text, its bubbles in order separated by one empty line. Empty when decision is no_reply_owed.",
     },
     reason: { type: "string", description: "One sentence: what the answer does, or why no reply is owed." },
   },
@@ -179,7 +180,7 @@ export async function main(person, offer, brand, rep, facts, currentDate, who) {
     "Write like a person who is glad they reached out: short, plain, warm, one idea per sentence. Greet them by first name when you have it. No sales pitch, no filler, no \\"I hope this finds you well\\", no \\"thank you for your submission\\".",
     "English only. Never use an em dash or an en dash. Use a comma or a period.",
     "Email: bodyHtml is simple HTML, <p> paragraphs only, under 120 words. Do not sign off with a name or a signature block: ours is added below your text. The subject is short and plain, about their request.",
-    "WhatsApp: whatsappText is the same answer in 2 or 3 short sentences, plain text, with the booking link if there is one." + (senderName ? " End it with " + senderName + " on its own." : " Do not sign it with a made-up name."),
+    "WhatsApp: whatsappText is the same answer, plain text, with the booking link if there is one." + (senderName ? " End the last bubble with " + senderName + "." : " Do not sign it with a made-up name.") + " " + ${JSON.stringify(whatsappBubblesStrategy("persona"))},
     "Decision no_reply_owed ONLY when the submission is plainly not a person asking anything (a test entry, spam, gibberish). Then leave subject, bodyHtml and whatsappText empty. A short form with only a name and an email IS a person asking: answer it. A name that differs from the email address, or a request outside the offer, is NOT a reason either: real people do both, so answer them.",
   ].join("\\n");
 
@@ -254,8 +255,12 @@ export async function main(draft, person) {
     whatsappText,
     idempotencyKey: key,
     whatsappIdempotencyKey: key + ":whatsapp",
+    // Several bubbles = crm-service's \`messages\` (WA-BUBBLES-1023), one = \`text\` as before.
+    whatsappBody: { email: person.email, brandId: person.brandId, ...bubbleSendFields(whatsappText), idempotencyKey: key + ":whatsapp" },
   };
 }
+
+${BUBBLE_SEND_FN}
 `.trim();
 
 const GATHER_FACTS_SIGNATURE = "export async function main(plan, offerAnswers, offerFields, brandFields)";
@@ -488,10 +493,7 @@ function formMeetingBookingDagUnvoiced(): DAG {
         config: { ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: [...WHATSAPP_REFUSAL_CODES] },
         retries: 0,
         inputMapping: {
-          "body.email": "$ref:resolve-form.output.email",
-          "body.brandId": "$ref:resolve-form.output.brandId",
-          "body.text": "$ref:finalize-answer.output.whatsappText",
-          "body.idempotencyKey": "$ref:finalize-answer.output.whatsappIdempotencyKey",
+          body: "$ref:finalize-answer.output.whatsappBody",
         },
       },
       {
