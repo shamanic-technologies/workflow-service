@@ -293,9 +293,10 @@ describe("composing the message", () => {
   it("explains the strategy, follows the instruction verbatim, and writes as the brand's rep", async () => {
     const out = await compose(first, "Ask what they tried to grow signups.", offer, brand, rep, facts, fresh, "2026-10-12");
     const system = out.systemPrompt as string;
-    expect(system).toContain("WHAT KEVIN WANTS FROM THIS CONVERSATION");
+    expect(system).toContain("WHAT KEVIN GIVES THEM");
+    expect(system).toContain("HOW IT LANDS ON THEIR PHONE");
     expect(system).toContain("Kevin, founder of Distribute.you");
-    expect(system).toContain("ONE easy question");
+    expect(system).toContain("ONE question about THEM");
     expect(system).toContain("Never use an em dash");
     expect(system).not.toMatch(/[–—]/);
     const message = out.message as string;
