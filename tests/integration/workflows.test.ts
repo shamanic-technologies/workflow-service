@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   VALID_LINEAR_DAG,
   DAG_WITH_UNKNOWN_TYPE,
@@ -168,6 +168,7 @@ const mockFetchPipe = vi.fn();
 // features-service owns the pipe <-> workflow link: these tests record what is assigned there.
 const mockAssignWorkflowToLeg = vi.fn(async (a: Record<string, unknown>) => ({ ...a, state: "active", decidedAt: "2026-10-10T00:00:00.000Z" }));
 const mockActiveLegsOfDynasty = vi.fn(async () => [] as string[]);
+const mockListLegAssignments = vi.fn();
 vi.mock("../../src/lib/catalogue-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/catalogue-client.js")>();
   return {
@@ -175,6 +176,9 @@ vi.mock("../../src/lib/catalogue-client.js", async (importOriginal) => {
     fetchPipe: (...a: unknown[]) => mockFetchPipe(...a),
     assignWorkflowToLeg: (...a: unknown[]) => mockAssignWorkflowToLeg(...(a as [Record<string, unknown>])),
     activeLegsOfDynasty: (...a: unknown[]) => mockActiveLegsOfDynasty(...(a as [])),
+    // Real unless a test stubs it (retire-by-content per leg).
+    listLegAssignments: (...a: unknown[]) =>
+      mockListLegAssignments.getMockImplementation() ? mockListLegAssignments(...a) : actual.listLegAssignments(...(a as [string])),
   };
 });
 
@@ -1982,6 +1986,88 @@ describe("POST /workflows/retire-by-content (TEMPLATE-MODEL-STATUS-1019)", () =>
     expect(ballad.workflowDynastyStatus).toBe("deprecated");
     // DEPRECATION-REASON-1020: the door states its own reason when the caller gives none.
     expect(ballad.deprecationReason).toBe("Uses deprecated model pro");
+  });
+
+  describe("narrowed to one pipe (RETIRE-BY-CONTENT-PER-LEG-1023)", () => {
+    const assignment = (workflowDynastySlug: string, legKey: string) => ({
+      featureSlug: "sales-cold-email-outreach", legKey, workflowDynastySlug, state: "active", decidedBy: "x", decidedAt: "2026-10-23T00:00:00Z", note: null,
+    });
+    const WEBSITE = "lead_found_to_website_visit";
+    const REPLY = "lead_found_to_conversation";
+    afterEach(() => mockListLegAssignments.mockReset());
+
+    it("dry run lists only the dynasties on that leg, each with its leg; one also on another leg is kept apart", async () => {
+      const keel = runnable("sales-cold-email-outreach-keel", "cold-email-v59", "glm-pro");
+      const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "glm-pro");
+      const both = runnable("sales-cold-email-outreach-both", "cold-email-v59", "glm-pro");
+      mockSelectResponses.push([keel, ballad, both]);
+      mockListLegAssignments.mockImplementation(async () => [
+        assignment(keel.workflowDynastySlug, WEBSITE),
+        assignment(ballad.workflowDynastySlug, REPLY),
+        assignment(both.workflowDynastySlug, WEBSITE),
+        assignment(both.workflowDynastySlug, REPLY),
+      ]);
+
+      const res = await request.post("/workflows/retire-by-content").set(AUTH)
+        .send({ model: "glm-pro", featureSlug: "sales-cold-email-outreach", legKey: WEBSITE, dryRun: true });
+
+      expect(res.status).toBe(200);
+      expect(mockListLegAssignments).toHaveBeenCalledWith("sales-cold-email-outreach", expect.anything());
+      expect(res.body.workflows).toEqual([expect.objectContaining({ workflowDynastySlug: keel.workflowDynastySlug, legKeys: [WEBSITE] })]);
+      expect(res.body.keptOnOtherLegs).toEqual([expect.objectContaining({ workflowDynastySlug: both.workflowDynastySlug, legKeys: [REPLY, WEBSITE] })]);
+      expect(res.body.retired).toBe(0);
+    });
+
+    it("retires only the dynasty on that leg and names the pipe in the reason", async () => {
+      const keel = runnable("sales-cold-email-outreach-keel", "cold-email-v59", "glm-pro");
+      const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "glm-pro");
+      mockDbRows.push(keel);
+      mockSelectResponses.push([keel, ballad]);
+      mockListLegAssignments.mockImplementation(async () => [assignment(keel.workflowDynastySlug, WEBSITE), assignment(ballad.workflowDynastySlug, REPLY)]);
+
+      const res = await request.post("/workflows/retire-by-content").set(AUTH)
+        .send({ model: "glm-pro", featureSlug: "sales-cold-email-outreach", legKey: WEBSITE });
+
+      expect(res.status).toBe(200);
+      expect(res.body.retired).toBe(1);
+      expect(res.body.workflows.map((w: { workflowDynastySlug: string }) => w.workflowDynastySlug)).toEqual([keel.workflowDynastySlug]);
+      expect(keel.status).toBe("deprecated");
+      expect(ballad.status).toBe("active");
+      expect(keel.deprecationReason).toBe(`Uses deprecated model glm-pro on pipe sales-cold-email-outreach|${WEBSITE}`);
+    });
+
+    it("without a leg answers as before: no assignment read, no leg fields", async () => {
+      const ballad = runnable("sales-cold-email-outreach-ballad", "cold-email-v59", "glm-pro");
+      mockSelectResponses.push([ballad]);
+      mockListLegAssignments.mockImplementation(async () => { throw new Error("must not be read"); });
+
+      const res = await request.post("/workflows/retire-by-content").set(AUTH).send({ model: "glm-pro", featureSlug: "sales-cold-email-outreach", dryRun: true });
+
+      expect(res.status).toBe(200);
+      expect(mockListLegAssignments).not.toHaveBeenCalled();
+      expect(res.body).toEqual({
+        dryRun: true,
+        retired: 0,
+        workflows: [{ workflowDynastySlug: ballad.workflowDynastySlug, workflowDynastyName: ballad.workflowDynastyName, featureSlug: ballad.featureSlug, workflowSlug: ballad.workflowSlug, version: 2 }],
+      });
+    });
+
+    it("502s and writes nothing when features-service cannot say which leg a dynasty sits on", async () => {
+      const keel = runnable("sales-cold-email-outreach-keel", "cold-email-v59", "glm-pro");
+      mockDbRows.push(keel);
+      mockSelectResponses.push([keel]);
+      mockListLegAssignments.mockImplementation(async () => { throw new Error("down"); });
+
+      const res = await request.post("/workflows/retire-by-content").set(AUTH).send({ model: "glm-pro", featureSlug: "sales-cold-email-outreach", legKey: WEBSITE });
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe("leg_assignments_unreadable");
+      expect(keel.status).toBe("active");
+    });
+
+    it("400s on a leg without its channel", async () => {
+      expect((await request.post("/workflows/retire-by-content").set(AUTH).send({ model: "glm-pro", legKey: WEBSITE })).status).toBe(400);
+    });
   });
 
   it("400s unless exactly one of promptType or model is given", async () => {
