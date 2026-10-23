@@ -51,6 +51,7 @@
  */
 import { withClientCommsVoice } from "./client-comms.js";
 import { withLegBestLlm } from "./leg-best-writer.js";
+import { withMessageWrittenDeclaration } from "./message-written-outcome.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -290,7 +291,14 @@ export const REFUSED = "results['finalize-answer']?.decision == 'answer' && resu
 
 /** The form responder, its answer drafted in our voice (the `client-comms` skill, read live before `draft-answer`). */
 export function buildFormMeetingBookingDag(): DAG {
-  return withLegBestLlm(withClientCommsVoice(formMeetingBookingDagUnvoiced(), "draft-answer"), "draft-answer");
+  // The written answer on the ledger, on the arm where the email went out (COST-ACCOUNTING-1023-P1).
+  const declared = withMessageWrittenDeclaration(formMeetingBookingDagUnvoiced(), {
+    after: "send-whatsapp",
+    signalRef: "$ref:send-email.output.success",
+    sentWhen: "true",
+    leadIdRef: "$ref:resolve-form.output.leadId",
+  });
+  return withLegBestLlm(withClientCommsVoice(declared, "draft-answer"), "draft-answer");
 }
 
 function formMeetingBookingDagUnvoiced(): DAG {
