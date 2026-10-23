@@ -27,6 +27,10 @@ const SHORT_DEADLINE_FILES = new Map([
     "src/lib/ai-meeting-booking-dag.ts",
     "the three public booking APIs this node reads (Calendly, GoHighLevel, Google appointment schedules) — unreadable availability degrades to the plain booking link, so a long hang would only delay the prospect's answer.",
   ],
+  [
+    "src/lib/message-written-outcome.ts",
+    "the ledger declaration after a message went out (COST-ACCOUNTING-1023-P1): it never fails the run and retries on its own, so a hanging runs-service gets 30 s per try, never ten minutes holding the run open.",
+  ],
 ]);
 
 const ANY_TIMEOUT_LITERAL = "AbortSignal.timeout(";
