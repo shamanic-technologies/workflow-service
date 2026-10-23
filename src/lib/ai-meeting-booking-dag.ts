@@ -141,6 +141,7 @@
  */
 
 import { readsClientComms, withClientCommsVoice } from "./client-comms.js";
+import { withMessageWrittenDeclaration } from "./message-written-outcome.js";
 import { LEG_BEST_LLM_MODEL_REF, withLegBestLlm, writesWithLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
@@ -2119,7 +2120,9 @@ export function buildAiMeetingBookingDag(opts: AiMeetingBookingDagOptions): DAG 
 
 /** The responder before our voice is spliced in: the offer-document copy derives from it, then voices its own draft. */
 export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOptions): DAG {
-  return {
+  // The written reply on the ledger, once it went out on any channel (COST-ACCOUNTING-1023-P1). The offer-document
+  // copy derives from this DAG, so it declares too.
+  return withMessageWrittenDeclaration({
     nodes: [
       {
         id: "gate-check",
@@ -2991,5 +2994,10 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       { from: "stop-followups-closed", to: "end-run-closed-with-thanks" },
     ],
     onError: "end-run-error",
-  };
+  }, {
+    after: "classify-send",
+    signalRef: "$ref:classify-send.output.outcome",
+    sentWhen: "sent",
+    leadIdRef: "$ref:claimed.output.followup.leadId",
+  });
 }

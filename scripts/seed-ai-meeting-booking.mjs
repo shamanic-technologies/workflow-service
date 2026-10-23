@@ -49,6 +49,7 @@ import {
   needsWhatsappBubbles,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
+import { needsMessageWrittenDeclaration } from "../dist/lib/message-written-outcome.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.WORKFLOW_SERVICE_API_KEY;
@@ -429,7 +430,8 @@ async function main() {
         needsWhatsappBubbles(w.dag) ||
         needsClientCommsVoice(w.dag) ||
         needsLlmAliasOnActs(w.dag) ||
-        needsLegBestLlm(w.dag))
+        needsLegBestLlm(w.dag) ||
+        needsMessageWrittenDeclaration(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
