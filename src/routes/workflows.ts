@@ -28,6 +28,7 @@ import {
 import {
   PipeResolutionError,
   LegAssignmentError,
+  listLegAssignments,
   fetchPipe,
   assignWorkflowToLeg,
   activeLegsOfDynasty,
@@ -70,7 +71,7 @@ import { readSiblingLines, singleSiblingLine } from "../lib/sibling-line-refresh
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import { summarizeContentGeneration } from "../lib/content-generation-summary.js";
 import { freeGeneratedWriter, freeUnstatedWriter } from "../lib/leg-best-writer.js";
-import { rowsUsingContent } from "../lib/retire-by-content.js";
+import { rowsUsingContent, scopeToLeg } from "../lib/retire-by-content.js";
 import {
   recordDeprecation,
   CLEAR_DEPRECATION,
@@ -1124,16 +1125,39 @@ router.post("/workflows/retire-by-content", requireApiKey, async (req, res) => {
           ...(body.featureSlug ? [eq(workflows.featureSlug, body.featureSlug)] : []),
         ),
       );
-    const matched = rowsUsingContent(runnable, target);
-    const listed = matched.map((w) => ({
+    const contentMatched = rowsUsingContent(runnable, target);
+    const describe = (w: (typeof contentMatched)[number]) => ({
       workflowDynastySlug: w.workflowDynastySlug,
       workflowDynastyName: w.workflowDynastyName,
       featureSlug: w.featureSlug,
       workflowSlug: w.workflowSlug,
       version: w.version,
-    }));
+    });
+    // RETIRE-BY-CONTENT-PER-LEG-1023: a leg narrows to the dynasties features-service has ACTIVE on that one pipe;
+    // a dynasty also on another leg is listed under `keptOnOtherLegs`, never retired. No leg = as before, no read.
+    let matched = contentMatched;
+    let legExtras: { keptOnOtherLegs: Array<ReturnType<typeof describe> & { legKeys: string[] }> } | null = null;
+    let legKeysOf: Map<string, string[]> | null = null;
+    if (body.legKey !== undefined) {
+      let assignments;
+      try {
+        assignments = await listLegAssignments(body.featureSlug!, extractDownstreamHeaders(req));
+      } catch (err) {
+        console.error(`[workflow-service] retire-by-content: leg assignments of ${body.featureSlug} unreadable:`, err);
+        res.status(502).json({
+          error: `Could not read which workflows sit on ${body.featureSlug}|${body.legKey} from features-service: nothing listed or retired`,
+          code: "leg_assignments_unreadable",
+        });
+        return;
+      }
+      const scoped = scopeToLeg(contentMatched, body.legKey, assignments);
+      matched = scoped.onLeg.map((s) => s.row);
+      legKeysOf = new Map(scoped.onLeg.map((s) => [s.row.workflowDynastySlug, s.legKeys]));
+      legExtras = { keptOnOtherLegs: scoped.alsoOnOtherLegs.map((s) => ({ ...describe(s.row), legKeys: s.legKeys })) };
+    }
+    const listed = matched.map((w) => ({ ...describe(w), ...(legKeysOf ? { legKeys: legKeysOf.get(w.workflowDynastySlug)! } : {}) }));
     if (body.dryRun || matched.length === 0) {
-      res.json({ dryRun: Boolean(body.dryRun), workflows: listed, retired: 0 });
+      res.json({ dryRun: Boolean(body.dryRun), workflows: listed, retired: 0, ...legExtras });
       return;
     }
     const dynasties = [...new Set(matched.map((w) => w.workflowDynastySlug))];
@@ -1142,7 +1166,8 @@ router.post("/workflows/retire-by-content", requireApiKey, async (req, res) => {
         body.reason ??
         (target.promptType !== undefined
           ? `Uses deprecated template ${target.promptType}`
-          : `Uses deprecated model ${target.model}`),
+          : `Uses deprecated model ${target.model}`) +
+          (body.legKey !== undefined ? ` on pipe ${body.featureSlug}|${body.legKey}` : ""),
       decidedBy: resolveDecidedBy(req, body.decidedBy),
     };
     await db.transaction(async (tx) => {
@@ -1160,9 +1185,9 @@ router.post("/workflows/retire-by-content", requireApiKey, async (req, res) => {
       }
     });
     console.log(
-      `[workflow-service] retire-by-content ${JSON.stringify(target)}: retired ${dynasties.length} dynasties: ${dynasties.join(", ")}`,
+      `[workflow-service] retire-by-content ${JSON.stringify(target)}${body.legKey ? ` on ${body.featureSlug}|${body.legKey}` : ""}: retired ${dynasties.length} dynasties: ${dynasties.join(", ")}`,
     );
-    res.json({ dryRun: false, workflows: listed, retired: dynasties.length });
+    res.json({ dryRun: false, workflows: listed, retired: dynasties.length, ...legExtras });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
       res.status(400).json({ error: "Validation error", details: err });

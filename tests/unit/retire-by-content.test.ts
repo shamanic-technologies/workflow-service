@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { rowsUsingContent } from "../../src/lib/retire-by-content.js";
+import { rowsUsingContent, scopeToLeg } from "../../src/lib/retire-by-content.js";
 import { withTemplateDynasty } from "../../src/lib/template-dynasty.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 
@@ -37,5 +37,24 @@ describe("rowsUsingContent (TEMPLATE-MODEL-STATUS-1019)", () => {
     const pinned = row("h", start);
     expect(rowsUsingContent([following, pinned], { promptType: "cold-email-v59" }).map((r) => r.id)).toEqual(["h"]);
     expect(rowsUsingContent([following, pinned], { model: "pro" }).map((r) => r.id)).toEqual(["g", "h"]);
+  });
+});
+
+describe("scopeToLeg (RETIRE-BY-CONTENT-PER-LEG-1023)", () => {
+  const a = (workflowDynastySlug: string, legKey: string, state: "active" | "deprecated" = "active") => ({
+    featureSlug: "sales-cold-email-outreach", legKey, workflowDynastySlug, state, decidedBy: "x", decidedAt: "2026-10-23T00:00:00Z", note: null,
+  });
+  const m = (slug: string) => ({ workflowDynastySlug: slug });
+
+  it("keeps only dynasties active on the leg, each with its legs; one also on another leg is kept apart", () => {
+    const out = scopeToLeg([m("keel"), m("ballad"), m("both"), m("old"), m("none")], "lead_found_to_website_visit", [
+      a("keel", "lead_found_to_website_visit"),
+      a("ballad", "lead_found_to_conversation"),
+      a("both", "lead_found_to_website_visit"),
+      a("both", "lead_found_to_conversation"),
+      a("old", "lead_found_to_website_visit", "deprecated"),
+    ]);
+    expect(out.onLeg).toEqual([{ row: m("keel"), legKeys: ["lead_found_to_website_visit"] }]);
+    expect(out.alsoOnOtherLegs).toEqual([{ row: m("both"), legKeys: ["lead_found_to_conversation", "lead_found_to_website_visit"] }]);
   });
 });
