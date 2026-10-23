@@ -971,6 +971,10 @@ export const RetireByContentRequestSchema = z
     promptType: z.string().min(1).optional().describe("content-generation template type: retire every runnable workflow whose content call PINS it. A workflow writing with a template dynasty's live head is never retired by one of that dynasty's versions (TPL-DYNASTY-1021-WF3)."),
     model: z.string().min(1).optional().describe("Writer model alias: retire every runnable workflow whose content call writes with it."),
     featureSlug: z.string().min(1).optional().describe("Narrow to one channel. Absent = every channel."),
+    legKey: z.string().min(1).optional().describe(
+      "Narrow to ONE pipe (`featureSlug` x `legKey`, e.g. lead_found_to_website_visit; requires `featureSlug`): only dynasties features-service has ACTIVE on that leg are listed/retired, each with its `legKeys`. " +
+      "A matching dynasty also active on another leg of the channel is never retired (it would stop that pipe too): it is listed under `keptOnOtherLegs`. Absent = every leg, answered as before (RETIRE-BY-CONTENT-PER-LEG-1023)."
+    ),
     dryRun: z.boolean().optional().describe("true = list what would be retired, write nothing (the confirmation a staff member reads first)."),
     reason: z.string().trim().min(1).max(2000).optional().describe(
       "Why these workflows are retired (DEPRECATION-REASON-1020). Absent = 'Uses deprecated template <promptType>' / 'Uses deprecated model <model>'."
@@ -978,6 +982,7 @@ export const RetireByContentRequestSchema = z
     decidedBy: DeprecationRequestFields.decidedBy,
   })
   .refine((b) => (b.promptType === undefined) !== (b.model === undefined), { message: "Exactly one of promptType or model is required" })
+  .refine((b) => b.legKey === undefined || b.featureSlug !== undefined, { message: "legKey requires featureSlug (a pipe is a channel x leg)" })
   .openapi("RetireByContentRequest");
 
 export const RetireByContentResponseSchema = z
@@ -991,10 +996,24 @@ export const RetireByContentResponseSchema = z
           featureSlug: z.string(),
           workflowSlug: z.string().describe("The version that was running (the dynasty's active version)."),
           version: z.number().int(),
+          legKeys: z.array(z.string()).optional().describe("Only when `legKey` was sent: the legs features-service has this dynasty ACTIVE on (exactly [legKey])."),
         }),
       )
-      .describe("Every workflow (dynasty) running the template or model: retired, or that would be on a dry run."),
+      .describe("Every workflow (dynasty) running the template or model (on the pipe, when `legKey` was sent): retired, or that would be on a dry run."),
     retired: z.number().int().describe("Dynasties retired by this call (0 on a dry run)."),
+    keptOnOtherLegs: z
+      .array(
+        z.object({
+          workflowDynastySlug: z.string(),
+          workflowDynastyName: z.string(),
+          featureSlug: z.string(),
+          workflowSlug: z.string(),
+          version: z.number().int(),
+          legKeys: z.array(z.string()).describe("Every leg it is ACTIVE on: `legKey` and at least one other."),
+        }),
+      )
+      .optional()
+      .describe("Only when `legKey` was sent: dynasties running the template or model on that leg AND another one, never retired by a per-pipe call."),
   })
   .openapi("RetireByContentResponse");
 
@@ -1563,7 +1582,7 @@ registry.registerPath({
     "Staff action behind deprecating a content-generation template or a writer model (TEMPLATE-MODEL-STATUS-1019). " +
     "Finds every RUNNABLE workflow (version active, dynasty active) whose content call renders `promptType` or writes " +
     "with `model`, and retires each whole dynasty exactly like PUT /workflows/dynasty/{workflowDynastySlug}/status " +
-    "with 'deprecated'. `dryRun: true` lists them and writes nothing. There is no reverse: re-activating a template or " +
+    "with 'deprecated'. `featureSlug` + `legKey` narrow it to ONE pipe (features-service's active leg assignments): a dynasty also on another leg is listed in `keptOnOtherLegs`, never retired. `dryRun: true` lists them and writes nothing. There is no reverse: re-activating a template or " +
     "a model brings no workflow back, each is re-activated by hand. Idempotent (a second call finds nothing left).",
   tags: ["Workflows"],
   security: [{ apiKey: [] }],
@@ -1574,6 +1593,7 @@ registry.registerPath({
   responses: {
     200: { description: "Listed (dryRun) or retired", content: { "application/json": { schema: RetireByContentResponseSchema } } },
     400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "`legKey` sent and features-service's leg assignments unreadable (`leg_assignments_unreadable`): nothing listed or retired", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
