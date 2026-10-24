@@ -1774,6 +1774,34 @@ export async function main(send, whatsapp, replyChannel) {
 }
 `.trim();
 
+/**
+ * ESCALATION-HANDOVER-1024: who closes the claimed row once a person must answer. instantly-service's escalate route
+ * hands over the row of the campaign whose Instantly thread it forwarded (the predecessor's), and only the FIRST time:
+ * `already_escalated` stops nothing. A row on this campaign's OWN queue (a reply filed here by the trigger door) is
+ * never touched by it, so before this step the same prospect was claimed and escalated again every hour, each run
+ * paying the reading and the draft (Shockwavecenters, drmontilla@, 2026-10-23: 17 runs in 18 h). So the row is handed
+ * here unless the escalation states it stopped THAT row: the email path on a predecessor-queue row with
+ * `followupsStopped: true`. Any other channel is handed here, as before.
+ */
+export const PLAN_HAND_OVER_CODE = `
+export async function main(thread, claimed, escalation) {
+  if (thread?.replyChannel !== "email") return { skip: false, why: "chat thread: handed here" };
+  const stoppedByEscalation = escalation?.escalation?.followupsStopped === true;
+  const ownQueue = claimed?.queue === "own";
+  if (stoppedByEscalation && !ownQueue) return { skip: true, why: "the escalation handed over this row" };
+  console.log("[ai-meeting-booking] escalation did not hand over row " + String(claimed?.followup?.id) + " (queue " + String(claimed?.queue) + ", handoff " + String(escalation?.escalation?.handoff) + "): handing it over here so it is not claimed again");
+  return { skip: false, why: ownQueue ? "row on this campaign's own queue" : "the escalation stopped nothing" };
+}
+`.trim();
+
+/** True when a stored DAG leaves an escalated row due after an email escalation that did not hand it over. */
+export function needsEscalationHandOver(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  if (!nodes.some((n) => n?.id === "hand-over")) return false;
+  const plan = nodes.find((n) => n?.id === "plan-hand-over");
+  return plan?.config?.code !== PLAN_HAND_OVER_CODE;
+}
+
 /** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
 export const WHATSAPP_TAKEOVER_CODES = ["human_in_conversation"] as const;
 
@@ -2514,10 +2542,10 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       // branch body is built as an ordinary module and silently does nothing.
       { id: "check-answerable", type: "condition" },
       // Nothing is sent. instantly-service forwards the exchange to the agency
-      // inbox naming the question, and empties the lead's follow-up schedule
-      // itself — so this DAG never touches lead-service on this path, and no
-      // follow-up is recorded as acted: nothing was sent, and the schedule is
-      // being emptied rather than advanced.
+      // inbox naming the question, and hands over the predecessor's row itself
+      // the first time; any row it did not hand over is handed by `hand-over`
+      // below. No follow-up is recorded as acted: nothing was sent, and the
+      // schedule is being emptied rather than advanced.
       {
         id: "escalate-unanswerable",
         type: "http.call",
@@ -2564,10 +2592,22 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           skip: "$ref:compose-rep-alert.output.skip",
         },
       },
-      // A conversation on any other channel is handed to a person the same way
-      // the email hand-over ends: nothing is sent, the thread is a person's now
-      // (permanent, no automated responder claims it again), and the person
-      // stays in "Needs your call" until one of our people answers them.
+      // Whether this DAG still has to hand the row over (ESCALATION-HANDOVER-1024).
+      {
+        id: "plan-hand-over",
+        type: "script",
+        config: { code: PLAN_HAND_OVER_CODE },
+        retries: 0,
+        inputMapping: {
+          thread: "$ref:thread.output",
+          claimed: "$ref:claimed.output",
+          escalation: "$ref:escalate-unanswerable.output",
+        },
+      },
+      // The claimed row is handed to a person: nothing is sent, the thread is a
+      // person's now (permanent, no automated responder claims it again), and
+      // the person stays in "Needs your call" until one of our people answers
+      // them. Any chat thread, and an email row the escalation did not hand over.
       {
         id: "hand-over",
         type: "http.call",
@@ -2580,7 +2620,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         retries: 0,
         inputMapping: {
           "params.id": "$ref:claimed.output.followup.id",
-          skip: "$ref:thread.output.skipHandOver",
+          skip: "$ref:plan-hand-over.output.skip",
         },
       },
       // No reply is owed: nothing is sent and nothing is escalated. The run says
@@ -2949,7 +2989,8 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         to: "name-no-reply-owed",
         condition: "results['ground-draft']?.json?.decision == 'no_reply_owed'",
       },
-      { from: "escalate-unanswerable", to: "hand-over" },
+      { from: "escalate-unanswerable", to: "plan-hand-over" },
+      { from: "plan-hand-over", to: "hand-over" },
       { from: "hand-over", to: "compose-rep-alert" },
       { from: "compose-rep-alert", to: "alert-rep" },
       { from: "alert-rep", to: "end-run-escalated" },
