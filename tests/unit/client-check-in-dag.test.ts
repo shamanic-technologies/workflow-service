@@ -103,6 +103,33 @@ describe("the client game", () => {
     expect(out.systemPrompt).toContain("You look after ONE current client of Distribute.you");
     expect(out.systemPrompt).toContain("THE GAME. A client stays and grows");
   });
+
+  it("shows the writer what the event carries (a form's words); the lead writer never does", async () => {
+    const args = (trigger: unknown) => [
+      { ...person, lead: { firstName: "Ana" }, timezone: "Europe/Paris" },
+      { channel: "email", email: "ana@client.com", skipModel: false, why: "email" },
+      { name: "Revenue made easy" },
+      { brand: { name: "Distribute.you" } },
+      { exact: [], neverGive: [] },
+      { lines: [], ourMessages: 1 },
+      undefined,
+      "",
+      { skip: true },
+      { skip: true },
+      trigger,
+      NOW,
+      NOW.slice(0, 10),
+      { lines: ["Customer"], threadLines: [], strategy: "WHO" },
+    ];
+    const trigger = { eventId: "ev-1", item: { formName: "Support", answers: [{ question: "Ask", answer: "How do I get more meetings?" }] } };
+    const client = await loadMain(COMPOSE_CLIENT_CHECK_IN_CODE)(...args(trigger));
+    expect(client.message).toContain("WHAT THE EVENT CARRIES");
+    expect(client.message).toContain("How do I get more meetings?");
+    const none = await loadMain(COMPOSE_CLIENT_CHECK_IN_CODE)(...args({ eventId: "ev-2" }));
+    expect(none.message).not.toContain("WHAT THE EVENT CARRIES");
+    const lead = await loadMain(COMPOSE_FOLLOW_UP_CODE)(...args(trigger));
+    expect(lead.message).not.toContain("WHAT THE EVENT CARRIES");
+  });
 });
 
 describe("the client claim", () => {
