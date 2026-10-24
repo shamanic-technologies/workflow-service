@@ -30,7 +30,6 @@
 import { pathToFileURL } from "node:url";
 
 import {
-  CHAT_STEP_MAX_TOKENS,
   FEATURE_SLUG,
   buildAiMeetingBookingDag,
   isConversationResponder,
@@ -38,6 +37,7 @@ import {
   needsClientCommsVoice,
   needsLlmAliasOnActs,
   needsLegBestLlm,
+  needsThinkingBudget,
   needsChannelAgnosticReply,
   needsEveryPredecessorClaim,
   needsLeadsOnlyClaim,
@@ -345,19 +345,6 @@ export function needsConditionalHypothetical(dag) {
   if (!compose) return false;
   const code = String(compose.config?.code ?? "");
   return code.includes("We do not hold a group") || (code.includes("THE GAME THIS THREAD IS IN") && !code.includes("Stay inside the hypothetical"));
-}
-
-/**
- * True when a stored DAG gives a chat step an output budget a thinking model
- * cannot fit in. Gemini 3.1 Pro spends its thought tokens out of the same cap,
- * so list-questions at 800 died on `MAX_TOKENS` before answering a prospect who
- * replied with interest (Legistai, 2026-10-05). The repair is an upgrade
- * carrying the current DAG.
- */
-export function needsThinkingBudget(dag) {
-  return (dag?.nodes ?? []).some(
-    (n) => n?.config?.service === "chat" && !(Number(n.config?.body?.maxTokens) >= CHAT_STEP_MAX_TOKENS),
-  );
 }
 
 /**
