@@ -1,9 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import {
-  DECLARE_INDUSTRY_UPDATE_VIDEO_CODE,
-  DECLARE_INDUSTRY_UPDATE_VIDEO_NODE_ID,
-} from "../../src/lib/industry-update-video-outcome.js";
 import { isFormItem, pastLegEvidence } from "../../src/lib/past-leg-outcomes.js";
 import { batchOutcomeRuns } from "../../src/lib/past-run-outcomes.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
@@ -12,13 +7,9 @@ const RUN_CALL = "aaaaaaaa-0000-4000-8000-000000000001";
 const RUN_CALL_FORM = "aaaaaaaa-0000-4000-8000-000000000002";
 const RUN_CALL_REFUSED = "aaaaaaaa-0000-4000-8000-000000000003";
 const RUN_CALL_TWO_LEADS = "aaaaaaaa-0000-4000-8000-000000000004";
-const RUN_VIDEO = "aaaaaaaa-0000-4000-8000-000000000005";
-const RUN_VIDEO_DRY = "aaaaaaaa-0000-4000-8000-000000000006";
 const RUN_OTHER = "aaaaaaaa-0000-4000-8000-000000000007";
 const LEAD_1 = "bbbbbbbb-0000-4000-8000-000000000001";
 const LEAD_2 = "bbbbbbbb-0000-4000-8000-000000000002";
-const VIDEO = "cccccccc-0000-4000-8000-000000000001";
-const VIDEO_DRY = "cccccccc-0000-4000-8000-000000000002";
 
 const base = () => ({
   runFeatures: new Map([
@@ -26,8 +17,6 @@ const base = () => ({
     [RUN_CALL_FORM, "ai-instant-call"],
     [RUN_CALL_REFUSED, "ai-instant-call"],
     [RUN_CALL_TWO_LEADS, "ai-instant-call"],
-    [RUN_VIDEO, "social-post"],
-    [RUN_VIDEO_DRY, "social-post"],
     [RUN_OTHER, "ai-meeting-booking"],
   ]),
   runTriggerItems: new Map<string, unknown>([
@@ -49,17 +38,9 @@ const base = () => ({
     // a call another workflow asked for is not this pipe's
     { parentRunId: RUN_OTHER, callSid: "CA4" },
   ],
-  videos: [
-    { id: VIDEO, parentRunId: RUN_VIDEO, status: "done" },
-    { id: VIDEO_DRY, parentRunId: RUN_VIDEO_DRY, status: "done" },
-  ],
-  posts: [
-    { parentRunId: RUN_VIDEO, platform: "x", status: "published" },
-    { parentRunId: RUN_VIDEO, platform: "linkedin", status: "failed" },
-  ],
 });
 
-describe("LEDGER-HISTORY-1024: past instant calls and industry videos", () => {
+describe("LEDGER-HISTORY-1024: past instant calls", () => {
   it("a placed call produced booking_call for the claimed lead, consuming the reply or the form that made it due", () => {
     const { runs } = pastLegEvidence(base());
     expect(runs.filter((r) => r.produced[0].outcomeKey === "booking_call")).toEqual([
@@ -85,18 +66,6 @@ describe("LEDGER-HISTORY-1024: past instant calls and industry videos", () => {
     expect(unnamed).toEqual([{ runId: RUN_CALL_TWO_LEADS, featureSlug: "ai-instant-call", why: "claimed 2 leads" }]);
   });
 
-  it("a published bulletin produced ONE industry_update_video, the video; a video never published produced nothing", () => {
-    const { runs } = pastLegEvidence(base());
-    expect(runs.filter((r) => r.produced[0].outcomeKey === "industry_update_video")).toEqual([
-      {
-        runId: RUN_VIDEO,
-        occurredAt: "run_started_at",
-        produced: [{ outcomeKey: "industry_update_video", subjectService: "content-generation", subjectId: VIDEO }],
-        consumed: [],
-      },
-    ]);
-  });
-
   it("reads a form by the DAG's own shape", () => {
     expect(isFormItem({ answers: [] })).toBe(true);
     expect(isFormItem({ formName: "x" })).toBe(true);
@@ -112,23 +81,12 @@ describe("LEDGER-HISTORY-1024: past instant calls and industry videos", () => {
   });
 });
 
-describe("LEDGER-HISTORY-1024: the bulletin declares its video once its X post is published", () => {
-  const dag = buildIndustryUpdateVideoDag();
-
-  it("splices the declaration between wait-x and the X owner line, mapping the rendered video id", () => {
-    const node = dag.nodes.find((n) => n.id === DECLARE_INDUSTRY_UPDATE_VIDEO_NODE_ID)!;
-    expect(node.config?.code).toBe(DECLARE_INDUSTRY_UPDATE_VIDEO_CODE);
-    expect(node.inputMapping?.videoId).toBe("$ref:render-start.output.id");
-    expect(dag.edges).toContainEqual({ from: "wait-x", to: DECLARE_INDUSTRY_UPDATE_VIDEO_NODE_ID });
-    expect(dag.edges).toContainEqual({ from: DECLARE_INDUSTRY_UPDATE_VIDEO_NODE_ID, to: "compose-notify-x" });
-    expect(dag.edges.filter((e) => e.from === "wait-x")).toHaveLength(1);
-    expect(validateDAG(dag).valid).toBe(true);
-  });
-
-  it("states industry_update_video on the run, subject the video, consuming nothing, and never throws", () => {
-    expect(DECLARE_INDUSTRY_UPDATE_VIDEO_CODE).toContain('outcomeKey: "industry_update_video", subjectService: "content-generation"');
-    expect(DECLARE_INDUSTRY_UPDATE_VIDEO_CODE).not.toContain("consumed");
-    expect(DECLARE_INDUSTRY_UPDATE_VIDEO_CODE).not.toMatch(/\bthrow\b/);
+describe("LEDGER-HISTORY-1024: the bulletin declares no outcome (content-generation owns the video)", () => {
+  it("states nothing on runs-service: no declaration node in the DAG", async () => {
+    const { buildIndustryUpdateVideoDag } = await import("../../src/lib/industry-update-video-dag.js");
+    const dag = buildIndustryUpdateVideoDag();
+    expect(JSON.stringify(dag)).not.toContain("/outcomes");
+    expect(dag.nodes.map((n) => n.id)).not.toContain("declare-industry-update-video");
   });
 });
 
