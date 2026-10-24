@@ -193,6 +193,22 @@ export async function main(served, campaignId, runId) {
 ${DIGITS_FN}
 `.trim();
 
+/**
+ * CLAIMED entry: the person the run's trigger OCCURRENCE names, stated on the claim so lead-service hands THEIR row
+ * (CLAIM-OCCURRENCE-PERSON-1025). Without it the claim handed the campaign's oldest due row: in a burst of occurrences
+ * every run claimed someone else, ended `other_person`, failed and left that row leased for an hour (Lead Follow-up
+ * f1ab54e3, 2026-10-24). No occurrence, or one naming nobody = null: the claim is the queue's, oldest first.
+ */
+export const CLAIM_PERSON_CODE = `
+export async function main(trigger) {
+  const t = trigger && typeof trigger === "object" ? trigger : null;
+  const str = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const p = t?.person && typeof t.person === "object" ? t.person : {};
+  const person = { email: str(p.email), phone: str(p.phone), leadId: str(t?.leadId) };
+  return { person: person.email || person.phone || person.leadId ? person : null };
+}
+`.trim();
+
 /** CLAIMED entry: whether the claim found someone, so the lead read is not made for nobody. */
 export const CLAIM_PLAN_CODE = `
 export async function main(claim) {
@@ -1151,6 +1167,8 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
       // What the run answers (a trigger occurrence, or nothing) and the trigger type's declaration.
       occurrencePlanNode(),
       triggerTypeNode(),
+      // Who the occurrence names: the claim takes THEIR row, never the queue's oldest one.
+      { id: "claim-person", type: "script", config: { code: CLAIM_PERSON_CODE }, retries: 0, inputMapping: { trigger: "$ref:flow_input.trigger" } },
       // THIS campaign's own queue: campaign-service made the person due right before the dispatch.
       {
         id: "claim-followup",
@@ -1163,7 +1181,7 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
           ...(a ? { body: a.claimBody } : {}),
         },
         retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
+        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId", "body.person": "$ref:claim-person.output.person" },
       },
       { id: "claim-plan", type: "script", config: { code: CLAIM_PLAN_CODE }, retries: 0, inputMapping: { claim: "$ref:claim-followup.output" } },
       {
@@ -1196,7 +1214,8 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
       { from: "gate-check", to: "start-run" },
       { from: "start-run", to: "occurrence" },
       { from: "occurrence", to: "trigger-type" },
-      { from: "trigger-type", to: "claim-followup" },
+      { from: "trigger-type", to: "claim-person" },
+      { from: "claim-person", to: "claim-followup" },
       { from: "claim-followup", to: "claim-plan" },
       { from: "claim-plan", to: "lead-detail" },
       { from: "lead-detail", to: "resolve-person" },
