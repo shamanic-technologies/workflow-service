@@ -16,7 +16,7 @@
  *    their local time, the persona of the sending account, the next date stated after every run) is the follow-up's.
  */
 import type { DAG } from "./dag-validator.js";
-import { FOLLOW_UP_FEATURE_SLUG, RESOLVE_CLAIMED_PERSON_CODE, buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience } from "./follow-up-dag.js";
+import { FOLLOW_UP_FEATURE_SLUG, RESOLVE_CLAIMED_PERSON_CODE, buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
 
 /** The pipe: Lead event (any fact about a person) heads it; a current client reloading is the paid client outcome. */
 export const CLIENT_CHECK_IN_LEG_KEY = "start_to_paid_client";
@@ -133,7 +133,8 @@ export async function main(person, state, nowIso) {
 
 /** THE GAME for a current client: four prompt lines (JS string literals of the generated script). */
 const line = (text: string) => `    ${JSON.stringify(text)},\n`;
-export const CLIENT_CHECK_IN_GAME = {
+export const CLIENT_CHECK_IN_GAME: FollowUpGame = {
+  occurrenceItem: true,
   intro:
     '    "You look after ONE current client of " + brandName + ": they already pay us. Something just happened with them, and you decide whether to write to them now or WHEN we next look at them. The thread below is everything that passed between us on every channel, our automatic messages and our transactional emails included.",\n',
   game: line(
