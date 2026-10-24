@@ -48,12 +48,15 @@ export const CLIENT_CHECK_IN_DESCRIPTION =
   "Answers every event of a current client of the brand (someone who paid the brand, never a personal contact, a prospect or the brand's own team): it reads their whole thread and either writes now, on WhatsApp when the brand reaches them there or else by email in their last thread, with a short check-in or one concrete way to get more from the service, or sets a later follow-up date and writes nothing. Its follow-up claim states current clients only.";
 
 /**
- * The claim read for a client: a person lead-service refuses (not a current client) or keeps off the queue ends the
- * run final, named; one it cannot judge yet ends idle. Everyone else is the follow-up's own resolve, unchanged.
+ * The claim read of a reactive follow-up whose claim states a relationship policy (a client here, a lead on the Lead
+ * follow-up, `lead-follow-up-leads-dag.ts`): a person lead-service refuses or keeps off the queue ends the run final,
+ * named; one it cannot judge yet ends idle. Everyone else is the follow-up's own resolve, unchanged. `noun` names who
+ * the pipe answers in the logs; `defaultReason` is stated when a refusal carries none.
  */
-export const RESOLVE_CLIENT_CODE =
-  RESOLVE_CLAIMED_PERSON_CODE.replace("export async function main(claim, detail, trigger)", "async function resolveClaimed(claim, detail, trigger)") +
-  `
+export function admissionResolveCode(o: { tag: string; noun: string; defaultReason: string }): string {
+  return (
+    RESOLVE_CLAIMED_PERSON_CODE.replace("export async function main(claim, detail, trigger)", "async function resolveClaimed(claim, detail, trigger)") +
+    `
 
 export async function main(claim, detail, trigger) {
   if (claim?.found !== true) {
@@ -70,21 +73,25 @@ export async function main(claim, detail, trigger) {
     const pending = Array.isArray(claim?.relationships?.pending) ? claim.relationships.pending : [];
     const r = refused.find(isTheirs);
     if (r) {
-      console.log("[client-check-in] not a current client of the brand (" + String(r.reason) + "): nothing written");
-      return { ok: false, why: "not a current client", endKind: "not_admitted", notAdmitted: { reason: String(r.reason ?? "not_a_current_client") } };
+      console.log("[${o.tag}] not ${o.noun} of the brand (" + String(r.reason) + "): nothing written");
+      return { ok: false, why: "not ${o.noun}", endKind: "not_admitted", notAdmitted: { reason: String(r.reason ?? "${o.defaultReason}") } };
     }
     if (pending.some(isTheirs)) {
-      console.log("[client-check-in] lead-service cannot say yet whether they are a current client: asked again later");
+      console.log("[${o.tag}] lead-service cannot say yet whether they are ${o.noun}: asked again later");
       return { ok: false, why: "relationship pending", endKind: "pending" };
     }
     if (t && (email || digits || leadId) && claim?.reason === "${QUEUE_EXCLUDED_REASON}") {
-      console.log("[client-check-in] lead-service keeps them off the queue (${QUEUE_EXCLUDED_REASON}): nothing written");
+      console.log("[${o.tag}] lead-service keeps them off the queue (${QUEUE_EXCLUDED_REASON}): nothing written");
       return { ok: false, why: "kept off the queue", endKind: "not_admitted", notAdmitted: { reason: "${QUEUE_EXCLUDED_REASON}" } };
     }
   }
   return resolveClaimed(claim, detail, trigger);
 }
-`;
+`
+  );
+}
+
+export const RESOLVE_CLIENT_CODE = admissionResolveCode({ tag: "client-check-in", noun: "a current client", defaultReason: "not_a_current_client" });
 
 /**
  * lead-service's follow-up state for a CLIENT: their own stops hold (team, opted out, do not contact, unsubscribed,
