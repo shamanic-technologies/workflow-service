@@ -40,6 +40,7 @@
  *  - Strictly AFTER the call, the row is `stopped` (`instant_call_placed`): not a tombstone, so the next occurrence
  *    for the same person rings again.
  */
+import { withBookingCallDeclaration } from "./booking-call-outcome.js";
 import type { DAG } from "./dag-validator.js";
 import { DELIVERED } from "./occurrence-delivery.js";
 
@@ -393,7 +394,14 @@ export function buildAiInstantCallDag(opts: { emailRepliesOnly?: boolean } = {})
     ],
     onError: "end-run-error",
   };
-  return opts.emailRepliesOnly ? withEmailRepliesOnly(dag) : dag;
+  // The call was placed: the leg's outcome is declared on this run, so twilio's call cost lands on it.
+  const declared = withBookingCallDeclaration(dag, {
+    after: "record-called",
+    placedRef: "$ref:resolve-call.output.ok",
+    occasionRef: "$ref:resolve-call.output.occasion",
+    leadIdRef: "$ref:claim-followup.output.followup.leadId",
+  });
+  return opts.emailRepliesOnly ? withEmailRepliesOnly(declared) : declared;
 }
 
 /**
