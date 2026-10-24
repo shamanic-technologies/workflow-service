@@ -71,8 +71,7 @@ describe("seed-ai-meeting-booking upgrades a responder whose sends are not keyed
 
 describe("the seed never re-upgrades a current DAG (LEDGER-HISTORY-1024)", () => {
   it("the thinking-budget check reads only model calls, never the client-comms skill read", async () => {
-    // @ts-expect-error plain .mjs script
-    const { needsThinkingBudget } = await import("../../scripts/seed-ai-meeting-booking.mjs");
+    const { needsThinkingBudget } = await import("../../src/lib/ai-meeting-booking-dag.js");
     const current = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
     expect(current.nodes.some((n) => n.config?.service === "chat" && !String(n.config?.path).endsWith("/complete"))).toBe(true);
     expect(needsThinkingBudget(current)).toBe(false);

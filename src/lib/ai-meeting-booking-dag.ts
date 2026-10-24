@@ -3042,3 +3042,21 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
     leadIdRef: "$ref:claimed.output.followup.leadId",
   });
 }
+
+/**
+ * True when a stored DAG gives a chat step an output budget a thinking model
+ * cannot fit in. Gemini 3.1 Pro spends its thought tokens out of the same cap,
+ * so list-questions at 800 died on `MAX_TOKENS` before answering a prospect who
+ * replied with interest (Legistai, 2026-10-05). The repair is an upgrade
+ * carrying the current DAG.
+ */
+export function needsThinkingBudget(dag: { nodes?: Array<{ config?: Record<string, any> }> } | null | undefined): boolean {
+  // Only a model call has an output budget: the client-comms skill read (`GET /internal/skills/{slug}`) is a chat-service
+  // call too, and counting it made every seed run re-upgrade a current DAG (LEDGER-HISTORY-1024: avior v20 -> v21 -> ...).
+  return (dag?.nodes ?? []).some(
+    (n) =>
+      n?.config?.service === "chat" &&
+      String(n.config?.path ?? "").endsWith("/complete") &&
+      !(Number(n.config?.body?.maxTokens) >= CHAT_STEP_MAX_TOKENS),
+  );
+}
