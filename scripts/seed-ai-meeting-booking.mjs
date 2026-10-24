@@ -355,8 +355,13 @@ export function needsConditionalHypothetical(dag) {
  * carrying the current DAG.
  */
 export function needsThinkingBudget(dag) {
+  // Only a model call has an output budget: the client-comms skill read (`GET /internal/skills/{slug}`) is a chat-service
+  // call too, and counting it made every seed run re-upgrade a current DAG (LEDGER-HISTORY-1024: avior v20 -> v21 -> ...).
   return (dag?.nodes ?? []).some(
-    (n) => n?.config?.service === "chat" && !(Number(n.config?.body?.maxTokens) >= CHAT_STEP_MAX_TOKENS),
+    (n) =>
+      n?.config?.service === "chat" &&
+      String(n.config?.path ?? "").endsWith("/complete") &&
+      !(Number(n.config?.body?.maxTokens) >= CHAT_STEP_MAX_TOKENS),
   );
 }
 

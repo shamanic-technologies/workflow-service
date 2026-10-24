@@ -68,3 +68,21 @@ describe("seed-ai-meeting-booking upgrades a responder whose sends are not keyed
     expect(needsOccurrenceSendKey(buildFormMeetingBookingDag())).toBe(false);
   });
 });
+
+describe("the seed never re-upgrades a current DAG (LEDGER-HISTORY-1024)", () => {
+  it("the thinking-budget check reads only model calls, never the client-comms skill read", async () => {
+    // @ts-expect-error plain .mjs script
+    const { needsThinkingBudget } = await import("../../scripts/seed-ai-meeting-booking.mjs");
+    const current = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
+    expect(current.nodes.some((n) => n.config?.service === "chat" && !String(n.config?.path).endsWith("/complete"))).toBe(true);
+    expect(needsThinkingBudget(current)).toBe(false);
+    const starved = {
+      nodes: current.nodes.map((n) =>
+        n.config?.service === "chat" && String(n.config?.path).endsWith("/complete")
+          ? { ...n, config: { ...n.config, body: { ...(n.config?.body as object), maxTokens: 800 } } }
+          : n,
+      ),
+    };
+    expect(needsThinkingBudget(starved)).toBe(true);
+  });
+});
