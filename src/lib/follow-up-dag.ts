@@ -470,7 +470,23 @@ export interface FollowUpGame {
   game: string;
   read: string;
   stop: string;
+  /**
+   * Also shows the writer what the run's occurrence CARRIES (`trigger.item`: a form's answers, a pushed email, a
+   * payment), clipped: the event that just happened, in its own words. Absent = not shown (the lead game).
+   */
+  occurrenceItem?: boolean;
 }
+
+/** `itemLines(trigger)`: the occurrence's item as plain lines, clipped, for the writer. */
+export const OCCURRENCE_ITEM_FN = `
+function itemLines(trigger) {
+  const item = trigger && typeof trigger === "object" && trigger.item && typeof trigger.item === "object" ? trigger.item : null;
+  if (!item) return [];
+  const text = JSON.stringify(item, null, 1).replace(/[\\u2013\\u2014]/g, ",");
+  if (!text || text === "{}") return [];
+  return [text.length > 3000 ? text.slice(0, 3000) + "..." : text];
+}
+`.trim();
 
 export const LEAD_FOLLOW_UP_GAME: FollowUpGame = {
   intro: "    \"You follow up ONE person for the team at \" + brandName + \", and you decide WHEN they are next followed up. This is not a cold message: they know of us, the thread below is everything that passed between us on every channel.\",\n",
@@ -553,7 +569,7 @@ ${GAME.stop}    "Write like a person who knows them: short, plain, warm, one ide
     "Messages of ours on record: " + String(history?.ourMessages ?? 0) + ". Our last: " + String(history?.lastOursAt ?? "unknown") + ". Their last message: " + String(history?.lastTheirsAt ?? "never") + ".",
     ...(text ? ["", "INSTRUCTION from our client:", text] : []),
     ...(factLines.length ? ["", "WHY WE WRITE NOW:", ...factLines] : []),
-    "",
+${GAME.occurrenceItem ? '    ...(itemLines(trigger).length ? ["", "WHAT THE EVENT CARRIES (its own record, never quote it as ours):", ...itemLines(trigger)] : []),\n' : ""}    "",
     "THEIR LOCAL TIME:",
     ...localTime,
     "",
@@ -585,7 +601,7 @@ ${GAME.stop}    "Write like a person who knows them: short, plain, warm, one ide
 ${WHY_NOW_FN}
 
 ${LOCAL_TIME_FN}
-
+${GAME.occurrenceItem ? "\n" + OCCURRENCE_ITEM_FN + "\n" : ""}
 ${SENDER_PERSONA_FN}
 `.trim();
 }
