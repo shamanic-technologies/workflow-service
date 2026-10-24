@@ -128,3 +128,25 @@ describe("LEDGER-HISTORY-1024: the hot-lead proposal marks its run support copil
     }
   });
 });
+
+describe("LEDGER-HISTORY-1024: past writer runs consume their pipe's from step", () => {
+  it("corrects only the runs whose pipe does not start from lead_found, Start legs consuming nothing", async () => {
+    const { correctionsFor, correctionDeclaration, correctionIdempotencyKey } = await import("../../src/lib/consumed-from-step.js");
+    const row = (runId: string, legKey: string | null) => ({ runId, legKey, leadId: LEAD_1, declaredAt: "2026-10-20T10:00:00.000Z" });
+    const { corrections, unreadable } = correctionsFor([
+      row("r1", "lead_found_to_conversation"),
+      row("r2", "conversation_to_meeting_booked"),
+      row("r3", "start_to_paid_client"),
+      row("r4", null),
+    ]);
+    expect(corrections.map((c) => [c.runId, c.fromStep])).toEqual([["r2", "conversation"], ["r3", null]]);
+    expect(unreadable.map((u) => u.runId)).toEqual(["r4"]);
+    expect(correctionDeclaration(corrections[0])).toEqual({
+      occurredAt: "2026-10-20T10:00:00.000Z",
+      produced: [{ outcomeKey: "message_written", subjectService: "lead-service", subjectId: LEAD_1 }],
+      consumed: [{ outcomeKey: "conversation", subjectService: "lead-service", subjectId: LEAD_1 }],
+    });
+    expect(correctionDeclaration(corrections[1]).consumed).toEqual([]);
+    expect(correctionIdempotencyKey("r2")).toBe("workflow:outcome-correction:r2");
+  });
+});

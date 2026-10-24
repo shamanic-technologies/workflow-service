@@ -4,6 +4,7 @@ import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import {
   DECLARE_MESSAGE_WRITTEN_CODE,
   DECLARE_MESSAGE_WRITTEN_NODE_ID,
+  legFromStep,
   needsMessageWrittenDeclaration,
 } from "../../src/lib/message-written-outcome.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
@@ -43,11 +44,17 @@ describe("every chat writer declares its written message on the ledger", () => {
         signal: spec.signal,
         sentWhen: spec.sentWhen,
         leadId: spec.leadId,
+        campaignRead: "$ref:pipe-of-run.output",
         serviceEnvs: "$ref:flow_input.serviceEnvs",
         orgId: "$ref:flow_input.orgId",
         runId: "$ref:flow_input.runId",
       });
-      expect(dag.edges.filter((e) => e.to === node.id)).toEqual([{ from: spec.after, to: node.id }]);
+      // the run's pipe is read off its own campaign right before (tolerated), then the declaration
+      const pipe = dag.nodes.find((n) => n.id === "pipe-of-run")!;
+      expect(pipe.config).toMatchObject({ service: "campaign", method: "GET", path: "/campaigns/{id}", tolerateFailure: true });
+      expect(pipe.inputMapping).toEqual({ "params.id": "$ref:flow_input.campaignId" });
+      expect(dag.edges.filter((e) => e.to === "pipe-of-run")).toEqual([{ from: spec.after, to: "pipe-of-run" }]);
+      expect(dag.edges.filter((e) => e.to === node.id)).toEqual([{ from: "pipe-of-run", to: node.id }]);
       expect(dag.edges.filter((e) => e.from === node.id)).toEqual([{ from: node.id, to: spec.next }]);
       expect(needsMessageWrittenDeclaration(dag)).toBe(false);
     });
@@ -74,6 +81,8 @@ describe("every chat writer declares its written message on the ledger", () => {
   });
 });
 
+const LEAD_FOUND_LEG = { campaign: { legKey: "lead_found_to_conversation" } };
+
 describe("the declaration script", () => {
   const main = loadMain(DECLARE_MESSAGE_WRITTEN_CODE);
   const envs = { RUNS_SERVICE_URL: "http://runs/", RUNS_SERVICE_API_KEY: "k" };
@@ -82,7 +91,7 @@ describe("the declaration script", () => {
   it("states message_written produced and lead_found consumed, both on lead-service/<lead id>, on the workflow run", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ recordedCount: 2, alreadyRecordedCount: 0 }), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
-    const out = await main("sent", "sent", "lead-1", envs, "org-1", "run-1");
+    const out = await main("sent", "sent", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1");
     expect(out).toMatchObject({ declared: true, status: 201, recordedCount: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
@@ -96,30 +105,65 @@ describe("the declaration script", () => {
     });
   });
 
+  it("consumes what the run's PIPE starts from, never an invented lead_found (LEDGER-HISTORY-1024)", async () => {
+    const bodies: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body))); return new Response("{}", { status: 201 }); }));
+    const lead = { subjectService: "lead-service", subjectId: "lead-1" };
+    await main("sent", "sent", "lead-1", { campaign: { legKey: "conversation_to_meeting_booked" } }, envs, "org-1", "run-1");
+    await main("sent", "sent", "lead-1", { campaign: { legKey: "form_submitted_to_meeting_booked" } }, envs, "org-1", "run-1");
+    await main("sent", "sent", "lead-1", { campaign: { legKey: "start_to_paid_client" } }, envs, "org-1", "run-1");
+    expect(bodies.map((b) => b.consumed)).toEqual([
+      [{ outcomeKey: "conversation", ...lead }],
+      [{ outcomeKey: "form_submitted", ...lead }],
+      [],
+    ]);
+    expect(bodies.every((b) => b.produced[0].outcomeKey === "message_written")).toBe(true);
+  });
+
+  it("an unreadable pipe declares NOTHING, loudly (never a guessed input)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const read of [{ ok: false, status: 502 }, { campaign: { legKey: null } }, undefined]) {
+      expect(await main("sent", "sent", "lead-1", read, envs, "org-1", "run-1")).toMatchObject({ declared: false, why: "pipe unreadable" });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(err.mock.calls[0][0]).toContain("DECLARATION FAILED");
+    err.mockRestore();
+  });
+
+  it("legFromStep reads the leg's from step, Start = no input", () => {
+    expect(legFromStep("conversation_to_meeting_booked")).toBe("conversation");
+    expect(legFromStep("lead_found_to_website_visit")).toBe("lead_found");
+    expect(legFromStep("start_to_signup")).toBeNull();
+    expect(legFromStep("")).toBeUndefined();
+    expect(legFromStep(undefined)).toBeUndefined();
+  });
+
   it("a replay is read as declared (runs-service answers already_recorded with 200)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ recordedCount: 0, alreadyRecordedCount: 2 }), { status: 200 })));
-    expect(await main("sent", "sent", "lead-1", envs, "org-1", "run-1")).toMatchObject({ declared: true, alreadyRecordedCount: 2 });
+    expect(await main("sent", "sent", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1")).toMatchObject({ declared: true, alreadyRecordedCount: 2 });
   });
 
   it("declares nothing when no message went out (later, stop, refused, escalated)", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     for (const signal of ["later", "stopped", "refused_kept", undefined, null]) {
-      expect((await main(signal, "sent", "lead-1", envs, "org-1", "run-1")).declared).toBe(false);
+      expect((await main(signal, "sent", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1")).declared).toBe(false);
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("a boolean signal compares as text (the form arm reads the send's success)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 201 })));
-    expect((await main(true, "true", "lead-1", envs, "org-1", "run-1")).declared).toBe(true);
+    expect((await main(true, "true", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1")).declared).toBe(true);
   });
 
   it("a sent message with no lead id is logged loudly, never an invented id", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await main("sent", "sent", null, envs, "org-1", "run-1")).toMatchObject({ declared: false, why: "no lead id" });
+    expect(await main("sent", "sent", null, LEAD_FOUND_LEG, envs, "org-1", "run-1")).toMatchObject({ declared: false, why: "no lead id" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(err.mock.calls[0][0]).toContain("DECLARATION MISSING");
     err.mockRestore();
@@ -130,7 +174,7 @@ describe("the declaration script", () => {
     const fetchMock = vi.fn(async () => new Response("down", { status: 502 }));
     vi.stubGlobal("fetch", fetchMock);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const p = main("sent", "sent", "lead-1", envs, "org-1", "run-1");
+    const p = main("sent", "sent", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1");
     await vi.runAllTimersAsync();
     expect(await p).toMatchObject({ declared: false });
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -143,7 +187,7 @@ describe("the declaration script", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "unknown_outcome_key" }), { status: 400 }));
     vi.stubGlobal("fetch", fetchMock);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect((await main("sent", "sent", "lead-1", envs, "org-1", "run-1")).declared).toBe(false);
+    expect((await main("sent", "sent", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1")).declared).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     err.mockRestore();
   });
@@ -155,7 +199,7 @@ describe("the declaration script", () => {
       .mockRejectedValueOnce(new Error("ECONNRESET"))
       .mockResolvedValueOnce(new Response("{}", { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
-    const p = main("sent", "sent", "lead-1", envs, "org-1", "run-1");
+    const p = main("sent", "sent", "lead-1", LEAD_FOUND_LEG, envs, "org-1", "run-1");
     await vi.runAllTimersAsync();
     expect((await p).declared).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
