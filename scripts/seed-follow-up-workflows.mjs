@@ -4,7 +4,8 @@
  * dynasty features-service has ACTIVELY assigned to one of the channel's legs is UPGRADED in place (new version, never
  * a fork) to the multichannel DAG of its kind:
  *  - the PROACTIVE leg (`lead_found_to_conversation`): the served DAG (a "Lead follow-up due" source upstream);
- *  - every REACTIVE leg: the claimed DAG. The dynasty carrying the Copilot's instruction follow-ups
+ *  - every REACTIVE leg: the claimed DAG; on `LEADS_ONLY_LEG_KEYS` (the Lead event pipe, LEAD-EVENT-LEADS-ONLY-1024) its
+ *    claim states leads only (`lead-follow-up-leads-dag.ts`). The dynasty carrying the Copilot's instruction follow-ups
  *    (`FIGURES_LEGS`) reads figures; the others do not (two dynasties cannot share one signature).
  * Then the figures dynasty is registered on every leg in `--register <legKey>` (the Lead event leg, once
  * features-service declares it), insert-if-absent.
@@ -28,6 +29,7 @@ import {
 import { computeDAGSignature } from "../dist/lib/dag-signature.js";
 import { keepForkMark } from "../dist/lib/fork-mark.js";
 import { isClientCheckInDag } from "../dist/lib/client-check-in-dag.js";
+import { FOLLOW_UP_REACTIVE_LEADS_DESCRIPTION, LEADS_ONLY_AUDIENCE, LEADS_ONLY_LEG_KEYS } from "../dist/lib/lead-follow-up-leads-dag.js";
 
 /** The legs whose dynasty serves the Copilot's instruction follow-ups: it reads the figures the instruction asks for. */
 const FIGURES_LEGS = ["signup_to_paid_client"];
@@ -84,12 +86,15 @@ const targets = [...legsOf].map(([dynasty, legs]) => {
     return { dynasty, legs, dag: keepForkMark(buildFollowUpProactiveDag(), storedDagOf(dynasty)), description: FOLLOW_UP_PROACTIVE_DESCRIPTION };
   }
   const figures = legs.some((l) => FIGURES_LEGS.includes(l));
+  // The Lead event pipe answers LEADS only (LEAD-EVENT-LEADS-ONLY-1024): its clients have their own play there.
+  const leadsOnly = legs.some((l) => LEADS_ONLY_LEG_KEYS.includes(l));
+  if (leadsOnly && figures) throw new Error(`${dynasty} serves a leads-only leg AND a figures leg (${legs.join(", ")}); resolve by hand`);
   return {
     dynasty,
     legs,
     figures,
-    dag: keepForkMark(buildFollowUpReactiveDag({ readFigures: figures }), storedDagOf(dynasty)),
-    description: figures ? FOLLOW_UP_REACTIVE_FIGURES_DESCRIPTION : FOLLOW_UP_REACTIVE_DESCRIPTION,
+    dag: keepForkMark(buildFollowUpReactiveDag({ readFigures: figures, ...(leadsOnly ? { audience: LEADS_ONLY_AUDIENCE } : {}) }), storedDagOf(dynasty)),
+    description: leadsOnly ? FOLLOW_UP_REACTIVE_LEADS_DESCRIPTION : figures ? FOLLOW_UP_REACTIVE_FIGURES_DESCRIPTION : FOLLOW_UP_REACTIVE_DESCRIPTION,
   };
 });
 // Two dynasties on DIFFERENT legs built to the same steps are not twins: an unmarked one-leg dynasty colliding with
