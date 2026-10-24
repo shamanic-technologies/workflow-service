@@ -257,9 +257,7 @@ describe("owner Telegram line once a post is published (POST-PUBLISHED-TELEGRAM-
 
   it("sends one line per post right after THAT post is published, then ends the run", () => {
     const next = (from: string) => dag.edges.filter((e) => e.from === from).map((e) => e.to);
-    // the video is declared as soon as the bulletin is out (LEDGER-HISTORY-1024), then the X line
-    expect(next("wait-x")).toEqual(["declare-industry-update-video"]);
-    expect(next("declare-industry-update-video")).toEqual(["compose-notify-x"]);
+    expect(next("wait-x")).toEqual(["compose-notify-x"]);
     expect(next("compose-notify-x")).toEqual(["notify-x"]);
     expect(next("notify-x")).toEqual(["wait-linkedin"]);
     expect(next("wait-linkedin")).toEqual(["compose-notify-linkedin"]);
