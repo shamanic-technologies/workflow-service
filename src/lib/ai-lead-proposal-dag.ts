@@ -36,6 +36,7 @@
  *    same person is a new fact), run ends `delivery: delivered`.
  *  - Cost: the Copilot turn is declared by chat-service on this run (`x-run-id`); nothing is declared here.
  */
+import { withSupportMark } from "./run-support-mark.js";
 import type { DAG } from "./dag-validator.js";
 import { ANSWERS_LEADS_ONLY_POLICY, NOT_A_LEAD_REASON } from "./ai-meeting-booking-dag.js";
 import { DELIVERED } from "./occurrence-delivery.js";
@@ -265,7 +266,23 @@ export const UNCLAIMED = outcomeIs("claimed", "unclaimed");
 export const ASKED = outcomeIs("classify-ask", "asked");
 export const NO_COPILOT_USER = outcomeIs("classify-ask", NO_COPILOT_USER_CODE);
 
+/**
+ * The proposal's DAG. The Copilot turn it asks for produces no outcome by design (the team decides what follows), so
+ * the run marks itself support `copilot` once the turn was asked (LEDGER-HISTORY-1024), instead of reading undeclared.
+ */
 export function buildAiLeadProposalDag(): DAG {
+  return withSupportMark(buildProposalDag(), {
+    after: "ask-copilot",
+    kind: "copilot",
+    reason: AI_LEAD_PROPOSAL_SUPPORT_REASON,
+    markedBy: "workflow-service ai-lead-proposal (LEDGER-HISTORY-1024)",
+  });
+}
+
+export const AI_LEAD_PROPOSAL_SUPPORT_REASON =
+  "AI Lead Proposal: one proactive Copilot turn telling the brand's team about a hot lead; nothing is sent to the person and no outcome is produced by design";
+
+function buildProposalDag(): DAG {
   return {
     nodes: [
       {

@@ -36,6 +36,7 @@
  * which silently does nothing); every arm reads positive evidence with `?.`, because on another path the node it
  * reads never ran.
  */
+import { withIndustryUpdateVideoDeclaration } from "./industry-update-video-outcome.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS } from "./ai-meeting-booking-dag.js";
 import {
@@ -516,7 +517,12 @@ const SOLID = "results['keep-solid']";
 const RENDER = "results['render-wait']";
 const DRY = "results['plan-day']?.dryRun";
 
+/** The bulletin's DAG; once its first post is published the run declares the video it produced (LEDGER-HISTORY-1024). */
 export function buildIndustryUpdateVideoDag(): DAG {
+  return withIndustryUpdateVideoDeclaration(buildBulletinDag());
+}
+
+function buildBulletinDag(): DAG {
   return {
     nodes: [
       {
