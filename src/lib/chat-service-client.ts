@@ -65,22 +65,47 @@ export async function chatServiceComplete(
   return res.json() as Promise<ChatServiceCompleteResponse>;
 }
 
+/** The support functions chat-service accepts (its `SUPPORT_FUNCTIONS`, byte-equal): spend reported apart, never on an outcome. */
+export type PlatformSupportKind =
+  | "payment_fees"
+  | "brand_setup"
+  | "copilot"
+  | "platform_llm"
+  | "staff_experiment"
+  | "product_feature"
+  | "retired_product";
+
 /**
- * Platform-level LLM call — no org/user/run context, no billing.
- * Uses POST /internal/platform-complete (x-api-key auth only).
+ * Whose work a platform call is (PLATFORM-CALLER-RUN-1024): THIS service's run doing the work (its spend rides the
+ * outcome that run declares), or, only when no run stands behind the call by design, the support function it serves.
+ * Exactly one, required: chat-service refuses both (400) and will refuse neither.
+ */
+export type PlatformCaller =
+  | { runId: string }
+  | { support: { kind: PlatformSupportKind; reason: string } };
+
+/**
+ * Platform-level LLM call: no org/user context, no org billing.
+ * Uses POST /internal/platform-complete (x-api-key auth only), stating whose work it is (`caller`).
  */
 export async function chatServicePlatformComplete(
   request: ChatServiceCompleteRequest,
+  caller: PlatformCaller,
 ): Promise<ChatServiceCompleteResponse> {
   const { baseUrl, apiKey } = getChatServiceConfig();
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+  };
+  let body: Record<string, unknown> = { ...request };
+  if ("runId" in caller) headers["x-run-id"] = caller.runId;
+  else body = { ...body, support: caller.support };
+
   const res = await fetch(`${baseUrl}/internal/platform-complete`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-    },
-    body: JSON.stringify(request),
+    headers,
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(600_000),
   });
 
