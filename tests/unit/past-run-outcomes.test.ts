@@ -71,7 +71,9 @@ describe("past-run outcomes (COST-BACKFILL-1023-WORKFLOW)", () => {
 
   it("reads the lead a writer's WhatsApp key names", () => {
     expect(leadInWhatsappKey(`cold-whatsapp-outreach:camp:${LEAD_1}:1`)).toBe(LEAD_1);
-    expect(leadInWhatsappKey(`follow-up:camp:row:${LEAD_2}`)).toBe(LEAD_2);
+    // follow-up keys are <campaign>:<row>:<run>: no lead in them (the run is not a person)
+    expect(leadInWhatsappKey(`follow-up:camp:row:${LEAD_2}`)).toBeNull();
+    expect(leadInWhatsappKey(`follow-up:event:${LEAD_2}`)).toBeNull();
     expect(leadInWhatsappKey(`cold-whatsapp-outreach:event:${LEAD_1}`)).toBeNull();
     expect(leadInWhatsappKey("cold-whatsapp-outreach:camp:not-a-uuid:1")).toBeNull();
   });
