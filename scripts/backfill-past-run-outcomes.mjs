@@ -49,6 +49,9 @@ function readCsv(path) {
 }
 
 async function main() {
+  // Superseded (LEDGER-HISTORY-1024): applied 2026-10-23. It consumed lead_found on every pipe; the doctrine is the
+  // pipe's `from` step, corrected by scripts/correct-consumed-from-step.mjs, and its voided runs refuse a replay.
+  if (!process.argv.includes("--superseded-i-know")) throw new Error("superseded: see scripts/correct-consumed-from-step.mjs");
   const dir = process.argv[2];
   const apply = process.argv.includes("--apply");
   if (!dir) throw new Error("usage: backfill-past-run-outcomes.mjs <exports dir> [--apply]");
