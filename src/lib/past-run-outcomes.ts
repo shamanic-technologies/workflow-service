@@ -137,6 +137,19 @@ export function pastRunBatches(declarations: PastRunDeclaration[]): Array<{ runs
     };
   });
 
+  return batchOutcomeRuns(runs);
+}
+
+/** Splits backfill runs into batch bodies: at most 500 runs and 1000 occurrences per call, each run once. */
+export function batchOutcomeRuns(runs: OutcomesBatchRun[]): Array<{ runs: OutcomesBatchRun[] }> {
+  const ids = new Set<string>();
+  for (const r of runs) {
+    if (ids.has(r.runId)) throw new Error(`past-run outcomes: run ${r.runId} stated twice`);
+    ids.add(r.runId);
+    if (new Set(r.produced.map((o) => o.outcomeKey)).size > 1) {
+      throw new Error(`past-run outcomes: run ${r.runId} produces several outcome keys (one run = one produced key)`);
+    }
+  }
   const batches: Array<{ runs: OutcomesBatchRun[] }> = [];
   let current: OutcomesBatchRun[] = [];
   let occurrences = 0;
