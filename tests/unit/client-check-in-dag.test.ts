@@ -76,6 +76,9 @@ describe("the client game", () => {
     expect(COMPOSE_CLIENT_CHECK_IN_CODE).not.toBe(COMPOSE_FOLLOW_UP_CODE);
     expect(COMPOSE_CLIENT_CHECK_IN_CODE).toContain("current client");
     expect(COMPOSE_CLIENT_CHECK_IN_CODE).toContain("a reload before their credit runs dry");
+    // A client's own question is answered the same day, weekend included (staff replay 2026-10-24: a Saturday help
+    // request was put off to Monday).
+    expect(COMPOSE_CLIENT_CHECK_IN_CODE).toContain("is waiting for us right now: write NOW, on any day");
     expect(COMPOSE_CLIENT_CHECK_IN_CODE).not.toContain("We follow up every lead");
     expect(COMPOSE_CLIENT_CHECK_IN_CODE).not.toMatch(/[–—]/);
     expect(COMPOSE_FOLLOW_UP_CODE).toContain("We follow up every lead");
