@@ -15,7 +15,7 @@ import type { db as DbInstance } from "../db/index.js";
 import { workflows, workflowSiblingLines, workflowSiblingLinePipes } from "../db/schema.js";
 import type { DAG } from "./dag-validator.js";
 import { fetchPipe, listLegAssignments, type LegAssignment } from "./catalogue-client.js";
-import { chatServicePlatformComplete } from "./chat-service-client.js";
+import { chatServicePlatformComplete, type PlatformCaller } from "./chat-service-client.js";
 import {
   SIBLING_LINE_RESPONSE_SCHEMA,
   SIBLING_LINE_RULES_VERSION,
@@ -40,6 +40,17 @@ export interface SiblingLineDeps {
   complete: (systemPrompt: string, message: string) => Promise<unknown>;
 }
 
+/**
+ * No run stands behind a short line by design (it rides write traffic and a boot sweep) and it produces no outcome:
+ * it is display text on the staff Research page, so its spend is a declared support function (PLATFORM-CALLER-RUN-1024).
+ */
+export const SIBLING_LINE_CALLER: PlatformCaller = {
+  support: {
+    kind: "product_feature",
+    reason: "workflow-service writes the short line that sets sibling workflows of one pipe apart on the Research page; display only, no outcome",
+  },
+};
+
 export const defaultSiblingLineDeps: SiblingLineDeps = {
   listAssignments: (featureSlug) => listLegAssignments(featureSlug),
   pipeWords: async (featureSlug, legKey) => {
@@ -55,7 +66,7 @@ export const defaultSiblingLineDeps: SiblingLineDeps = {
       responseFormat: "json",
       responseSchema: SIBLING_LINE_RESPONSE_SCHEMA as unknown as Record<string, unknown>,
       maxTokens: 4000,
-    });
+    }, SIBLING_LINE_CALLER);
     return res.json;
   },
 };
