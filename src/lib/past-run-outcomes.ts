@@ -59,7 +59,10 @@ export interface PastRunEvidence {
 /** The lead a writer's WhatsApp idempotency key names, if any. */
 export function leadInWhatsappKey(key: string): string | null {
   const parts = key.split(":");
-  const candidate = parts[0] === "follow-up" ? parts[3] : parts[1] === "event" ? undefined : parts[2];
+  // `follow-up:<campaign>:<row>:<run>` / `follow-up:event:<event>` name no lead (the 4th segment is the RUN: reading it
+  // as the lead declared a run as its own person, LEDGER-HISTORY-1024); the send's own message_sent names it instead.
+  if (parts[0] === "follow-up") return null;
+  const candidate = parts[1] === "event" ? undefined : parts[2];
   return candidate && UUID_RE.test(candidate) ? candidate.toLowerCase() : null;
 }
 
