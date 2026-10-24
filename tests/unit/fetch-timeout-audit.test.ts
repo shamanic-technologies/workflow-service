@@ -32,6 +32,14 @@ const SHORT_DEADLINE_FILES = new Map([
     "the ledger declaration after a placed call (COST-SUPPORT-1024-WORKFLOW): same contract as message-written-outcome, 30 s per try, never failing the run.",
   ],
   [
+    "src/lib/industry-update-video-outcome.ts",
+    "the ledger declaration after the bulletin is published (LEDGER-HISTORY-1024): same contract as message-written-outcome, 30 s per try, never failing the run.",
+  ],
+  [
+    "src/lib/run-support-mark.ts",
+    "the run's own support mark (LEDGER-HISTORY-1024): same contract as message-written-outcome, 30 s per try, never failing the run.",
+  ],
+  [
     "src/lib/message-written-outcome.ts",
     "the ledger declaration after a message went out (COST-ACCOUNTING-1023-P1): it never fails the run and retries on its own, so a hanging runs-service gets 30 s per try, never ten minutes holding the run open.",
   ],
