@@ -229,6 +229,11 @@ describe("build-bulletin", () => {
     ]);
   });
 
+  it("tells content-generation whether the render is a dry run, so a test is never counted as a delivered video (LEDGER-HISTORY-1024)", async () => {
+    expect((await build(solid, copy(), pickInput, day, plan)).render.dryRun).toBe(false);
+    expect((await build(solid, copy(), pickInput, day, { ...plan, dryRun: true })).render.dryRun).toBe(true);
+  });
+
   it("tags an X poster under the full name the writer gave, never twice under their handle", async () => {
     const named = copy();
     named.json.entities.push({ name: "Jason Lemkin", kind: "person", candidateId: "c1", xHandle: "jasonlk", linkedinUrl: "" });

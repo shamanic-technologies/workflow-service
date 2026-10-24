@@ -355,6 +355,8 @@ export async function main(solid, write, pickInput, day, plan) {
       scan: { postsRead: pickInput.postsRead, windowHours: ${SCAN_WINDOW_HOURS} },
       stories,
       idempotencyKey: "industry-update:" + (plan.query.campaignId ?? "dry-run") + ":" + day.date + ":" + h.toString(36),
+      // content-generation counts a render as a delivered industry_update_video unless it is told it is a dry run.
+      dryRun: plan.dryRun === true,
     },
     x: { text: xText, reply: xReply },
     linkedin: { text: linkedinText, reply: linkedinComment },
