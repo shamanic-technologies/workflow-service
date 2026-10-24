@@ -1002,10 +1002,10 @@ describe("handing an unanswerable question to a human", () => {
     expect(byId.get("end-run-escalated")?.config?.body).toEqual({ success: true, stopCampaign: false });
   });
 
-  it("does not stop an EMAIL ladder itself — the escalate route already did; a chat thread is handed in lead-service", () => {
-    // On an email thread instantly-service's escalate route empties the
-    // schedule itself, so the only lead-service write on that path is the
-    // chat hand-over, which is not called on an email thread.
+  it("hands the claimed row over in lead-service unless the email escalation stopped that very row (ESCALATION-HANDOVER-1024)", () => {
+    // instantly-service's escalate route hands over the predecessor's row the
+    // first time only; `plan-hand-over` decides whether this DAG still has to
+    // (a chat thread, an own-queue row, an `already_escalated` answer).
     const reached = descendants(dag, "escalate-unanswerable");
     const leadWrites = dag.nodes.filter(
       (n) => reached.has(n.id) && n.config?.service === "lead",
@@ -1020,7 +1020,7 @@ describe("handing an unanswerable question to a human", () => {
     });
     expect(hand?.inputMapping).toEqual({
       "params.id": "$ref:claimed.output.followup.id",
-      skip: "$ref:thread.output.skipHandOver",
+      skip: "$ref:plan-hand-over.output.skip",
     });
     // Nothing is sent to the person on either channel.
     expect(reached.has("send-whatsapp-reply")).toBe(false);
@@ -1097,7 +1097,7 @@ describe("a last message that needs no reply at all", () => {
       "end_run_no_reply_owed",
     ]);
     const escalate = branches.find((b) => b.expr.includes("'escalate'"));
-    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "hand_over", "compose_rep_alert", "alert_rep", "end_run_escalated"]);
+    expect(escalate?.modules.map((m) => m.id)).toEqual(["escalate_unanswerable", "plan_hand_over", "hand_over", "compose_rep_alert", "alert_rep", "end_run_escalated"]);
   });
 
   it("says why in the log", async () => {
@@ -2086,7 +2086,7 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     const transforms = (id: string) => (all.find((m) => m.id === id)?.value.input_transforms ?? {}) as Record<string, { type: string; expr?: string }>;
     expect(transforms("send_whatsapp_reply").skip).toEqual({ type: "javascript", expr: expect.stringContaining("thread") });
     expect(transforms("send_reply").skip?.expr).toContain("skipEmail");
-    expect(transforms("hand_over").skip?.expr).toContain("skipHandOver");
+    expect(transforms("hand_over").skip?.expr).toContain("plan_hand_over");
     expect(transforms("claim_followup").skip?.expr).toContain("skipPredecessor");
   });
 
