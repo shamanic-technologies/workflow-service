@@ -460,10 +460,31 @@ export async function main() {
 `.trim();
 
 /**
+ * The writer's GAME: who it writes to and why (owner rule: a strategy, never a canned reply per case). The lead game
+ * is the follow-up channel's own; another audience (current clients, `client-check-in-dag.ts`) states its own four
+ * prompt lines and keeps everything else of the writer byte for byte. Each value is one line of the generated script
+ * (a JS string literal, its comma and newline included).
+ */
+export interface FollowUpGame {
+  intro: string;
+  game: string;
+  read: string;
+  stop: string;
+}
+
+export const LEAD_FOLLOW_UP_GAME: FollowUpGame = {
+  intro: "    \"You follow up ONE person for the team at \" + brandName + \", and you decide WHEN they are next followed up. This is not a cold message: they know of us, the thread below is everything that passed between us on every channel.\",\n",
+  game: "    \"THE GAME. We follow up every lead until they say yes, no or stop. Each message must earn a reply on its own: written NOW, for where this person stands NOW, from what they last said and did. Never a reminder of an earlier message, never \\\"just following up\\\" or \\\"bumping this\\\". Pick ONE thing that moves them one step: answer what they were waiting for, a useful fact about what we offer, a simpler next step, or a plain question about their situation. End with ONE easy question they can answer in a line.\",\n",
+  read: "    \"Read the thread like the person who wrote it on our side. If they asked something, answer it if the FACTS hold the answer. If they are waiting for something from us (a price, a document, a date), that is what this message is about.\",\n",
+  stop: "    \"STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again, or they show they are not a fit at all (the wrong person, they left the company, they do not run anything like what we offer). Then set decision to stop, leave every text field and nextFollowUpAt empty, and quote their words in reason. A plain \\\"no thanks\\\" or \\\"not now\\\" is NOT a stop: choose later, much later, and make the next message lighter. Silence is never a reason to stop.\",\n",
+};
+
+/**
  * Builds the system prompt and the message. Explains THE GAME (owner rule: a strategy, never a canned reply per case),
  * with the channel already chosen. Kept free of em and en dashes: the model copies the style of its prompt.
  */
-export const COMPOSE_FOLLOW_UP_CODE = `
+export function composeFollowUpCode(GAME: FollowUpGame): string {
+  return `
 export async function main(person, channel, offer, brand, facts, history, figures, instruction, occurrence, triggerType, trigger, nowIso, currentDate, who) {
   if (channel?.skipModel === true) return { skip: true, systemPrompt: "", message: "" };
   if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
@@ -503,10 +524,7 @@ export async function main(person, channel, offer, brand, facts, history, figure
   const localTime = localTimeLines(nowIso, { timezone: person?.timezone, city: p.city, country: p.country, phone: channel.phone ?? person?.phone });
 
   const systemPrompt = [
-    "You follow up ONE person for the team at " + brandName + ", and you decide WHEN they are next followed up. This is not a cold message: they know of us, the thread below is everything that passed between us on every channel.",
-    "THE GAME. We follow up every lead until they say yes, no or stop. Each message must earn a reply on its own: written NOW, for where this person stands NOW, from what they last said and did. Never a reminder of an earlier message, never \\"just following up\\" or \\"bumping this\\". Pick ONE thing that moves them one step: answer what they were waiting for, a useful fact about what we offer, a simpler next step, or a plain question about their situation. End with ONE easy question they can answer in a line.",
-    "Read the thread like the person who wrote it on our side. If they asked something, answer it if the FACTS hold the answer. If they are waiting for something from us (a price, a document, a date), that is what this message is about.",
-    wa
+${GAME.intro}${GAME.game}${GAME.read}    wa
       ? "THE CHANNEL is WhatsApp: the message continues our WhatsApp conversation with them, from the same number, in the language and tone of that conversation. No greeting line of its own, no sign off, plain text, no links unless the facts give one. " + ${JSON.stringify(whatsappBubblesStrategy("persona"))}
       : "THE CHANNEL is email: the email is a reply in the last email thread we have with them, from the same mailbox, so never re-introduce us. Under 120 words. Greet them by first name when you have it. No sign off or signature block: ours is added below your text. bodyHtml is simple HTML, <p> paragraphs only. The subject is short and plain, never \\"Re:\\" or \\"Follow-up\\".",
     // The sending WhatsApp account's own persona (SOPHIE-WA-1016): none = the prompt of before.
@@ -523,8 +541,7 @@ export async function main(person, channel, offer, brand, facts, history, figure
     game,
     localHour,
     nextDate,
-    "STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again, or they show they are not a fit at all (the wrong person, they left the company, they do not run anything like what we offer). Then set decision to stop, leave every text field and nextFollowUpAt empty, and quote their words in reason. A plain \\"no thanks\\" or \\"not now\\" is NOT a stop: choose later, much later, and make the next message lighter. Silence is never a reason to stop.",
-    "Write like a person who knows them: short, plain, warm, one idea per sentence. No filler, no \\"I hope this finds you well\\".",
+${GAME.stop}    "Write like a person who knows them: short, plain, warm, one idea per sentence. No filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
     wa ? "Fill message; leave subject and bodyHtml empty." : "Fill subject and bodyHtml; leave message empty.",
   ].join("\\n");
@@ -571,6 +588,9 @@ ${LOCAL_TIME_FN}
 
 ${SENDER_PERSONA_FN}
 `.trim();
+}
+
+export const COMPOSE_FOLLOW_UP_CODE = composeFollowUpCode(LEAD_FOLLOW_UP_GAME);
 
 /**
  * Holds the model to its contract strictly BEFORE the send and builds each transport's body: a `write` with an empty
@@ -725,8 +745,22 @@ const P = "$ref:resolve-person.output";
 const SKIP_READS = "$ref:read-state.output.skip";
 const SKIP_MODEL = "$ref:channel-plan.output.skipModel";
 
+/**
+ * Who a reactive follow-up writes to, when it is not the brand's leads (`client-check-in-dag.ts`): the claim body it
+ * states (WHO = the pipe's strategy, judged by lead-service), the scripts that read the claim, the state and write the
+ * prompt, and the end kinds its claim adds. Absent = the lead follow-up, byte for byte.
+ */
+export interface FollowUpAudience {
+  claimBody: Record<string, unknown>;
+  resolveClaimedCode: string;
+  readStateCode: string;
+  composeCode: string;
+  /** End kinds the claim adds, each with its end-run body and mappings. */
+  claimEnds: Array<{ kind: string; body: Record<string, unknown>; inputMapping?: Record<string, string> }>;
+}
+
 /** The straight line after "who is this run for": state, reads, channel, write, send, date, row. */
-function tail(opts: { readFigures: boolean; reactive: boolean }): { nodes: DAGNode[]; edges: DAG["edges"] } {
+function tail(opts: { readFigures: boolean; reactive: boolean; audience?: FollowUpAudience }): { nodes: DAGNode[]; edges: DAG["edges"] } {
   const nodes: DAGNode[] = [
     { id: "now", type: "script", config: { code: NOW_CODE }, retries: 0 },
     {
@@ -740,7 +774,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean }): { nodes: DAGNo
     {
       id: "read-state",
       type: "script",
-      config: { code: READ_STATE_CODE },
+      config: { code: opts.audience?.readStateCode ?? READ_STATE_CODE },
       retries: 0,
       inputMapping: { person: P, state: "$ref:followup-state.output", nowIso: "$ref:now.output.now" },
     },
@@ -856,7 +890,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean }): { nodes: DAGNo
     {
       id: "compose",
       type: "script",
-      config: { code: COMPOSE_FOLLOW_UP_CODE },
+      config: { code: opts.audience?.composeCode ?? COMPOSE_FOLLOW_UP_CODE },
       retries: 0,
       inputMapping: {
         person: P,
@@ -1092,8 +1126,9 @@ export function buildFollowUpProactiveDag(): DAG {
  * REACTIVE: the person a trigger occurrence filed on this campaign's own queue. `readFigures` reads the figures the
  * campaign's instruction asks for (the Copilot's follow-ups); the follow-up-date chain runs without.
  */
-export function buildFollowUpReactiveDag(opts: { readFigures: boolean }): DAG {
-  const t = tail({ readFigures: opts.readFigures, reactive: true });
+export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?: FollowUpAudience }): DAG {
+  const t = tail({ readFigures: opts.readFigures, reactive: true, audience: opts.audience });
+  const a = opts.audience;
   return {
     nodes: [
       ...chassis(),
@@ -1104,7 +1139,13 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean }): DAG {
       {
         id: "claim-followup",
         type: "http.call",
-        config: { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/followups/claim-next" },
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/campaigns/{campaignId}/followups/claim-next",
+          // WHO this pipe answers, judged by lead-service (the strategy's tactic reads this literal).
+          ...(a ? { body: a.claimBody } : {}),
+        },
         retries: 0,
         inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
       },
@@ -1122,7 +1163,7 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean }): DAG {
       {
         id: "resolve-person",
         type: "script",
-        config: { code: withSkipState(RESOLVE_CLAIMED_PERSON_CODE, "claim, detail, trigger") },
+        config: { code: withSkipState(a?.resolveClaimedCode ?? RESOLVE_CLAIMED_PERSON_CODE, "claim, detail, trigger") },
         retries: 0,
         inputMapping: { claim: "$ref:claim-followup.output", detail: "$ref:lead-detail.output", trigger: "$ref:flow_input.trigger" },
       },
@@ -1132,6 +1173,7 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean }): DAG {
       // A run carrying an occurrence that claims nobody, or someone else: fails, so the occurrence is redelivered.
       endRun("end-run-unclaimed", { success: false, stopCampaign: false }),
       endRun("end-run-other-person", { success: false, stopCampaign: false }),
+      ...(a?.claimEnds ?? []).map((e) => endRun(`end-run-${e.kind.replace(/_/g, "-")}`, e.body, e.inputMapping)),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
     edges: [
@@ -1147,6 +1189,11 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean }): DAG {
       { from: "check-end", to: "end-run-idle", condition: "results['outcome']?.endKind == 'idle'" },
       { from: "check-end", to: "end-run-unclaimed", condition: "results['outcome']?.endKind == 'unclaimed'" },
       { from: "check-end", to: "end-run-other-person", condition: "results['outcome']?.endKind == 'other_person'" },
+      ...(a?.claimEnds ?? []).map((e) => ({
+        from: "check-end",
+        to: `end-run-${e.kind.replace(/_/g, "-")}`,
+        condition: `results['outcome']?.endKind == '${e.kind}'`,
+      })),
     ],
     onError: "end-run-error",
   };
