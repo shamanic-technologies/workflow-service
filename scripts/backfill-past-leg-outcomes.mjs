@@ -1,16 +1,14 @@
 /**
- * LEDGER-HISTORY-1024: the past AI Instant Call and Social post runs declare the outcome their leg produced
- * (`booking_call`, `industry_update_video`) on runs-service's ledger, as if declared when they ran
+ * LEDGER-HISTORY-1024: the past AI Instant Call runs declare the outcome their leg produced (`booking_call`) on
+ * runs-service's ledger, as if declared when they ran
  * (`occurredAt: run_started_at`), exactly as the live nodes do today. What counts, and for whom:
  * src/lib/past-leg-outcomes.ts.
  *
- * Input: five read-only CSV exports in one directory (prod databases on the box, `psql \copy ... CSV HEADER`):
+ * Input: three read-only CSV exports in one directory (prod databases on the box, `psql \copy ... CSV HEADER`):
  *   runs.csv      workflow_service: SELECT run_id, feature_slug AS f, inputs->'trigger'->'item' AS item FROM workflow_runs
- *                                   WHERE feature_slug IN ('ai-instant-call', 'social-post') AND run_id IS NOT NULL
+ *                                   WHERE feature_slug = 'ai-instant-call' AND run_id IS NOT NULL
  *   followups.csv lead_service:     SELECT run_id, lead_id, action FROM followup_actions WHERE run_id IN (<runs.csv ids>)
  *   calls.csv     twilio_service:   SELECT parent_run_id, call_sid FROM twilio_calls WHERE parent_run_id IS NOT NULL
- *   videos.csv    content_generation_service: SELECT id, parent_run_id, status FROM industry_debrief_videos
- *   posts.csv     social_service:   SELECT parent_run_id, platform, status FROM social_posts WHERE parent_run_id IS NOT NULL
  *
  * Runs against the COMPILED code inside the workflow-service container (RUNS_SERVICE_URL / RUNS_SERVICE_API_KEY):
  *   docker cp scripts/backfill-past-leg-outcomes.mjs <container>:/app/scripts/
@@ -59,8 +57,6 @@ async function main() {
     runTriggerItems: new Map(runRows.filter((r) => r.item).map((r) => [r.run_id.toLowerCase(), JSON.parse(r.item)])),
     followupActions: readCsv(join(dir, "followups.csv")).map((r) => ({ runId: r.run_id, leadId: r.lead_id, action: r.action })),
     calls: readCsv(join(dir, "calls.csv")).map((r) => ({ parentRunId: r.parent_run_id, callSid: r.call_sid || null })),
-    videos: readCsv(join(dir, "videos.csv")).map((r) => ({ id: r.id, parentRunId: r.parent_run_id, status: r.status })),
-    posts: readCsv(join(dir, "posts.csv")).map((r) => ({ parentRunId: r.parent_run_id, platform: r.platform, status: r.status })),
   };
   const { runs, unnamed } = pastLegEvidence(input);
   const byKey = {};
