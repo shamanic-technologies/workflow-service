@@ -1096,7 +1096,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
   // The written message on the ledger, once it went out (COST-ACCOUNTING-1023-P1).
   const declared = withMessageWrittenDeclaration(
     { nodes, edges },
-    { after: "record-row", signalRef: "$ref:outcome.output.endKind", sentWhen: "sent", leadIdRef: `${P}.leadId` },
+    { after: "record-row", signalRef: "$ref:outcome.output.endKind", sentWhen: "sent", leadIdRef: `${P}.leadId`, consumedAfter: "now" },
   );
   return withLegBestLlm(withClientCommsVoice(declared, "draft"), "draft");
 }
