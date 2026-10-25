@@ -3,7 +3,7 @@
  * occurrence its pipe starts from), as the live `declare-consumed-lead` node does. What and why:
  * src/lib/past-consumed-leads.ts.
  *
- * Input: three read-only CSV exports in one directory (prod databases on the box, `psql \copy ... CSV HEADER`):
+ * Input: four read-only CSV exports in one directory (prod databases on the box, `psql \copy ... CSV HEADER`):
  *   claims.csv  lead_service:     SELECT run_id, lead_id FROM followup_actions WHERE action = 'claimed' AND run_id IS NOT NULL
  *   runs.csv    runs_service:     SELECT r.id AS run_id, r.campaign_id, r.feature_slug FROM runs r
  *                                 WHERE r.service_name = 'workflow' AND r.task_name = 'execute-workflow'
@@ -12,6 +12,9 @@
  *                                                   WHERE e.run_id = r.id AND e.event_type = 'outcomes.voided')
  *                                   AND NOT EXISTS (SELECT 1 FROM run_support_marks m WHERE m.run_id = r.id)
  *   legs.csv    campaign_service: SELECT id, leg_key FROM campaigns
+ *   features.csv workflow_service: SELECT run_id, feature_slug FROM workflow_runs WHERE run_id IS NOT NULL
+ * The feature is THIS service's record (`workflow_runs`): runs-service opens many execute-workflow runs unlabelled
+ * (`runs.feature_slug` NULL on 73 of 640 claimed runs, 2026-10-25), so it is only the fallback.
  *
  * Runs against the COMPILED code inside the workflow-service container (RUNS_SERVICE_URL / RUNS_SERVICE_API_KEY):
  *   docker cp scripts/backfill-consumed-leads.mjs <container>:/app/scripts/
@@ -44,9 +47,10 @@ async function main() {
     claims.get(id).push(c.lead_id);
   }
   const legs = new Map(readCsv(join(dir, "legs.csv")).map((c) => [c.id.toLowerCase(), c.leg_key || null]));
+  const features = new Map(readCsv(join(dir, "features.csv")).map((c) => [c.run_id.toLowerCase(), c.feature_slug || null]));
   const rows = readCsv(join(dir, "runs.csv")).map((r) => ({
     runId: r.run_id,
-    featureSlug: r.feature_slug || null,
+    featureSlug: features.get(r.run_id.toLowerCase()) ?? (r.feature_slug || null),
     legKey: r.campaign_id ? legs.get(r.campaign_id.toLowerCase()) ?? null : null,
     leadIds: claims.get(r.run_id.toLowerCase()) ?? [],
   }));
