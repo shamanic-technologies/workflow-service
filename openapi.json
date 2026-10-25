@@ -40,65 +40,6 @@
           "service"
         ]
       },
-      "WorkflowCategory": {
-        "type": "string",
-        "nullable": true,
-        "enum": [
-          "sales",
-          "pr",
-          "outlets",
-          "journalists",
-          "advertising"
-        ],
-        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
-      },
-      "WorkflowChannel": {
-        "type": "string",
-        "nullable": true,
-        "enum": [
-          "email",
-          "database",
-          "ads"
-        ],
-        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
-      },
-      "WorkflowAudienceType": {
-        "type": "string",
-        "nullable": true,
-        "enum": [
-          "cold-outreach",
-          "discovery",
-          "audience-targeting",
-          "conversation-follow-up"
-        ],
-        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
-      },
-      "WorkflowDeprecation": {
-        "type": "object",
-        "nullable": true,
-        "properties": {
-          "reason": {
-            "type": "string",
-            "description": "Why this workflow was deprecated, in plain words. 'Not specified' for workflows deprecated before 2026-10-20 (the reason was never recorded)."
-          },
-          "decidedBy": {
-            "type": "string",
-            "nullable": true,
-            "description": "Who decided it: a staff email, 'workflow-service' for an automatic deprecation (an upgrade replacing this version), or 'user:<id>' when only the caller's user id is known. Null when unknown (every pre-2026-10-20 'Not specified' row)."
-          },
-          "decidedAt": {
-            "type": "string",
-            "nullable": true,
-            "description": "ISO instant the deprecation was decided. Null when unknown (pre-2026-10-20 'Not specified' rows)."
-          }
-        },
-        "required": [
-          "reason",
-          "decidedBy",
-          "decidedAt"
-        ],
-        "description": "Why, by whom and when this workflow was deprecated. Null while it is executable (status AND workflowDynastyStatus 'active'). A retired dynasty carries its retirement decision on every version; a version replaced by an upgrade says so."
-      },
       "WorkflowResponse": {
         "type": "object",
         "properties": {
@@ -300,6 +241,68 @@
           "updatedAt"
         ]
       },
+      "WorkflowCategory": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "sales",
+          "pr",
+          "outlets",
+          "journalists",
+          "advertising",
+          null
+        ],
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
+      },
+      "WorkflowChannel": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "email",
+          "database",
+          "ads",
+          null
+        ],
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
+      },
+      "WorkflowAudienceType": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "cold-outreach",
+          "discovery",
+          "audience-targeting",
+          "conversation-follow-up",
+          null
+        ],
+        "description": "Legacy provenance tag (pre-2026-10-10). The generator no longer sets it: the pipe link lives in features-service (/internal/workflow-leg-assignments)."
+      },
+      "WorkflowDeprecation": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why this workflow was deprecated, in plain words. 'Not specified' for workflows deprecated before 2026-10-20 (the reason was never recorded)."
+          },
+          "decidedBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "Who decided it: a staff email, 'workflow-service' for an automatic deprecation (an upgrade replacing this version), or 'user:<id>' when only the caller's user id is known. Null when unknown (every pre-2026-10-20 'Not specified' row)."
+          },
+          "decidedAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "ISO instant the deprecation was decided. Null when unknown (pre-2026-10-20 'Not specified' rows)."
+          }
+        },
+        "required": [
+          "reason",
+          "decidedBy",
+          "decidedAt"
+        ],
+        "description": "Why, by whom and when this workflow was deprecated. Null while it is executable (status AND workflowDynastyStatus 'active'). A retired dynasty carries its retirement decision on every version; a version replaced by an upgrade says so."
+      },
       "ErrorResponse": {
         "type": "object",
         "properties": {
@@ -314,122 +317,80 @@
           "error"
         ]
       },
-      "DAGNode": {
+      "CreateWorkflowRequest": {
         "type": "object",
         "properties": {
-          "id": {
+          "createdForBrandId": {
+            "type": "string",
+            "description": "Optional brand ID — records which brand context created this workflow."
+          },
+          "campaignId": {
+            "type": "string",
+            "description": "Optional campaign ID for scoping."
+          },
+          "subrequestId": {
+            "type": "string",
+            "description": "Optional subrequest ID for cost tracking."
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what this workflow does."
+          },
+          "featureSlug": {
             "type": "string",
             "minLength": 1,
-            "description": "Unique identifier for this node within the DAG. Used in edges and $ref input mappings."
+            "description": "Feature slug from features-service. Required — used to build the workflow slug/name and for feature-level grouping."
           },
-          "type": {
+          "category": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowCategory"
+              },
+              {
+                "description": "Optional workflow category tag."
+              }
+            ]
+          },
+          "channel": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowChannel"
+              },
+              {
+                "description": "Optional workflow channel tag."
+              }
+            ]
+          },
+          "audienceType": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowAudienceType"
+              },
+              {
+                "description": "Optional workflow audience type tag."
+              }
+            ]
+          },
+          "pipeId": {
             "type": "string",
-            "enum": [
-              "lead-service",
-              "outbound-sending",
-              "content-sentiment",
-              "client-service",
-              "stripe.createProduct",
-              "stripe.getProduct",
-              "stripe.createPrice",
-              "stripe.getPricesByProduct",
-              "stripe.createCoupon",
-              "stripe.getCoupon",
-              "stripe.createCheckout",
-              "stripe.getStats",
-              "client.createUser",
-              "client.updateUser",
-              "client.getUsers",
-              "transactional-email.send",
-              "transactional-email.getStats",
-              "app.resolveProduct",
-              "app.resolveDiscount",
-              "twilio-sms",
-              "order-service",
-              "product-service",
-              "stripe-service",
-              "linkedin-dm",
-              "linkedin-connect",
-              "linkedin-post",
-              "google-ads",
-              "meta-ads",
-              "http.call",
-              "wait",
-              "condition",
-              "for-each",
-              "script"
-            ],
-            "description": "Node type. Must be one of the registered types — unknown strings are rejected (no silent fallback). Preferred: \"http.call\" — call any microservice. config requires { service, method, path }. Inline JS: \"script\" — runs node.config.code (string) inline as a Windmill rawscript. config = { code: string, language?: \"bun\" | \"deno\" }. Inputs via inputMapping, outputs via `return { … }`. Native flow control: \"condition\" — if/then/else branching (uses Windmill branchone). Outgoing edges with 'condition' define branches; nodes downstream of a conditional edge are nested inside that branch. Outgoing edges without 'condition' define after-branch steps that always execute. \"wait\" — sleep/delay. \"for-each\" — loop over items (body nodes are nested inside the loop). Legacy named types: stripe.createProduct, client.createUser, transactional-email.send."
+            "minLength": 1,
+            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). The workflow is then registered on that pipe in features-service (POST /internal/workflow-leg-assignments/register, active at once), which owns the link; this service stores no pipe."
           },
-          "config": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            },
-            "description": "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. For script: { code (string, required, inline JS), language? (\"bun\" | \"deno\", default \"bun\") }. For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. Each key becomes a direct parameter of the underlying script. Special config keys (stripped before passing to script): retries (number) — override default retry count; validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; stopAfterIf (string) — native Windmill stop_after_if. JS expression evaluated after step completes using 'result' variable, stops the entire flow gracefully (no onError, no subsequent steps) when true. Example: \"result.found == false\". For conditional branching (run some steps but not others), use a \"condition\" node instead; skipIf (string) — native Windmill skip_if. JS expression evaluated before this step runs, skips only this step when true. Can reference previous results via results.<module_id>. Example: \"results.fetch_lead.found == false\". For multi-step skipping, prefer a \"condition\" node."
-          },
-          "inputMapping": {
-            "type": "object",
-            "additionalProperties": {
+          "tags": {
+            "type": "array",
+            "items": {
               "type": "string"
             },
-            "description": "Dynamic input references using $ref syntax. Use \"$ref:flow_input.fieldName\" for workflow execution inputs, or \"$ref:node-id.output.fieldName\" for a previous node's output. Keys in inputMapping override same-named keys in config."
+            "description": "Free-form tags for filtering/grouping (e.g. channels used in the DAG: [\"email\", \"linkedin\"])."
           },
-          "retries": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Number of retry attempts on failure. Defaults to 3 if omitted. Set to 0 for non-idempotent operations (e.g., sending emails, consuming queue items) to prevent duplicates."
+          "dag": {
+            "$ref": "#/components/schemas/DAG"
           }
         },
         "required": [
-          "id",
-          "type"
-        ],
-        "example": {
-          "id": "fetch-lead",
-          "type": "http.call",
-          "config": {
-            "service": "lead",
-            "method": "POST",
-            "path": "/buffer/next",
-            "body": {
-              "sourceType": "journalist"
-            }
-          },
-          "inputMapping": {
-            "body.brandId": "$ref:start-run.output.brandId",
-            "body.campaignId": "$ref:flow_input.campaignId"
-          },
-          "retries": 0
-        }
-      },
-      "DAGEdge": {
-        "type": "object",
-        "properties": {
-          "from": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Source node ID — this node runs first."
-          },
-          "to": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Target node ID — runs after the source completes."
-          },
-          "condition": {
-            "type": "string",
-            "description": "JavaScript expression for conditional branching. Only used when source node is type \"condition\". Edges WITH condition: target node (and its chain) are nested inside that branch — they only execute when the condition is true. Edges WITHOUT condition from a condition node: target is an after-branch step that always executes. Expressions can reference previous results (results.<module_id>.<field>) or flow_input. Example: \"results.fetch_lead.found == true\""
-          }
-        },
-        "required": [
-          "from",
-          "to"
-        ],
-        "example": {
-          "from": "check-lead",
-          "to": "brand-profile",
-          "condition": "results['fetch-lead'].found == true"
-        }
+          "featureSlug",
+          "dag"
+        ]
       },
       "DAG": {
         "type": "object",
@@ -557,80 +518,122 @@
           "onError": "end-run-error"
         }
       },
-      "CreateWorkflowRequest": {
+      "DAGNode": {
         "type": "object",
         "properties": {
-          "createdForBrandId": {
-            "type": "string",
-            "description": "Optional brand ID — records which brand context created this workflow."
-          },
-          "campaignId": {
-            "type": "string",
-            "description": "Optional campaign ID for scoping."
-          },
-          "subrequestId": {
-            "type": "string",
-            "description": "Optional subrequest ID for cost tracking."
-          },
-          "description": {
-            "type": "string",
-            "description": "Human-readable description of what this workflow does."
-          },
-          "featureSlug": {
+          "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Feature slug from features-service. Required — used to build the workflow slug/name and for feature-level grouping."
+            "description": "Unique identifier for this node within the DAG. Used in edges and $ref input mappings."
           },
-          "category": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowCategory"
-              },
-              {
-                "description": "Optional workflow category tag."
-              }
-            ]
-          },
-          "channel": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowChannel"
-              },
-              {
-                "description": "Optional workflow channel tag."
-              }
-            ]
-          },
-          "audienceType": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowAudienceType"
-              },
-              {
-                "description": "Optional workflow audience type tag."
-              }
-            ]
-          },
-          "pipeId": {
+          "type": {
             "type": "string",
-            "minLength": 1,
-            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>`. Read from the catalogue: it must exist, its channel must equal featureSlug and it must be platform-worked (else 422). The workflow is then registered on that pipe in features-service (POST /internal/workflow-leg-assignments/register, active at once), which owns the link; this service stores no pipe."
+            "enum": [
+              "lead-service",
+              "outbound-sending",
+              "content-sentiment",
+              "client-service",
+              "stripe.createProduct",
+              "stripe.getProduct",
+              "stripe.createPrice",
+              "stripe.getPricesByProduct",
+              "stripe.createCoupon",
+              "stripe.getCoupon",
+              "stripe.createCheckout",
+              "stripe.getStats",
+              "client.createUser",
+              "client.updateUser",
+              "client.getUsers",
+              "transactional-email.send",
+              "transactional-email.getStats",
+              "app.resolveProduct",
+              "app.resolveDiscount",
+              "twilio-sms",
+              "order-service",
+              "product-service",
+              "stripe-service",
+              "linkedin-dm",
+              "linkedin-connect",
+              "linkedin-post",
+              "google-ads",
+              "meta-ads",
+              "http.call",
+              "wait",
+              "condition",
+              "for-each",
+              "script"
+            ],
+            "description": "Node type. Must be one of the registered types — unknown strings are rejected (no silent fallback). Preferred: \"http.call\" — call any microservice. config requires { service, method, path }. Inline JS: \"script\" — runs node.config.code (string) inline as a Windmill rawscript. config = { code: string, language?: \"bun\" | \"deno\" }. Inputs via inputMapping, outputs via `return { … }`. Native flow control: \"condition\" — if/then/else branching (uses Windmill branchone). Outgoing edges with 'condition' define branches; nodes downstream of a conditional edge are nested inside that branch. Outgoing edges without 'condition' define after-branch steps that always execute. \"wait\" — sleep/delay. \"for-each\" — loop over items (body nodes are nested inside the loop). Legacy named types: stripe.createProduct, client.createUser, transactional-email.send."
           },
-          "tags": {
-            "type": "array",
-            "items": {
+          "config": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. For script: { code (string, required, inline JS), language? (\"bun\" | \"deno\", default \"bun\") }. For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. Each key becomes a direct parameter of the underlying script. Special config keys (stripped before passing to script): retries (number) — override default retry count; validateResponse ({ field, equals }) — throw error if response[field] !== equals, triggers onError handler; stopAfterIf (string) — native Windmill stop_after_if. JS expression evaluated after step completes using 'result' variable, stops the entire flow gracefully (no onError, no subsequent steps) when true. Example: \"result.found == false\". For conditional branching (run some steps but not others), use a \"condition\" node instead; skipIf (string) — native Windmill skip_if. JS expression evaluated before this step runs, skips only this step when true. Can reference previous results via results.<module_id>. Example: \"results.fetch_lead.found == false\". For multi-step skipping, prefer a \"condition\" node."
+          },
+          "inputMapping": {
+            "type": "object",
+            "additionalProperties": {
               "type": "string"
             },
-            "description": "Free-form tags for filtering/grouping (e.g. channels used in the DAG: [\"email\", \"linkedin\"])."
+            "description": "Dynamic input references using $ref syntax. Use \"$ref:flow_input.fieldName\" for workflow execution inputs, or \"$ref:node-id.output.fieldName\" for a previous node's output. Keys in inputMapping override same-named keys in config."
           },
-          "dag": {
-            "$ref": "#/components/schemas/DAG"
+          "retries": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of retry attempts on failure. Defaults to 3 if omitted. Set to 0 for non-idempotent operations (e.g., sending emails, consuming queue items) to prevent duplicates."
           }
         },
         "required": [
-          "featureSlug",
-          "dag"
-        ]
+          "id",
+          "type"
+        ],
+        "example": {
+          "id": "fetch-lead",
+          "type": "http.call",
+          "config": {
+            "service": "lead",
+            "method": "POST",
+            "path": "/buffer/next",
+            "body": {
+              "sourceType": "journalist"
+            }
+          },
+          "inputMapping": {
+            "body.brandId": "$ref:start-run.output.brandId",
+            "body.campaignId": "$ref:flow_input.campaignId"
+          },
+          "retries": 0
+        }
+      },
+      "DAGEdge": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Source node ID — this node runs first."
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Target node ID — runs after the source completes."
+          },
+          "condition": {
+            "type": "string",
+            "description": "JavaScript expression for conditional branching. Only used when source node is type \"condition\". Edges WITH condition: target node (and its chain) are nested inside that branch — they only execute when the condition is true. Edges WITHOUT condition from a condition node: target is an after-branch step that always executes. Expressions can reference previous results (results.<module_id>.<field>) or flow_input. Example: \"results.fetch_lead.found == true\""
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "example": {
+          "from": "check-lead",
+          "to": "brand-profile",
+          "condition": "results['fetch-lead'].found == true"
+        }
       },
       "WorkflowSummary": {
         "type": "object",
@@ -816,6 +819,25 @@
           "status"
         ]
       },
+      "DynastyMergeResponse": {
+        "type": "object",
+        "properties": {
+          "merge": {
+            "$ref": "#/components/schemas/DynastyMerge"
+          },
+          "deprecatedVersions": {
+            "type": "integer",
+            "description": "Merge: how many absorbed versions were deprecated."
+          },
+          "restoredVersions": {
+            "type": "integer",
+            "description": "Un-merge: how many versions were restored to their exact prior state."
+          }
+        },
+        "required": [
+          "merge"
+        ]
+      },
       "DynastyMerge": {
         "type": "object",
         "properties": {
@@ -883,25 +905,6 @@
           "unmergedAt",
           "unmergedBy",
           "unmergeReason"
-        ]
-      },
-      "DynastyMergeResponse": {
-        "type": "object",
-        "properties": {
-          "merge": {
-            "$ref": "#/components/schemas/DynastyMerge"
-          },
-          "deprecatedVersions": {
-            "type": "integer",
-            "description": "Merge: how many absorbed versions were deprecated."
-          },
-          "restoredVersions": {
-            "type": "integer",
-            "description": "Un-merge: how many versions were restored to their exact prior state."
-          }
-        },
-        "required": [
-          "merge"
         ]
       },
       "DynastyMergeRequest": {
@@ -1128,24 +1131,6 @@
           "status"
         ]
       },
-      "ProviderInfo": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Provider name (e.g. 'anthropic', 'apollo')."
-          },
-          "domain": {
-            "type": "string",
-            "nullable": true,
-            "description": "Provider's primary domain for logo lookup (e.g. 'anthropic.com'). Null if unknown."
-          }
-        },
-        "required": [
-          "name",
-          "domain"
-        ]
-      },
       "WorkflowListItem": {
         "allOf": [
           {
@@ -1176,26 +1161,22 @@
           }
         ]
       },
-      "ServiceEndpoint": {
+      "ProviderInfo": {
         "type": "object",
         "properties": {
-          "service": {
+          "name": {
             "type": "string",
-            "description": "Service name (e.g. 'apollo', 'stripe')."
+            "description": "Provider name (e.g. 'anthropic', 'apollo')."
           },
-          "method": {
+          "domain": {
             "type": "string",
-            "description": "HTTP method (e.g. 'POST', 'GET')."
-          },
-          "path": {
-            "type": "string",
-            "description": "Endpoint path (e.g. '/leads/search')."
+            "nullable": true,
+            "description": "Provider's primary domain for logo lookup (e.g. 'anthropic.com'). Null if unknown."
           }
         },
         "required": [
-          "service",
-          "method",
-          "path"
+          "name",
+          "domain"
         ]
       },
       "ProviderRequirementsResponse": {
@@ -1227,6 +1208,28 @@
           "endpoints",
           "requirements",
           "providers"
+        ]
+      },
+      "ServiceEndpoint": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "Service name (e.g. 'apollo', 'stripe')."
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method (e.g. 'POST', 'GET')."
+          },
+          "path": {
+            "type": "string",
+            "description": "Endpoint path (e.g. '/leads/search')."
+          }
+        },
+        "required": [
+          "service",
+          "method",
+          "path"
         ]
       },
       "WorkflowMutationResponse": {
@@ -1429,6 +1432,79 @@
           }
         }
       },
+      "ValidationResult": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ]
+            }
+          },
+          "invalidEndpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvalidEndpoint"
+            },
+            "description": "http.call endpoints that do not exist in the corresponding service's current OpenAPI spec."
+          },
+          "fieldIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldValidationIssue"
+            },
+            "description": "Body/output field mismatches between http.call nodes and the current OpenAPI specs."
+          },
+          "templateContract": {
+            "type": "object",
+            "properties": {
+              "valid": {
+                "type": "boolean"
+              },
+              "templateRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TemplateRef"
+                },
+                "description": "Content-generation template references found in the DAG."
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TemplateContractIssue"
+                },
+                "description": "Variable mismatches between workflow and prompt templates."
+              }
+            },
+            "required": [
+              "valid",
+              "templateRefs",
+              "issues"
+            ],
+            "description": "Template contract validation result. Present when content-generation service is reachable."
+          }
+        },
+        "required": [
+          "valid",
+          "invalidEndpoints",
+          "fieldIssues"
+        ]
+      },
       "InvalidEndpoint": {
         "type": "object",
         "properties": {
@@ -1551,136 +1627,6 @@
           "severity",
           "reason"
         ]
-      },
-      "ValidationResult": {
-        "type": "object",
-        "properties": {
-          "valid": {
-            "type": "boolean"
-          },
-          "errors": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "field": {
-                  "type": "string"
-                },
-                "message": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "field",
-                "message"
-              ]
-            }
-          },
-          "invalidEndpoints": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/InvalidEndpoint"
-            },
-            "description": "http.call endpoints that do not exist in the corresponding service's current OpenAPI spec."
-          },
-          "fieldIssues": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/FieldValidationIssue"
-            },
-            "description": "Body/output field mismatches between http.call nodes and the current OpenAPI specs."
-          },
-          "templateContract": {
-            "type": "object",
-            "properties": {
-              "valid": {
-                "type": "boolean"
-              },
-              "templateRefs": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/TemplateRef"
-                },
-                "description": "Content-generation template references found in the DAG."
-              },
-              "issues": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/TemplateContractIssue"
-                },
-                "description": "Variable mismatches between workflow and prompt templates."
-              }
-            },
-            "required": [
-              "valid",
-              "templateRefs",
-              "issues"
-            ],
-            "description": "Template contract validation result. Present when content-generation service is reachable."
-          }
-        },
-        "required": [
-          "valid",
-          "invalidEndpoints",
-          "fieldIssues"
-        ]
-      },
-      "NullableCampaignAttributionContext": {
-        "type": "object",
-        "nullable": true,
-        "properties": {
-          "brandId": {
-            "type": "string",
-            "description": "Single brand ID for this attributed execution when the campaign is single-brand."
-          },
-          "brandIds": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Brand IDs for this attributed execution. Copied from the execution brand header when attribution is present."
-          },
-          "campaignId": {
-            "type": "string",
-            "description": "Campaign ID copied from the execution header when attribution is present."
-          },
-          "featureSlug": {
-            "type": "string",
-            "description": "Feature slug copied from the execution header when attribution is present."
-          },
-          "goal": {
-            "type": "string",
-            "description": "Canonical active optimization goal supplied by the caller. Workflow-service never infers this value."
-          },
-          "brandProfileId": {
-            "type": "string",
-            "description": "Canonical brand-profile version ID supplied by the caller. Workflow-service never infers this value."
-          },
-          "profileId": {
-            "type": "string",
-            "description": "Brand/profile version ID supplied by the caller. Workflow-service never infers this value."
-          },
-          "personaId": {
-            "type": "string",
-            "description": "Customer persona ID supplied by the caller. Workflow-service never infers this value."
-          },
-          "goalId": {
-            "type": "string",
-            "description": "Goal ID supplied by the caller. Workflow-service never infers this value."
-          },
-          "goalSlug": {
-            "type": "string",
-            "description": "Goal slug supplied by the caller. Workflow-service never infers this value."
-          },
-          "optimizationGoal": {
-            "type": "string",
-            "description": "Active optimization goal supplied by the caller, e.g. signups or sales_meetings."
-          }
-        },
-        "additionalProperties": {
-          "nullable": true
-        },
-        "description": "Literal attribution context preserved from execution, or null when the execution was untagged."
       },
       "WorkflowRunResponse": {
         "type": "object",
@@ -1847,6 +1793,63 @@
           "createdAt"
         ]
       },
+      "NullableCampaignAttributionContext": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "description": "Single brand ID for this attributed execution when the campaign is single-brand."
+          },
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Brand IDs for this attributed execution. Copied from the execution brand header when attribution is present."
+          },
+          "campaignId": {
+            "type": "string",
+            "description": "Campaign ID copied from the execution header when attribution is present."
+          },
+          "featureSlug": {
+            "type": "string",
+            "description": "Feature slug copied from the execution header when attribution is present."
+          },
+          "goal": {
+            "type": "string",
+            "description": "Canonical active optimization goal supplied by the caller. Workflow-service never infers this value."
+          },
+          "brandProfileId": {
+            "type": "string",
+            "description": "Canonical brand-profile version ID supplied by the caller. Workflow-service never infers this value."
+          },
+          "profileId": {
+            "type": "string",
+            "description": "Brand/profile version ID supplied by the caller. Workflow-service never infers this value."
+          },
+          "personaId": {
+            "type": "string",
+            "description": "Customer persona ID supplied by the caller. Workflow-service never infers this value."
+          },
+          "goalId": {
+            "type": "string",
+            "description": "Goal ID supplied by the caller. Workflow-service never infers this value."
+          },
+          "goalSlug": {
+            "type": "string",
+            "description": "Goal slug supplied by the caller. Workflow-service never infers this value."
+          },
+          "optimizationGoal": {
+            "type": "string",
+            "description": "Active optimization goal supplied by the caller, e.g. signups or sales_meetings."
+          }
+        },
+        "additionalProperties": {
+          "nullable": true
+        },
+        "description": "Literal attribution context preserved from execution, or null when the execution was untagged."
+      },
       "ExecutionConflictResponse": {
         "type": "object",
         "properties": {
@@ -1868,6 +1871,38 @@
           "error",
           "workflowRun"
         ]
+      },
+      "ExecuteWorkflowRequest": {
+        "type": "object",
+        "properties": {
+          "conflictPolicy": {
+            "type": "string",
+            "enum": [
+              "use_existing",
+              "reject"
+            ],
+            "description": "How to handle an already-active campaign-scoped execution for the same org + campaign. When omitted, workflow-service returns the existing active execution."
+          },
+          "attributionContext": {
+            "$ref": "#/components/schemas/CampaignAttributionContext"
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
+          }
+        },
+        "example": {
+          "inputs": {
+            "orgId": "b645207b-d8e9-40b0-9391-072b777cd9a9",
+            "campaignId": "camp-123",
+            "prAngle": "AI-powered PR automation",
+            "newsHook": "Company raises Series A",
+            "currentDate": "2026-03-26"
+          }
+        }
       },
       "CampaignAttributionContext": {
         "type": "object",
@@ -1925,38 +1960,6 @@
         },
         "description": "Optional real campaign attribution context to preserve on the workflow run and expose to nodes via flow_input.attributionContext. Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."
       },
-      "ExecuteWorkflowRequest": {
-        "type": "object",
-        "properties": {
-          "conflictPolicy": {
-            "type": "string",
-            "enum": [
-              "use_existing",
-              "reject"
-            ],
-            "description": "How to handle an already-active campaign-scoped execution for the same org + campaign. When omitted, workflow-service returns the existing active execution."
-          },
-          "attributionContext": {
-            "$ref": "#/components/schemas/CampaignAttributionContext"
-          },
-          "inputs": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            },
-            "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
-          }
-        },
-        "example": {
-          "inputs": {
-            "orgId": "b645207b-d8e9-40b0-9391-072b777cd9a9",
-            "campaignId": "camp-123",
-            "prAngle": "AI-powered PR automation",
-            "newsHook": "Company raises Series A",
-            "currentDate": "2026-03-26"
-          }
-        }
-      },
       "WorkflowRunDebugResponse": {
         "type": "object",
         "properties": {
@@ -1983,6 +1986,25 @@
           "runId",
           "windmillJobId",
           "status"
+        ]
+      },
+      "WorkflowFromDescriptionResponse": {
+        "type": "object",
+        "properties": {
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowFromDescriptionResult"
+          },
+          "dag": {
+            "$ref": "#/components/schemas/DAG"
+          },
+          "generatedDescription": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow",
+          "dag",
+          "generatedDescription"
         ]
       },
       "WorkflowFromDescriptionResult": {
@@ -2094,23 +2116,31 @@
           "action"
         ]
       },
-      "WorkflowFromDescriptionResponse": {
+      "CreateWorkflowFromDescriptionRequest": {
         "type": "object",
         "properties": {
-          "workflow": {
-            "$ref": "#/components/schemas/WorkflowFromDescriptionResult"
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Natural-language description of the desired workflow."
           },
-          "dag": {
-            "$ref": "#/components/schemas/DAG"
+          "featureSlug": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The workflow's channel slug in features-service (e.g. 'sales-cold-email-outreach'). Required: it names the workflow and its pipes are the ones the workflow can run on."
           },
-          "generatedDescription": {
-            "type": "string"
+          "pipeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>` (GET /internal/catalogue/pipes). Its channel slug must equal featureSlug. Omit it when the channel has one pipe, or to let the generator pick the pipe the description is about."
+          },
+          "hints": {
+            "$ref": "#/components/schemas/GenerateWorkflowHints"
           }
         },
         "required": [
-          "workflow",
-          "dag",
-          "generatedDescription"
+          "description",
+          "featureSlug"
         ]
       },
       "GenerateWorkflowHints": {
@@ -2139,33 +2169,6 @@
           }
         },
         "description": "Optional hints to guide generation."
-      },
-      "CreateWorkflowFromDescriptionRequest": {
-        "type": "object",
-        "properties": {
-          "description": {
-            "type": "string",
-            "minLength": 10,
-            "description": "Natural-language description of the desired workflow."
-          },
-          "featureSlug": {
-            "type": "string",
-            "minLength": 1,
-            "description": "The workflow's channel slug in features-service (e.g. 'sales-cold-email-outreach'). Required: it names the workflow and its pipes are the ones the workflow can run on."
-          },
-          "pipeId": {
-            "type": "string",
-            "minLength": 1,
-            "description": "The features-service pipe the workflow runs on, `<channel slug>|<leg key>` (GET /internal/catalogue/pipes). Its channel slug must equal featureSlug. Omit it when the channel has one pipe, or to let the generator pick the pipe the description is about."
-          },
-          "hints": {
-            "$ref": "#/components/schemas/GenerateWorkflowHints"
-          }
-        },
-        "required": [
-          "description",
-          "featureSlug"
-        ]
       },
       "UpgradeWorkflowFromDescriptionRequest": {
         "type": "object",
@@ -2208,6 +2211,21 @@
         },
         "required": [
           "workflowDynastySlug"
+        ]
+      },
+      "PublicWorkflowsResponse": {
+        "type": "object",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWorkflowItem"
+            },
+            "description": "Workflow metadata matching the query."
+          }
+        },
+        "required": [
+          "workflows"
         ]
       },
       "PublicWorkflowItem": {
@@ -2281,7 +2299,8 @@
             "enum": [
               "recorded",
               "successor_created",
-              "last_update"
+              "last_update",
+              null
             ],
             "description": "Where `executableUntil` comes from. 'recorded': written by this service at the transition (every stop since 2026-10-19), exact. 'successor_created': backfilled for older rows from the creation of the upgrade that replaced this version (an upgrade deprecates its predecessor in the same transaction), exact to the second. 'last_update': backfilled for older rows with no upgrade successor (a dynasty's last version, a per-version or stale retirement) from the row's updated_at, which a later edit of the already-deprecated row (bulk description/DAG repairs) could have moved LATER than the real stop: an upper bound. Null when `executableUntil` is null."
           },
@@ -2313,18 +2332,23 @@
           "mergedIntoDynastySlug"
         ]
       },
-      "PublicWorkflowsResponse": {
+      "PublicWorkflowDefinitionsResponse": {
         "type": "object",
         "properties": {
+          "featureSlug": {
+            "type": "string",
+            "description": "The feature slug queried."
+          },
           "workflows": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PublicWorkflowItem"
+              "$ref": "#/components/schemas/PublicWorkflowDefinitionItem"
             },
-            "description": "Workflow metadata matching the query."
+            "description": "Every version of every workflow of the feature, ordered by dynasty slug then version."
           }
         },
         "required": [
+          "featureSlug",
           "workflows"
         ]
       },
@@ -2411,7 +2435,8 @@
             "enum": [
               "recorded",
               "successor_created",
-              "last_update"
+              "last_update",
+              null
             ],
             "description": "Reliability of `executableUntil`: 'recorded' exact, 'successor_created' exact (backfill), 'last_update' upper bound (backfill from updated_at). Null when `executableUntil` is null."
           },
@@ -2436,26 +2461,6 @@
           "executableUntil",
           "executableUntilSource",
           "deprecation"
-        ]
-      },
-      "PublicWorkflowDefinitionsResponse": {
-        "type": "object",
-        "properties": {
-          "featureSlug": {
-            "type": "string",
-            "description": "The feature slug queried."
-          },
-          "workflows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PublicWorkflowDefinitionItem"
-            },
-            "description": "Every version of every workflow of the feature, ordered by dynasty slug then version."
-          }
-        },
-        "required": [
-          "featureSlug",
-          "workflows"
         ]
       },
       "ExecuteBySlugRequest": {
@@ -2745,33 +2750,6 @@
           "changeIndex"
         ]
       },
-      "WorkflowChange": {
-        "type": "object",
-        "properties": {
-          "op": {
-            "type": "string",
-            "enum": [
-              "add",
-              "replace",
-              "remove",
-              "test"
-            ],
-            "description": "JSON Patch (RFC 6902) operation. `add` sets a key (creating it) or inserts into an array; `replace` requires the path to exist; `remove` deletes it; `test` refuses the whole fork unless the path holds `value` (use it to assert the source is what you think before changing it)."
-          },
-          "path": {
-            "type": "string",
-            "description": "JSON Pointer into the workflow's DAG (`{nodes, edges}`), e.g. `/nodes/fetch-lead/config/body/acceptedEmails`. Under `/nodes` a non-numeric segment names a node by its `id`; a numeric one is the array index."
-          },
-          "value": {
-            "nullable": true,
-            "description": "The value to add, replace with, or test against. Required except for `remove`."
-          }
-        },
-        "required": [
-          "op",
-          "path"
-        ]
-      },
       "ForkWorkflowRequest": {
         "type": "object",
         "properties": {
@@ -2802,6 +2780,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowChange": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "add",
+              "replace",
+              "remove",
+              "test"
+            ],
+            "description": "JSON Patch (RFC 6902) operation. `add` sets a key (creating it) or inserts into an array; `replace` requires the path to exist; `remove` deletes it; `test` refuses the whole fork unless the path holds `value` (use it to assert the source is what you think before changing it)."
+          },
+          "path": {
+            "type": "string",
+            "description": "JSON Pointer into the workflow's DAG (`{nodes, edges}`), e.g. `/nodes/fetch-lead/config/body/acceptedEmails`. Under `/nodes` a non-numeric segment names a node by its `id`; a numeric one is the array index."
+          },
+          "value": {
+            "nullable": true,
+            "description": "The value to add, replace with, or test against. Required except for `remove`."
+          }
+        },
+        "required": [
+          "op",
+          "path"
+        ]
       },
       "ReadFiguresResponse": {
         "type": "object",

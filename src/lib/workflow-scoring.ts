@@ -5,6 +5,7 @@ import { fetchRunCostsAuth, fetchRunCostsPublic, fetchEmailStatsAuth, fetchEmail
 import { fetchSourceStats, type SourceStatsMap } from "./source-stats-client.js";
 import type { DownstreamHeaders } from "./downstream-headers.js";
 import type { StatsRegistryEntry } from "./features-client.js";
+import { zodErrorDetails } from "./zod-error-details.js";
 
 export const EMPTY_EMAIL_STATS = {
   sent: 0, delivered: 0, opened: 0, clicked: 0,
@@ -279,7 +280,7 @@ export function aggregateSectionStats(scores: WorkflowScore[]) {
 
 export function handleExternalServiceError(err: unknown, res: import("express").Response, label: string) {
   if (err instanceof Error && err.name === "ZodError") {
-    res.status(400).json({ error: "Validation error", details: err });
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
     return true;
   }
   if (

@@ -12,6 +12,7 @@ import { requireApiKey } from "../middleware/auth.js";
 import { resolveStatusFilter } from "../lib/status-filter.js";
 import type { ExecutableUntilSource } from "../lib/executable-until.js";
 import { servedDeprecation } from "../lib/deprecation.js";
+import { zodErrorDetails } from "../lib/zod-error-details.js";
 
 function executableUntilFields(w: { executableUntil: Date | null; executableUntilSource: string | null }) {
   return {
@@ -29,7 +30,7 @@ router.get("/public/workflows", requireApiKey, async (req, res) => {
   try {
     const query = PublicWorkflowsQuerySchema.safeParse(req.query);
     if (!query.success) {
-      res.status(400).json({ error: "Validation error", details: query.error });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(query.error) });
       return;
     }
 
@@ -103,7 +104,7 @@ router.get("/public/workflows/dynasty-merges", requireApiKey, async (req, res) =
   try {
     const query = DynastyMergesQuerySchema.safeParse(req.query);
     if (!query.success) {
-      res.status(400).json({ error: "Validation error", details: query.error });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(query.error) });
       return;
     }
     const conditions = [];
@@ -131,7 +132,7 @@ router.get("/public/workflows/definitions", requireApiKey, async (req, res) => {
   try {
     const query = PublicWorkflowDefinitionsQuerySchema.safeParse(req.query);
     if (!query.success) {
-      res.status(400).json({ error: "Validation error", details: query.error });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(query.error) });
       return;
     }
     const featureSlug = query.data.featureSlug.trim();

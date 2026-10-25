@@ -21,6 +21,7 @@ import { traceEvent } from "../lib/trace-event.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
 import { invalidateSpecWatcherCache } from "../lib/spec-watcher.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
+import { zodErrorDetails } from "../lib/zod-error-details.js";
 
 /**
  * Fork a workflow with a STATED change (WORKFLOW-FORK-PUBLIC-1013).
@@ -155,7 +156,7 @@ async function refusePipe(
 
 function handleError(res: Response, err: unknown): void {
   if (err instanceof Error && err.name === "ZodError") {
-    res.status(400).json({ error: "Validation error", details: err });
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
     return;
   }
   const constraintError = constraintErrorResponse(err);

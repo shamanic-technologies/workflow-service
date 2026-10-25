@@ -27,6 +27,7 @@ import {
   resolveExecutionConflictPolicy,
   type ExecutionConflictPolicy,
 } from "../lib/execution-admission.js";
+import { zodErrorDetails } from "../lib/zod-error-details.js";
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
@@ -424,7 +425,7 @@ router.post(
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "ZodError") {
-        res.status(400).json({ error: "Validation error", details: err });
+        res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
         return;
       }
       console.error("[workflow-service] POST execute-by-slug error:", err);
@@ -501,7 +502,7 @@ router.post("/workflows/:id/execute", requireApiKey, requireExecutionHeaders, ex
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     console.error("[workflow-service] POST execute error:", err);
