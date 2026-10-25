@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { transferBrand } from "../lib/transfer-brand.js";
 import { TransferBrandRequestSchema } from "../schemas.js";
 import { requireApiKey } from "../middleware/auth.js";
+import { zodErrorDetails } from "../lib/zod-error-details.js";
 
 const router = Router();
 
@@ -10,7 +11,7 @@ const router = Router();
 router.post("/internal/transfer-brand", requireApiKey, async (req, res) => {
   const parsed = TransferBrandRequestSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Validation error", details: parsed.error });
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
     return;
   }
 

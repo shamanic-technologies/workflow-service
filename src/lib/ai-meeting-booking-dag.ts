@@ -3040,6 +3040,8 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
     signalRef: "$ref:classify-send.output.outcome",
     sentWhen: "sent",
     leadIdRef: "$ref:claimed.output.followup.leadId",
+    // The lead is known once the claim found someone: every run that acts on it states it, whatever it decides.
+    consumedAfter: "campaign-detail",
   });
 }
 

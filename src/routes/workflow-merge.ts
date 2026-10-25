@@ -20,6 +20,7 @@ import { getWindmillClient } from "../lib/windmill-client.js";
 import { syncFlowToWindmill } from "../lib/startup-validator.js";
 import { constraintErrorResponse } from "../lib/db-error.js";
 import { noteWorkflowWrite } from "../lib/periodic-cleanup.js";
+import { zodErrorDetails } from "../lib/zod-error-details.js";
 
 // TPL-DYNASTY-1021-WF: merge a duplicate workflow dynasty into its survivor on the same pipe, and undo it.
 // The invariants (non-destructive, reversible, same pipe only) are in src/lib/dynasty-merge.ts.
@@ -28,7 +29,7 @@ const router = Router();
 
 function handleError(res: import("express").Response, err: unknown, route: string): void {
   if (err instanceof Error && err.name === "ZodError") {
-    res.status(400).json({ error: "Validation error", details: err });
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
     return;
   }
   const constraintError = constraintErrorResponse(err);

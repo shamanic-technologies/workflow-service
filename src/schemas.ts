@@ -35,7 +35,7 @@ export const DAGNodeSchema = z
       "\"wait\" — sleep/delay. \"for-each\" — loop over items (body nodes are nested inside the loop). " +
       "Legacy named types: stripe.createProduct, client.createUser, transactional-email.send."
     ),
-    config: z.record(z.unknown()).optional().describe(
+    config: z.record(z.string(), z.unknown()).optional().describe(
       "Static parameters passed to the node. For http.call: { service, method, path, body?, query?, headers? }. " +
       "For script: { code (string, required, inline JS), language? (\"bun\" | \"deno\", default \"bun\") }. " +
       "For wait: { seconds }. For for-each: { iterator, parallel?, skipFailures? }. " +
@@ -50,7 +50,7 @@ export const DAGNodeSchema = z
       "skips only this step when true. Can reference previous results via results.<module_id>. " +
       "Example: \"results.fetch_lead.found == false\". For multi-step skipping, prefer a \"condition\" node."
     ),
-    inputMapping: z.record(z.string()).optional().describe(
+    inputMapping: z.record(z.string(), z.string()).optional().describe(
       "Dynamic input references using $ref syntax. " +
       "Use \"$ref:flow_input.fieldName\" for workflow execution inputs, " +
       "or \"$ref:node-id.output.fieldName\" for a previous node's output. " +
@@ -466,7 +466,7 @@ export const ExecuteWorkflowSchema = z
       "Optional real campaign attribution context to preserve on the workflow run and expose to nodes via flow_input.attributionContext. " +
       "Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."
     ),
-    inputs: z.record(z.unknown()).optional().describe(
+    inputs: z.record(z.string(), z.unknown()).optional().describe(
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
   })
@@ -550,7 +550,7 @@ export const ExecuteByNameSchema = z
       "Optional real campaign attribution context to preserve on the workflow run and expose to nodes via flow_input.attributionContext. " +
       "Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."
     ),
-    inputs: z.record(z.unknown()).optional().describe(
+    inputs: z.record(z.string(), z.unknown()).optional().describe(
       "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
     ),
   })
@@ -1322,7 +1322,7 @@ const DynastyItemSchema = z.object({
 const DynastyStatsSchema = z.object({
   workflowDynastySlug: z.string(),
   workflowDynastyName: z.string(),
-  stats: z.record(z.unknown()).describe("Aggregated stats for the dynasty (costs, email metrics, completed runs)."),
+  stats: z.record(z.string(), z.unknown()).describe("Aggregated stats for the dynasty (costs, email metrics, completed runs)."),
 });
 
 const WorkflowSummarySchema = z.object({

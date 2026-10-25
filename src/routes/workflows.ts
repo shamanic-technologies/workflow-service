@@ -88,6 +88,7 @@ import {
   upgradeWorkflowRow,
   forkWorkflowRow,
 } from "../lib/workflow-lineage.js";
+import { zodErrorDetails } from "../lib/zod-error-details.js";
 
 const router = Router();
 
@@ -329,7 +330,7 @@ router.post("/workflows/create", requireApiKey, createRateLimit, async (req, res
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     const constraintError = constraintErrorResponse(err);
@@ -586,7 +587,7 @@ router.post("/workflows/upgrade", requireApiKey, createRateLimit, async (req, re
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     const constraintError = constraintErrorResponse(err);
@@ -769,7 +770,7 @@ router.post("/workflows", requireApiKey, createRateLimit, async (req, res) => {
     res.status(201).json(formatWorkflow(workflow));
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     const constraintError = constraintErrorResponse(err);
@@ -1094,7 +1095,7 @@ router.put("/workflows/dynasty/:workflowDynastySlug/status", requireApiKey, asyn
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     const constraintError = constraintErrorResponse(err);
@@ -1190,7 +1191,7 @@ router.post("/workflows/retire-by-content", requireApiKey, async (req, res) => {
     res.json({ dryRun: false, workflows: listed, retired: dynasties.length, ...legExtras });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     console.error("[workflow-service] POST retire-by-content error:", err);
@@ -1307,7 +1308,7 @@ router.put("/workflows/:id/status", requireApiKey, async (req, res) => {
     res.json(formatWorkflow(updated));
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     const constraintError = constraintErrorResponse(err);
@@ -1671,7 +1672,7 @@ router.put("/workflows/:id", requireApiKey, async (req, res) => {
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "ZodError") {
-      res.status(400).json({ error: "Validation error", details: err });
+      res.status(400).json({ error: "Validation error", details: zodErrorDetails(err) });
       return;
     }
     const constraintError = constraintErrorResponse(err);
