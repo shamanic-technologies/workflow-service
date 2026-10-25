@@ -297,6 +297,7 @@ export function buildFormMeetingBookingDag(): DAG {
     signalRef: "$ref:send-email.output.success",
     sentWhen: "true",
     leadIdRef: "$ref:resolve-form.output.leadId",
+    consumedAfter: "resolve-form",
   });
   return withLegBestLlm(withClientCommsVoice(declared, "draft-answer"), "draft-answer");
 }

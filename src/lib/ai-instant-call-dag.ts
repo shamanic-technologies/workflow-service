@@ -41,6 +41,7 @@
  *    for the same person rings again.
  */
 import { withBookingCallDeclaration } from "./booking-call-outcome.js";
+import { withConsumedLeadDeclaration } from "./message-written-outcome.js";
 import type { DAG } from "./dag-validator.js";
 import { DELIVERED } from "./occurrence-delivery.js";
 
@@ -395,7 +396,10 @@ export function buildAiInstantCallDag(opts: { emailRepliesOnly?: boolean } = {})
     onError: "end-run-error",
   };
   // The call was placed: the leg's outcome is declared on this run, so twilio's call cost lands on it.
-  const declared = withBookingCallDeclaration(dag, {
+  // The lead the run acted on, once claimed, whatever it then does (LEAD-STATES-1024-MEETING-WRITES): a run that rang
+  // nobody still names its lead, so its spend reaches that lead's next state.
+  const withLead = withConsumedLeadDeclaration(dag, { after: "lead-detail", leadIdRef: "$ref:claim-followup.output.followup.leadId" });
+  const declared = withBookingCallDeclaration(withLead, {
     after: "record-called",
     placedRef: "$ref:resolve-call.output.ok",
     occasionRef: "$ref:resolve-call.output.occasion",
