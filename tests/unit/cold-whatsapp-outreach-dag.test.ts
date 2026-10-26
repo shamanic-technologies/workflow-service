@@ -750,7 +750,8 @@ describe("a WhatsApp conversation is followed up until the person answers, like 
   }
 
   it("BEST-TPL-LLM-1022: a sent look names the LLM the writer actually used (the leg's pick)", async () => {
-    const next = "2026-10-26T10:00:00.000Z";
+    // A fixed date became a past one on 2026-10-26: NEXT_DATE_FN only accepts a future date.
+    const next = inDays(4);
     const out = await look("2026-10-14T09:00:00Z", quietThread, { decision: "write", message: "Ana, still keen?", nextFollowUpAt: next, reason: "quiet" }, { model: "flash-lite", provider: "google", picked: true });
     expect(out.record.body).toMatchObject({ kind: "acted", llmAlias: "flash-lite" });
     expect(dag.nodes.find((n) => n.id === "record-plan")?.inputMapping?.writer).toBe("$ref:writer-plan.output");
