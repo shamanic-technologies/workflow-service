@@ -90,6 +90,9 @@ export const QUEUED_FOLLOW_UP_GAP_DAYS = 3;
 /** No route can write to them (no WhatsApp reach, no email): looked at again this long after, never dropped. */
 export const NO_CHANNEL_RECHECK_DAYS = 30;
 
+/** Another campaign's row made due this close to the occurrence run's own row was made due by the same facts. */
+export const SAME_FACT_WINDOW_MINUTES = 10;
+
 /** The channels the follow-up writes on, each with the one transport that sends it. */
 export const FOLLOW_UP_CHANNELS = ["whatsapp", "email"] as const;
 
@@ -253,14 +256,22 @@ export async function main(claim, detail, trigger) {
       String(named?.email ?? named?.phone ?? namedLead) + ": nothing is written, their row is left alone");
     return { ok: false, why: "occurrence names someone else", endKind: "other_person", rowId: f.id };
   }
+  // The phone the occurrence states for THIS person is the one they just gave: it wins over the row's, which may be an
+  // earlier typo ("+91 0 83..." refused not_on_whatsapp while the corrected "+91 83..." sat on the occurrence).
+  const givenDigits = namesThem ? phoneDigits(named?.phone ?? t?.item?.phone ?? null) : "";
+  const phoneDigitsKept = givenDigits || digits;
   return {
     ok: true,
     entry: "claimed",
     rowId: f.id,
     leadId: f.leadId ?? null,
     email,
-    phone: digits ? "+" + digits : null,
+    phone: phoneDigitsKept ? "+" + phoneDigitsKept : null,
     brandId: f.brandId,
+    // When this row was made due: another campaign's row made due by the same moment's facts is a sibling reaction,
+    // never a message already queued for them (READ_STATE_CODE).
+    dueAt: f.dueAt ?? null,
+    answersOccurrence: !!(eventId && namesThem),
     lead,
     timezone: lead.timezone ?? null,
     sendKey: eventId && namesThem ? "follow-up:event:" + eventId : "follow-up:" + f.id + ":" + String(f.dueAt ?? ""),
@@ -327,7 +338,13 @@ export async function main(person, state, nowIso) {
   // Queued = a message of ours already waiting for them: a step of their email sequence, or a follow-up another
   // campaign owes them. This run's own claimed row is not one.
   const q = state.queued;
-  const others = (Array.isArray(q.followups) ? q.followups : []).filter((f) => f && f.leadCampaignId !== person.rowId && Number.isFinite(Date.parse(String(f.dueAt))));
+  // A run answering an occurrence ignores another campaign's row made due within ${SAME_FACT_WINDOW_MINUTES} min of its own:
+  // the same fact (a hot lead, a signup) makes every campaign on it due together, and one of them (a Copilot proposal
+  // to the team) writes nothing to the person. Read as "already queued", it pushed the hot lead's answer 3 days out
+  // (LEAD-EVENT-WHATSAPP-1027, Fanoiki 2026-10-27).
+  const ownDue = person.answersOccurrence === true ? Date.parse(String(person.dueAt ?? "")) : NaN;
+  const sameFact = (f) => Number.isFinite(ownDue) && Math.abs(Date.parse(String(f.dueAt)) - ownDue) <= ${SAME_FACT_WINDOW_MINUTES} * 60000;
+  const others = (Array.isArray(q.followups) ? q.followups : []).filter((f) => f && f.leadCampaignId !== person.rowId && Number.isFinite(Date.parse(String(f.dueAt))) && !sameFact(f));
   if (q.emailSequence === true || others.length > 0) {
     const lastDue = others.reduce((m, f) => Math.max(m, Date.parse(String(f.dueAt))), now);
     const after = lastDue + ${QUEUED_FOLLOW_UP_GAP_DAYS} * 86400000;
