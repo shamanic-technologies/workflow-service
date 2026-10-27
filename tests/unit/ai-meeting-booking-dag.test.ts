@@ -35,6 +35,10 @@ import {
   CLAIMED_CODE,
   needsPhoneOnlyPerson,
   THREAD_CODE,
+  NO_THREAD_REASON,
+  UNSUPPORTED_CHANNEL_REASON,
+  NAME_THREAD_REFUSAL_CODE,
+  needsSettledThreadRefusal,
   FINALIZE_REPLY_CODE,
   CRM_WHATSAPP_SEND,
   PERSON_TIMELINE_READ,
@@ -1952,7 +1956,7 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
   const notCalled = { ok: false, skipped: true, notCalled: true };
 
   it("claims its OWN queue first, then the predecessor's only when nobody came and it names nobody", async () => {
-    expect(byId.get("claim-own")?.inputMapping).toEqual({ "params.campaignId": "$ref:flow_input.campaignId" });
+    expect(byId.get("claim-own")?.inputMapping).toEqual({ "params.campaignId": "$ref:flow_input.campaignId", "body.person": "$ref:claim-person.output.person" });
     const plan = loadMain(PLAN_CLAIM_CODE);
     expect((await plan({ found: true, followup: {} }, { people: [] })).skipPredecessor).toBe(true);
     expect((await plan({ found: false, reason: "nothing_due" }, { people: [{ email: "a@b.com" }] })).skipPredecessor).toBe(true);
@@ -2052,9 +2056,21 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     await expect(main({ ok: false, status: 502, error: "down" }, timeline([]))).rejects.toThrow("could not read the email thread (502)");
     await expect(main({ ok: false, status: 404 }, { ok: false, status: 500, error: "x" })).rejects.toThrow("person's timeline (500)");
     await expect(main({ ok: false, status: 404 }, timeline([wa("inbound", "hi", "2026-10-12T16:05:00.000Z")], "failed"))).rejects.toThrow("could not read the person's chats");
-    await expect(main({ ok: false, status: 404 }, timeline([]))).rejects.toThrow("no conversation with this person");
+  });
+
+  it("REFUSES (never throws on) a person with no conversation or whose last message came on a channel nothing sends on", async () => {
+    const l = vi.spyOn(console, "log").mockImplementation(() => {});
+    const main = loadMain(THREAD_CODE);
+    const none = await main({ ok: false, status: 404 }, timeline([]));
+    expect(none.refusal).toMatchObject({ reason: NO_THREAD_REASON });
+    expect(none).toMatchObject({ skipEmail: true, skipWhatsapp: true, replyChannel: null });
     const tg = { kind: "message", source: "matrix", channel: "telegram", direction: "inbound", text: "hi", at: "2026-10-12T16:05:00.000Z" };
-    await expect(main({ ok: false, status: 404 }, timeline([tg]))).rejects.toThrow("telegram");
+    const onTelegram = await main({ ok: false, status: 404 }, timeline([tg]));
+    expect(onTelegram.refusal).toMatchObject({ reason: UNSUPPORTED_CHANNEL_REASON });
+    expect(String((onTelegram.refusal as { detail: string }).detail)).toContain("telegram");
+    const ok = await main({ ok: false, status: 404 }, timeline([wa("inbound", "hi", "2026-10-12T16:05:00.000Z")]));
+    expect(ok.refusal).toBeNull();
+    l.mockRestore();
   });
 
   it("sends on exactly one transport per run: the email reply and the WhatsApp reply are each skipped unless theirs", () => {
@@ -2386,5 +2402,75 @@ describe("a prospect who asks for a call gets it, even with a question no fact c
     expect(out.overridden).toBe(true);
     expect((out.json as Record<string, unknown>).decision).toBe("escalate");
     expect((out.json as Record<string, unknown>).question).toBe("What does it cost?");
+  });
+});
+
+describe("a person this responder cannot answer is settled, never a crash (MEETING-BOOKING-STUCK-ITEM-1027)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+  type M = { id: string; value: { type: string; branches?: Array<{ expr: string; modules: M[] }>; default?: M[] } };
+  const top = dagToOpenFlow(dag, `${FEATURE_SLUG}-test`).value.modules as unknown as M[];
+
+  it("decides in a TOP-LEVEL branchone, never a condition silently built inside check-claim's branch", () => {
+    const check = top.find((m) => m.id === "check_thread");
+    expect(check?.value.type).toBe("branchone");
+    const branches = check?.value.branches ?? [];
+    expect(branches).toHaveLength(2);
+    const refused = branches.find((b) => b.expr.includes("refusal != null"));
+    expect(refused?.modules.map((m) => m.id)).toEqual(["name_thread_refusal", "stop_followups_not_answerable", "end_run_not_answerable"]);
+    const answered = branches.find((b) => b.expr.includes("refusal == null"));
+    expect(answered?.modules.map((m) => m.id)).toContain("draft_reply");
+    // Both arms need a claimed person: on the nobody-claimed path neither runs.
+    for (const b of branches) expect(b.expr).toContain("found == true");
+    // check-answerable and check-sent stay top-level siblings after it.
+    const ids = top.map((m) => m.id);
+    expect(ids.indexOf("check_claim")).toBeLessThan(ids.indexOf("check_thread"));
+    expect(ids.indexOf("check_thread")).toBeLessThan(ids.indexOf("check_answerable"));
+    expect(ids).toContain("check_sent");
+  });
+
+  it("stops the claimed row with the reason, then ends a NORMAL run so the next person due is served", () => {
+    expect(byId.get("stop-followups-not-answerable")?.config).toMatchObject({ service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", body: { kind: "stopped" } });
+    expect(byId.get("stop-followups-not-answerable")?.inputMapping).toEqual({
+      "params.id": "$ref:claimed.output.followup.id",
+      "body.reason": "$ref:name-thread-refusal.output.reason",
+    });
+    const end = byId.get("end-run-not-answerable");
+    expect(end?.config?.body).toEqual({ success: true, stopCampaign: false });
+    expect(end?.inputMapping).toEqual({ "body.personNotAdmitted": "$ref:name-thread-refusal.output.notAdmitted" });
+  });
+
+  it("states personNotAdmitted only when the run's occurrence names the settled person", async () => {
+    const l = vi.spyOn(console, "log").mockImplementation(() => {});
+    const main = loadMain(NAME_THREAD_REFUSAL_CODE);
+    const thread = { refusal: { reason: NO_THREAD_REASON, detail: "x" } };
+    const claimed = { followup: { id: "row-1", leadId: "lead-1", email: "Probe@Example.com", phone: null } };
+    expect(await main(thread, claimed, null)).toEqual({ reason: NO_THREAD_REASON, notAdmitted: null });
+    expect(await main(thread, claimed, { eventId: "e", person: { email: "probe@example.com" } })).toEqual({
+      reason: NO_THREAD_REASON,
+      notAdmitted: { reason: NO_THREAD_REASON },
+    });
+    expect(await main(thread, claimed, { eventId: "e", person: { email: "someone@else.com" } })).toMatchObject({ notAdmitted: null });
+    const phoneOnly = { followup: { id: "row-2", leadId: "lead-2", email: null, phone: "+44 7700 900123" } };
+    expect(await main(thread, phoneOnly, { eventId: "e", person: { phone: "+447700900123" } })).toMatchObject({ notAdmitted: { reason: NO_THREAD_REASON } });
+    expect(await main(thread, claimed, { eventId: "e", leadId: "lead-1" })).toMatchObject({ notAdmitted: { reason: NO_THREAD_REASON } });
+    await expect(main({ refusal: null }, claimed, null)).rejects.toThrow("without a refusal");
+    l.mockRestore();
+  });
+
+  it("both claims state the occurrence's person, so a run carrying someone's reply answers THEM, not the oldest due row", () => {
+    expect(byId.get("claim-own")?.inputMapping?.["body.person"]).toBe("$ref:claim-person.output.person");
+    expect(byId.get("claim-followup")?.inputMapping?.["body.person"]).toBe("$ref:claim-person.output.person");
+    expect(byId.get("claim-person")?.inputMapping).toEqual({ trigger: "$ref:flow_input.trigger" });
+  });
+
+  it("the seed upgrades a stored DAG that still crashes, and leaves the current one alone", () => {
+    expect(needsSettledThreadRefusal(dag)).toBe(false);
+    const old = JSON.parse(JSON.stringify(dag)) as DAG;
+    old.nodes = old.nodes.filter((n) => n.id !== "check-thread");
+    expect(needsSettledThreadRefusal(old)).toBe(true);
+    const noPerson = JSON.parse(JSON.stringify(dag)) as DAG;
+    delete (noPerson.nodes.find((n) => n.id === "claim-own")!.inputMapping as Record<string, string>)["body.person"];
+    expect(needsSettledThreadRefusal(noPerson)).toBe(true);
   });
 });

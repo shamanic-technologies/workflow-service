@@ -142,6 +142,7 @@
 
 import { readsClientComms, withClientCommsVoice } from "./client-comms.js";
 import { withMessageWrittenDeclaration } from "./message-written-outcome.js";
+import { CLAIM_PERSON_CODE } from "./claim-person.js";
 import { LEG_BEST_LLM_MODEL_REF, withLegBestLlm, writesWithLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
@@ -331,6 +332,14 @@ export async function main(claimOwn, claimPredecessor, campaignId, predecessorCa
 `.trim();
 
 /**
+ * Why a claimed person is not answered when their thread gives this responder nothing to answer
+ * (MEETING-BOOKING-STUCK-ITEM-1027): no message on any channel we read, or their last message on a channel no
+ * transport sends on. Stored as the stop reason on lead-service and stated on `/end-run` for their occurrence.
+ */
+export const NO_THREAD_REASON = "no_conversation_to_answer";
+export const UNSUPPORTED_CHANNEL_REASON = "reply_channel_unsupported";
+
+/**
  * ONE conversation per person, whatever channel each message took: the email
  * thread (instantly-service) plus every chat message of their merged timeline
  * (crm-service, source matrix: WhatsApp today). The reply goes out on the
@@ -385,24 +394,62 @@ export async function main(conversation, timeline) {
   const last = inbound[inbound.length - 1] ?? null;
   // No message of theirs anywhere: the email thread is the conversation, as it always was.
   const replyChannel = last ? last.channel : (emailMessages.length > 0 ? "email" : null);
+  // A person this responder cannot answer is REFUSED, never a crash: the run settles their turn (stopped, with the
+  // reason) and ends cleanly, so the next person due is served (MEETING-BOOKING-STUCK-ITEM-1027). A throw here failed
+  // every run on the same row, which the queue handed back first, forever.
+  const refuse = (reason, detail) => {
+    console.log("[ai-meeting-booking] not answered (" + reason + "): " + detail);
+    return { refusal: { reason, detail }, conversation: { messages }, person: null, replyChannel: null, skipEmail: true, skipWhatsapp: true, skipHandOver: true };
+  };
   if (!replyChannel) {
-    throw new Error("[ai-meeting-booking] no conversation with this person on any channel; refusing to write to someone we have never talked with");
+    return refuse(NO_THREAD_REASON_LITERAL, "no conversation with this person on any channel we read (email thread, chats); never writing to someone we have never talked with");
   }
   if (!CHANNELS.includes(replyChannel)) {
-    throw new Error("[ai-meeting-booking] their last message came on " + replyChannel + ", which no reply transport sends on (" + CHANNELS.join(", ") + ")");
+    return refuse(UNSUPPORTED_CHANNEL_REASON_LITERAL, "their last message came on " + replyChannel + ", which no reply transport sends on (" + CHANNELS.join(", ") + ")");
   }
   console.log("[ai-meeting-booking] conversation: " + emailMessages.length + " email, " + chatMessages.length + " chat message(s); replying on " + replyChannel);
   const person = timeline && timeline.ok !== false ? timeline.person ?? null : null;
   return {
     conversation: { messages },
     person: { name: person?.displayName ?? null, phone: (person?.phones ?? [])[0] ?? null },
+    refusal: null,
     replyChannel,
     skipEmail: replyChannel !== "email",
     skipWhatsapp: replyChannel !== "whatsapp",
     skipHandOver: replyChannel === "email",
   };
 }
-`.trim().replace("REPLY_CHANNELS_LIST", JSON.stringify(REPLY_CHANNELS));
+`.trim()
+  .replace("REPLY_CHANNELS_LIST", JSON.stringify(REPLY_CHANNELS))
+  .replace("NO_THREAD_REASON_LITERAL", JSON.stringify(NO_THREAD_REASON))
+  .replace("UNSUPPORTED_CHANNEL_REASON_LITERAL", JSON.stringify(UNSUPPORTED_CHANNEL_REASON));
+
+/**
+ * The claimed person's thread gave this responder nothing it may answer (`thread.refusal`): their turn is SETTLED,
+ * never left due (MEETING-BOOKING-STUCK-ITEM-1027: a staff probe with no conversation failed 225 runs in a row on the
+ * same row, and a real prospect's reply behind it waited in campaign-service's failure backoff). The row is stopped
+ * with the reason (a fresh message from them re-schedules them, as for `no_reply_owed`), and the run ends as a
+ * normal run so the next person due is served. When the run's occurrence names this person, the occurrence is
+ * stated `personNotAdmitted` (final, never redelivered: redelivering it would claim them again for nothing).
+ */
+export const NAME_THREAD_REFUSAL_CODE = `
+export async function main(thread, claimed, trigger) {
+  const refusal = thread?.refusal;
+  if (!refusal?.reason) throw new Error("[ai-meeting-booking] name-thread-refusal ran without a refusal");
+  const f = claimed?.followup ?? {};
+  const fold = (s) => (typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null);
+  const digits = (s) => (typeof s === "string" && s.replace(/\\D/g, "").length >= 8 ? s.replace(/\\D/g, "") : null);
+  const t = trigger && typeof trigger === "object" ? trigger : null;
+  const tEmail = fold(t?.person?.email), tPhone = digits(t?.person?.phone), tLead = typeof t?.leadId === "string" && t.leadId ? t.leadId : null;
+  const namesThem =
+    (tEmail !== null && fold(f.email) === tEmail) ||
+    (tPhone !== null && fold(f.email) === null && digits(f.phone) === tPhone) ||
+    (tLead !== null && f.leadId === tLead);
+  console.log("[ai-meeting-booking] settling " + String(f.email ?? f.phone ?? f.id) + " (" + refusal.reason + "): " + String(refusal.detail ?? "") +
+    (namesThem ? "; their occurrence ends here" : ""));
+  return { reason: refusal.reason, notAdmitted: namesThem ? { reason: refusal.reason } : null };
+}
+`.trim();
 
 /**
  * The WhatsApp form of the answer: the same words as plain text (a chat shows
@@ -1802,6 +1849,25 @@ export function needsEscalationHandOver(dag: { nodes?: Array<{ id?: string; conf
   return plan?.config?.code !== PLAN_HAND_OVER_CODE;
 }
 
+/**
+ * True when a stored DAG still crashes on a person it cannot answer (MEETING-BOOKING-STUCK-ITEM-1027): its thread
+ * step throws instead of returning a refusal, it has no `check-thread` settling their turn, or its claims do not
+ * state the occurrence's person. The seed upgrades it.
+ */
+export function needsSettledThreadRefusal(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown>; inputMapping?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const byId = (id: string) => nodes.find((n) => n?.id === id);
+  const thread = byId("thread");
+  if (!thread) return false;
+  return (
+    thread.config?.code !== THREAD_CODE ||
+    !byId("check-thread") ||
+    byId("name-thread-refusal")?.config?.code !== NAME_THREAD_REFUSAL_CODE ||
+    byId("claim-own")?.inputMapping?.["body.person"] !== "$ref:claim-person.output.person" ||
+    byId("claim-followup")?.inputMapping?.["body.person"] !== "$ref:claim-person.output.person"
+  );
+}
+
 /** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
 export const WHATSAPP_TAKEOVER_CODES = ["human_in_conversation"] as const;
 
@@ -2201,6 +2267,9 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       // (`ANSWERS_LEADS_ONLY_POLICY`). A personal contact, a customer, team,
       // investor, partner, supplier or advisor is refused by lead-service and
       // never answered.
+      // The person this run's occurrence names, stated on both claims: a run carrying someone's reply answers THEM,
+      // never the queue's oldest due row (MEETING-BOOKING-STUCK-ITEM-1027). No occurrence = null = oldest first.
+      { id: "claim-person", type: "script", config: { code: CLAIM_PERSON_CODE }, retries: 0, inputMapping: { trigger: "$ref:flow_input.trigger" } },
       {
         id: "claim-own",
         type: "http.call",
@@ -2211,7 +2280,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           body: { relationships: ANSWERS_LEADS_ONLY_POLICY },
         },
         retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId" },
+        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId", "body.person": "$ref:claim-person.output.person" },
       },
       {
         id: "plan-claim",
@@ -2242,6 +2311,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         inputMapping: {
           "params.campaignId": PREDECESSOR_CAMPAIGN_REF,
           "body.alsoCampaignIds": "$ref:plan-claim.output.alsoCampaignIds",
+          "body.person": "$ref:claim-person.output.person",
           skip: "$ref:plan-claim.output.skipPredecessor",
         },
       },
@@ -2336,6 +2406,8 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           timeline: "$ref:person-timeline.output",
         },
       },
+      // Can this responder answer them at all? A thread with nothing to answer settles their turn (see name-thread-refusal).
+      { id: "check-thread", type: "condition" },
       // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
       relationshipReadNode({
         leadRowId: "$ref:claimed.output.followup.id",
@@ -2893,6 +2965,45 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           body: { success: false, stopCampaign: false },
         },
       },
+      // Their thread gave us nothing to answer: their turn is settled, the run goes on to the next person.
+      {
+        id: "name-thread-refusal",
+        type: "script",
+        config: { code: NAME_THREAD_REFUSAL_CODE },
+        retries: 0,
+        inputMapping: {
+          thread: "$ref:thread.output",
+          claimed: "$ref:claimed.output",
+          trigger: "$ref:flow_input.trigger",
+        },
+      },
+      {
+        id: "stop-followups-not-answerable",
+        type: "http.call",
+        config: {
+          service: "lead",
+          method: "POST",
+          path: "/orgs/leads/{id}/followups",
+          body: { kind: "stopped" },
+        },
+        retries: 0,
+        inputMapping: {
+          "params.id": "$ref:claimed.output.followup.id",
+          "body.reason": "$ref:name-thread-refusal.output.reason",
+        },
+      },
+      // A normal run (not idle, not a failure): campaign-service dispatches again and the next person due is served.
+      {
+        id: "end-run-not-answerable",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+        inputMapping: { "body.personNotAdmitted": "$ref:name-thread-refusal.output.notAdmitted" },
+      },
       {
         id: "end-run-error",
         type: "http.call",
@@ -2910,7 +3021,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       { from: "predecessor-campaign", to: "check-predecessor" },
       {
         from: "check-predecessor",
-        to: "claim-own",
+        to: "claim-person",
         condition: "results['predecessor-campaign'].predecessor != null",
       },
       {
@@ -2919,6 +3030,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         condition: "results['predecessor-campaign'].predecessor == null",
       },
       { from: "name-missing-predecessor", to: "end-run-no-predecessor" },
+      { from: "claim-person", to: "claim-own" },
       { from: "claim-own", to: "plan-claim" },
       { from: "plan-claim", to: "claim-followup" },
       { from: "claim-followup", to: "claimed" },
@@ -2952,7 +3064,22 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "person-timeline" },
       { from: "person-timeline", to: "thread" },
-      { from: "thread", to: "relationship-read" },
+      { from: "thread", to: "check-thread" },
+      // Convergence edge, as for `check-answerable`: `claimed` is outside `check-claim`'s branch body, so
+      // `check-thread` is a top-level sibling branchone, never a condition silently built inside a branch.
+      { from: "claimed", to: "check-thread" },
+      {
+        from: "check-thread",
+        to: "relationship-read",
+        condition: "results['claimed']?.found == true && results['thread']?.refusal == null",
+      },
+      {
+        from: "check-thread",
+        to: "name-thread-refusal",
+        condition: "results['claimed']?.found == true && results['thread']?.refusal != null",
+      },
+      { from: "name-thread-refusal", to: "stop-followups-not-answerable" },
+      { from: "stop-followups-not-answerable", to: "end-run-not-answerable" },
       { from: "relationship-read", to: "who-they-are" },
       { from: "who-they-are", to: "prior-generation" },
       { from: "prior-generation", to: "compose-questions-prompt" },
