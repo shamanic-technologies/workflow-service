@@ -32,6 +32,9 @@ export const LEADS_ONLY_POLICY = "pure_prospect";
 /** The follow-up legs whose reactive dynasty answers leads only: the Lead event pipe, where clients have their own play. */
 export const LEADS_ONLY_LEG_KEYS: readonly string[] = [CLIENT_CHECK_IN_LEG_KEY];
 
+/** The LLM the Lead event writer runs on when its leg ranks none (chat-service alias; never pinned past the pick). */
+export const LEAD_EVENT_AGENT_LLM = { provider: "zai", model: "glm" } as const;
+
 export const RESOLVE_LEAD_CODE = admissionResolveCode({ tag: "follow-up", noun: "a lead", defaultReason: "not_a_lead" });
 
 export const LEADS_ONLY_AUDIENCE: FollowUpAudience = {
@@ -41,10 +44,14 @@ export const LEADS_ONLY_AUDIENCE: FollowUpAudience = {
   composeCode: COMPOSE_FOLLOW_UP_CODE,
   // Not a lead: final, never redelivered. lead-service cannot say yet: idle, redelivered later. Same ends as the client.
   claimEnds: CLIENT_CHECK_IN_AUDIENCE.claimEnds,
+  // Sophie (SOPHIE-LEAD-EVENT-AGENT-1027): before deciding write now / later / nothing, the writer reads the lead's
+  // own account through tools (what they set up, their campaigns, their billing). GLM when the leg ranks no LLM
+  // (owner: « Sophie runs on GLM »; the pipe's strategy narrows the leg's pick to GLM, as data in features-service).
+  agentWriter: LEAD_EVENT_AGENT_LLM,
 };
 
 const LEADS_ONLY_SENTENCE =
-  " It answers only leads of the brand, never a current client, a personal contact, the brand's own team or our staff: its follow-up claim states leads only.";
+  " It answers leads only, never a client, a personal contact, the brand's team or our staff, and first reads the lead's own account to see where they stand.";
 
 export const FOLLOW_UP_REACTIVE_LEADS_DESCRIPTION = FOLLOW_UP_REACTIVE_DESCRIPTION + LEADS_ONLY_SENTENCE;
 

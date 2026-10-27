@@ -1173,6 +1173,47 @@ export const ReadFiguresRequestSchema = z
   .strict()
   .openapi("ReadFiguresRequest");
 
+export const AgentTurnRequestSchema = z
+  .object({
+    systemPrompt: z.string().min(1).max(200_000).describe("The writer's system prompt (its game, its rules): the agent's tools are explained after it."),
+    message: z.string().min(1).max(400_000).describe("The writer's context (the thread, who the person is, the facts): what is always needed, given up front."),
+    responseSchema: z.record(z.string(), z.unknown()).describe("The writer's answer schema (strict JSON Schema object): the final step answers in it."),
+    provider: z.string().min(1).describe("chat-service provider of the model that runs the turn (e.g. `zai`)."),
+    model: z.string().min(1).describe("chat-service model alias (e.g. `glm`)."),
+    maxTokens: z.number().int().positive().max(64_000).optional(),
+    recipientEmail: z.string().trim().email().nullable().optional().describe(
+      "The person the message goes to. Their OWN account (the organizations they belong to, per the identity " +
+      "provider) is the only account the tools read. Null, omitted, or a person with no organization: no tool, one call."
+    ),
+  })
+  .strict()
+  .openapi("AgentTurnRequest");
+
+export const AgentTurnResponseSchema = z
+  .object({
+    json: z.record(z.string(), z.unknown()).describe("The answer, in the caller's responseSchema (same field as chat-service /complete)."),
+    content: z.string(),
+    model: z.string().nullable(),
+    steps: z.array(z.object({
+      step: z.number().int(),
+      action: z.enum(["read", "answer"]),
+      why: z.string().describe("What the model needed to read, or what decided its answer."),
+    })).describe("Every step of the turn, in order."),
+    reads: z.array(z.object({
+      kind: z.enum(["account", "public", "web"]),
+      orgId: z.string().nullable(),
+      target: z.string(),
+      status: z.number().int().nullable(),
+      refused: z.string().nullable(),
+    })).describe("Every read made or refused, in order: what the answer was reasoned from."),
+    recipient: z.object({
+      email: z.string().nullable(),
+      isMember: z.boolean(),
+      organizations: z.array(z.object({ orgId: z.string(), name: z.string().nullable() })),
+    }),
+  })
+  .openapi("AgentTurnResponse");
+
 export const ReadFiguresResponseSchema = z
   .object({
     figures: z.array(z.object({
@@ -2354,6 +2395,30 @@ registry.registerPath({
     200: { description: "What was found and read", content: { "application/json": { schema: ReadFiguresResponseSchema } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
     502: { description: "A dependency failed (identity provider, gateway 5xx, chat-service)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/orgs/agent/turns",
+  summary: "One writer turn with tools: the model reads the recipient's own account before it answers",
+  description:
+    "General capability for any workflow (an `http.call` node, in place of chat-service `/complete`). The caller's " +
+    "prompt is the context; before answering in the caller's `responseSchema`, the model may read, in a few steps, " +
+    "the RECIPIENT's own account through the customer API gateway as that recipient (what they set up, their " +
+    "campaigns, their billing), never another organization's (same gate as `/orgs/figures/read`). Read-only. The " +
+    "answer is `json`, like `/complete`; `steps` and `reads` record what it was reasoned from. Every model call goes " +
+    "through chat-service on the calling run.",
+  tags: ["Figures"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    body: { required: true, content: { "application/json": { schema: AgentTurnRequestSchema } } },
+  },
+  responses: {
+    200: { description: "The answer and what it was reasoned from", content: { "application/json": { schema: AgentTurnResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "A dependency failed, or the model never answered", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

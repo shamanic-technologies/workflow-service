@@ -347,7 +347,7 @@ const SYSTEM_PROMPT = [
   "missing: empty when every figure the request needs was found; else one sentence naming what could not be read and why.",
 ].join("\n");
 
-function compactJson(body: unknown): string {
+export function compactJson(body: unknown): string {
   const text = typeof body === "string" ? body : JSON.stringify(body);
   return text.length > MAX_READ_CHARS ? text.slice(0, MAX_READ_CHARS) + " …[truncated]" : text;
 }
