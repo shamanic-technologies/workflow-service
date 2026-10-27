@@ -447,7 +447,9 @@ export async function main(thread, claimed, trigger) {
     (tLead !== null && f.leadId === tLead);
   console.log("[ai-meeting-booking] settling " + String(f.email ?? f.phone ?? f.id) + " (" + refusal.reason + "): " + String(refusal.detail ?? "") +
     (namesThem ? "; their occurrence ends here" : ""));
-  return { reason: refusal.reason, notAdmitted: namesThem ? { reason: refusal.reason } : null };
+  // No key at all when their occurrence is not this run's: campaign-service refuses a null personNotAdmitted (400),
+  // and an absent field drops out of the end-run body.
+  return namesThem ? { reason: refusal.reason, notAdmitted: { reason: refusal.reason } } : { reason: refusal.reason };
 }
 `.trim();
 

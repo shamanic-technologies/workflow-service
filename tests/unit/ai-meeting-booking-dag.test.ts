@@ -2445,12 +2445,15 @@ describe("a person this responder cannot answer is settled, never a crash (MEETI
     const main = loadMain(NAME_THREAD_REFUSAL_CODE);
     const thread = { refusal: { reason: NO_THREAD_REASON, detail: "x" } };
     const claimed = { followup: { id: "row-1", leadId: "lead-1", email: "Probe@Example.com", phone: null } };
-    expect(await main(thread, claimed, null)).toEqual({ reason: NO_THREAD_REASON, notAdmitted: null });
+    // Never a null: campaign-service's /end-run 400s `personNotAdmitted: null` (first live run, 2026-10-27).
+    const notNamed = await main(thread, claimed, null);
+    expect(notNamed).toEqual({ reason: NO_THREAD_REASON });
+    expect("notAdmitted" in notNamed).toBe(false);
     expect(await main(thread, claimed, { eventId: "e", person: { email: "probe@example.com" } })).toEqual({
       reason: NO_THREAD_REASON,
       notAdmitted: { reason: NO_THREAD_REASON },
     });
-    expect(await main(thread, claimed, { eventId: "e", person: { email: "someone@else.com" } })).toMatchObject({ notAdmitted: null });
+    expect(await main(thread, claimed, { eventId: "e", person: { email: "someone@else.com" } })).toEqual({ reason: NO_THREAD_REASON });
     const phoneOnly = { followup: { id: "row-2", leadId: "lead-2", email: null, phone: "+44 7700 900123" } };
     expect(await main(thread, phoneOnly, { eventId: "e", person: { phone: "+447700900123" } })).toMatchObject({ notAdmitted: { reason: NO_THREAD_REASON } });
     expect(await main(thread, claimed, { eventId: "e", leadId: "lead-1" })).toMatchObject({ notAdmitted: { reason: NO_THREAD_REASON } });
