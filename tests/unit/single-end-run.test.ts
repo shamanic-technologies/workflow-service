@@ -12,6 +12,7 @@ import { buildSourcingDag } from "../../src/lib/sourcing-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
+import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
 
 /**
  * LLM-SPEND-NO-SEND-1016: a run reports its end to campaign-service ONCE. An `/end-run` node that is the target of
@@ -38,6 +39,7 @@ const DAGS: Record<string, DAG> = {
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),
   "client-check-in": buildClientCheckInDag(),
+  "founder-hello": buildFounderHelloDag(),
 };
 
 const moduleId = (nodeId: string) => nodeId.replace(/-/g, "_");
