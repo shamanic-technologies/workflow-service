@@ -37,6 +37,7 @@
  */
 import { CLAIM_PERSON_CODE } from "./claim-person.js";
 import { withClientCommsVoice } from "./client-comms.js";
+import { withAgentTurn } from "./agent-turn-node.js";
 import { withLegBestLlm } from "./leg-best-writer.js";
 import { withMessageWrittenDeclaration } from "./message-written-outcome.js";
 import type { DAG, DAGNode } from "./dag-validator.js";
@@ -793,6 +794,12 @@ export interface FollowUpAudience {
   composeCode: string;
   /** End kinds the claim adds, each with its end-run body and mappings. */
   claimEnds: Array<{ kind: string; body: Record<string, unknown>; inputMapping?: Record<string, string> }>;
+  /**
+   * The writer runs as an AGENT TURN (`agent-turn.ts`, SOPHIE-LEAD-EVENT-AGENT-1027): before deciding, it reads the
+   * person's own account through tools. The LLM named here is the one it writes with when its leg ranks none.
+   * Absent = the one `/complete` call of before.
+   */
+  agentWriter?: { provider: string; model: string };
 }
 
 /** The straight line after "who is this run for": state, reads, channel, write, send, date, row. */
@@ -953,8 +960,8 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
         method: "POST",
         path: "/complete",
         body: {
-          provider: FOLLOW_UP_LLM.provider,
-          model: FOLLOW_UP_LLM.model,
+          provider: (opts.audience?.agentWriter ?? FOLLOW_UP_LLM).provider,
+          model: (opts.audience?.agentWriter ?? FOLLOW_UP_LLM).model,
           responseFormat: "json",
           responseSchema: FOLLOW_UP_RESPONSE_SCHEMA,
           maxTokens: CHAT_STEP_MAX_TOKENS,
@@ -1102,7 +1109,8 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
     { nodes, edges },
     { after: "record-row", signalRef: "$ref:outcome.output.endKind", sentWhen: "sent", leadIdRef: `${P}.leadId`, consumedAfter: "now" },
   );
-  return withLegBestLlm(withClientCommsVoice(declared, "draft"), "draft");
+  const written = withLegBestLlm(withClientCommsVoice(declared, "draft"), "draft");
+  return opts.audience?.agentWriter ? withAgentTurn(written, "draft", "$ref:channel-plan.output.email") : written;
 }
 
 /** The proactive chassis. */

@@ -12,7 +12,9 @@ import {
   RESOLVE_LEAD_CODE,
   buildLeadFollowUpLeadsOnlyDag,
   isLeadsOnlyFollowUpDag,
+  LEAD_EVENT_AGENT_LLM,
 } from "../../src/lib/lead-follow-up-leads-dag.js";
+import { isAgentTurn } from "../../src/lib/agent-turn-node.js";
 
 /**
  * LEAD-EVENT-LEADS-ONLY-1024 (owner 2026-10-24): the Lead event pipe's lead follow-up answers LEADS only (never a
@@ -49,12 +51,34 @@ describe("the leads-only lead follow-up DAG", () => {
     expect(isClientCheckInDag(dag)).toBe(false);
   });
 
-  it("only the claim and its read differ from the lead follow-up: same state read, same writer", () => {
+  it("only the claim, its read and the writer differ from the lead follow-up: same state read, same prompt", () => {
     expect(node(dag, "read-state")?.config).toEqual({ code: READ_STATE_CODE });
     expect(node(dag, "compose")?.config ?? null).toEqual(node(plain, "compose")?.config ?? null);
     expect(COMPOSE_FOLLOW_UP_CODE).toBeTruthy();
     const differing = dag.nodes.filter((n) => JSON.stringify(n) !== JSON.stringify(plain.nodes.find((p) => p.id === n.id))).map((n) => n.id);
-    expect(differing.sort()).toEqual(["claim-followup", "end-run-not-admitted", "end-run-pending", "resolve-person"].sort());
+    expect(differing.sort()).toEqual(["claim-followup", "draft", "end-run-not-admitted", "end-run-pending", "llm-plan", "resolve-person"].sort());
+  });
+
+  it("writes as an AGENT TURN: reads the lead's own account through tools before deciding, GLM unless the leg ranks another (SOPHIE-LEAD-EVENT-AGENT-1027)", () => {
+    const draft = node(dag, "draft");
+    expect(draft?.config).toMatchObject({ service: "workflow", method: "POST", path: "/orgs/agent/turns" });
+    expect(isAgentTurn(dag, "draft")).toBe(true);
+    expect(isAgentTurn(plain, "draft")).toBe(false);
+    const body = draft?.config?.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty("responseFormat");
+    expect(body).not.toHaveProperty("provider");
+    expect(body.responseSchema).toBeTruthy();
+    // The leg's best LLM, the voice and the recipient whose account it may read.
+    expect(draft?.inputMapping).toMatchObject({
+      "body.recipientEmail": "$ref:channel-plan.output.email",
+      "body.provider": expect.stringContaining("llm-plan"),
+      "body.model": expect.stringContaining("llm-plan"),
+      "body.systemPrompt": expect.stringContaining("client-comms-voice"),
+      skip: "$ref:compose.output.skip",
+    });
+    expect(LEAD_EVENT_AGENT_LLM).toEqual({ provider: "zai", model: "glm" });
+    expect(String(node(dag, "llm-plan")?.config?.code)).toContain('"glm"');
+    expect(String(node(dag, "llm-plan")?.config?.code)).not.toContain('"opus"');
   });
 
   it("is its own signature, never a twin of the lead follow-up or the client check-in", () => {

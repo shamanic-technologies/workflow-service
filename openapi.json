@@ -2946,6 +2946,190 @@
           "question"
         ],
         "additionalProperties": false
+      },
+      "AgentTurnResponse": {
+        "type": "object",
+        "properties": {
+          "json": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "The answer, in the caller's responseSchema (same field as chat-service /complete)."
+          },
+          "content": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step": {
+                  "type": "integer"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "answer"
+                  ]
+                },
+                "why": {
+                  "type": "string",
+                  "description": "What the model needed to read, or what decided its answer."
+                }
+              },
+              "required": [
+                "step",
+                "action",
+                "why"
+              ]
+            },
+            "description": "Every step of the turn, in order."
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "account",
+                    "public",
+                    "web"
+                  ]
+                },
+                "orgId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "target": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "refused": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "kind",
+                "orgId",
+                "target",
+                "status",
+                "refused"
+              ]
+            },
+            "description": "Every read made or refused, in order: what the answer was reasoned from."
+          },
+          "recipient": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "nullable": true
+              },
+              "isMember": {
+                "type": "boolean"
+              },
+              "organizations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "orgId",
+                    "name"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "email",
+              "isMember",
+              "organizations"
+            ]
+          }
+        },
+        "required": [
+          "json",
+          "content",
+          "model",
+          "steps",
+          "reads",
+          "recipient"
+        ]
+      },
+      "AgentTurnRequest": {
+        "type": "object",
+        "properties": {
+          "systemPrompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200000,
+            "description": "The writer's system prompt (its game, its rules): the agent's tools are explained after it."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400000,
+            "description": "The writer's context (the thread, who the person is, the facts): what is always needed, given up front."
+          },
+          "responseSchema": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "The writer's answer schema (strict JSON Schema object): the final step answers in it."
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "description": "chat-service provider of the model that runs the turn (e.g. `zai`)."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "chat-service model alias (e.g. `glm`)."
+          },
+          "maxTokens": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 64000
+          },
+          "recipientEmail": {
+            "type": "string",
+            "nullable": true,
+            "format": "email",
+            "description": "The person the message goes to. Their OWN account (the organizations they belong to, per the identity provider) is the only account the tools read. Null, omitted, or a person with no organization: no tool, one call."
+          }
+        },
+        "required": [
+          "systemPrompt",
+          "message",
+          "responseSchema",
+          "provider",
+          "model"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -7264,6 +7448,134 @@
           },
           "502": {
             "description": "A dependency failed (identity provider, gateway 5xx, chat-service)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/agent/turns": {
+      "post": {
+        "summary": "One writer turn with tools: the model reads the recipient's own account before it answers",
+        "description": "General capability for any workflow (an `http.call` node, in place of chat-service `/complete`). The caller's prompt is the context; before answering in the caller's `responseSchema`, the model may read, in a few steps, the RECIPIENT's own account through the customer API gateway as that recipient (what they set up, their campaigns, their billing), never another organization's (same gate as `/orgs/figures/read`). Read-only. The answer is `json`, like `/complete`; `steps` and `reads` record what it was reasoned from. Every model call goes through chat-service on the calling run.",
+        "tags": [
+          "Figures"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer and what it was reasoned from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentTurnResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A dependency failed, or the model never answered",
             "content": {
               "application/json": {
                 "schema": {
