@@ -19,7 +19,7 @@
  *    of the brand already talks with them there, a hello would read as a bot. Our staff and the brand's own team are
  *    never greeted (crm-service `team-membership`). Each is `personNotAdmitted`, final.
  *  - The hello is written ONLY from what the person set up themselves: the onboarding record crm-service serves on
- *    their thread (`ONBOARDING_RECORD_KIND`), never the brand's own sales facts, never analytics event lines. No record
+ *    their thread (`ONBOARDING_RECORD_STEP`), never the brand's own sales facts, never analytics event lines. No record
  *    on their thread = nothing written, the run fails loud (redelivered), never a hello that proves nothing.
  *  - The rhythm it copies is the founder's own hand-typed WhatsApp messages to the brand's BUSINESS contacts (crm-service
  *    tags them `professional_to_brand` and none `personal_*`), never a personal chat, a test, a staff alert or a
@@ -46,8 +46,13 @@ export const FOUNDER_HELLO_TRIGGER_ID = "whatsapp_number_given";
 export const FOUNDER_HELLO_DESCRIPTION =
   "Sends one WhatsApp hello from the founder to a person who just set up the product and gave their number, naming what they set up themselves, then never writes again. It skips anyone already greeted, anyone already talking with the brand on WhatsApp, our staff and the brand's own team.";
 
-/** The timeline item crm-service serves the person's onboarding choices as (ONBOARDING-FICHE-1027). */
-export const ONBOARDING_RECORD_KIND = "onboarding";
+/**
+ * The timeline item crm-service serves the person's onboarding choices as (ONBOARDING-FICHE-1027): one event per account
+ * (org x brand) they opened, `source: "onboarding"`, `event.step: "onboarding_record"`, the whole record in `text`
+ * (plain lines, nothing cut). An unreadable owner = the `onboarding` source `failed`, never a partial record.
+ */
+export const ONBOARDING_RECORD_SOURCE = "onboarding";
+export const ONBOARDING_RECORD_STEP = "onboarding_record";
 
 /** How many of the founder's business conversations his rhythm is copied from. */
 export const VOICE_SAMPLE_PEOPLE = 3;
@@ -255,18 +260,22 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
   if (!founderName) throw new Error("compose: neither the sending account's persona nor the brand's sales rep names who says hello");
   if (!thread || !Array.isArray(thread.items)) throw new Error("compose: the person's thread did not come back");
 
-  const records = thread.items.filter((i) => i?.kind === "${ONBOARDING_RECORD_KIND}");
-  const record = records[records.length - 1] ?? null;
-  const setup = record ? recordLines(record) : [];
-  if (!setup.length) {
+  const recordSource = (thread.sources ?? []).find((x) => x?.source === "${ONBOARDING_RECORD_SOURCE}");
+  if (recordSource?.status === "failed") {
+    throw new Error("compose: crm-service could not read what " + String(person?.email ?? person?.phone) + " set up (" + String(recordSource.error ?? "failed") + "); nothing is written blind");
+  }
+  const records = thread.items.filter((i) => i?.source === "${ONBOARDING_RECORD_SOURCE}" && i?.event?.step === "${ONBOARDING_RECORD_STEP}" && s(i.text));
+  if (!records.length) {
     throw new Error("compose: no onboarding record on " + String(person?.email ?? person?.phone) + "'s thread (crm-service); a hello that cannot name what they set up is never written");
   }
+  // One record per account they opened, verbatim.
+  const setup = records.flatMap((r, k) => [...(k > 0 ? [""] : []), ...String(r.text).split(/\\r?\\n/).map((l) => l.trimEnd()).filter((l) => l.trim() !== "")]);
 
   const clip = (t, n) => { const x = String(t ?? "").replace(/\\s+/g, " ").trim(); return x.length > n ? x.slice(0, n) + "..." : x; };
   const label = (i) => {
     if (i.direction === "inbound") return "THEM";
-    if (i.sentBy === "automation" || i.source === "transactional" || i.source === "instantly") return "US [automated " + String(i.channel ?? "message") + "]";
     if (i.source === "copilot") return "US [AI Copilot]";
+    if (i.sentBy === "automation" || i.source === "transactional" || i.source === "instantly") return "US [automated " + String(i.channel ?? "message") + "]";
     return "US";
   };
   const messages = thread.items.filter((i) => i?.kind === "message" && i.source !== "api" && s(i.text));
@@ -275,7 +284,8 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
   const voice = [];
   for (const v of [v1, v2, v3]) {
     if (!Array.isArray(v?.items)) continue;
-    const outbound = v.items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix" && i?.sentBy !== "automation" && s(i.text));
+    // Typed by a person of the brand (crm-service \`sentBy\`), never one of our automated sends.
+    const outbound = v.items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix" && i?.sentBy === "person" && s(i.text));
     for (const i of handTyped(outbound).slice(-10)) voice.push("- " + clip(i.text, 300));
   }
 
@@ -304,16 +314,6 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
     ...(voice.length ? ["", "HIS OWN MESSAGES TO " + brandName.toUpperCase() + "'S CLIENTS AND LEADS (rhythm only):", ...voice] : []),
   ].join("\\n");
   return { skip: false, variables, message };
-}
-
-function recordLines(record) {
-  const text = typeof record.text === "string" ? record.text.trim() : "";
-  if (text) return text.split(/\\r?\\n/).map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
-  const fields = record.record && typeof record.record === "object" ? record.record : record.onboarding && typeof record.onboarding === "object" ? record.onboarding : null;
-  if (!fields) return [];
-  return Object.entries(fields)
-    .filter(([, v]) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0))
-    .map(([k, v]) => k + ": " + (typeof v === "string" ? v : JSON.stringify(v)));
 }
 
 ${HAND_TYPED_FN}
