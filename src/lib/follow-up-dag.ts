@@ -800,6 +800,8 @@ export interface FollowUpAudience {
    * Absent = the one `/complete` call of before.
    */
   agentWriter?: { provider: string; model: string };
+  /** The channel plan, when the pipe writes on fewer channels than the follow-up (a WhatsApp pipe). Absent = `CHANNEL_PLAN_CODE`. */
+  channelPlanCode?: string;
 }
 
 /** The straight line after "who is this run for": state, reads, channel, write, send, date, row. */
@@ -841,7 +843,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
     {
       id: "channel-plan",
       type: "script",
-      config: { code: CHANNEL_PLAN_CODE },
+      config: { code: opts.audience?.channelPlanCode ?? CHANNEL_PLAN_CODE },
       retries: 0,
       inputMapping: { person: P, plan: "$ref:read-state.output", reach: "$ref:reach-check.output", timeline: `$ref:${PERSON_THREAD_NODE_ID}.output` },
     },
