@@ -9,7 +9,8 @@ import {
   FOUNDER_HELLO_DESCRIPTION,
   FOUNDER_HELLO_ENDS,
   FOUNDER_HELLO_PIPE_ID,
-  ONBOARDING_RECORD_KIND,
+  ONBOARDING_RECORD_SOURCE,
+  ONBOARDING_RECORD_STEP,
   OUTCOME_CODE,
   PICK_PERSON_CODE,
   PLAN_CLAIM_CODE,
@@ -36,8 +37,11 @@ const trigger = {
 const claim = { found: true, followup: { id: "row-1", leadId: "lead-1", email: "chaim@beyondlogic.tech", brandId: BRAND } };
 
 const record = {
-  kind: ONBOARDING_RECORD_KIND,
-  source: "client",
+  kind: "event",
+  source: ONBOARDING_RECORD_SOURCE,
+  channel: "account",
+  direction: null,
+  event: { step: ONBOARDING_RECORD_STEP, dateBasis: "latest_setup_change" },
   at: "2026-10-27T17:45:39.000Z",
   text: [
     "Website: beyondlogic.tech",
@@ -45,15 +49,15 @@ const record = {
     "Audience: Founders/CEOs, Service Firms (US service businesses, 10 to 100 employees)",
     "Budget: $10 per month",
     "Campaign: live",
-    "Next step: send your booking link so replies turn into meetings",
+    "Booking link: none",
   ].join("\n"),
 };
 const thread = {
   person: { personId: "p-1", phones: ["+18485257858"] },
-  sources: [{ source: "matrix", status: "ok" }],
+  sources: [{ source: "matrix", status: "ok" }, { source: "onboarding", status: "ok" }],
   items: [
     { kind: "event", source: "posthog", text: "Get started step done · step: audience · who_they_sell_to: Founders, CEOs ..." },
-    { kind: "message", source: "transactional", channel: "email", direction: "outbound", at: "2026-10-27T17:38:27Z", text: "Revenue made easy. You run your business." },
+    { kind: "message", source: "transactional", channel: "email", direction: "outbound", sentBy: "automation", at: "2026-10-27T17:38:27Z", text: "Revenue made easy. You run your business." },
     record,
   ],
 };
@@ -203,8 +207,9 @@ describe("compose", () => {
   it("writes from THEIR onboarding record only, never analytics lines, and labels our automated emails", async () => {
     const voice = {
       items: [
-        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T18:00:50Z", text: "Good, I see that everything is setup perfectly" },
-        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T19:01:12Z", text: "Feel free to reach out to me anytime" },
+        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T18:00:50Z", text: "Good, I see that everything is setup perfectly", sentBy: "person" },
+        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T19:01:12Z", text: "Feel free to reach out to me anytime", sentBy: "person" },
+        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T20:00:00Z", text: "Automated bubble", sentBy: "automation" },
       ],
     };
     const out = await compose(person, verdict, thread, brand, null, "2026-10-27", voice, null, null);
@@ -214,14 +219,17 @@ describe("compose", () => {
     expect(out.message).not.toContain("who_they_sell_to");
     expect(out.message).toContain("US [automated email]: Revenue made easy.");
     expect(out.message).toContain("- Good, I see that everything is setup perfectly");
+    expect(out.message).not.toContain("Automated bubble");
     expect(out.message).not.toMatch(/FACTS our client told us/);
     expect(out.variables).toMatchObject({ founderName: "Kevin", brandName: "Distribute.you" });
     expect(out.variables.writerRole).toContain("Kevin, Founder of Distribute.you");
   });
 
   it("never writes a hello that cannot name what they set up", async () => {
-    const bare = { ...thread, items: thread.items.filter((i) => i.kind !== ONBOARDING_RECORD_KIND) };
+    const bare = { ...thread, items: thread.items.filter((i) => i.source !== ONBOARDING_RECORD_SOURCE) };
     await expect(compose(person, verdict, bare, brand, null, "2026-10-27", null, null, null)).rejects.toThrow(/no onboarding record/);
+    const failed = { ...thread, sources: [{ source: "onboarding", status: "failed", error: "client-service down" }] };
+    await expect(compose(person, verdict, failed, brand, null, "2026-10-27", null, null, null)).rejects.toThrow(/could not read what/);
   });
 
   it("writes nothing for a person not admitted or not reachable", async () => {
