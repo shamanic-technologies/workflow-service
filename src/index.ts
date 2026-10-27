@@ -29,6 +29,7 @@ import openapiRoutes from "./routes/openapi.js";
 import publicWorkflowsRoutes from "./routes/public-workflows.js";
 import internalRoutes from "./routes/internal.js";
 import figuresRoutes from "./routes/figures.js";
+import agentTurnsRoutes from "./routes/agent-turns.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -61,6 +62,7 @@ app.use(workflowMergeRoutes);
 app.use(workflowsRoutes);
 app.use(workflowRunsRoutes);
 app.use(figuresRoutes);
+app.use(agentTurnsRoutes);
 
 // 404 fallback
 app.use((_req, res) => {
