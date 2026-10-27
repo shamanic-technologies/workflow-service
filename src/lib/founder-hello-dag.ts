@@ -27,8 +27,9 @@
  *  - The sending account is crm-service's to pick; its persona (`reach.persona`) is who speaks.
  *  - Strictly after the send, the queue row is `stopped` (`FOUNDER_HELLO_SENT_REASON`). The send's idempotency key names
  *    the campaign and the PERSON, never the occurrence: a second number given by the same person is never a second hello.
- *  - `inputs.dryRun: true` (a staff replay): no chassis, no claim, the person is the trigger's; the message is written
- *    and recorded by content-generation exactly as a real one, nothing is sent, no row is touched.
+ *  - `inputs.dryRun: true` (a staff replay): no chassis, no claim, the person is the trigger's; the admission is decided
+ *    and REPORTED (`wouldNotAdmit`) but never blocks the writing; the message is written and recorded by
+ *    content-generation exactly as a real one, nothing is sent, no row is touched.
  */
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { GENERATE_WHATSAPP_PATH, withLegBestWhatsappTemplate } from "./whatsapp-template-writer.js";
@@ -153,9 +154,9 @@ export async function main(plan, claim, trigger, brandId) {
  * of his, never the person greeted. Empty slots are skipped reads.
  */
 export const VOICE_PLAN_CODE = `
-export async function main(person, people) {
+export async function main(person, people, verdict) {
   const empty = { skip: true, query: null };
-  if (person?.go !== true) return { samples: Array.from({ length: ${VOICE_SAMPLE_PEOPLE} }, () => empty) };
+  if (person?.go !== true || verdict?.skip !== false) return { samples: Array.from({ length: ${VOICE_SAMPLE_PEOPLE} }, () => empty) };
   if (!Array.isArray(people?.people)) throw new Error("voice-plan: the brand's people index answered no people list");
   const isSelf = (p) => (person.email && (p.emails ?? []).map((e) => String(e).toLowerCase()).includes(person.email))
     || (person.phone && (p.phones ?? []).map((x) => String(x).replace(/\\D/g, "")).includes(person.phone.replace(/\\D/g, "")));
@@ -185,6 +186,8 @@ export async function main(person, sends, thread, campaignId) {
   const who = String(person.email ?? person.phone);
   const refuse = (code, reason) => {
     console.log("[founder-hello] " + who + " not greeted (" + code + "): " + reason);
+    // A dry run (staff replay) states what a real run would decide and still writes: nothing is ever sent.
+    if (person.dryRun === true) return { go: true, skipTeam: true, teamBody: null, code, notAdmitted: null, wouldNotAdmit: { reason: code + ": " + reason } };
     return { go: false, skipTeam: true, teamBody: null, code, notAdmitted: { reason: code + ": " + reason } };
   };
   if (!Array.isArray(sends?.sends)) throw new Error("admission: crm-service answered no sends list for " + who);
@@ -221,14 +224,14 @@ export async function main(person, admission, team) {
     skip: false,
     notAdmitted: null,
     code: null,
-    reachBody: { brandId: person.brandId, skipIfReplied: true, ...(person.email ? { email: person.email } : {}), ...(person.phone ? { phone: person.phone } : {}) },
+    reachBody: { brandId: person.brandId, skipIfReplied: person.dryRun !== true, ...(person.email ? { email: person.email } : {}), ...(person.phone ? { phone: person.phone } : {}) },
   };
 }
 `.trim();
 
 /** crm-service's reach answer merged in: reachable = the persona of the account that sends; else its refusal, nothing drafted. */
 export const REACH_VERDICT_CODE = `
-export async function main(plan, check) {
+export async function main(plan, check, person) {
   if (plan?.skip === true) return { ...plan, refused: null };
   if (!check || check.notCalled === true || typeof check.reachable !== "boolean") {
     throw new Error("reach-verdict: crm-service's reach check gave no answer; nothing is drafted blind");
@@ -237,6 +240,8 @@ export async function main(plan, check) {
   const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
   const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
   console.error("[founder-hello] crm-service says WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
+  // A dry run (staff replay) reports the refusal and still writes, as the account that would send.
+  if (person?.dryRun === true) return { skip: false, refused: null, wouldRefuse: { code, reason }, persona: senderPersona(check) };
   return { skip: true, refused: { code, reason } };
 }
 
@@ -353,10 +358,10 @@ ${BUBBLE_SEND_FN}
 
 /** How the run ends, and what is stated on the queue row. */
 export const OUTCOME_CODE = `
-export async function main(person, reach, verdict, final, send) {
+export async function main(person, reach, verdict, final, send, admission) {
   const row = (reason) => ({ skipRecord: !person?.rowId, rowId: person?.rowId ?? null, rowReason: reason });
   if (person?.go !== true) return { endKind: person?.end ?? "nobody_due", skipRecord: true, rowId: null, rowReason: null };
-  if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, notAdmitted: reach?.notAdmitted ?? null, refused: verdict?.refused ?? null };
+  if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, wouldNotAdmit: admission?.wouldNotAdmit ?? reach?.notAdmitted ?? null, refused: verdict?.wouldRefuse ?? null };
   if (reach?.notAdmitted) return { endKind: "not_admitted", notAdmitted: reach.notAdmitted, ...row("founder_hello_" + String(reach.code)) };
   if (verdict?.refused) return { endKind: "refused", delivery: { state: "refused", code: verdict.refused.code, reason: verdict.refused.reason }, ...row("founder_hello_whatsapp_" + verdict.refused.code) };
   if (send?.skipped === true && send?.notCalled !== true) {
@@ -468,7 +473,7 @@ function founderHelloDagUnvoiced(): DAG {
         type: "script",
         config: { code: REACH_VERDICT_CODE },
         retries: 0,
-        inputMapping: { plan: "$ref:reach-plan.output", check: "$ref:reach-check.output" },
+        inputMapping: { plan: "$ref:reach-plan.output", check: "$ref:reach-check.output", person: "$ref:pick-person.output" },
       },
       {
         id: "brand-profile",
@@ -488,7 +493,7 @@ function founderHelloDagUnvoiced(): DAG {
         type: "script",
         config: { code: VOICE_PLAN_CODE },
         retries: 0,
-        inputMapping: { person: "$ref:pick-person.output", people: "$ref:voice-people.output" },
+        inputMapping: { person: "$ref:pick-person.output", people: "$ref:voice-people.output", verdict: "$ref:reach-verdict.output" },
       },
       ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) =>
         crmRead(`voice-thread-${i + 1}`, "/orgs/people/timeline", `$ref:voice-plan.output.samples.${i}.query`, `$ref:voice-plan.output.samples.${i}.skip`, true),
@@ -554,6 +559,7 @@ function founderHelloDagUnvoiced(): DAG {
           verdict: "$ref:reach-verdict.output",
           final: "$ref:finalize.output",
           send: "$ref:send-whatsapp.output",
+          admission: "$ref:admission.output",
         },
       },
       // Strictly AFTER the send: the row is closed for good, one hello per person.
@@ -618,7 +624,7 @@ function founderHelloDagUnvoiced(): DAG {
 
 export const DRY_SUMMARY_CODE = `
 export async function main(outcome) {
-  return { dryRun: true, text: outcome?.text ?? null, notAdmitted: outcome?.notAdmitted ?? null, refused: outcome?.refused ?? null };
+  return { dryRun: true, text: outcome?.text ?? null, wouldNotAdmit: outcome?.wouldNotAdmit ?? null, refused: outcome?.refused ?? null };
 }
 `.trim();
 
