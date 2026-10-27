@@ -85,6 +85,16 @@ describe("the DAGs", () => {
   it("the prompt itself carries no em or en dash (the model copies its style)", () => {
     expect(COMPOSE_FOLLOW_UP_CODE).not.toMatch(/[–—]/);
   });
+
+  it("the writer answers what they said, stays consistent with the thread and reasons on THEIR economics (LEAD-EVENT-WHATSAPP-1027)", () => {
+    // Pabitra, 2026-10-27: our first email ruled authors out at $800 a project; the follow-up offered authors again,
+    // pasted our offer card and ended on "publishers alongside authors, or publishers only?".
+    expect(COMPOSE_FOLLOW_UP_CODE).not.toContain("a useful fact about what we offer");
+    expect(COMPOSE_FOLLOW_UP_CODE).toContain("never contradict it");
+    expect(COMPOSE_FOLLOW_UP_CODE).toContain("reason on THEIR economics");
+    expect(COMPOSE_FOLLOW_UP_CODE).toContain("never sentences to paste");
+    expect(COMPOSE_FOLLOW_UP_CODE).toContain("never a choice between options you list");
+  });
 });
 
 describe("who the run is for", () => {
