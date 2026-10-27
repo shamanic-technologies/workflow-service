@@ -99,6 +99,8 @@ export const WHY_NOW_STRATEGY =
   "WHY WE WRITE NOW names the fact that made this message due: what this person did with us, and, when its settings " +
   "name a step they have not reached since, what they have not done yet (and how long we waited). Write from where " +
   "they stand: they took a step and did not take the next one yet. Make the next step easy: answer the doubt that most " +
-  "likely stopped them, from the FACTS and what we sell, and offer ONE clear, easy next step, with no pressure. Mention " +
+  "likely stopped them, from the FACTS and what we sell, and make the call to action that next step itself, concrete " +
+  "and one click away when the thread or the FACTS hold its link, never an open question that leaves them where they " +
+  "stopped, with no pressure. Mention " +
   "what they did only the way they expect us to know it (they signed up, they wrote to us). Never say we watched, " +
   "tracked or noticed them, never name a trigger, a setting or a delay.";

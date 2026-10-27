@@ -93,7 +93,10 @@ describe("the DAGs", () => {
     expect(COMPOSE_FOLLOW_UP_CODE).toContain("never contradict it");
     expect(COMPOSE_FOLLOW_UP_CODE).toContain("reason on THEIR economics");
     expect(COMPOSE_FOLLOW_UP_CODE).toContain("never sentences to paste");
-    expect(COMPOSE_FOLLOW_UP_CODE).toContain("never a choice between options you list");
+    expect(COMPOSE_FOLLOW_UP_CODE).toContain("never on a choice between options you list");
+    // Owner 2026-10-27: the call to action IS the next step of their path, never a stagnating open question.
+    expect(COMPOSE_FOLLOW_UP_CODE).toContain("the call to action IS that next step");
+    expect(COMPOSE_FOLLOW_UP_CODE).not.toContain("End with ONE");
   });
 });
 
