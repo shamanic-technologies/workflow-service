@@ -48,6 +48,7 @@ import {
   needsWhatsappTakeover,
   needsWhatsappBubbles,
   needsEscalationHandOver,
+  needsSettledThreadRefusal,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 import { needsMessageWrittenDeclaration } from "../dist/lib/message-written-outcome.js";
@@ -420,7 +421,8 @@ async function main() {
         needsLlmAliasOnActs(w.dag) ||
         needsLegBestLlm(w.dag) ||
         needsMessageWrittenDeclaration(w.dag) ||
-        needsEscalationHandOver(w.dag))
+        needsEscalationHandOver(w.dag) ||
+        needsSettledThreadRefusal(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
