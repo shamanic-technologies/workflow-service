@@ -15,6 +15,7 @@ import {
   PICK_PERSON_CODE,
   PLAN_CLAIM_CODE,
   REACH_PLAN_CODE,
+  REACH_VERDICT_CODE,
   VOICE_PLAN_CODE,
   buildFounderHelloDag,
 } from "../../src/lib/founder-hello-dag.js";
@@ -150,6 +151,13 @@ describe("admission", () => {
     expect(await admission(person, sends, thread, CAMPAIGN)).toMatchObject({ go: false, code: "already_greeted" });
   });
 
+  it("a dry run reports the refusal and still writes, asking crm-service nothing that would block it", async () => {
+    const talking = { ...thread, items: [...thread.items, { kind: "message", source: "matrix", direction: "outbound", text: "hi" }] };
+    const a = await admission({ ...person, dryRun: true }, { sends: [] }, talking, CAMPAIGN);
+    expect(a).toMatchObject({ go: true, skipTeam: true, notAdmitted: null, wouldNotAdmit: { reason: expect.stringMatching(/^already_talking/) } });
+    expect((await reachPlan({ ...person, dryRun: true }, a, null)).reachBody.skipIfReplied).toBe(false);
+  });
+
   it("never greets someone already talking with the brand on WhatsApp", async () => {
     const talking = { ...thread, items: [...thread.items, { kind: "message", source: "matrix", direction: "inbound", text: "hi" }] };
     expect(await admission(person, { sends: [] }, talking, CAMPAIGN)).toMatchObject({ go: false, code: "already_talking" });
@@ -163,6 +171,19 @@ describe("admission", () => {
     await expect(reachPlan(person, a, { notCalled: true })).rejects.toThrow(/staff/);
     const ok = await reachPlan(person, a, { staff: false, ownTeam: false });
     expect(ok).toMatchObject({ skip: false, reachBody: { brandId: BRAND, email: person.email, phone: person.phone, skipIfReplied: true } });
+  });
+});
+
+describe("reach-verdict", () => {
+  const verdict = loadMain(REACH_VERDICT_CODE);
+  const check = { reachable: false, code: "human_in_conversation", error: "Someone typed by hand", persona: { name: "Kevin", role: "Founder" } };
+
+  it("a refusal ends a real run before any draft", async () => {
+    expect(await verdict({ skip: false }, check, { dryRun: false })).toEqual({ skip: true, refused: { code: "human_in_conversation", reason: "Someone typed by hand" } });
+  });
+
+  it("a dry run reports it and writes as the sending persona", async () => {
+    expect(await verdict({ skip: false }, check, { dryRun: true })).toMatchObject({ skip: false, wouldRefuse: { code: "human_in_conversation" }, persona: { name: "Kevin" } });
   });
 });
 
@@ -191,10 +212,15 @@ describe("voice-plan", () => {
         p("client-b", ["professional_to_brand", "professional_not_to_brand"], 12),
       ],
     };
-    const { samples } = await voicePlan(person, people);
+    const { samples } = await voicePlan(person, people, { skip: false });
     expect(samples.filter((s: any) => !s.skip).map((s: any) => s.query.personId)).toEqual(["client-a", "client-b"]);
     expect(samples).toHaveLength(3);
     expect(samples[2]).toEqual({ skip: true, query: null });
+  });
+
+  it("reads nothing when the person is not greeted (the people index was not called)", async () => {
+    const { samples } = await voicePlan(person, { ok: false, skipped: true, notCalled: true }, { skip: true });
+    expect(samples.every((s: any) => s.skip)).toBe(true);
   });
 });
 
@@ -253,7 +279,11 @@ describe("finalize + outcome", () => {
   it("a dry run writes and sends nothing", async () => {
     const f = await finalize({ skip: false }, draft, { ...person, dryRun: true }, CAMPAIGN);
     expect(f).toMatchObject({ skipSend: true, written: true, dryRun: true, sendBody: null });
-    expect(await outcome({ ...person, dryRun: true }, {}, {}, f, { notCalled: true, skipped: true })).toMatchObject({ endKind: "dry_run", skipRecord: true });
+    expect(await outcome({ ...person, dryRun: true }, {}, {}, f, { notCalled: true, skipped: true }, { wouldNotAdmit: { reason: "already_talking: x" } })).toMatchObject({
+      endKind: "dry_run",
+      skipRecord: true,
+      wouldNotAdmit: { reason: "already_talking: x" },
+    });
   });
 
   it("sent closes the row for good; a refusal is stated, never a failed run", async () => {
