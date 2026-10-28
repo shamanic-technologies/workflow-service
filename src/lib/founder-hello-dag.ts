@@ -27,8 +27,9 @@
  *  - The sending account is crm-service's to pick; its persona (`reach.persona`) is who speaks.
  *  - Strictly after the send, the queue row is `stopped` (`FOUNDER_HELLO_SENT_REASON`). The send's idempotency key names
  *    the campaign and the PERSON, never the occurrence: a second number given by the same person is never a second hello.
- *  - `inputs.dryRun: true` (a staff replay): no chassis, no claim, the person is the trigger's; the message is written
- *    and recorded by content-generation exactly as a real one, nothing is sent, no row is touched.
+ *  - `inputs.dryRun: true` (a staff replay): no chassis, no claim, the person is the trigger's; the admission is decided
+ *    and REPORTED (`wouldNotAdmit`) but never blocks the writing; the message is written and recorded by
+ *    content-generation exactly as a real one, nothing is sent, no row is touched.
  */
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { GENERATE_WHATSAPP_PATH, withLegBestWhatsappTemplate } from "./whatsapp-template-writer.js";
@@ -150,12 +151,14 @@ export async function main(plan, claim, trigger, brandId) {
 /**
  * Which of the brand's people the founder's rhythm is copied from: BUSINESS contacts only (crm-service tags them
  * \`professional_to_brand\` and no \`personal_*\` tag, and does not call them not-business), with enough WhatsApp messages
- * of his, never the person greeted. Empty slots are skipped reads.
+ * of his, never the person greeted. Each sample is then asked to crm-service's team check (our staff, the brand's own
+ * team: a test thread to our own assistant's number is tagged business too) and dropped unless both answer no. Empty
+ * slots are skipped reads.
  */
 export const VOICE_PLAN_CODE = `
-export async function main(person, people) {
-  const empty = { skip: true, query: null };
-  if (person?.go !== true) return { samples: Array.from({ length: ${VOICE_SAMPLE_PEOPLE} }, () => empty) };
+export async function main(person, people, verdict) {
+  const empty = { skip: true, query: null, teamBody: null };
+  if (person?.go !== true || verdict?.skip !== false) return { samples: Array.from({ length: ${VOICE_SAMPLE_PEOPLE} }, () => empty) };
   if (!Array.isArray(people?.people)) throw new Error("voice-plan: the brand's people index answered no people list");
   const isSelf = (p) => (person.email && (p.emails ?? []).map((e) => String(e).toLowerCase()).includes(person.email))
     || (person.phone && (p.phones ?? []).map((x) => String(x).replace(/\\D/g, "")).includes(person.phone.replace(/\\D/g, "")));
@@ -167,7 +170,14 @@ export async function main(person, people) {
     if (!tags.includes("${BUSINESS_CONTACT_TAG}") || tags.some((t) => t.startsWith("personal"))) continue;
     const wrote = (p.presences ?? []).filter((x) => x?.source === "matrix").reduce((n, x) => n + (Number(x.outboundCount) || 0), 0);
     if (wrote < ${VOICE_SAMPLE_MIN_OUTBOUND}) continue;
-    samples.push({ skip: false, query: { brandId: person.brandId, personId: p.personId } });
+    const email = (p.emails ?? []).map((e) => String(e).trim()).find(Boolean);
+    const phone = (p.phones ?? []).map((x) => String(x).trim()).find(Boolean);
+    if (!email && !phone) continue;
+    samples.push({
+      skip: false,
+      query: { brandId: person.brandId, personId: p.personId },
+      teamBody: { brandId: person.brandId, ...(email ? { email } : {}), ...(phone ? { phone } : {}) },
+    });
   }
   while (samples.length < ${VOICE_SAMPLE_PEOPLE}) samples.push(empty);
   return { samples };
@@ -185,6 +195,8 @@ export async function main(person, sends, thread, campaignId) {
   const who = String(person.email ?? person.phone);
   const refuse = (code, reason) => {
     console.log("[founder-hello] " + who + " not greeted (" + code + "): " + reason);
+    // A dry run (staff replay) states what a real run would decide and still writes: nothing is ever sent.
+    if (person.dryRun === true) return { go: true, skipTeam: true, teamBody: null, code, notAdmitted: null, wouldNotAdmit: { reason: code + ": " + reason } };
     return { go: false, skipTeam: true, teamBody: null, code, notAdmitted: { reason: code + ": " + reason } };
   };
   if (!Array.isArray(sends?.sends)) throw new Error("admission: crm-service answered no sends list for " + who);
@@ -205,6 +217,13 @@ export async function main(person, sends, thread, campaignId) {
 }
 `.trim();
 
+/**
+ * The hello goes from the brand's FOUNDER line (crm-service \`fromLine\`, SOPHIE-SENDS-1028; owner 2026-10-28: every other
+ * campaign writes from the assistant line, the hello from the founder's own). A brand stating no founder line is
+ * refused \`whatsapp_not_linked\`: nothing sent.
+ */
+export const FOUNDER_LINE = "founder";
+
 /** Our staff and the brand's own team are never greeted; then the reach check names exactly the send. */
 export const REACH_PLAN_CODE = `
 export async function main(person, admission, team) {
@@ -221,23 +240,34 @@ export async function main(person, admission, team) {
     skip: false,
     notAdmitted: null,
     code: null,
-    reachBody: { brandId: person.brandId, skipIfReplied: true, ...(person.email ? { email: person.email } : {}), ...(person.phone ? { phone: person.phone } : {}) },
+    reachBody: { brandId: person.brandId, fromLine: "${FOUNDER_LINE}", skipIfReplied: person.dryRun !== true, ...(person.email ? { email: person.email } : {}), ...(person.phone ? { phone: person.phone } : {}) },
   };
 }
 `.trim();
 
 /** crm-service's reach answer merged in: reachable = the persona of the account that sends; else its refusal, nothing drafted. */
 export const REACH_VERDICT_CODE = `
-export async function main(plan, check) {
+export async function main(plan, check, person) {
   if (plan?.skip === true) return { ...plan, refused: null };
   if (!check || check.notCalled === true || typeof check.reachable !== "boolean") {
     throw new Error("reach-verdict: crm-service's reach check gave no answer; nothing is drafted blind");
   }
-  if (check.reachable === true) return { skip: false, refused: null, persona: senderPersona(check) };
+  if (check.reachable === true) return { skip: false, refused: null, persona: senderPersona(check), assistantLine: assistantLineOf(check) };
   const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
   const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
   console.error("[founder-hello] crm-service says WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
+  // A dry run (staff replay) reports the refusal and still writes, as the account that would send.
+  if (person?.dryRun === true) return { skip: false, refused: null, wouldRefuse: { code, reason }, persona: senderPersona(check), assistantLine: null };
   return { skip: true, refused: { code, reason } };
+}
+
+/** The brand's assistant line (crm-service \`assistantLine\`): who the person can run everything through, or null. */
+function assistantLineOf(check) {
+  const a = check?.assistantLine;
+  if (!a || typeof a.phone !== "string" || !a.phone.trim()) return null;
+  const name = typeof a.persona?.name === "string" && a.persona.name.trim() ? a.persona.name.trim() : null;
+  const role = typeof a.persona?.role === "string" && a.persona.role.trim() ? a.persona.role.trim() : null;
+  return { phone: a.phone.trim(), name, role };
 }
 
 ${SENDER_PERSONA_FN}
@@ -249,7 +279,7 @@ ${SENDER_PERSONA_FN}
  * nothing is repeated. The voice is the sending persona plus the founder's own typed messages to business contacts.
  */
 export const COMPOSE_CODE = `
-export async function main(person, verdict, thread, brand, rep, currentDate, v1, v2, v3) {
+export async function main(person, verdict, thread, brand, rep, currentDate, v1, v2, v3, t1, t2, t3) {
   if (verdict?.skip !== false) return { skip: true, variables: null, message: null };
   const b = brand?.brand ?? {};
   const brandName = typeof b.name === "string" && b.name.trim() ? b.name.trim() : null;
@@ -282,10 +312,14 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
   const threadLines = messages.slice(-12).map((i) => String(i.at ?? "").slice(0, 16).replace("T", " ") + " | " + String(i.channel) + " | " + label(i) + ": " + clip(i.text, 400));
 
   const voice = [];
-  for (const v of [v1, v2, v3]) {
-    if (!Array.isArray(v?.items)) continue;
+  // A sample counts only when crm-service said it is neither our staff nor the brand's own team (a test is not a client).
+  const outsider = (t) => t && t.notCalled !== true && t.staff === false && t.ownTeam === false;
+  // An attachment shows as its file name: never a typed line.
+  const attachment = (t) => String(t).trim().length <= 80 && /\\.(ogg|opus|mp3|m4a|jpe?g|png|gif|webp|pdf|mp4|mov|docx?|xlsx?)$/i.test(String(t).trim());
+  for (const [v, t] of [[v1, t1], [v2, t2], [v3, t3]]) {
+    if (!Array.isArray(v?.items) || !outsider(t)) continue;
     // Typed by a person of the brand (crm-service \`sentBy\`), never one of our automated sends.
-    const outbound = v.items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix" && i?.sentBy === "person" && s(i.text));
+    const outbound = v.items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix" && i?.sentBy === "person" && s(i.text) && !attachment(i.text));
     for (const i of handTyped(outbound).slice(-10)) voice.push("- " + clip(i.text, 300));
   }
 
@@ -308,6 +342,10 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
     "",
     "WHAT THEY SET UP WITH " + brandName.toUpperCase() + " (their own choices, the only facts you may use):",
     ...setup,
+    "",
+    "THE ASSISTANT LINE: " + (verdict.assistantLine
+      ? (verdict.assistantLine.name ?? "our assistant") + (verdict.assistantLine.role ? ", " + verdict.assistantLine.role : "") + ", writes to them from " + verdict.assistantLine.phone
+      : "none"),
     "",
     "THE MESSAGES THEY ALREADY GOT FROM US (never repeat them):",
     ...(threadLines.length ? threadLines : ["(none)"]),
@@ -344,7 +382,7 @@ export async function main(compose, draft, person, campaignId) {
     text,
     idempotencyKey,
     // Never a null field (crm-service 400s it). skipIfReplied: they wrote to the brand meanwhile = no hello.
-    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, ...bubbleSendFields(text), idempotencyKey, skipIfReplied: true, ...(person.phone ? { phone: person.phone } : {}) },
+    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, fromLine: "${FOUNDER_LINE}", ...bubbleSendFields(text), idempotencyKey, skipIfReplied: true, ...(person.phone ? { phone: person.phone } : {}) },
   };
 }
 
@@ -353,10 +391,10 @@ ${BUBBLE_SEND_FN}
 
 /** How the run ends, and what is stated on the queue row. */
 export const OUTCOME_CODE = `
-export async function main(person, reach, verdict, final, send) {
+export async function main(person, reach, verdict, final, send, admission) {
   const row = (reason) => ({ skipRecord: !person?.rowId, rowId: person?.rowId ?? null, rowReason: reason });
   if (person?.go !== true) return { endKind: person?.end ?? "nobody_due", skipRecord: true, rowId: null, rowReason: null };
-  if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, notAdmitted: reach?.notAdmitted ?? null, refused: verdict?.refused ?? null };
+  if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, wouldNotAdmit: admission?.wouldNotAdmit ?? reach?.notAdmitted ?? null, refused: verdict?.wouldRefuse ?? null };
   if (reach?.notAdmitted) return { endKind: "not_admitted", notAdmitted: reach.notAdmitted, ...row("founder_hello_" + String(reach.code)) };
   if (verdict?.refused) return { endKind: "refused", delivery: { state: "refused", code: verdict.refused.code, reason: verdict.refused.reason }, ...row("founder_hello_whatsapp_" + verdict.refused.code) };
   if (send?.skipped === true && send?.notCalled !== true) {
@@ -468,7 +506,7 @@ function founderHelloDagUnvoiced(): DAG {
         type: "script",
         config: { code: REACH_VERDICT_CODE },
         retries: 0,
-        inputMapping: { plan: "$ref:reach-plan.output", check: "$ref:reach-check.output" },
+        inputMapping: { plan: "$ref:reach-plan.output", check: "$ref:reach-check.output", person: "$ref:pick-person.output" },
       },
       {
         id: "brand-profile",
@@ -488,11 +526,19 @@ function founderHelloDagUnvoiced(): DAG {
         type: "script",
         config: { code: VOICE_PLAN_CODE },
         retries: 0,
-        inputMapping: { person: "$ref:pick-person.output", people: "$ref:voice-people.output" },
+        inputMapping: { person: "$ref:pick-person.output", people: "$ref:voice-people.output", verdict: "$ref:reach-verdict.output" },
       },
-      ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) =>
+      ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => [
         crmRead(`voice-thread-${i + 1}`, "/orgs/people/timeline", `$ref:voice-plan.output.samples.${i}.query`, `$ref:voice-plan.output.samples.${i}.skip`, true),
-      ),
+        {
+          id: `voice-team-${i + 1}`,
+          type: "http.call" as const,
+          // A sample nobody could check is dropped (compose), never the run failed for it.
+          config: { service: "crm", method: "POST", path: "/orgs/people/team-membership", tolerateFailure: true },
+          retries: 1,
+          inputMapping: { body: `$ref:voice-plan.output.samples.${i}.teamBody`, skip: `$ref:voice-plan.output.samples.${i}.skip` },
+        },
+      ]).flat(),
       {
         id: "compose",
         type: "script",
@@ -508,6 +554,9 @@ function founderHelloDagUnvoiced(): DAG {
           v1: "$ref:voice-thread-1.output",
           v2: "$ref:voice-thread-2.output",
           v3: "$ref:voice-thread-3.output",
+          t1: "$ref:voice-team-1.output",
+          t2: "$ref:voice-team-2.output",
+          t3: "$ref:voice-team-3.output",
         },
       },
       {
@@ -554,6 +603,7 @@ function founderHelloDagUnvoiced(): DAG {
           verdict: "$ref:reach-verdict.output",
           final: "$ref:finalize.output",
           send: "$ref:send-whatsapp.output",
+          admission: "$ref:admission.output",
         },
       },
       // Strictly AFTER the send: the row is closed for good, one hello per person.
@@ -596,8 +646,10 @@ function founderHelloDagUnvoiced(): DAG {
       { from: "sales-rep", to: "voice-people" },
       { from: "voice-people", to: "voice-plan" },
       { from: "voice-plan", to: "voice-thread-1" },
-      ...Array.from({ length: VOICE_SAMPLE_PEOPLE - 1 }, (_, i) => ({ from: `voice-thread-${i + 1}`, to: `voice-thread-${i + 2}` })),
-      { from: `voice-thread-${VOICE_SAMPLE_PEOPLE}`, to: "compose" },
+      ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => [
+        { from: `voice-thread-${i + 1}`, to: `voice-team-${i + 1}` },
+        { from: `voice-team-${i + 1}`, to: i + 1 < VOICE_SAMPLE_PEOPLE ? `voice-thread-${i + 2}` : "compose" },
+      ]).flat(),
       { from: "compose", to: "draft-message" },
       { from: "draft-message", to: "finalize" },
       { from: "finalize", to: "send-whatsapp" },
@@ -618,7 +670,7 @@ function founderHelloDagUnvoiced(): DAG {
 
 export const DRY_SUMMARY_CODE = `
 export async function main(outcome) {
-  return { dryRun: true, text: outcome?.text ?? null, notAdmitted: outcome?.notAdmitted ?? null, refused: outcome?.refused ?? null };
+  return { dryRun: true, text: outcome?.text ?? null, wouldNotAdmit: outcome?.wouldNotAdmit ?? null, refused: outcome?.refused ?? null };
 }
 `.trim();
 

@@ -15,6 +15,7 @@ import {
   PICK_PERSON_CODE,
   PLAN_CLAIM_CODE,
   REACH_PLAN_CODE,
+  REACH_VERDICT_CODE,
   VOICE_PLAN_CODE,
   buildFounderHelloDag,
 } from "../../src/lib/founder-hello-dag.js";
@@ -100,11 +101,23 @@ describe("founder hello template", () => {
     expect([...new Set([...FOUNDER_HELLO_TEMPLATE.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))].sort()).toEqual(FOUNDER_HELLO_TEMPLATE_VARIABLES.map((v) => v.name).sort());
   });
 
+  it("never takes our own proposals or our earlier messages as their facts", () => {
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/suggested, not confirmed by them/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/Those messages are never facts/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/a campaign's stored name/);
+  });
+
   it("holds ONE stance on introductions and never asks them to answer a question", () => {
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/never introduce yourself|NOT a first contact/i);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/ask ONE question|one question mark/i);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/[–—]/);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/agency/i);
+  });
+
+  it("hands them to the assistant line when the brand has one, the founder staying reachable (owner 2026-10-28)", () => {
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/When THE ASSISTANT LINE names one/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/run their whole service through her directly/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/right here on this number if they ever need you/);
   });
 });
 
@@ -150,6 +163,13 @@ describe("admission", () => {
     expect(await admission(person, sends, thread, CAMPAIGN)).toMatchObject({ go: false, code: "already_greeted" });
   });
 
+  it("a dry run reports the refusal and still writes, asking crm-service nothing that would block it", async () => {
+    const talking = { ...thread, items: [...thread.items, { kind: "message", source: "matrix", direction: "outbound", text: "hi" }] };
+    const a = await admission({ ...person, dryRun: true }, { sends: [] }, talking, CAMPAIGN);
+    expect(a).toMatchObject({ go: true, skipTeam: true, notAdmitted: null, wouldNotAdmit: { reason: expect.stringMatching(/^already_talking/) } });
+    expect((await reachPlan({ ...person, dryRun: true }, a, null)).reachBody.skipIfReplied).toBe(false);
+  });
+
   it("never greets someone already talking with the brand on WhatsApp", async () => {
     const talking = { ...thread, items: [...thread.items, { kind: "message", source: "matrix", direction: "inbound", text: "hi" }] };
     expect(await admission(person, { sends: [] }, talking, CAMPAIGN)).toMatchObject({ go: false, code: "already_talking" });
@@ -162,7 +182,27 @@ describe("admission", () => {
     expect(await reachPlan(person, a, { staff: false, ownTeam: true, matches: [] })).toMatchObject({ skip: true, code: "own_team" });
     await expect(reachPlan(person, a, { notCalled: true })).rejects.toThrow(/staff/);
     const ok = await reachPlan(person, a, { staff: false, ownTeam: false });
-    expect(ok).toMatchObject({ skip: false, reachBody: { brandId: BRAND, email: person.email, phone: person.phone, skipIfReplied: true } });
+    expect(ok).toMatchObject({ skip: false, reachBody: { brandId: BRAND, fromLine: "founder", email: person.email, phone: person.phone, skipIfReplied: true } });
+  });
+});
+
+describe("reach-verdict", () => {
+  const verdict = loadMain(REACH_VERDICT_CODE);
+  const check = { reachable: false, code: "human_in_conversation", error: "Someone typed by hand", persona: { name: "Kevin", role: "Founder" } };
+
+  it("a refusal ends a real run before any draft", async () => {
+    expect(await verdict({ skip: false }, check, { dryRun: false })).toEqual({ skip: true, refused: { code: "human_in_conversation", reason: "Someone typed by hand" } });
+  });
+
+  it("a reachable answer carries the brand's assistant line (SOPHIE-SENDS-1028), or null when the brand states none", async () => {
+    const ok = { reachable: true, fromAccount: "+33680478702", persona: { name: "Kevin", role: "Founder" } };
+    const withAssistant = { ...ok, assistantLine: { phone: "+77776879632", persona: { name: "Sophie", role: "Distribute.you Assistant", instructions: null } } };
+    expect(await verdict({ skip: false }, withAssistant, {})).toMatchObject({ skip: false, assistantLine: { phone: "+77776879632", name: "Sophie", role: "Distribute.you Assistant" } });
+    expect(await verdict({ skip: false }, { ...ok, assistantLine: null }, {})).toMatchObject({ skip: false, assistantLine: null });
+  });
+
+  it("a dry run reports it and writes as the sending persona", async () => {
+    expect(await verdict({ skip: false }, check, { dryRun: true })).toMatchObject({ skip: false, wouldRefuse: { code: "human_in_conversation" }, persona: { name: "Kevin" } });
   });
 });
 
@@ -191,10 +231,16 @@ describe("voice-plan", () => {
         p("client-b", ["professional_to_brand", "professional_not_to_brand"], 12),
       ],
     };
-    const { samples } = await voicePlan(person, people);
+    const { samples } = await voicePlan(person, people, { skip: false });
     expect(samples.filter((s: any) => !s.skip).map((s: any) => s.query.personId)).toEqual(["client-a", "client-b"]);
+    expect(samples[0].teamBody).toEqual({ brandId: BRAND, email: "client-a@x.com" });
     expect(samples).toHaveLength(3);
-    expect(samples[2]).toEqual({ skip: true, query: null });
+    expect(samples[2]).toEqual({ skip: true, query: null, teamBody: null });
+  });
+
+  it("reads nothing when the person is not greeted (the people index was not called)", async () => {
+    const { samples } = await voicePlan(person, { ok: false, skipped: true, notCalled: true }, { skip: true });
+    expect(samples.every((s: any) => s.skip)).toBe(true);
   });
 });
 
@@ -210,9 +256,15 @@ describe("compose", () => {
         { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T18:00:50Z", text: "Good, I see that everything is setup perfectly", sentBy: "person" },
         { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T19:01:12Z", text: "Feel free to reach out to me anytime", sentBy: "person" },
         { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T20:00:00Z", text: "Automated bubble", sentBy: "automation" },
+        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T21:00:00Z", text: "Voice message.ogg", sentBy: "person" },
       ],
     };
-    const out = await compose(person, verdict, thread, brand, null, "2026-10-27", voice, null, null);
+    const tests = {
+      items: [{ kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T10:00:00Z", text: "Hi Sophie, how many campaigns run?", sentBy: "person" }],
+    };
+    const outsider = { staff: false, ownTeam: false };
+    const out = await compose(person, verdict, thread, brand, null, "2026-10-27", voice, tests, null, outsider, { staff: true, ownTeam: false }, null);
+    expect(out.message).not.toContain("Hi Sophie");
     expect(out.skip).toBe(false);
     expect(out.message).toContain("Offer: Fixed-Price Software Build");
     expect(out.message).toContain("Audience: Founders/CEOs, Service Firms");
@@ -220,9 +272,17 @@ describe("compose", () => {
     expect(out.message).toContain("US [automated email]: Revenue made easy.");
     expect(out.message).toContain("- Good, I see that everything is setup perfectly");
     expect(out.message).not.toContain("Automated bubble");
+    expect(out.message).not.toContain("Voice message.ogg");
     expect(out.message).not.toMatch(/FACTS our client told us/);
     expect(out.variables).toMatchObject({ founderName: "Kevin", brandName: "Distribute.you" });
     expect(out.variables.writerRole).toContain("Kevin, Founder of Distribute.you");
+    expect(out.message).toContain("THE ASSISTANT LINE: none");
+  });
+
+  it("names the brand's assistant line in the context when crm-service serves one", async () => {
+    const v = { ...verdict, assistantLine: { phone: "+77776879632", name: "Sophie", role: "Distribute.you Assistant" } };
+    const out = await compose(person, v, thread, brand, null, "2026-10-28", null, null, null);
+    expect(out.message).toContain("THE ASSISTANT LINE: Sophie, Distribute.you Assistant, writes to them from +77776879632");
   });
 
   it("never writes a hello that cannot name what they set up", async () => {
@@ -247,13 +307,17 @@ describe("finalize + outcome", () => {
     const f = await finalize({ skip: false }, draft, person, CAMPAIGN);
     expect(f.idempotencyKey).toBe(`founder-hello:${CAMPAIGN}:lead-1`);
     expect(f.sendBody.messages).toEqual(["Hey Chaim, Kevin from Distribute.you", "Saw your campaign to founders of service firms, nice"]);
-    expect(f.sendBody).toMatchObject({ brandId: BRAND, email: person.email, phone: person.phone, skipIfReplied: true });
+    expect(f.sendBody).toMatchObject({ brandId: BRAND, fromLine: "founder", email: person.email, phone: person.phone, skipIfReplied: true });
   });
 
   it("a dry run writes and sends nothing", async () => {
     const f = await finalize({ skip: false }, draft, { ...person, dryRun: true }, CAMPAIGN);
     expect(f).toMatchObject({ skipSend: true, written: true, dryRun: true, sendBody: null });
-    expect(await outcome({ ...person, dryRun: true }, {}, {}, f, { notCalled: true, skipped: true })).toMatchObject({ endKind: "dry_run", skipRecord: true });
+    expect(await outcome({ ...person, dryRun: true }, {}, {}, f, { notCalled: true, skipped: true }, { wouldNotAdmit: { reason: "already_talking: x" } })).toMatchObject({
+      endKind: "dry_run",
+      skipRecord: true,
+      wouldNotAdmit: { reason: "already_talking: x" },
+    });
   });
 
   it("sent closes the row for good; a refusal is stated, never a failed run", async () => {
