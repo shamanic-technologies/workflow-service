@@ -151,11 +151,13 @@ export async function main(plan, claim, trigger, brandId) {
 /**
  * Which of the brand's people the founder's rhythm is copied from: BUSINESS contacts only (crm-service tags them
  * \`professional_to_brand\` and no \`personal_*\` tag, and does not call them not-business), with enough WhatsApp messages
- * of his, never the person greeted. Empty slots are skipped reads.
+ * of his, never the person greeted. Each sample is then asked to crm-service's team check (our staff, the brand's own
+ * team: a test thread to our own assistant's number is tagged business too) and dropped unless both answer no. Empty
+ * slots are skipped reads.
  */
 export const VOICE_PLAN_CODE = `
 export async function main(person, people, verdict) {
-  const empty = { skip: true, query: null };
+  const empty = { skip: true, query: null, teamBody: null };
   if (person?.go !== true || verdict?.skip !== false) return { samples: Array.from({ length: ${VOICE_SAMPLE_PEOPLE} }, () => empty) };
   if (!Array.isArray(people?.people)) throw new Error("voice-plan: the brand's people index answered no people list");
   const isSelf = (p) => (person.email && (p.emails ?? []).map((e) => String(e).toLowerCase()).includes(person.email))
@@ -168,7 +170,14 @@ export async function main(person, people, verdict) {
     if (!tags.includes("${BUSINESS_CONTACT_TAG}") || tags.some((t) => t.startsWith("personal"))) continue;
     const wrote = (p.presences ?? []).filter((x) => x?.source === "matrix").reduce((n, x) => n + (Number(x.outboundCount) || 0), 0);
     if (wrote < ${VOICE_SAMPLE_MIN_OUTBOUND}) continue;
-    samples.push({ skip: false, query: { brandId: person.brandId, personId: p.personId } });
+    const email = (p.emails ?? []).map((e) => String(e).trim()).find(Boolean);
+    const phone = (p.phones ?? []).map((x) => String(x).trim()).find(Boolean);
+    if (!email && !phone) continue;
+    samples.push({
+      skip: false,
+      query: { brandId: person.brandId, personId: p.personId },
+      teamBody: { brandId: person.brandId, ...(email ? { email } : {}), ...(phone ? { phone } : {}) },
+    });
   }
   while (samples.length < ${VOICE_SAMPLE_PEOPLE}) samples.push(empty);
   return { samples };
@@ -254,7 +263,7 @@ ${SENDER_PERSONA_FN}
  * nothing is repeated. The voice is the sending persona plus the founder's own typed messages to business contacts.
  */
 export const COMPOSE_CODE = `
-export async function main(person, verdict, thread, brand, rep, currentDate, v1, v2, v3) {
+export async function main(person, verdict, thread, brand, rep, currentDate, v1, v2, v3, t1, t2, t3) {
   if (verdict?.skip !== false) return { skip: true, variables: null, message: null };
   const b = brand?.brand ?? {};
   const brandName = typeof b.name === "string" && b.name.trim() ? b.name.trim() : null;
@@ -287,10 +296,14 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
   const threadLines = messages.slice(-12).map((i) => String(i.at ?? "").slice(0, 16).replace("T", " ") + " | " + String(i.channel) + " | " + label(i) + ": " + clip(i.text, 400));
 
   const voice = [];
-  for (const v of [v1, v2, v3]) {
-    if (!Array.isArray(v?.items)) continue;
+  // A sample counts only when crm-service said it is neither our staff nor the brand's own team (a test is not a client).
+  const outsider = (t) => t && t.notCalled !== true && t.staff === false && t.ownTeam === false;
+  // An attachment shows as its file name: never a typed line.
+  const attachment = (t) => String(t).trim().length <= 80 && /\\.(ogg|opus|mp3|m4a|jpe?g|png|gif|webp|pdf|mp4|mov|docx?|xlsx?)$/i.test(String(t).trim());
+  for (const [v, t] of [[v1, t1], [v2, t2], [v3, t3]]) {
+    if (!Array.isArray(v?.items) || !outsider(t)) continue;
     // Typed by a person of the brand (crm-service \`sentBy\`), never one of our automated sends.
-    const outbound = v.items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix" && i?.sentBy === "person" && s(i.text));
+    const outbound = v.items.filter((i) => i?.kind === "message" && i?.direction === "outbound" && i?.source === "matrix" && i?.sentBy === "person" && s(i.text) && !attachment(i.text));
     for (const i of handTyped(outbound).slice(-10)) voice.push("- " + clip(i.text, 300));
   }
 
@@ -495,9 +508,17 @@ function founderHelloDagUnvoiced(): DAG {
         retries: 0,
         inputMapping: { person: "$ref:pick-person.output", people: "$ref:voice-people.output", verdict: "$ref:reach-verdict.output" },
       },
-      ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) =>
+      ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => [
         crmRead(`voice-thread-${i + 1}`, "/orgs/people/timeline", `$ref:voice-plan.output.samples.${i}.query`, `$ref:voice-plan.output.samples.${i}.skip`, true),
-      ),
+        {
+          id: `voice-team-${i + 1}`,
+          type: "http.call" as const,
+          // A sample nobody could check is dropped (compose), never the run failed for it.
+          config: { service: "crm", method: "POST", path: "/orgs/people/team-membership", tolerateFailure: true },
+          retries: 1,
+          inputMapping: { body: `$ref:voice-plan.output.samples.${i}.teamBody`, skip: `$ref:voice-plan.output.samples.${i}.skip` },
+        },
+      ]).flat(),
       {
         id: "compose",
         type: "script",
@@ -513,6 +534,9 @@ function founderHelloDagUnvoiced(): DAG {
           v1: "$ref:voice-thread-1.output",
           v2: "$ref:voice-thread-2.output",
           v3: "$ref:voice-thread-3.output",
+          t1: "$ref:voice-team-1.output",
+          t2: "$ref:voice-team-2.output",
+          t3: "$ref:voice-team-3.output",
         },
       },
       {
@@ -602,8 +626,10 @@ function founderHelloDagUnvoiced(): DAG {
       { from: "sales-rep", to: "voice-people" },
       { from: "voice-people", to: "voice-plan" },
       { from: "voice-plan", to: "voice-thread-1" },
-      ...Array.from({ length: VOICE_SAMPLE_PEOPLE - 1 }, (_, i) => ({ from: `voice-thread-${i + 1}`, to: `voice-thread-${i + 2}` })),
-      { from: `voice-thread-${VOICE_SAMPLE_PEOPLE}`, to: "compose" },
+      ...Array.from({ length: VOICE_SAMPLE_PEOPLE }, (_, i) => [
+        { from: `voice-thread-${i + 1}`, to: `voice-team-${i + 1}` },
+        { from: `voice-team-${i + 1}`, to: i + 1 < VOICE_SAMPLE_PEOPLE ? `voice-thread-${i + 2}` : "compose" },
+      ]).flat(),
       { from: "compose", to: "draft-message" },
       { from: "draft-message", to: "finalize" },
       { from: "finalize", to: "send-whatsapp" },

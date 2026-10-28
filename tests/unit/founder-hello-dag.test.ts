@@ -101,6 +101,11 @@ describe("founder hello template", () => {
     expect([...new Set([...FOUNDER_HELLO_TEMPLATE.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))].sort()).toEqual(FOUNDER_HELLO_TEMPLATE_VARIABLES.map((v) => v.name).sort());
   });
 
+  it("never takes our own proposals or our earlier messages as their facts", () => {
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/suggested, not confirmed by them/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/Those messages are never facts/);
+  });
+
   it("holds ONE stance on introductions and never asks them to answer a question", () => {
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/never introduce yourself|NOT a first contact/i);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/ask ONE question|one question mark/i);
@@ -214,8 +219,9 @@ describe("voice-plan", () => {
     };
     const { samples } = await voicePlan(person, people, { skip: false });
     expect(samples.filter((s: any) => !s.skip).map((s: any) => s.query.personId)).toEqual(["client-a", "client-b"]);
+    expect(samples[0].teamBody).toEqual({ brandId: BRAND, email: "client-a@x.com" });
     expect(samples).toHaveLength(3);
-    expect(samples[2]).toEqual({ skip: true, query: null });
+    expect(samples[2]).toEqual({ skip: true, query: null, teamBody: null });
   });
 
   it("reads nothing when the person is not greeted (the people index was not called)", async () => {
@@ -236,9 +242,15 @@ describe("compose", () => {
         { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T18:00:50Z", text: "Good, I see that everything is setup perfectly", sentBy: "person" },
         { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T19:01:12Z", text: "Feel free to reach out to me anytime", sentBy: "person" },
         { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T20:00:00Z", text: "Automated bubble", sentBy: "automation" },
+        { kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T21:00:00Z", text: "Voice message.ogg", sentBy: "person" },
       ],
     };
-    const out = await compose(person, verdict, thread, brand, null, "2026-10-27", voice, null, null);
+    const tests = {
+      items: [{ kind: "message", source: "matrix", direction: "outbound", at: "2026-10-27T10:00:00Z", text: "Hi Sophie, how many campaigns run?", sentBy: "person" }],
+    };
+    const outsider = { staff: false, ownTeam: false };
+    const out = await compose(person, verdict, thread, brand, null, "2026-10-27", voice, tests, null, outsider, { staff: true, ownTeam: false }, null);
+    expect(out.message).not.toContain("Hi Sophie");
     expect(out.skip).toBe(false);
     expect(out.message).toContain("Offer: Fixed-Price Software Build");
     expect(out.message).toContain("Audience: Founders/CEOs, Service Firms");
@@ -246,6 +258,7 @@ describe("compose", () => {
     expect(out.message).toContain("US [automated email]: Revenue made easy.");
     expect(out.message).toContain("- Good, I see that everything is setup perfectly");
     expect(out.message).not.toContain("Automated bubble");
+    expect(out.message).not.toContain("Voice message.ogg");
     expect(out.message).not.toMatch(/FACTS our client told us/);
     expect(out.variables).toMatchObject({ founderName: "Kevin", brandName: "Distribute.you" });
     expect(out.variables.writerRole).toContain("Kevin, Founder of Distribute.you");
