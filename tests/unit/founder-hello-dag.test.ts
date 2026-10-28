@@ -113,6 +113,12 @@ describe("founder hello template", () => {
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/[–—]/);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/agency/i);
   });
+
+  it("hands them to the assistant line when the brand has one, the founder staying reachable (owner 2026-10-28)", () => {
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/When THE ASSISTANT LINE names one/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/run their whole service through her directly/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/right here on this number if they ever need you/);
+  });
 });
 
 describe("pick-person", () => {
@@ -176,7 +182,7 @@ describe("admission", () => {
     expect(await reachPlan(person, a, { staff: false, ownTeam: true, matches: [] })).toMatchObject({ skip: true, code: "own_team" });
     await expect(reachPlan(person, a, { notCalled: true })).rejects.toThrow(/staff/);
     const ok = await reachPlan(person, a, { staff: false, ownTeam: false });
-    expect(ok).toMatchObject({ skip: false, reachBody: { brandId: BRAND, email: person.email, phone: person.phone, skipIfReplied: true } });
+    expect(ok).toMatchObject({ skip: false, reachBody: { brandId: BRAND, fromLine: "founder", email: person.email, phone: person.phone, skipIfReplied: true } });
   });
 });
 
@@ -186,6 +192,13 @@ describe("reach-verdict", () => {
 
   it("a refusal ends a real run before any draft", async () => {
     expect(await verdict({ skip: false }, check, { dryRun: false })).toEqual({ skip: true, refused: { code: "human_in_conversation", reason: "Someone typed by hand" } });
+  });
+
+  it("a reachable answer carries the brand's assistant line (SOPHIE-SENDS-1028), or null when the brand states none", async () => {
+    const ok = { reachable: true, fromAccount: "+33680478702", persona: { name: "Kevin", role: "Founder" } };
+    const withAssistant = { ...ok, assistantLine: { phone: "+77776879632", persona: { name: "Sophie", role: "Distribute.you Assistant", instructions: null } } };
+    expect(await verdict({ skip: false }, withAssistant, {})).toMatchObject({ skip: false, assistantLine: { phone: "+77776879632", name: "Sophie", role: "Distribute.you Assistant" } });
+    expect(await verdict({ skip: false }, { ...ok, assistantLine: null }, {})).toMatchObject({ skip: false, assistantLine: null });
   });
 
   it("a dry run reports it and writes as the sending persona", async () => {
@@ -263,6 +276,13 @@ describe("compose", () => {
     expect(out.message).not.toMatch(/FACTS our client told us/);
     expect(out.variables).toMatchObject({ founderName: "Kevin", brandName: "Distribute.you" });
     expect(out.variables.writerRole).toContain("Kevin, Founder of Distribute.you");
+    expect(out.message).toContain("THE ASSISTANT LINE: none");
+  });
+
+  it("names the brand's assistant line in the context when crm-service serves one", async () => {
+    const v = { ...verdict, assistantLine: { phone: "+77776879632", name: "Sophie", role: "Distribute.you Assistant" } };
+    const out = await compose(person, v, thread, brand, null, "2026-10-28", null, null, null);
+    expect(out.message).toContain("THE ASSISTANT LINE: Sophie, Distribute.you Assistant, writes to them from +77776879632");
   });
 
   it("never writes a hello that cannot name what they set up", async () => {
@@ -287,7 +307,7 @@ describe("finalize + outcome", () => {
     const f = await finalize({ skip: false }, draft, person, CAMPAIGN);
     expect(f.idempotencyKey).toBe(`founder-hello:${CAMPAIGN}:lead-1`);
     expect(f.sendBody.messages).toEqual(["Hey Chaim, Kevin from Distribute.you", "Saw your campaign to founders of service firms, nice"]);
-    expect(f.sendBody).toMatchObject({ brandId: BRAND, email: person.email, phone: person.phone, skipIfReplied: true });
+    expect(f.sendBody).toMatchObject({ brandId: BRAND, fromLine: "founder", email: person.email, phone: person.phone, skipIfReplied: true });
   });
 
   it("a dry run writes and sends nothing", async () => {
