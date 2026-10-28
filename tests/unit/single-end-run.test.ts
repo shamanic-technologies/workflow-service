@@ -13,6 +13,7 @@ import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-d
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
+import { buildThreadsPostDag } from "../../src/lib/threads-post-dag.js";
 
 /**
  * LLM-SPEND-NO-SEND-1016: a run reports its end to campaign-service ONCE. An `/end-run` node that is the target of
@@ -28,6 +29,7 @@ const DAGS: Record<string, DAG> = {
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
   "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
+  "threads-post": buildThreadsPostDag(),
   "ai-instant-call": buildAiInstantCallDag(),
   "ai-instant-call-email-only": buildAiInstantCallDag({ emailRepliesOnly: true }),
   "email-sending": buildEmailSendingDag(),
