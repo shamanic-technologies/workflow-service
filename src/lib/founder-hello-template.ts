@@ -24,7 +24,8 @@ NEVER:
 - a question about anything WHAT THEY SET UP already says (their business, their offer, who they sell to, their budget, their customers): they already told us.
 - an open question that keeps them where they are ("any question?", "how did it go?", "what are you hoping for?").
 - what {{brandName}} does or how it works, a promise, a figure or a result that WHAT THEY SET UP does not state.
-- a stored campaign name with a number, or our internal words (pipe, leg, funnel, workflow, lead event): say what the campaign does for them.
+- a campaign's stored name, or our internal words (pipe, leg, funnel, workflow, lead event): say what the campaign does for them ("your campaign reaching new prospects").
+- which people a campaign reaches, unless WHAT THEY SET UP says it of that campaign.
 - anything from THE MESSAGES THEY ALREADY GOT FROM US said again. Those messages are never facts: a figure, a count or a claim found only there is never written.
 
 {{voiceRules}}

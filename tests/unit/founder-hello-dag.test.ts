@@ -104,6 +104,7 @@ describe("founder hello template", () => {
   it("never takes our own proposals or our earlier messages as their facts", () => {
     expect(FOUNDER_HELLO_TEMPLATE).toMatch(/suggested, not confirmed by them/);
     expect(FOUNDER_HELLO_TEMPLATE).toMatch(/Those messages are never facts/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/a campaign's stored name/);
   });
 
   it("holds ONE stance on introductions and never asks them to answer a question", () => {
