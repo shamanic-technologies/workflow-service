@@ -217,6 +217,13 @@ export async function main(person, sends, thread, campaignId) {
 }
 `.trim();
 
+/**
+ * The hello goes from the brand's FOUNDER line (crm-service \`fromLine\`, SOPHIE-SENDS-1028; owner 2026-10-28: every other
+ * campaign writes from the assistant line, the hello from the founder's own). A brand stating no founder line is
+ * refused \`whatsapp_not_linked\`: nothing sent.
+ */
+export const FOUNDER_LINE = "founder";
+
 /** Our staff and the brand's own team are never greeted; then the reach check names exactly the send. */
 export const REACH_PLAN_CODE = `
 export async function main(person, admission, team) {
@@ -233,7 +240,7 @@ export async function main(person, admission, team) {
     skip: false,
     notAdmitted: null,
     code: null,
-    reachBody: { brandId: person.brandId, skipIfReplied: person.dryRun !== true, ...(person.email ? { email: person.email } : {}), ...(person.phone ? { phone: person.phone } : {}) },
+    reachBody: { brandId: person.brandId, fromLine: "${FOUNDER_LINE}", skipIfReplied: person.dryRun !== true, ...(person.email ? { email: person.email } : {}), ...(person.phone ? { phone: person.phone } : {}) },
   };
 }
 `.trim();
@@ -245,13 +252,22 @@ export async function main(plan, check, person) {
   if (!check || check.notCalled === true || typeof check.reachable !== "boolean") {
     throw new Error("reach-verdict: crm-service's reach check gave no answer; nothing is drafted blind");
   }
-  if (check.reachable === true) return { skip: false, refused: null, persona: senderPersona(check) };
+  if (check.reachable === true) return { skip: false, refused: null, persona: senderPersona(check), assistantLine: assistantLineOf(check) };
   const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
   const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
   console.error("[founder-hello] crm-service says WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
   // A dry run (staff replay) reports the refusal and still writes, as the account that would send.
-  if (person?.dryRun === true) return { skip: false, refused: null, wouldRefuse: { code, reason }, persona: senderPersona(check) };
+  if (person?.dryRun === true) return { skip: false, refused: null, wouldRefuse: { code, reason }, persona: senderPersona(check), assistantLine: null };
   return { skip: true, refused: { code, reason } };
+}
+
+/** The brand's assistant line (crm-service \`assistantLine\`): who the person can run everything through, or null. */
+function assistantLineOf(check) {
+  const a = check?.assistantLine;
+  if (!a || typeof a.phone !== "string" || !a.phone.trim()) return null;
+  const name = typeof a.persona?.name === "string" && a.persona.name.trim() ? a.persona.name.trim() : null;
+  const role = typeof a.persona?.role === "string" && a.persona.role.trim() ? a.persona.role.trim() : null;
+  return { phone: a.phone.trim(), name, role };
 }
 
 ${SENDER_PERSONA_FN}
@@ -327,6 +343,10 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
     "WHAT THEY SET UP WITH " + brandName.toUpperCase() + " (their own choices, the only facts you may use):",
     ...setup,
     "",
+    "THE ASSISTANT LINE: " + (verdict.assistantLine
+      ? (verdict.assistantLine.name ?? "our assistant") + (verdict.assistantLine.role ? ", " + verdict.assistantLine.role : "") + ", writes to them from " + verdict.assistantLine.phone
+      : "none"),
+    "",
     "THE MESSAGES THEY ALREADY GOT FROM US (never repeat them):",
     ...(threadLines.length ? threadLines : ["(none)"]),
     ...(voice.length ? ["", "HIS OWN MESSAGES TO " + brandName.toUpperCase() + "'S CLIENTS AND LEADS (rhythm only):", ...voice] : []),
@@ -362,7 +382,7 @@ export async function main(compose, draft, person, campaignId) {
     text,
     idempotencyKey,
     // Never a null field (crm-service 400s it). skipIfReplied: they wrote to the brand meanwhile = no hello.
-    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, ...bubbleSendFields(text), idempotencyKey, skipIfReplied: true, ...(person.phone ? { phone: person.phone } : {}) },
+    sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, fromLine: "${FOUNDER_LINE}", ...bubbleSendFields(text), idempotencyKey, skipIfReplied: true, ...(person.phone ? { phone: person.phone } : {}) },
   };
 }
 
