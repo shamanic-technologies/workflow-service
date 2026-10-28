@@ -828,6 +828,30 @@ function statesBodyFieldAlready(
 }
 
 /**
+ * The campaign's stated WhatsApp line (CAMPAIGN-WA-LINE-1028, owner 2026-10-28: Sophie's Lead event campaign writes
+ * from Sophie's own line, the founder hello keeps the founder's). campaign-service serves it on `/start-run` as
+ * `whatsappSenderPhone` (null = nothing stated); crm-service's reach check and send both take it as `fromAccount`
+ * (the linked line's own number, matched on digits). Injected at CONVERSION time into every crm-service WhatsApp
+ * reach/send body downstream of start-run, so every writer honours it and no stored DAG changes. Wraps the body
+ * AFTER the one collapse (never re-collapsed, #431): a campaign that states none sends a byte-identical body,
+ * including a `fromAccount` the writer already put there.
+ */
+export const CAMPAIGN_SENDER_LINE_FIELD = "whatsappSenderPhone";
+
+function sendsFromBrandWhatsapp(node: DAGNode): boolean {
+  return (
+    node.type === "http.call" &&
+    node.config?.service === "crm" &&
+    String(node.config?.method ?? "").toUpperCase() === "POST" &&
+    (node.config?.path === "/orgs/whatsapp/reach" || node.config?.path === "/orgs/whatsapp/messages")
+  );
+}
+
+export function campaignSenderLineExpr(bodyExpr: string, lineRef: string): string {
+  return `((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) ? { ...b, fromAccount: f.trim() } : b))(${bodyExpr}, ${lineRef})`;
+}
+
+/**
  * The only two callee shapes that read an `offerId` on their request body.
  * Deliberately a closed list — a blanket injection into a strict-schema callee
  * would 400 it.
@@ -1212,6 +1236,22 @@ function nodeToModule(
     resolvedInputMapping,
     Object.keys(extraTransforms).length > 0 ? extraTransforms : undefined,
   );
+
+  // The campaign's stated WhatsApp line rides every crm WhatsApp reach/send body (CAMPAIGN_SENDER_LINE_FIELD).
+  if (
+    offerScope.startRunModuleId &&
+    offerScope.descendants.has(moduleId) &&
+    loopBodyIds === null &&
+    sendsFromBrandWhatsapp(node) &&
+    inputTransforms.body
+  ) {
+    const b = inputTransforms.body;
+    const bodyExpr = b.type === "javascript" ? b.expr! : JSON.stringify(b.value);
+    inputTransforms.body = {
+      type: "javascript",
+      expr: campaignSenderLineExpr(bodyExpr, `results.${offerScope.startRunModuleId}?.${CAMPAIGN_SENDER_LINE_FIELD}`),
+    };
+  }
 
   // A send the sender refuses for this one lead ends the run as a normal run.
   // See REFUSAL_SKIP_CODES. On a run answering a trigger occurrence EVERY refusal the
