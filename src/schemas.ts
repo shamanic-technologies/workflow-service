@@ -2450,3 +2450,269 @@ registry.registerPath({
     },
   },
 });
+
+// ─── FACTORY-P2-ENGINES: scripts (code stored as data) ──────────────────────────────────────────────────────────────
+
+const ScriptSlugSchema = z.string().regex(/^[a-z][a-z0-9_]{1,62}$/);
+
+export const ScriptSchema = z
+  .object({
+    id: z.string().uuid(),
+    outcome: z.string().describe("The features-service step key the script makes one Unit of (e.g. `message_written`)."),
+    dynasty: z.string().describe("The lineage: every version of one idea. A fork is a new dynasty."),
+    version: z.number().int(),
+    scriptSlug: z.string().describe("`<outcome>/<dynasty>/v<version>`"),
+    description: z.string(),
+    materials: z.array(z.string()).describe("The outcomes the code asks its Providers for (`ctx.get(\"...\")`), read from the code."),
+    vendors: z.array(z.string()).describe("The vendors the code calls by name (`ctx.vendor.call(\"...\")`), read from the code."),
+    tactics: z.record(z.string(), z.unknown()).describe("Data the script reads as `ctx.tactics` (e.g. `llm: {provider, model}`, `systemPrompt`)."),
+    status: z.enum(["active", "deprecated"]).describe("Per-version lifecycle: the latest version of a dynasty is active."),
+    dynastyStatus: z.enum(["active", "deprecated"]).describe("The whole lineage: deprecated = retired, no version runs."),
+    runnable: z.boolean(),
+    creationType: z.enum(["scratch", "upgrade", "fork"]),
+    createdFromScript: z.string().uuid().nullable(),
+    createdBy: z.string(),
+    replay: z.object({ cases: z.number().int(), matches: z.number().int() }).nullable().describe("The replay proof this version passed when it was stored (null: its dynasty carried no recorded case)."),
+    cases: z.number().int().describe("Recorded production cases its dynasty carries (a port when > 0: every version must replay all of them)."),
+    deprecationReason: z.string().nullable(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .openapi("Script");
+
+export const ScriptWithCodeSchema = ScriptSchema.extend({ code: z.string() }).openapi("ScriptWithCode");
+
+export const CreateScriptRequestSchema = z
+  .object({
+    outcome: ScriptSlugSchema.describe("A features-service catalogue step key (the ledger refuses any other)."),
+    dynasty: ScriptSlugSchema.describe("A new lineage name, e.g. `dy_hook_writer`."),
+    code: z
+      .string()
+      .min(1)
+      .max(500_000)
+      .describe(
+        "TypeScript text whose default export is `run(ctx)`; it imports types only. `ctx.get(\"<outcome>\")` (a literal) returns a material Unit `{id, outcome, subject, ageDays, content}`; `ctx.vendor.call(name, args)` returns `{ok, data}` (vendors: `llm.complete`); `ctx.storage.get/set/delete/count(table, key)` are its Engine's notes for this org; `ctx.subject`, `ctx.tactics`, `ctx.day`, `ctx.request`. Return `{content: {...}}` (one Unit) or `null` (none).",
+      ),
+    description: z.string().min(1).max(2000),
+    tactics: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi("CreateScriptRequest");
+
+export const UpgradeScriptRequestSchema = z
+  .object({
+    code: z.string().min(1).max(500_000),
+    description: z.string().min(1).max(2000).optional(),
+    tactics: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi("UpgradeScriptRequest");
+
+export const ForkScriptRequestSchema = z
+  .object({
+    dynasty: ScriptSlugSchema.describe("The new dynasty's name."),
+    description: z.string().min(1).max(2000),
+    code: z.string().min(1).max(500_000).optional().describe("Absent: the source's active code (a copy whose tactics differ)."),
+    tactics: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi("ForkScriptRequest");
+
+export const ScriptDynastyStatusRequestSchema = z
+  .object({ status: z.enum(["active", "deprecated"]), reason: z.string().min(1).max(500) })
+  .openapi("ScriptDynastyStatusRequest");
+
+export const ReplayScriptRequestSchema = z
+  .object({ code: z.string().min(1).max(500_000).optional().describe("Absent: the dynasty's active code.") })
+  .openapi("ReplayScriptRequest");
+
+export const ReplayScriptResponseSchema = z
+  .object({
+    cases: z.number().int(),
+    matches: z.number().int(),
+    failures: z.array(z.object({ id: z.string(), diffs: z.array(z.string()) })).describe("At most 5, three differences each; never a case body."),
+  })
+  .openapi("ReplayScriptResponse");
+
+const SubjectRefSchema = z.object({ service: z.string().min(1), id: z.string().min(1) });
+const MaterialUnitSchema = z.object({ content: z.record(z.string(), z.unknown()), subject: SubjectRefSchema.optional() });
+
+export const RunScriptRequestSchema = z
+  .object({
+    outcome: ScriptSlugSchema,
+    dynasty: ScriptSlugSchema,
+    version: z.number().int().positive().optional().describe("Pin one version (default: the active one)."),
+    subject: SubjectRefSchema.describe("Who or what the Unit is about: its produced outcome is declared on this subject (e.g. `{service: \"lead-service\", id: <lead id>}`)."),
+    units: z
+      .record(z.string(), z.union([MaterialUnitSchema, z.array(MaterialUnitSchema)]))
+      .describe("The materials, by outcome. A Unit that states its `subject` is declared consumed when the script asks for it."),
+    tactics: z.record(z.string(), z.unknown()).optional().describe("The run's tactics, on top of the script's own."),
+    request: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .openapi("RunScriptRequest");
+
+const OccurrenceSchema = z.object({ outcomeKey: z.string(), subjectService: z.string(), subjectId: z.string() });
+
+export const RunScriptResponseSchema = z
+  .object({
+    scriptId: z.string().uuid(),
+    scriptSlug: z.string(),
+    version: z.number().int(),
+    runId: z.string().describe("The script's own runs-service run (a child of the caller's)."),
+    status: z.enum(["made", "nothing", "stopped", "failed"]),
+    unit: z.object({ outcome: z.string(), subject: SubjectRefSchema, content: z.record(z.string(), z.unknown()), found: z.string().optional() }).nullable(),
+    error: z.string().nullable(),
+    vendorCalls: z.array(z.object({ name: z.string(), ok: z.boolean(), error: z.string().optional(), ms: z.number() })),
+    declared: z.object({ produced: z.array(OccurrenceSchema), consumed: z.array(OccurrenceSchema) }),
+  })
+  .openapi("RunScriptResponse");
+
+export const PutScriptCasesRequestSchema = z
+  .object({
+    source: z.string().min(1).max(200).describe("Where the cases were recorded from (e.g. `gtm-factory-app@<sha> distribute/cases/message_written`)."),
+    cases: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
+  })
+  .openapi("PutScriptCasesRequest");
+
+const scriptDynastyParams = z.object({ outcome: ScriptSlugSchema, dynasty: ScriptSlugSchema });
+const SCRIPT_INTRO =
+  "A script is code stored as data (FACTORY-P2-ENGINES): it makes one Unit of its outcome or none, competes inside its dynasty, and a new idea is a new version or a fork created on the fly, never a deploy. ";
+
+registry.registerPath({
+  method: "get",
+  path: "/scripts",
+  summary: "List scripts (no code)",
+  description: SCRIPT_INTRO + "`status=active` (default) = runnable (version AND dynasty active), `deprecated` = its complement, `all`.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: IdentityHeaders,
+    query: z.object({ outcome: z.string().optional(), dynasty: z.string().optional(), status: z.enum(["active", "deprecated", "all"]).optional() }),
+  },
+  responses: { 200: { description: "Scripts", content: { "application/json": { schema: z.object({ scripts: z.array(ScriptSchema) }) } } } },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/scripts/{id}",
+  summary: "One script version, with its code",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: z.object({ id: z.string().uuid() }) },
+  responses: {
+    200: { description: "The version", content: { "application/json": { schema: ScriptWithCodeSchema } } },
+    404: { description: "Unknown", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/scripts/dynasty/{outcome}/{dynasty}",
+  summary: "Every version of one script dynasty (newest first, no code)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams },
+  responses: {
+    200: { description: "Versions", content: { "application/json": { schema: z.object({ outcome: z.string(), dynasty: z.string(), cases: z.number().int(), versions: z.array(ScriptSchema) }) } } },
+    404: { description: "Unknown", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/scripts",
+  summary: "Create a script (a new dynasty, version 1)",
+  description: SCRIPT_INTRO + "The code is checked in the sandbox (it loads, exports run(ctx), names every material by a literal). 409 when the dynasty exists.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, body: { required: true, content: { "application/json": { schema: CreateScriptRequestSchema } } } },
+  responses: {
+    201: { description: "Created", content: { "application/json": { schema: ScriptWithCodeSchema } } },
+    400: { description: "Invalid code, slug or outcome", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Dynasty exists", content: { "application/json": { schema: ErrorResponseSchema } } },
+    422: { description: "A port's replay failed", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/upgrade",
+  summary: "Upgrade a script: the next version of the same idea",
+  description:
+    "The active version is deprecated and the new one becomes active in one transaction. A dynasty carrying recorded cases (a port) stores the version only when it replays 100 % of them (422 `replay_failed` with case ids otherwise): a behaviour change to a port is a fork.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: UpgradeScriptRequestSchema } } } },
+  responses: {
+    201: { description: "New version", content: { "application/json": { schema: ScriptWithCodeSchema } } },
+    400: { description: "Invalid code or no change", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Unknown dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
+    422: { description: "Replay failed", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/fork",
+  summary: "Fork a script: a different idea, a new dynasty (version 1)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: ForkScriptRequestSchema } } } },
+  responses: {
+    201: { description: "New dynasty", content: { "application/json": { schema: ScriptWithCodeSchema } } },
+    404: { description: "Unknown source", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Dynasty name taken", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/status",
+  summary: "Retire or restore a whole script dynasty",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: ScriptDynastyStatusRequestSchema } } } },
+  responses: {
+    200: { description: "Versions after the change", content: { "application/json": { schema: z.object({ versions: z.array(ScriptSchema) }) } } },
+    404: { description: "Unknown", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/replay",
+  summary: "Replay code on the dynasty's recorded cases (a dry proof, nothing written)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: false, content: { "application/json": { schema: ReplayScriptRequestSchema } } } },
+  responses: {
+    200: { description: "The proof", content: { "application/json": { schema: ReplayScriptResponseSchema } } },
+    404: { description: "Unknown dynasty or no cases", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/orgs/scripts/run",
+  summary: "Run a stored script as a workflow step",
+  description:
+    "Any workflow calls it as an `http.call` node (service `workflow`). Opens the script's own runs-service run (child of `x-run-id`, task `script:<outcome>/<dynasty>`), runs the code in its sandbox (no env, no DB, no network: only the materials handed, its Engine's notes for this org, and our metered vendors with this run's identity), declares consumed (each material asked for that states a subject) and produced (its outcome on `subject`, when a Unit was made), closes the run. A stopped or failed script, or a declaration the ledger refuses, answers 502 naming the run.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, body: { required: true, content: { "application/json": { schema: RunScriptRequestSchema } } } },
+  responses: {
+    200: { description: "The run (made or nothing)", content: { "application/json": { schema: RunScriptResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Unknown script", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "A port not proven on all its cases", content: { "application/json": { schema: ErrorResponseSchema } } },
+    410: { description: "Dynasty retired", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "The script stopped or failed, or the ledger refused", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/internal/scripts/dynasty/{outcome}/{dynasty}/cases",
+  summary: "Store recorded production cases for a ported dynasty (service key only; personal data, never served back)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: PutScriptCasesRequestSchema } } } },
+  responses: { 200: { description: "Stored", content: { "application/json": { schema: z.object({ stored: z.number().int(), total: z.number().int() }) } } } },
+});
