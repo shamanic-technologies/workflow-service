@@ -74,7 +74,9 @@ export async function main(
   // again every `intervalSeconds`, at most until `timeoutSeconds` (capped at 300) have passed. The LAST answer is
   // returned either way, with `pollTimedOut: true` when the wait ran out, so the node downstream decides what a
   // still-pending outcome means. Never throws for the wait itself; a failed request behaves as without it.
-  pollWhile?: { field: string; equals: unknown; intervalSeconds?: number; timeoutSeconds?: number },
+  // `throwWhenTimedOut: true` instead THROWS when the wait runs out, tolerateFailure or not: the answer is not one
+  // the flow may act on (UNIBOX-FACT-LAG-1028: a person thread crm-service says is still moving is never written on).
+  pollWhile?: { field: string; equals: unknown; intervalSeconds?: number; timeoutSeconds?: number; throwWhenTimedOut?: boolean },
 ) {
   if (skip === true) {
     console.log(`[http-call] ${method} ${service} ${path} not called: skip is true for this run`);
@@ -248,6 +250,11 @@ export async function main(
     const deadline = Date.now() + Math.max(0, Math.min(300, Number(pollWhile.timeoutSeconds ?? 60))) * 1000;
     while (readField(result, pollWhile.field) === pollWhile.equals) {
       if (Date.now() + intervalMs > deadline) {
+        if (pollWhile.throwWhenTimedOut === true) {
+          throw new Error(
+            `${method} ${service}${path}: ${pollWhile.field} still ${JSON.stringify(pollWhile.equals)} when the wait ran out — nothing is acted on until it moves`
+          );
+        }
         console.log(
           `${method} ${service}${path}: ${pollWhile.field} still ${JSON.stringify(pollWhile.equals)} when the wait ran out — returning the last answer`
         );
