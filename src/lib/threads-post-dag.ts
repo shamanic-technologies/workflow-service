@@ -23,9 +23,8 @@
  *    figure: tolerated, a run without angles still writes from the facts).
  *  - The leg's best LLM (features-service, `withLegBestLlm`, Opus when the leg ranks none) writes the thread under
  *    THREADS_WRITING_RULES, a different subject from every main post of the last HISTORY_DAYS days and a different
- *    shape from today's. `check-thread` holds it to the rules a rule can check (counts, length, a number only when
- *    the facts state it, banned words, the last line); a refused draft is rewritten ONCE with the reasons, and a
- *    second refusal fails the run (nothing published).
+ *    shape from today's. The model is TRUSTED (owner 2026-10-16): its thread is published as written, never validated,
+ *    retried or refused; `final-thread` only rewrites dashes and places the GET STARTED line.
  *  - meta-service publishes the main post, then each reply under the previous one, each with an idempotency key
  *    (a retried node never publishes twice). A main post refused because the account needs reconnecting ends the
  *    run IDLE (the next run picks another account); every other refusal fails the run loud.
@@ -40,7 +39,7 @@
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS } from "./ai-meeting-booking-dag.js";
 import { GATHER_CLIENT_FACTS_CODE } from "./cold-whatsapp-outreach-dag.js";
-import { LEG_BEST_LLM_MODEL_REF, LEG_BEST_LLM_PROVIDER_REF, withLegBestLlm } from "./leg-best-writer.js";
+import { withLegBestLlm } from "./leg-best-writer.js";
 
 export const THREADS_POST_FEATURE_SLUG = "threads-post";
 
@@ -223,79 +222,37 @@ export async function main(plan, turn, brand, facts, angles) {
     "ALREADY POSTED (never repeat a subject):",
     ...(turn.history.length ? turn.history : ["(none yet)"]),
   ].join("\\n");
-  const factText = [...(facts?.exact ?? []).map((f) => String(f.value)), plan.instruction ?? "", b.name ?? "", domain].join("\\n");
-  return { systemPrompt: ${JSON.stringify(THREADS_WRITING_RULES)}, message, getStarted, factText };
+  return { systemPrompt: ${JSON.stringify(THREADS_WRITING_RULES)}, message, getStarted };
 }
 `.trim();
 
 /**
- * Holds a draft to the rules a rule can check, then cleans it: dashes rewritten, the GET STARTED line closing the
- * last reply only. `ok: false` names every problem (rewritten once by `rewrite-thread`).
+ * The thread to publish: the model's draft AS WRITTEN (owner 2026-10-16: the writer is TRUSTED, never a validation,
+ * a retry or a refusal of its output). Only the deterministic cleanups: em/en dashes rewritten (between digits a
+ * hyphen, otherwise a comma), the GET STARTED line closing the last part and nowhere else, at most 3 replies (the
+ * DAG chains 3). Each part gets its own idempotency key.
  */
-const CHECK_THREAD_FN = `
-function checkThread(draft, compose) {
-  const j = draft?.json ?? draft ?? {};
-  const problems = [];
+export const FINAL_THREAD_CODE = `
+export async function main(draft, compose, plan, turn) {
+  const j = draft?.json ?? {};
   const undash = (s) => String(s ?? "").replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-").replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ").trim();
   const strip = (s) => undash(s).split("\\n").filter((l) => l.trim() !== compose.getStarted).join("\\n").trim();
   const post = strip(j.post);
-  const replies = Array.isArray(j.replies) ? j.replies.map(strip).filter(Boolean) : [];
-  if (!post) problems.push("the main post is empty");
-  if (replies.length < 2 || replies.length > 3) problems.push("write 2 or 3 replies, not " + replies.length);
-  if (replies.length) replies[replies.length - 1] = replies[replies.length - 1] + "\\n\\n" + compose.getStarted;
+  if (!post) throw new Error("final-thread: the writer returned no main post: " + JSON.stringify(j).slice(0, 300));
+  const replies = (Array.isArray(j.replies) ? j.replies : []).map(strip).filter(Boolean).slice(0, 3);
   const parts = [post, ...replies];
-  parts.forEach((t, i) => {
-    const name = i === 0 ? "the main post" : "reply " + i;
-    if ([...t].length > ${MAX_POST_CHARS}) problems.push(name + " is " + [...t].length + " characters, at most ${MAX_POST_CHARS}");
-    if (/\\b(effort|cost|risk)s?\\b/i.test(t)) problems.push(name + " uses a banned word (effort, cost, risk)");
-    if (/\\b(no|without) \\w+[^.!?\\n]{0,40}, (no|without) \\w+/i.test(t)) problems.push(name + ' has a "No X, no Y" list');
-    if (/(^|\\s)#\\w/.test(t)) problems.push(name + " has a hashtag");
-    // A counting word ("2 tips", "step 3") is not a figure; a money amount, a rate or any larger number is.
-    const numbers = (t.replace(compose.getStarted, "").match(/[$\\u20ac\\u00a3]?\\d[\\d,.]*[%x]?/g) ?? []).map((n) => n.replace(/[.,]$/, ""));
-    for (const n of numbers) {
-      if (/^([0-9]|10)$/.test(n)) continue;
-      if (!compose.factText.includes(n.replace(/^[$\\u20ac\\u00a3]/, "").replace(/[%x]$/, ""))) problems.push(name + " states " + n + ", a number OUR FACTS do not hold");
-    }
-  });
-  const emoji = parts.join(" ").match(/\\p{Extended_Pictographic}/gu) ?? [];
-  if (emoji.length > 1) problems.push("the thread has " + emoji.length + " emojis, at most 1");
-  return { ok: problems.length === 0, problems, thread: { subject: String(j.subject ?? "").trim(), post, replies } };
-}
-`.trim();
-
-export const CHECK_THREAD_CODE = `
-${CHECK_THREAD_FN}
-
-export async function main(draft, compose) {
-  const r = checkThread(draft, compose);
-  if (!r.ok) console.error("[threads-post] draft refused, rewriting once: " + r.problems.join("; "));
-  return {
-    ...r,
-    rewriteMessage: compose.message + "\\n\\nYOUR PREVIOUS DRAFT:\\n" + JSON.stringify(draft?.json ?? null) + "\\n\\nIT BROKE THESE RULES, fix every one:\\n- " + r.problems.join("\\n- "),
-  };
-}
-`.trim();
-
-/** The thread to publish: the first draft when it passed, else the rewrite, which must pass. */
-export const FINAL_THREAD_CODE = `
-${CHECK_THREAD_FN}
-
-export async function main(first, rewrite, compose, plan, turn) {
-  let thread = first.thread;
-  if (!first.ok) {
-    const r = checkThread(rewrite, compose);
-    if (!r.ok) throw new Error("final-thread: the rewrite still breaks the rules, nothing published: " + r.problems.join("; "));
-    thread = r.thread;
-  }
+  parts[parts.length - 1] = parts[parts.length - 1] + "\\n\\n" + compose.getStarted;
   const scope = (plan.campaignId ?? "dry-run") + ":" + plan.now;
   return {
-    ...thread,
+    subject: String(j.subject ?? "").trim(),
+    post: parts[0],
+    replies: parts.slice(1),
     accountId: turn.account.id,
     username: turn.account.username,
-    replyCount: thread.replies.length,
-    reply1: thread.replies[0],
-    reply2: thread.replies[1],
-    reply3: thread.replies[2] ?? null,
+    replyCount: parts.length - 1,
+    reply1: parts[1] ?? null,
+    reply2: parts[2] ?? null,
+    reply3: parts[3] ?? null,
     keys: { main: "threads-post:" + scope + ":main", reply1: "threads-post:" + scope + ":reply-1", reply2: "threads-post:" + scope + ":reply-2", reply3: "threads-post:" + scope + ":reply-3" },
   };
 }
@@ -339,7 +296,7 @@ const publishReply = (n: 1 | 2 | 3, parentRef: string) => ({
     service: "meta",
     method: "POST",
     path: "/orgs/threads/accounts/{id}/posts",
-    ...(n === 3 ? { skipIf: "results.final_thread.replyCount < 3" } : {}),
+    skipIf: `results.final_thread.replyCount < ${n}`,
   },
   retries: 2,
   inputMapping: {
@@ -487,38 +444,12 @@ export function buildThreadsPostDag(): DAG {
         inputMapping: { "body.message": "$ref:compose-write.output.message", "body.systemPrompt": "$ref:compose-write.output.systemPrompt" },
       },
       {
-        id: "check-thread",
-        type: "script",
-        config: { code: CHECK_THREAD_CODE },
-        retries: 0,
-        inputMapping: { draft: "$ref:write-thread.output", compose: "$ref:compose-write.output" },
-      },
-      {
-        id: "rewrite-thread",
-        type: "http.call",
-        config: {
-          service: "chat",
-          method: "POST",
-          path: "/complete",
-          body: { responseFormat: "json", responseSchema: THREAD_RESPONSE_SCHEMA, maxTokens: CHAT_STEP_MAX_TOKENS },
-          skipIf: "results.check_thread.ok == true",
-        },
-        retries: 0,
-        inputMapping: {
-          "body.provider": LEG_BEST_LLM_PROVIDER_REF,
-          "body.model": LEG_BEST_LLM_MODEL_REF,
-          "body.message": "$ref:check-thread.output.rewriteMessage",
-          "body.systemPrompt": "$ref:compose-write.output.systemPrompt",
-        },
-      },
-      {
         id: "final-thread",
         type: "script",
         config: { code: FINAL_THREAD_CODE },
         retries: 0,
         inputMapping: {
-          first: "$ref:check-thread.output",
-          rewrite: "$ref:rewrite-thread.output",
+          draft: "$ref:write-thread.output",
           compose: "$ref:compose-write.output",
           plan: "$ref:plan-run.output",
           turn: "$ref:check-turn.output",
@@ -580,9 +511,7 @@ export function buildThreadsPostDag(): DAG {
       { from: "compose-angles", to: "read-angles" },
       { from: "read-angles", to: "compose-write" },
       { from: "compose-write", to: "write-thread" },
-      { from: "write-thread", to: "check-thread" },
-      { from: "check-thread", to: "rewrite-thread" },
-      { from: "rewrite-thread", to: "final-thread" },
+      { from: "write-thread", to: "final-thread" },
       // Converges (edge from check-turn, outside decide-turn's branches) so it is top level.
       { from: "final-thread", to: "check-ship" },
       { from: "check-turn", to: "check-ship" },

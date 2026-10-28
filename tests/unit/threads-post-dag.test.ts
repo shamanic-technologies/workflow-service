@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
-  CHECK_THREAD_CODE,
   CHECK_TURN_CODE,
   CLASSIFY_MAIN_CODE,
   COMPOSE_WRITE_CODE,
@@ -39,7 +38,7 @@ const planAt = (iso: string, dryRun = false) => {
 };
 
 const FACTS = { exact: [{ id: "E1", label: "Positive replies within 24 hours", value: "At least 30% of positive replies arrive within 24 hours" }], neverGive: [] };
-const COMPOSE = { getStarted: "Get started: distribute.you", factText: "At least 30% of positive replies arrive within 24 hours\ndistribute.you", message: "M" };
+const COMPOSE = { getStarted: "Get started: distribute.you", message: "M" };
 
 describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
   const dag = buildThreadsPostDag();
@@ -142,32 +141,26 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     expect(noAngles.getStarted).toBe("Get started: x.com");
   });
 
-  it("check-thread refuses an invented number, a banned word, a long post; cleans dashes and the last line", async () => {
-    const check = loadMain(CHECK_THREAD_CODE);
-    const good = await check({ json: { subject: "s", post: "Fast replies win — at least 30% arrive within 24 hours.", replies: ["Answer the same day.", "Your team already does this well.\n\nGet started: distribute.you"] } }, COMPOSE);
-    expect(good.ok).toBe(true);
-    expect(good.thread.post).toBe("Fast replies win, at least 30% arrive within 24 hours.");
-    expect(good.thread.replies[1]).toBe("Your team already does this well.\n\nGet started: distribute.you");
-    expect(good.thread.replies[0]).not.toContain("Get started");
-    const bad = await check({ json: { subject: "s", post: "x".repeat(401), replies: ["We doubled 47% of pipelines.", "Lower your risk."] } }, COMPOSE);
-    expect(bad.ok).toBe(false);
-    expect(bad.problems.join(" ")).toMatch(/401 characters/);
-    expect(bad.problems.join(" ")).toMatch(/47%/);
-    expect(bad.problems.join(" ")).toMatch(/banned word/);
-    expect(bad.rewriteMessage).toContain("IT BROKE THESE RULES");
-    const one = await check({ json: { subject: "s", post: "p", replies: ["only one"] } }, COMPOSE);
-    expect(one.problems.join(" ")).toMatch(/2 or 3 replies/);
-  });
-
-  it("final-thread takes the rewrite when the first draft failed, throws when it fails again, keys each part", async () => {
+  it("publishes the model's thread as written (owner: the writer is TRUSTED): dashes and the last line only", async () => {
     const final = loadMain(FINAL_THREAD_CODE);
     const plan = { campaignId: "c", now: "2026-10-29T13:00:00.000Z" };
     const turn = { account: { id: "acc-ai-1", username: "sophie_ai" } };
-    const first = { ok: false, thread: null };
-    const out = await final(first, { json: { subject: "s", post: "P", replies: ["R1", "R2"] } }, COMPOSE, plan, turn);
-    expect(out).toMatchObject({ accountId: "acc-ai-1", replyCount: 2, reply1: "R1", reply3: null });
+    const out = await final({ json: { subject: "s", post: "Fast replies win \u2014 at least 30% arrive within 24 hours.", replies: ["Get started: distribute.you\nAnswer the same day, 47 of them.", "Your team already does this well.\n\nGet started: distribute.you"] } }, COMPOSE, plan, turn);
+    expect(out.post).toBe("Fast replies win, at least 30% arrive within 24 hours.");
+    expect(out.reply1).toBe("Answer the same day, 47 of them.");
+    expect(out.reply2).toBe("Your team already does this well.\n\nGet started: distribute.you");
+    expect(out).toMatchObject({ accountId: "acc-ai-1", replyCount: 2, reply3: null });
     expect(new Set(Object.values(out.keys)).size).toBe(4);
-    await expect(final(first, { json: { subject: "s", post: "P", replies: ["R1"] } }, COMPOSE, plan, turn)).rejects.toThrow(/nothing published/);
+    const long = await final({ json: { subject: "s", post: "P", replies: ["1", "2", "3", "4"] } }, COMPOSE, plan, turn);
+    expect(long.replyCount).toBe(3);
+    expect(long.reply3).toBe("3\n\nGet started: distribute.you");
+    await expect(final({ json: { subject: "s", post: "", replies: [] } }, COMPOSE, plan, turn)).rejects.toThrow(/no main post/);
+  });
+
+  it("no validation, retry or refusal sits on the writer's output", () => {
+    const ids = dag.nodes.map((n) => n.id);
+    expect(ids.filter((id) => /check-thread|rewrite/.test(id))).toEqual([]);
+    expect(dag.edges).toContainEqual({ from: "write-thread", to: "final-thread" });
   });
 
   it("a dead account ends idle, any other refusal fails the run", async () => {
