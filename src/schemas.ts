@@ -456,12 +456,27 @@ const NullableCampaignAttributionContextSchema = CampaignAttributionContextSchem
   .describe("Literal attribution context preserved from execution, or null when the execution was untagged.")
   .openapi("NullableCampaignAttributionContext");
 
+// REACTIVE-THROUGHPUT-1028-WF
+const ExecutionSubjectSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .describe(
+    "Optional: who/what this execution is about (e.g. the lead or person a trigger occurrence names, " +
+    "as the caller keys it: `lead:<id>`, `email:<addr>`). When stated, admission is per (org, campaign, subject): " +
+    "executions of one campaign about DIFFERENT subjects are admitted side by side, two about the SAME subject " +
+    "conflict under conflictPolicy. When omitted, admission is campaign-wide (one active execution per org + campaign), " +
+    "unchanged. A subject execution and a campaign-wide one never block each other. Stored in executionKey " +
+    "(`campaign:<orgId>:<campaignId>:subject:<executionSubject>`)."
+  );
+
 export const ExecuteWorkflowSchema = z
   .object({
     conflictPolicy: z.enum(["use_existing", "reject"]).optional().describe(
-      "How to handle an already-active campaign-scoped execution for the same org + campaign. " +
-      "When omitted, workflow-service returns the existing active execution."
+      "How to handle an already-active campaign-scoped execution for the same org + campaign " +
+      "(+ executionSubject when stated). When omitted, workflow-service returns the existing active execution."
     ),
+    executionSubject: ExecutionSubjectSchema.optional(),
     attributionContext: CampaignAttributionContextSchema.optional().describe(
       "Optional real campaign attribution context to preserve on the workflow run and expose to nodes via flow_input.attributionContext. " +
       "Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."
@@ -543,9 +558,10 @@ export const WorkflowDeprecatedResponseSchema = z
 export const ExecuteByNameSchema = z
   .object({
     conflictPolicy: z.enum(["use_existing", "reject"]).optional().describe(
-      "How to handle an already-active campaign-scoped execution for the same org + campaign. " +
-      "When omitted, workflow-service returns the existing active execution."
+      "How to handle an already-active campaign-scoped execution for the same org + campaign " +
+      "(+ executionSubject when stated). When omitted, workflow-service returns the existing active execution."
     ),
+    executionSubject: ExecutionSubjectSchema.optional(),
     attributionContext: CampaignAttributionContextSchema.optional().describe(
       "Optional real campaign attribution context to preserve on the workflow run and expose to nodes via flow_input.attributionContext. " +
       "Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."

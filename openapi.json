@@ -1881,7 +1881,13 @@
               "use_existing",
               "reject"
             ],
-            "description": "How to handle an already-active campaign-scoped execution for the same org + campaign. When omitted, workflow-service returns the existing active execution."
+            "description": "How to handle an already-active campaign-scoped execution for the same org + campaign (+ executionSubject when stated). When omitted, workflow-service returns the existing active execution."
+          },
+          "executionSubject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Optional: who/what this execution is about (e.g. the lead or person a trigger occurrence names, as the caller keys it: `lead:<id>`, `email:<addr>`). When stated, admission is per (org, campaign, subject): executions of one campaign about DIFFERENT subjects are admitted side by side, two about the SAME subject conflict under conflictPolicy. When omitted, admission is campaign-wide (one active execution per org + campaign), unchanged. A subject execution and a campaign-wide one never block each other. Stored in executionKey (`campaign:<orgId>:<campaignId>:subject:<executionSubject>`)."
           },
           "attributionContext": {
             "$ref": "#/components/schemas/CampaignAttributionContext"
@@ -2472,7 +2478,13 @@
               "use_existing",
               "reject"
             ],
-            "description": "How to handle an already-active campaign-scoped execution for the same org + campaign. When omitted, workflow-service returns the existing active execution."
+            "description": "How to handle an already-active campaign-scoped execution for the same org + campaign (+ executionSubject when stated). When omitted, workflow-service returns the existing active execution."
+          },
+          "executionSubject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Optional: who/what this execution is about (e.g. the lead or person a trigger occurrence names, as the caller keys it: `lead:<id>`, `email:<addr>`). When stated, admission is per (org, campaign, subject): executions of one campaign about DIFFERENT subjects are admitted side by side, two about the SAME subject conflict under conflictPolicy. When omitted, admission is campaign-wide (one active execution per org + campaign), unchanged. A subject execution and a campaign-wide one never block each other. Stored in executionKey (`campaign:<orgId>:<campaignId>:subject:<executionSubject>`)."
           },
           "attributionContext": {
             "$ref": "#/components/schemas/CampaignAttributionContext"
