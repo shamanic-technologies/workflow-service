@@ -92,6 +92,7 @@ type ExecuteBody = {
   inputs?: Record<string, unknown>;
   attributionContext?: Record<string, unknown>;
   conflictPolicy?: ExecutionConflictPolicy;
+  executionSubject?: string;
 };
 
 async function startWorkflowExecution(params: {
@@ -145,6 +146,7 @@ async function startWorkflowExecution(params: {
     inputs: body.inputs,
     attributionContext,
     conflictPolicy,
+    executionSubject: body.executionSubject,
   });
 
   if (reservation.kind === "conflict") {
@@ -157,7 +159,9 @@ async function startWorkflowExecution(params: {
 
     if (conflictPolicy === "reject") {
       res.status(409).json({
-        error: "Active workflow execution already exists for this campaign",
+        error: body.executionSubject === undefined
+          ? "Active workflow execution already exists for this campaign"
+          : "Active workflow execution already exists for this campaign and subject",
         workflowRun: formatRun(reservation.run),
       });
       return;

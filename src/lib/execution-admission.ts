@@ -15,8 +15,20 @@ export type ExecutionConflictPolicy = "use_existing" | "reject";
 
 const STALE_DISPATCHING_MS = 10 * 60 * 1000;
 
-export function campaignExecutionKey(orgId: string, campaignId: string): string {
-  return `${EXECUTION_SCOPE_CAMPAIGN}:${orgId}:${campaignId}`;
+/**
+ * REACTIVE-THROUGHPUT-1028-WF: the admission key. No subject = ONE active
+ * execution per (org, campaign), byte-identical to before. A subject (the
+ * person/item one execution is about, e.g. the lead a trigger occurrence names)
+ * narrows the key to (org, campaign, subject): executions of one campaign about
+ * DIFFERENT subjects run side by side, two about the SAME subject still conflict
+ * under the caller's conflictPolicy. The two key families never collide (a
+ * campaign-wide key has no `:subject:` part), so a subject execution and a
+ * campaign-wide one do not block each other: how many run at once is the
+ * caller's (campaign-service's) cap, never decided here.
+ */
+export function campaignExecutionKey(orgId: string, campaignId: string, subject?: string): string {
+  const base = `${EXECUTION_SCOPE_CAMPAIGN}:${orgId}:${campaignId}`;
+  return subject === undefined ? base : `${base}:subject:${subject}`;
 }
 
 export function resolveExecutionConflictPolicy(
@@ -36,6 +48,8 @@ export interface ReserveCampaignExecutionInput {
   inputs: Record<string, unknown> | undefined;
   attributionContext: CampaignAttributionContext | null;
   conflictPolicy: ExecutionConflictPolicy;
+  /** Who this execution is about; absent = campaign-wide admission. */
+  executionSubject?: string;
 }
 
 export type ReserveCampaignExecutionResult =
@@ -45,7 +59,7 @@ export type ReserveCampaignExecutionResult =
 export async function reserveCampaignExecution(
   input: ReserveCampaignExecutionInput,
 ): Promise<ReserveCampaignExecutionResult> {
-  const executionKey = campaignExecutionKey(input.orgId, input.campaignId);
+  const executionKey = campaignExecutionKey(input.orgId, input.campaignId, input.executionSubject);
   const staleBefore = new Date(Date.now() - STALE_DISPATCHING_MS);
   let result: ReserveCampaignExecutionResult | null = null;
 

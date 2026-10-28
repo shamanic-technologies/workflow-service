@@ -798,6 +798,77 @@ describe("POST /workflows/by-slug/:slug/execute", () => {
     await first;
   });
 
+  it("admits concurrent executions of one campaign about DIFFERENT subjects (REACTIVE-THROUGHPUT-1028-WF)", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "campaign-subject-flow",
+      workflowName: "Campaign Subject Flow",
+      workflowDynastySlug: "campaign-subject-flow",
+      workflowDynastyName: "Campaign Subject Flow",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/campaign_subject_flow",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+
+    let resolveRunFlow: (jobId: string) => void = () => {};
+    mockRunFlow.mockImplementationOnce(
+      () => new Promise<string>((resolve) => {
+        resolveRunFlow = resolve;
+      }),
+    );
+
+    const first = request
+      .post("/workflows/by-slug/campaign-subject-flow/execute")
+      .set(AUTH)
+      .send({ conflictPolicy: "reject", executionSubject: "lead:a", inputs: {} })
+      .then((res) => res);
+
+    await waitUntil(() => mockRunFlow.mock.calls.length === 1);
+
+    const other = await request
+      .post("/workflows/by-slug/campaign-subject-flow/execute")
+      .set(AUTH)
+      .send({ conflictPolicy: "reject", executionSubject: "lead:b", inputs: {} });
+    expect(other.status).toBe(201);
+    expect(other.body.executionKey).toBe("campaign:org-1:camp-1:subject:lead:b");
+
+    const same = await request
+      .post("/workflows/by-slug/campaign-subject-flow/execute")
+      .set(AUTH)
+      .send({ conflictPolicy: "reject", executionSubject: "lead:a", inputs: {} });
+    expect(same.status).toBe(409);
+    expect(same.body.error).toContain("campaign and subject");
+    expect(same.body.workflowRun.executionKey).toBe("campaign:org-1:camp-1:subject:lead:a");
+
+    resolveRunFlow("job-uuid-subject");
+    const firstRes = await first;
+    expect(firstRes.status).toBe(201);
+    expect(mockRunFlow).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an empty executionSubject", async () => {
+    mockWorkflows.push({
+      id: WF_ID,
+      orgId: "deployer-org",
+      workflowSlug: "campaign-subject-empty",
+      workflowName: "Campaign Subject Empty",
+      workflowDynastySlug: "campaign-subject-empty",
+      workflowDynastyName: "Campaign Subject Empty",
+      version: 1,
+      windmillFlowPath: "f/workflows/org_1/campaign_subject_empty",
+      windmillWorkspace: "prod",
+      dag: VALID_LINEAR_DAG,
+    });
+    const res = await request
+      .post("/workflows/by-slug/campaign-subject-empty/execute")
+      .set(AUTH)
+      .send({ executionSubject: "", inputs: {} });
+    expect(res.status).toBe(400);
+    expect(mockRunFlow).not.toHaveBeenCalled();
+  });
+
   it("allows concurrent executions for different campaigns in the same org", async () => {
     mockWorkflows.push({
       id: WF_ID,
