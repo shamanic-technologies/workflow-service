@@ -847,6 +847,34 @@ function sendsFromBrandWhatsapp(node: DAGNode): boolean {
   );
 }
 
+/**
+ * A writer never writes on a person thread crm-service says is still moving (UNIBOX-FACT-LAG-1028, owner 2026-10-28:
+ * « Les paiements refusés doivent être dans l'unibox tout simplement, comme toutes les tentatives de paiement »).
+ * crm-service's person timeline answers `factFeed.settled: false` while a record of the thread (a payment, a refused
+ * payment, an onboarding event, a message...) is recorded but not yet stated on the people fact feed; it states it
+ * within about a minute. Injected at CONVERSION time on EVERY crm `GET /orgs/people/timeline` read, so every writer
+ * (and the cold email's person-thread step) waits for the settled thread before anything reads it, and no stored DAG
+ * changes. Driven by crm-service's signal only: an answer with no `factFeed`, or `settled: true`, is used at once,
+ * byte-identical to before. Still moving when the wait runs out = the read THROWS (crm-service's emitter is stuck):
+ * nothing drafted or sent on that read, the run fails and the person is served again later, never burned.
+ */
+export const SETTLED_THREAD_WAIT = {
+  field: "factFeed.settled",
+  equals: false,
+  intervalSeconds: 10,
+  timeoutSeconds: 180,
+  throwWhenTimedOut: true,
+} as const;
+
+export function readsPersonThread(node: DAGNode): boolean {
+  return (
+    node.type === "http.call" &&
+    node.config?.service === "crm" &&
+    String(node.config?.method ?? "").toUpperCase() === "GET" &&
+    node.config?.path === "/orgs/people/timeline"
+  );
+}
+
 export function campaignSenderLineExpr(bodyExpr: string, lineRef: string): string {
   return `((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) ? { ...b, fromAccount: f.trim() } : b))(${bodyExpr}, ${lineRef})`;
 }
@@ -1251,6 +1279,15 @@ function nodeToModule(
       type: "javascript",
       expr: campaignSenderLineExpr(bodyExpr, `results.${offerScope.startRunModuleId}?.${CAMPAIGN_SENDER_LINE_FIELD}`),
     };
+  }
+
+  // Every person-thread read waits for crm-service's settled thread (SETTLED_THREAD_WAIT), unless the node states its own wait.
+  if (
+    readsPersonThread(node) &&
+    !("pollWhile" in scriptConfig) &&
+    !(resolvedInputMapping && "pollWhile" in resolvedInputMapping)
+  ) {
+    inputTransforms.pollWhile = { type: "static", value: { ...SETTLED_THREAD_WAIT } };
   }
 
   // A send the sender refuses for this one lead ends the run as a normal run.
