@@ -29,6 +29,7 @@ import {
 import { computeDAGSignature } from "../dist/lib/dag-signature.js";
 import { keepForkMark } from "../dist/lib/fork-mark.js";
 import { isClientCheckInDag } from "../dist/lib/client-check-in-dag.js";
+import { isBrandTeamDag } from "../dist/lib/brand-team-dag.js";
 import { FOLLOW_UP_REACTIVE_LEADS_DESCRIPTION, LEADS_ONLY_AUDIENCE, LEADS_ONLY_LEG_KEYS } from "../dist/lib/lead-follow-up-leads-dag.js";
 
 /** The legs whose dynasty serves the Copilot's instruction follow-ups: it reads the figures the instruction asks for. */
@@ -72,9 +73,10 @@ const rows = Array.isArray(existing.payload) ? existing.payload : (existing.payl
 
 // One target per assigned dynasty, from the legs it serves.
 const legsOf = new Map();
-// A client check-in dynasty (CLIENT-CHECKIN-ON-LEAD-EVENT-1024) shares a leg of this channel but is its own workflow:
-// `seed-client-check-in-workflow.mjs` keeps it, never this script.
-const clientDynasties = new Set(rows.filter((r) => isClientCheckInDag(r.dag)).map((r) => r.workflowDynastySlug));
+// A client check-in dynasty (CLIENT-CHECKIN-ON-LEAD-EVENT-1024) and the brand's team dynasty (ONE-AI-CONVERSES-1029)
+// share a leg of this channel but are their own workflows: `seed-client-check-in-workflow.mjs` and
+// `seed-brand-team-workflow.mjs` keep them, never this script.
+const clientDynasties = new Set(rows.filter((r) => isClientCheckInDag(r.dag) || isBrandTeamDag(r.dag)).map((r) => r.workflowDynastySlug));
 for (const a of assigned.payload.assignments.filter((x) => x.state === "active" && !clientDynasties.has(x.workflowDynastySlug))) {
   legsOf.set(a.workflowDynastySlug, [...(legsOf.get(a.workflowDynastySlug) ?? []), a.legKey]);
 }
