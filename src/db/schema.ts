@@ -8,6 +8,9 @@ import {
   index,
   uniqueIndex,
   primaryKey,
+  date,
+  bigint,
+  numeric,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -236,4 +239,23 @@ export const scriptRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (table) => [index("idx_script_runs_script").on(table.scriptId, table.createdAt)]
+);
+
+// FACTORY-P3: the daily Monitoring series per outcome x path (src/lib/scripts/script-monitoring.ts). Migration 0043.
+export const scriptMonitoringDays = pgTable(
+  "script_monitoring_days",
+  {
+    day: date("day", { mode: "string" }).notNull(),
+    outcome: text("outcome").notNull(),
+    path: text("path").notNull(),
+    serviceName: text("service_name").notNull(),
+    taskNames: jsonb("task_names").$type<string[]>().notNull(),
+    totalRunCount: bigint("total_run_count", { mode: "number" }).notNull(),
+    sampleSize: integer("sample_size").notNull(),
+    completedCount: integer("completed_count").notNull(),
+    failedCount: integer("failed_count").notNull(),
+    avgCostCents: numeric("avg_cost_cents"),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.day, table.outcome, table.path] })]
 );
