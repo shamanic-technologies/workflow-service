@@ -342,6 +342,20 @@ export async function putCases(db: AnyPgDb, outcome: string, dynasty: string, ca
   return { stored: cases.length, total: await caseCount(db, outcome, dynasty) };
 }
 
+/**
+ * Re-prove a dynasty's ACTIVE version on every case it now carries (cases were just added) and store the proof on that
+ * version. A miss is stored too: the runner then refuses the version (409 `not_proven`) until a version that replays
+ * 100 % is upgraded in. No active version = nothing to prove.
+ */
+export async function reproveActive(db: AnyPgDb, outcome: string, dynasty: string): Promise<{ scriptSlug: string; cases: number; matches: number } | null> {
+  const active = await activeVersion(db, outcome, dynasty);
+  if (!active) return null;
+  const summary = await proveOnCases(db, outcome, dynasty, active.code);
+  if (!summary) return null;
+  await db.update(scripts).set({ replay: { cases: summary.cases, matches: summary.matches }, updatedAt: new Date() }).where(eq(scripts.id, active.id));
+  return { scriptSlug: `${outcome}/${dynasty}/v${active.version}`, cases: summary.cases, matches: summary.matches };
+}
+
 /** The production check that an outcome is a features-service catalogue step (`GET /public/catalogue/steps`). */
 export function productionCatalogueDeps(): CatalogueDeps {
   return {
