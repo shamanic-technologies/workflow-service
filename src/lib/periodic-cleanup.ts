@@ -1,3 +1,4 @@
+import { noteScriptMonitoring } from "./scripts/script-monitoring.js";
 import type { db as DbInstance } from "../db/index.js";
 import type { WindmillClient } from "./windmill-client.js";
 import { cleanupOrphanedWindmillFlows } from "./windmill-flow-cleanup.js";
@@ -112,4 +113,6 @@ export function noteWorkflowWrite(): void {
   sharedCleanup?.maybeRun();
   // WF-SHORT-LINE-1023: the same traffic keeps every pipe's short lines true.
   noteSiblingLinesMaybeStale();
+  // FACTORY-P3: the scripts' daily Monitoring row rides the same traffic (at most once per UTC day).
+  noteScriptMonitoring();
 }
