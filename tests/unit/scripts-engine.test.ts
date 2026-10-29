@@ -11,6 +11,7 @@ import {
   forkScript,
   listScripts,
   putCases,
+  reproveActive,
   setDynastyStatus,
   upgradeScript,
   type AnyPgDb,
@@ -111,6 +112,19 @@ describe("script catalogue (dynasties)", () => {
     expect(retired.map((v) => [v.status, v.dynastyStatus])).toEqual([["deprecated", "deprecated"], ["deprecated", "deprecated"]]);
     const restored = await setDynastyStatus(db, "message_written", "dy_writer", "active", "back");
     expect(restored.map((v) => [v.version, v.status, v.dynastyStatus])).toEqual([[2, "active", "active"], [1, "deprecated", "active"]]);
+  });
+
+  it("fresh cases re-prove the ACTIVE version; a miss is stored and the runner refuses it until a 100 % version", async () => {
+    await putCases(db, "message_written", "dy_port", [CASE], "fictional");
+    await createScript(db, { outcome: "message_written", dynasty: "dy_port", code: WRITER_V1, description: "Port" }, author, deps);
+    const fresh = { ...CASE, id: "fictional-2", units: { ...CASE.units, lead_identified: { name: "Bo" } }, calls: [{ ...CASE.calls[0]!, args: { message: "Write to Bo", responseSchema: "email_sequence" } }] };
+    await putCases(db, "message_written", "dy_port", [fresh], "fictional fresh");
+    expect(await reproveActive(db, "message_written", "dy_port")).toEqual({ scriptSlug: "message_written/dy_port/v1", cases: 2, matches: 2 });
+    const wrong = { ...fresh, id: "fictional-3", expect: { content: { subject: "Something else" } } };
+    await putCases(db, "message_written", "dy_port", [wrong], "fictional wrong");
+    expect(await reproveActive(db, "message_written", "dy_port")).toEqual({ scriptSlug: "message_written/dy_port/v1", cases: 3, matches: 2 });
+    expect((await activeVersion(db, "message_written", "dy_port"))!.replay).toEqual({ cases: 3, matches: 2 });
+    expect(await reproveActive(db, "message_written", "dy_none")).toBeNull();
   });
 
   it("a PORT stores a version only when it replays 100 % of its cases; a behaviour change is a fork", async () => {

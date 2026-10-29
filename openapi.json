@@ -9560,6 +9560,20 @@
             "required": true,
             "name": "dynasty",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "description": "`true` (the last batch): re-replay the active version on every case and store its proof; a miss makes the runner refuse it (409 not_proven) until a version replaying 100 % is upgraded in."
+            },
+            "required": false,
+            "description": "`true` (the last batch): re-replay the active version on every case and store its proof; a miss makes the runner refuse it (409 not_proven) until a version replaying 100 % is upgraded in.",
+            "name": "reprove",
+            "in": "query"
           }
         ],
         "requestBody": {
@@ -9585,11 +9599,32 @@
                     },
                     "total": {
                       "type": "integer"
+                    },
+                    "reproved": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "scriptSlug": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "type": "integer"
+                        },
+                        "matches": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "scriptSlug",
+                        "cases",
+                        "matches"
+                      ]
                     }
                   },
                   "required": [
                     "stored",
-                    "total"
+                    "total",
+                    "reproved"
                   ]
                 }
               }
