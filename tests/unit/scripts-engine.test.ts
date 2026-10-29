@@ -165,6 +165,9 @@ describe("a script run as a step: isolation and ledger declaration", () => {
         calls.push({ body, headers });
         return { content: "", json: answer, model: "sonnet" };
       },
+      async judge() {
+        return { answers: {} };
+      },
       async readSkill() {
         return { content: "Write short and warm.", version: 3 };
       },
@@ -180,7 +183,7 @@ describe("a script run as a step: isolation and ledger declaration", () => {
       lead_identified: { content: { name: "Ana" }, subject: { service: "lead-service", id: "lead-42" } },
       template_written: { content: { text: "Write to {{name}}" } },
     },
-    tactics: { llm: { provider: "anthropic", model: "sonnet" } },
+    tactics: { llm: { provider: "anthropic", model: "sonnet" }, systemPrompt: "You write cold emails." },
   };
 
   it("opens a child run under the dynasty's task, calls the vendor ON that run, declares produced + consumed, closes it", async () => {
@@ -192,7 +195,7 @@ describe("a script run as a step: isolation and ledger declaration", () => {
     expect(l.calls[0]).toEqual(["create", { parentRunId: "run-parent", orgId: "org-test", userId: "user-1", taskName: scriptTaskName("message_written", "dy_writer"), headers: who.headers }]);
     expect(v.calls[0]!.headers).toMatchObject({ "x-run-id": "run-child-1", "x-org-id": "org-test", "x-user-id": "user-1", "x-brand-id": "brand-1", "x-campaign-id": "camp-1" });
     expect(v.calls[0]!.body).toMatchObject({ message: "Write to Ana", provider: "anthropic", model: "sonnet", responseFormat: "json" });
-    expect(String(v.calls[0]!.body.systemPrompt)).toContain("Write short and warm.");
+    expect(v.calls[0]!.body.systemPrompt).toBe("You write cold emails.");
     expect(l.calls[1]).toEqual([
       "declare",
       {
@@ -265,12 +268,39 @@ describe("a script run as a step: isolation and ledger declaration", () => {
 
 describe("vendors", () => {
   const ctx = { headers: { "x-run-id": "r" }, tactics: {} };
-  const deps: VendorDeps = { complete: async () => ({}), readSkill: async () => ({ content: "voice" }) };
-  it("refuses an unknown vendor, no LLM stated, Haiku 4.5, and an unreadable voice", async () => {
-    expect(await callVendor("http.get", {}, ctx, deps)).toEqual({ ok: false, data: { error: "no vendor named http.get (scripts may call: llm.complete)" } });
-    expect((await callVendor("llm.complete", { message: "x" }, ctx, deps)).data.error).toMatch(/needs an LLM/);
-    expect((await callVendor("llm.complete", { message: "x", provider: "anthropic", model: "claude-haiku-4-5" }, ctx, deps)).data.error).toMatch(/Haiku 4.5/);
-    const silent: VendorDeps = { ...deps, readSkill: async () => null };
-    expect((await callVendor("llm.complete", { message: "x", provider: "anthropic", model: "sonnet" }, ctx, silent)).data.error).toMatch(/our voice/);
+  const seen: Array<Record<string, unknown>> = [];
+  const deps: VendorDeps = {
+    complete: async (body) => {
+      seen.push(body);
+      return { content: "{}", json: { axes: ["size"], segments: [] }, model: "m", tokensInput: 1, tokensOutput: 2 };
+    },
+    judge: async (body) => {
+      seen.push(body);
+      return { answers: { answer: { noul: 0.8 } }, model: "jev" };
+    },
+    readSkill: async () => ({ content: "voice", version: 4 }),
+  };
+  it("refuses an unknown vendor, no LLM stated, no system prompt, and Haiku 4.5", async () => {
+    expect(await callVendor("http.get", {}, ctx, deps)).toEqual({ ok: false, data: { error: "no vendor named http.get (scripts may call: llm.complete, chat.complete, jev.noul, voice.read)" } });
+    expect((await callVendor("llm.complete", { message: "x", systemPrompt: "s" }, ctx, deps)).data.error).toMatch(/needs an LLM/);
+    expect((await callVendor("llm.complete", { message: "x", provider: "anthropic", model: "sonnet" }, ctx, deps)).data.error).toMatch(/needs a systemPrompt/);
+    expect((await callVendor("llm.complete", { message: "x", systemPrompt: "s", provider: "anthropic", model: "claude-haiku-4-5" }, ctx, deps)).data.error).toMatch(/Haiku 4.5/);
+  });
+  it("passes a completion VERBATIM (nothing appended), answers chat's whole answer or its JSON", async () => {
+    seen.length = 0;
+    const a = await callVendor("llm.complete", { message: "m", systemPrompt: "You classify.", model: "deepseek-flash", responseFormat: "json", temperature: 0 }, { ...ctx, tactics: { llm: { provider: "deepseek" } } }, deps);
+    expect(seen[0]).toEqual({ message: "m", systemPrompt: "You classify.", provider: "deepseek", model: "deepseek-flash", responseFormat: "json", temperature: 0 });
+    expect(a).toEqual({ ok: true, data: { content: "{}", json: { axes: ["size"], segments: [] }, model: "m", tokensInput: 1, tokensOutput: 2 } });
+    const c = await callVendor("chat.complete", { message: "m", systemPrompt: "s", provider: "google", model: "pro", disableThinking: true }, ctx, deps);
+    expect(seen[1]).toMatchObject({ disableThinking: true });
+    expect(c).toEqual({ ok: true, data: { axes: ["size"], segments: [] } });
+  });
+  it("jev.noul asks chat-service's judgments and answers probabilities; voice.read serves our voice", async () => {
+    seen.length = 0;
+    const j = await callVendor("jev.noul", { state: { a: 1 }, questions: { answer: { instructions: "Fits?" } } }, ctx, deps);
+    expect(seen[0]).toEqual({ state: { a: 1 }, questions: { answer: { type: "noul", instructions: "Fits?" } } });
+    expect(j).toEqual({ ok: true, data: { probabilities: { answer: 0.8 }, model: "jev" } });
+    expect(await callVendor("voice.read", null, ctx, deps)).toEqual({ ok: true, data: { content: "voice", version: 4 } });
+    expect((await callVendor("voice.read", null, ctx, { ...deps, readSkill: async () => null })).ok).toBe(false);
   });
 });
