@@ -125,7 +125,7 @@ describe("founder hello template", () => {
     expect(FOUNDER_HELLO_TEMPLATE).toMatch(/write the assistant's number exactly as THE ASSISTANT LINE gives it/);
     expect(FOUNDER_HELLO_TEMPLATE).toMatch(/Never "this number" or "here" for the assistant/);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/writing to them from that number and that they can run/);
-    expect(FOUNDER_HELLO_TEMPLATE).toContain("write one line holding only " + ASSISTANT_PART_MARKER);
+    expect(FOUNDER_HELLO_TEMPLATE).toContain("4. When THE ASSISTANT LINE names one, the message does not end with your hello: write a line holding only " + ASSISTANT_PART_MARKER);
     expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/\+\d{8,}/);
   });
 });
