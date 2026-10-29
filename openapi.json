@@ -3776,6 +3776,202 @@
           "source",
           "cases"
         ]
+      },
+      "ScriptMonitoringResponse": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string"
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string"
+                },
+                "servicePath": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "serviceName": {
+                      "type": "string"
+                    },
+                    "taskNames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "serviceName",
+                    "taskNames"
+                  ],
+                  "description": "The service task that makes this outcome today."
+                },
+                "scripts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "scriptSlug": {
+                        "type": "string"
+                      },
+                      "proof": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                          "cases": {
+                            "type": "integer"
+                          },
+                          "matches": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "cases",
+                          "matches"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "scriptSlug",
+                      "proof"
+                    ]
+                  }
+                },
+                "red": {
+                  "type": "boolean",
+                  "description": "The script path's error rate is above the service path's on the latest day."
+                },
+                "readyToDelete": {
+                  "type": "boolean",
+                  "description": "The service path made zero runs on each of the last 7 stored days: its code may leave its repo."
+                },
+                "days": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "day": {
+                        "type": "string"
+                      },
+                      "service": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "runs": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "Runs that day (day-over-day delta of totalRuns); null on the path's first stored day."
+                          },
+                          "totalRuns": {
+                            "type": "number"
+                          },
+                          "sample": {
+                            "type": "integer",
+                            "description": "Latest runs runs-service sampled for the rates below (up to 200 per task)."
+                          },
+                          "errorRate": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "avgCostCents": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "Average whole-subtree cost per run, in US cents, over the sample."
+                          },
+                          "tasks": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "runs",
+                          "totalRuns",
+                          "sample",
+                          "errorRate",
+                          "avgCostCents",
+                          "tasks"
+                        ]
+                      },
+                      "script": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "runs": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "Runs that day (day-over-day delta of totalRuns); null on the path's first stored day."
+                          },
+                          "totalRuns": {
+                            "type": "number"
+                          },
+                          "sample": {
+                            "type": "integer",
+                            "description": "Latest runs runs-service sampled for the rates below (up to 200 per task)."
+                          },
+                          "errorRate": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "avgCostCents": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "Average whole-subtree cost per run, in US cents, over the sample."
+                          },
+                          "tasks": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "runs",
+                          "totalRuns",
+                          "sample",
+                          "errorRate",
+                          "avgCostCents",
+                          "tasks"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "day",
+                      "service",
+                      "script"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "outcome",
+                "servicePath",
+                "scripts",
+                "red",
+                "readyToDelete",
+                "days"
+              ]
+            }
+          }
+        },
+        "required": [
+          "since",
+          "outcomes"
+        ]
       }
     },
     "parameters": {}
@@ -9626,6 +9822,54 @@
                     "total",
                     "reproved"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/scripts/monitoring": {
+      "get": {
+        "summary": "Monitoring series of the stored scripts: per outcome and day, script path vs the service path (service key only)",
+        "description": "FACTORY-P3. One stored row per day x outcome x path, read from runs-service task outcomes once per UTC day. `red` and `readyToDelete` are the two verdicts the dashboard Monitoring hub shows.",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Window in days, 1-365 (default 30)."
+            },
+            "required": false,
+            "description": "Window in days, 1-365 (default 30).",
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptMonitoringResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

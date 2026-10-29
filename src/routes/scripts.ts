@@ -35,6 +35,7 @@ import {
 import { ScriptRunFailed, productionLedgerDeps, runStoredScript } from "../lib/scripts/script-runner.js";
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
 import type { ReplayCase } from "../lib/scripts/replay.js";
+import { maybeRefreshMonitoring, productionMonitoringDeps, readMonitoring } from "../lib/scripts/script-monitoring.js";
 
 /**
  * FACTORY-P2-ENGINES: scripts as data (src/lib/scripts/*). Identity-gated (mounted after `requireIdentity`), except
@@ -249,6 +250,20 @@ internalScriptsRouter.put("/internal/scripts/dynasty/:outcome/:dynasty/cases", r
     res.json({ ...out, reproved });
   } catch (err) {
     fail(res, err, "store script cases");
+  }
+});
+
+internalScriptsRouter.get("/internal/scripts/monitoring", requireApiKey, async (req, res) => {
+  const days = req.query.days === undefined ? 30 : Number(req.query.days);
+  if (!Number.isInteger(days) || days < 1 || days > 365) {
+    res.status(400).json({ error: "days must be an integer from 1 to 365" });
+    return;
+  }
+  try {
+    await maybeRefreshMonitoring(db, productionMonitoringDeps());
+    res.json(await readMonitoring(db, days));
+  } catch (err) {
+    fail(res, err, "read script monitoring");
   }
 });
 

@@ -2716,3 +2716,44 @@ registry.registerPath({
   request: { params: scriptDynastyParams, query: z.object({ reprove: z.enum(["true", "false"]).optional().describe("`true` (the last batch): re-replay the active version on every case and store its proof; a miss makes the runner refuse it (409 not_proven) until a version replaying 100 % is upgraded in.") }), body: { required: true, content: { "application/json": { schema: PutScriptCasesRequestSchema } } } },
   responses: { 200: { description: "Stored", content: { "application/json": { schema: z.object({ stored: z.number().int(), total: z.number().int(), reproved: z.object({ scriptSlug: z.string(), cases: z.number().int(), matches: z.number().int() }).nullable() }) } } } },
 });
+
+const MonitoringPathDaySchema = z.object({
+  day: z.string(),
+  runs: z.number().nullable().describe("Runs that day (day-over-day delta of totalRuns); null on the path's first stored day."),
+  totalRuns: z.number(),
+  sample: z.number().int().describe("Latest runs runs-service sampled for the rates below (up to 200 per task)."),
+  errorRate: z.number().nullable(),
+  avgCostCents: z.number().nullable().describe("Average whole-subtree cost per run, in US cents, over the sample."),
+  tasks: z.array(z.string()),
+});
+
+export const ScriptMonitoringResponseSchema = z
+  .object({
+    since: z.string(),
+    outcomes: z.array(
+      z.object({
+        outcome: z.string(),
+        servicePath: z.object({ serviceName: z.string(), taskNames: z.array(z.string()) }).nullable().describe("The service task that makes this outcome today."),
+        scripts: z.array(z.object({ scriptSlug: z.string(), proof: z.object({ cases: z.number().int(), matches: z.number().int() }).nullable() })),
+        red: z.boolean().describe("The script path's error rate is above the service path's on the latest day."),
+        readyToDelete: z.boolean().describe("The service path made zero runs on each of the last 7 stored days: its code may leave its repo."),
+        days: z.array(z.object({ day: z.string(), service: MonitoringPathDaySchema.nullable(), script: MonitoringPathDaySchema.nullable() })),
+      }),
+    ),
+  })
+  .openapi("ScriptMonitoringResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/scripts/monitoring",
+  summary: "Monitoring series of the stored scripts: per outcome and day, script path vs the service path (service key only)",
+  description:
+    "FACTORY-P3. One stored row per day x outcome x path, read from runs-service task outcomes once per UTC day. `red` and `readyToDelete` are the two verdicts the dashboard Monitoring hub shows.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { query: z.object({ days: z.string().optional().describe("Window in days, 1-365 (default 30).") }) },
+  responses: {
+    200: { description: "The series", content: { "application/json": { schema: ScriptMonitoringResponseSchema } } },
+    400: { description: "Invalid days", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});

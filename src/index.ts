@@ -31,6 +31,7 @@ import internalRoutes from "./routes/internal.js";
 import figuresRoutes from "./routes/figures.js";
 import agentTurnsRoutes from "./routes/agent-turns.js";
 import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
+import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -158,6 +159,13 @@ async function boot(): Promise<void> {
     const siblingLines = new SiblingLineRefresher(db, 10 * 60 * 1000);
     setSiblingLineRefresher(siblingLines);
     setTimeout(() => siblingLines.maybeRun(), 60_000).unref();
+  }
+
+  // FACTORY-P3: the scripts' Monitoring series, stored daily (a minute after boot, then riding workflow traffic).
+  if (process.env.RUNS_SERVICE_URL && process.env.RUNS_SERVICE_API_KEY) {
+    const monitoring = { db, deps: productionMonitoringDeps() };
+    setMonitoringContext(monitoring);
+    setTimeout(() => void maybeRefreshMonitoring(monitoring.db, monitoring.deps), 60_000).unref();
   }
 
   // Validate & upgrade workflows last — the service already serves traffic
