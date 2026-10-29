@@ -29,7 +29,6 @@ import openapiRoutes from "./routes/openapi.js";
 import publicWorkflowsRoutes from "./routes/public-workflows.js";
 import internalRoutes from "./routes/internal.js";
 import figuresRoutes from "./routes/figures.js";
-import agentTurnsRoutes from "./routes/agent-turns.js";
 import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
 import { setGuardContext } from "./lib/scripts/script-guard.js";
@@ -67,7 +66,6 @@ app.use(workflowMergeRoutes);
 app.use(workflowsRoutes);
 app.use(workflowRunsRoutes);
 app.use(figuresRoutes);
-app.use(agentTurnsRoutes);
 app.use(scriptsRoutes);
 
 // 404 fallback
