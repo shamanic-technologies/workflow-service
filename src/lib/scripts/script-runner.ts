@@ -51,6 +51,11 @@ export interface RunScriptInput {
   recordedBy?: string;
   /** Answer every vendor call (args, answer; a completion's exact request + whole answer) for the recording service. */
   trace?: boolean;
+  /**
+   * Who pays the vendors: `platform` only through the service-key door `POST /internal/scripts/run` (a service's own
+   * sweep with no org request, billed as that service's own code was: chat-service's platform doors, on this run).
+   */
+  billing?: "org" | "platform";
 }
 
 export interface RunIdentity {
@@ -176,7 +181,7 @@ export async function runStoredScript(
       const answer = await callVendor(
         name,
         (args[1] ?? null) as Record<string, unknown> | null,
-        { headers: vendorHeaders, tactics, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
+        { headers: vendorHeaders, tactics, billing: input.billing ?? "org", ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
         deps.vendors,
       );
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }) });
@@ -280,6 +285,8 @@ export function productionLedgerDeps(): LedgerDeps {
     async createRun(opts) {
       need();
       const headers: Record<string, string> = { ...opts.headers, "content-type": "application/json", "x-api-key": key, "x-org-id": opts.orgId, "x-user-id": opts.userId, "x-run-id": opts.parentRunId };
+      // A service's own sweep runs for an org with no person behind it (instantly's reply-judging run): no user.
+      if (!opts.userId) delete headers["x-user-id"];
       const res = await fetch(`${base}/v1/runs`, { method: "POST", headers, body: JSON.stringify({ serviceName: "workflow", taskName: opts.taskName }), signal: AbortSignal.timeout(600_000) });
       const text = await res.text();
       if (!res.ok) throw new Error(`runs-service POST /v1/runs -> ${res.status}: ${text.slice(0, 300)}`);

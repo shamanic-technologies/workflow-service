@@ -24,6 +24,7 @@ import { scriptRuns, scriptSwitches, scripts, workflows } from "../../db/schema.
 import type { AnyPgDb } from "./script-catalogue.js";
 import { CLEAR_DEPRECATION, recordDeprecation } from "../deprecation.js";
 import { STILL_EXECUTABLE, stopExecutable } from "../executable-until.js";
+import { serviceSwitchLabel } from "./script-service-switch.js";
 
 export const WINDOW_MINUTES = 60;
 export const MIN_RUNS = 20;
@@ -86,9 +87,13 @@ export interface RollbackResult {
   skipped: Array<{ workflowDynastySlug: string; reason: string }>;
 }
 
+/** A switch row named the way Monitoring and a roll-back by name read it: its dynasty, or `service:<caller>`. */
+const switchLabel = (r: typeof scriptSwitches.$inferSelect) => (r.callerService ? serviceSwitchLabel(r.callerService) : r.workflowDynastySlug!);
+
 /**
  * Re-activate the previous version of every switched dynasty of `outcome` and deprecate the script version, one
  * transaction per dynasty (the active version is flipped BEFORE the previous one goes live: one active per dynasty).
+ * A SERVICE switch (script-service-switch.ts) is only marked rolled_back: its caller reads that and runs its own code.
  */
 export async function rollBackSwitches(
   db: AnyPgDb,
@@ -100,19 +105,33 @@ export async function rollBackSwitches(
   onlyDynasties?: string[],
 ): Promise<RollbackResult> {
   const all = await db.select().from(scriptSwitches).where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
-  const rows = onlyDynasties ? all.filter((r) => onlyDynasties.includes(r.workflowDynastySlug)) : all;
+  const rows = onlyDynasties ? all.filter((r) => onlyDynasties.includes(switchLabel(r))) : all;
   const out: RollbackResult = { rolledBack: [], skipped: [] };
   for (const sw of rows) {
+    if (sw.callerService) {
+      await db
+        .update(scriptSwitches)
+        .set({ state: "rolled_back", rolledBackAt: new Date(), rollbackReason: reason })
+        .where(and(eq(scriptSwitches.id, sw.id), eq(scriptSwitches.state, "switched")));
+      console.warn(`[workflow-service] script guard: ${outcome} ${switchLabel(sw)} rolled back to the service's own code: ${reason}`);
+      out.rolledBack.push({ workflowDynastySlug: switchLabel(sw), fromVersion: sw.fromVersion ?? 0, toVersion: sw.toVersion ?? 0 });
+      continue;
+    }
+    if (!sw.fromWorkflowId || !sw.toWorkflowId) {
+      out.skipped.push({ workflowDynastySlug: switchLabel(sw), reason: "a workflow switch without its versions" });
+      continue;
+    }
     const pair = await db.select().from(workflows).where(inArray(workflows.id, [sw.fromWorkflowId, sw.toWorkflowId]));
+    const slug = switchLabel(sw);
     const from = pair.find((w) => w.id === sw.fromWorkflowId);
     const to = pair.find((w) => w.id === sw.toWorkflowId);
     if (!from || !to) {
-      out.skipped.push({ workflowDynastySlug: sw.workflowDynastySlug, reason: "a version of the switch is gone" });
+      out.skipped.push({ workflowDynastySlug: slug, reason: "a version of the switch is gone" });
       continue;
     }
     if (to.status !== "active") {
       // The dynasty moved on (a later upgrade): the switch row stays, the guard names it.
-      out.skipped.push({ workflowDynastySlug: sw.workflowDynastySlug, reason: `v${sw.toVersion} is no longer the active version` });
+      out.skipped.push({ workflowDynastySlug: slug, reason: `v${sw.toVersion} is no longer the active version` });
       continue;
     }
     await deps.restoreFlow(from);
@@ -130,8 +149,8 @@ export async function rollBackSwitches(
         .set({ state: "rolled_back", rolledBackAt: new Date(), rollbackReason: reason })
         .where(eq(scriptSwitches.id, sw.id));
     });
-    console.warn(`[workflow-service] script guard: ${sw.workflowDynastySlug} rolled back v${sw.toVersion} -> v${sw.fromVersion}: ${reason}`);
-    out.rolledBack.push({ workflowDynastySlug: sw.workflowDynastySlug, fromVersion: sw.fromVersion, toVersion: sw.toVersion });
+    console.warn(`[workflow-service] script guard: ${slug} rolled back v${sw.toVersion} -> v${sw.fromVersion}: ${reason}`);
+    out.rolledBack.push({ workflowDynastySlug: slug, fromVersion: sw.fromVersion!, toVersion: sw.toVersion! });
   }
   return out;
 }
@@ -147,7 +166,7 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
   const verdict = shouldRollBack(w);
   if (!verdict.rollBack) return { checked: true as const, window: w, ...verdict, result: null };
   const reason =
-    `the stored script's error rate on writing was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
+    `the stored script's error rate on ${outcome} was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
     `(${w.failed} of ${w.runs} runs), above ${(100 * THRESHOLD_ERROR_RATE).toFixed(0)} % and above the service path's ${(100 * BASELINE_ERROR_RATE).toFixed(1)} % ` +
     `baseline beyond chance (p = ${verdict.pValue!.toExponential(1)})`;
   const result = await rollBackSwitches(db, deps, outcome, reason, "workflow-service script guard");
@@ -198,7 +217,14 @@ export async function guardView(db: AnyPgDb, outcome: string, now = new Date()) 
     rolledBackAt: state === "rolled_back" ? (rolled[0]?.rolledBackAt?.toISOString() ?? null) : null,
     reason: state === "rolled_back" ? (rolled[0]?.rollbackReason ?? null) : null,
     switches: rows
-      .sort((a, b) => a.workflowDynastySlug.localeCompare(b.workflowDynastySlug))
-      .map((r) => ({ workflowDynastySlug: r.workflowDynastySlug, fromVersion: r.fromVersion, toVersion: r.toVersion, state: r.state as "switched" | "rolled_back" })),
+      .sort((a, b) => switchLabel(a).localeCompare(switchLabel(b)))
+      .map((r) => ({
+        workflowDynastySlug: switchLabel(r),
+        fromVersion: r.fromVersion ?? 0,
+        toVersion: r.toVersion ?? 0,
+        state: r.state as "switched" | "rolled_back",
+        // A service switch: the caller service (fromVersion 0 = its own code, toVersion = the script version).
+        ...(r.callerService ? { callerService: r.callerService } : {}),
+      })),
   };
 }

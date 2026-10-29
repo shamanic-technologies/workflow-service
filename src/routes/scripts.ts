@@ -39,6 +39,7 @@ import { maybeRefreshMonitoring, productionMonitoringDeps, readMonitoring } from
 import { noteScriptRunForGuard, rollBackSwitches, guardView } from "../lib/scripts/script-guard.js";
 import { SwitchError, recordSwitch } from "../lib/scripts/script-writer-switch.js";
 import { productionRollbackDeps } from "../lib/scripts/script-guard-deps.js";
+import { serviceSwitchState, switchService } from "../lib/scripts/script-service-switch.js";
 
 /**
  * FACTORY-P2-ENGINES: scripts as data (src/lib/scripts/*). Identity-gated (mounted after `requireIdentity`), except
@@ -239,6 +240,80 @@ router.post("/orgs/scripts/run", requireApiKey, async (req, res) => {
       return;
     }
     fail(res, err, "run script");
+  }
+});
+
+// FACTORY-P3 service switch: the door a service calls in place of its own code for an outcome it makes with no org
+// request behind it (instantly's reply judge). Service key only (never reachable through the gateway): its vendors are
+// PLATFORM-billed exactly as that service's own code was, on the script's run, a child of the caller's own run.
+internalScriptsRouter.post("/internal/scripts/run", requireApiKey, async (req, res) => {
+  const header = (k: string) => (typeof req.headers[k] === "string" ? (req.headers[k] as string).trim() : "");
+  const orgId = header("x-org-id");
+  const parentRunId = header("x-run-id");
+  if (!orgId || !parentRunId) {
+    res.status(400).json({ error: "x-org-id (whose work it is) and x-run-id (the caller's own run) are required" });
+    return;
+  }
+  const parsed = RunScriptRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const result = await runStoredScript(
+      db,
+      { ...parsed.data, billing: "platform" },
+      { orgId, userId: header("x-user-id"), parentRunId, headers: extractDownstreamHeaders(req) },
+      { ledger: productionLedgerDeps(), vendors: productionVendorDeps() },
+    );
+    console.log(
+      `[workflow-service] script run (service, platform-billed) ${result.scriptSlug} run=${result.runId} parent=${parentRunId} status=${result.status} ` +
+        `vendors=${result.vendorCalls.map((c) => `${c.name}:${c.ok ? "ok" : "refused"}`).join(",") || "none"}`,
+    );
+    res.json(result);
+    noteScriptRunForGuard(parsed.data.outcome);
+  } catch (err) {
+    if (err instanceof ScriptRunFailed) {
+      noteScriptRunForGuard(parsed.data.outcome);
+      console.error(`[workflow-service] script run (service) ${err.result.scriptSlug} run=${err.result.runId} ${err.result.status}: ${err.result.error}`);
+      res.status(502).json({ error: `script ${err.result.scriptSlug} ${err.result.status}: ${err.result.error}`, details: err.result });
+      return;
+    }
+    fail(res, err, "run script");
+  }
+});
+
+internalScriptsRouter.post("/internal/scripts/switches/service", requireApiKey, async (req, res) => {
+  const str = (k: string) => (typeof req.body?.[k] === "string" ? (req.body[k] as string).trim() : "");
+  const input = { outcome: str("outcome"), dynasty: str("dynasty"), callerService: str("callerService") };
+  if (!input.outcome || !input.dynasty || !input.callerService) {
+    res.status(400).json({ error: "outcome, dynasty and callerService are required" });
+    return;
+  }
+  try {
+    const row = await switchService(db, input);
+    console.log(`[workflow-service] service switch ${input.outcome} (${input.callerService}) -> ${row.dynasty}/v${row.scriptVersion}`);
+    res.status(201).json(row);
+  } catch (err) {
+    if (err instanceof SwitchError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    fail(res, err, "switch a service onto a script");
+  }
+});
+
+internalScriptsRouter.get("/internal/scripts/switches/service", requireApiKey, async (req, res) => {
+  const outcome = typeof req.query.outcome === "string" ? req.query.outcome : "";
+  const callerService = typeof req.query.callerService === "string" ? req.query.callerService : "";
+  if (!outcome || !callerService) {
+    res.status(400).json({ error: "outcome and callerService are required" });
+    return;
+  }
+  try {
+    res.json(await serviceSwitchState(db, outcome, callerService));
+  } catch (err) {
+    fail(res, err, "read a service switch");
   }
 });
 

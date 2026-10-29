@@ -316,6 +316,13 @@
       "when": 1793000000000,
       "tag": "0044_script_switches",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793100000000,
+      "tag": "0045_script_service_switches",
+      "breakpoints": true
     }
   ]
 }

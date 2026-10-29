@@ -268,11 +268,16 @@ export const scriptSwitches = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     outcome: text("outcome").notNull(),
     dynasty: text("dynasty").notNull(),
-    workflowDynastySlug: text("workflow_dynasty_slug").notNull(),
-    fromWorkflowId: uuid("from_workflow_id").notNull(),
-    fromVersion: integer("from_version").notNull(),
-    toWorkflowId: uuid("to_workflow_id").notNull(),
-    toVersion: integer("to_version").notNull(),
+    /** A workflow switch: the dynasty upgraded onto the script (null on a SERVICE switch). */
+    workflowDynastySlug: text("workflow_dynasty_slug"),
+    fromWorkflowId: uuid("from_workflow_id"),
+    fromVersion: integer("from_version"),
+    toWorkflowId: uuid("to_workflow_id"),
+    toVersion: integer("to_version"),
+    /** A SERVICE switch (migration 0045): the service that makes the outcome in its own code and now calls the script. */
+    callerService: text("caller_service"),
+    /** The script version a service switch was proven on. */
+    scriptVersion: integer("script_version"),
     state: text("state").notNull().default("switched"),
     switchedAt: timestamp("switched_at", { withTimezone: true }).notNull().defaultNow(),
     rolledBackAt: timestamp("rolled_back_at", { withTimezone: true }),

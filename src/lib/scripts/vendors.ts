@@ -17,6 +17,14 @@ export interface VendorDeps {
   judge(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
   /** chat-service `GET /internal/skills/{slug}` (our voice, read live). */
   readSkill(slug: string): Promise<{ content?: unknown; version?: unknown } | null>;
+  /**
+   * chat-service `POST /internal/platform-complete`: the same completion, PLATFORM-billed, its platform run a child of
+   * the script's run (`x-run-id`). Only for a run whose caller has no org request behind it (a service's own sweep,
+   * `POST /internal/scripts/run`), exactly as that service's own code called it.
+   */
+  platformComplete(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
+  /** chat-service `POST /internal/platform-judgments` (Jev, platform-billed) on the script's run. */
+  platformJudge(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
 }
 
 export interface VendorCallContext {
@@ -29,6 +37,19 @@ export interface VendorCallContext {
    * `trace: true`): the service that records the Unit stores them (the fleet writer: content-generation's row).
    */
   onCompletion?: (exchange: { sent: Record<string, unknown>; raw: Record<string, unknown> }) => void;
+  /**
+   * Who pays the vendor (the caller's choice, never the script's): `org` (default, the run's org through `/complete`)
+   * or `platform` (a service's own sweep with no org request: chat-service's platform doors, x-run-id = the run).
+   */
+  billing?: "org" | "platform";
+}
+
+/** The headers of a platform call: only whose work it is (the script's run), as chat-service's platform doors read. */
+function platformHeaders(headers: Record<string, string>): Record<string, string> {
+  const runId = headers["x-run-id"];
+  // PLATFORM-CALLER-RUN-1024: a platform call always states whose work it is; here, always the script's own run.
+  if (!runId) throw new Error("a platform-billed vendor call needs the script's run (x-run-id)");
+  return { "x-run-id": runId };
 }
 
 /** An LLM completion, answered with chat-service's whole answer `{content, json, model, tokensInput, tokensOutput}`. */
@@ -113,7 +134,7 @@ async function complete(name: string, args: Record<string, unknown>, ctx: Vendor
   if ("error" in built) return refuse(`${name} ${built.error}`);
   let answer: Record<string, unknown>;
   try {
-    answer = await deps.complete(built.body, ctx.headers);
+    answer = ctx.billing === "platform" ? await deps.platformComplete(built.body, platformHeaders(ctx.headers)) : await deps.complete(built.body, ctx.headers);
   } catch (e) {
     return refuse(e instanceof Error ? e.message : String(e));
   }
@@ -137,7 +158,8 @@ async function jevNoul(args: Record<string, unknown>, ctx: VendorCallContext, de
   }
   let out: Record<string, unknown>;
   try {
-    out = await deps.judge({ ...(args.state !== undefined ? { state: args.state } : {}), questions: wire }, ctx.headers);
+    const body = { ...(args.state !== undefined ? { state: args.state } : {}), questions: wire };
+    out = ctx.billing === "platform" ? await deps.platformJudge(body, platformHeaders(ctx.headers)) : await deps.judge(body, ctx.headers);
   } catch (e) {
     return refuse(e instanceof Error ? e.message : String(e));
   }
@@ -196,6 +218,30 @@ export function productionVendorDeps(): VendorDeps {
       });
       const text = await res.text();
       if (!res.ok) throw new Error(`chat-service POST /orgs/judgments -> ${res.status}: ${text.slice(0, 300)}`);
+      return JSON.parse(text) as Record<string, unknown>;
+    },
+    async platformComplete(body, headers) {
+      need();
+      const res = await fetch(`${base}/internal/platform-complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, ...headers },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(600_000),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`chat-service POST /internal/platform-complete -> ${res.status}: ${text.slice(0, 300)}`);
+      return JSON.parse(text) as Record<string, unknown>;
+    },
+    async platformJudge(body, headers) {
+      need();
+      const res = await fetch(`${base}/internal/platform-judgments`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, ...headers },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(600_000),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`chat-service POST /internal/platform-judgments -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
     async readSkill(slug) {
