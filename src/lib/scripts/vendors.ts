@@ -13,7 +13,9 @@ import type { VendorAnswer } from "./replay.js";
 export interface VendorDeps {
   /** chat-service `POST /complete` on the run (its own key + the given headers). */
   complete(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
-  /** chat-service `GET /internal/skills/{slug}` (our one voice, read live). */
+  /** chat-service `POST /orgs/judgments` (Jev) on the run. */
+  judge(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
+  /** chat-service `GET /internal/skills/{slug}` (our voice, read live). */
   readSkill(slug: string): Promise<{ content?: unknown; version?: unknown } | null>;
 }
 
@@ -24,8 +26,15 @@ export interface VendorCallContext {
   tactics: Record<string, unknown>;
 }
 
+/** An LLM completion, answered with chat-service's whole answer `{content, json, model, tokensInput, tokensOutput}`. */
 export const LLM_COMPLETE = "llm.complete";
-export const SCRIPT_VENDORS = [LLM_COMPLETE] as const;
+/** The same completion, answered with the model's parsed JSON object itself. */
+export const CHAT_COMPLETE = "chat.complete";
+/** Jev yes/no judgments: `{state, questions: {<key>: {instructions, whenTrue?, whenFalse?}}}` -> `{probabilities: {<key>: P(yes)}, model}`. */
+export const JEV_NOUL = "jev.noul";
+/** Our one voice (chat-service skill `client-comms`), for a writer that builds its own system prompt: `{content, version}`. */
+export const VOICE_READ = "voice.read";
+export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ] as const;
 
 /** Response schemas a script may name instead of spelling one (Anthropic needs a strict schema). */
 export const NAMED_RESPONSE_SCHEMAS: Record<string, Record<string, unknown>> = {
@@ -48,7 +57,6 @@ export const NAMED_RESPONSE_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
 };
 
-/** The voice every written word is drafted in (chat-service skill, read live; never a default voice). */
 export const VOICE_SKILL_SLUG = "client-comms";
 
 /** The owner's ban (2026-10-09): nothing goes to Haiku 4.5. */
@@ -62,53 +70,92 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
+/** chat-service `/complete` fields a script may state, passed through verbatim (the door owns their meaning). */
+const PASSTHROUGH_FIELDS = ["responseFormat", "temperature", "maxTokens", "webSearch", "disableThinking", "thinkingLevel", "effort"] as const;
+
 /**
- * `llm.complete` `{message, systemPrompt?, responseSchema?, provider?, model?, temperature?, maxTokens?}`. The LLM is
- * the call's, else the script's tactic `llm` (`{provider, model}`); none = refused (never a default model). The system
- * prompt is the call's, else the tactic `systemPrompt`, else a plain one; our voice (client-comms) always follows it.
+ * The completion body, VERBATIM: nothing is added to the script's prompt (a classifier and a writer differ; a writer
+ * that wants our voice reads it with `voice.read`). The system prompt, provider and model are the call's, else the
+ * script's tactics (`systemPrompt`, `llm: {provider, model}`); missing = refused, never a default.
  */
-async function llmComplete(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+function completionBody(args: Record<string, unknown>, ctx: VendorCallContext): { body: Record<string, unknown> } | { error: string } {
   const message = str(args.message);
-  if (!message) return refuse("llm.complete needs a message");
+  if (!message) return { error: "needs a message" };
   const tacticLlm = (ctx.tactics.llm ?? null) as { provider?: unknown; model?: unknown } | null;
   const provider = str(args.provider) ?? str(tacticLlm?.provider);
   const model = str(args.model) ?? str(tacticLlm?.model);
-  if (!provider || !model) return refuse("llm.complete needs an LLM: state provider and model in the call or in the script's tactic `llm`");
-  if (isBannedModel(model)) return refuse(`llm.complete refuses ${model}: nothing goes to Haiku 4.5`);
-  let responseSchema: Record<string, unknown> | undefined;
+  if (!provider || !model) return { error: "needs an LLM: state provider and model in the call or in the script's tactic `llm`" };
+  if (isBannedModel(model)) return { error: `refuses ${model}: nothing goes to Haiku 4.5` };
+  const systemPrompt = typeof args.systemPrompt === "string" ? args.systemPrompt : str(ctx.tactics.systemPrompt);
+  if (systemPrompt === null || systemPrompt === undefined) return { error: "needs a systemPrompt: state it in the call or in the script's tactic `systemPrompt`" };
+  const body: Record<string, unknown> = { message, systemPrompt, provider, model };
   if (typeof args.responseSchema === "string") {
-    responseSchema = NAMED_RESPONSE_SCHEMAS[args.responseSchema];
-    if (!responseSchema) return refuse(`llm.complete: no response schema named ${args.responseSchema} (known: ${Object.keys(NAMED_RESPONSE_SCHEMAS).join(", ")})`);
-  } else if (args.responseSchema && typeof args.responseSchema === "object") {
-    responseSchema = args.responseSchema as Record<string, unknown>;
-  }
-  const skill = await deps.readSkill(VOICE_SKILL_SLUG);
-  const voice = typeof skill?.content === "string" ? skill.content.trim() : "";
-  if (!voice) return refuse(`llm.complete: our voice (${VOICE_SKILL_SLUG}) could not be read; nothing is written in a default voice`);
-  const stated = str(args.systemPrompt) ?? str(ctx.tactics.systemPrompt) ?? "You write exactly what the message asks, in the shape it asks for.";
-  const body: Record<string, unknown> = {
-    message,
-    systemPrompt: [stated, "", "OUR VOICE. How everything we send talks to a person. Follow it for HOW you write; WHAT you write stays as asked above.", "<<< OUR VOICE", voice, "OUR VOICE >>>"].join("\n"),
-    provider,
-    model,
-  };
-  if (responseSchema) {
+    const named = NAMED_RESPONSE_SCHEMAS[args.responseSchema];
+    if (!named) return { error: `no response schema named ${args.responseSchema} (known: ${Object.keys(NAMED_RESPONSE_SCHEMAS).join(", ")})` };
     body.responseFormat = "json";
-    body.responseSchema = responseSchema;
+    body.responseSchema = named;
+  } else if (args.responseSchema && typeof args.responseSchema === "object") {
+    body.responseFormat = "json";
+    body.responseSchema = args.responseSchema;
   }
-  if (typeof args.temperature === "number") body.temperature = args.temperature;
-  if (typeof args.maxTokens === "number") body.maxTokens = args.maxTokens;
+  for (const f of PASSTHROUGH_FIELDS) if (args[f] !== undefined) body[f] = args[f];
+  return { body };
+}
+
+async function complete(name: string, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  const built = completionBody(args, ctx);
+  if ("error" in built) return refuse(`${name} ${built.error}`);
+  let answer: Record<string, unknown>;
   try {
-    const answer = await deps.complete(body, ctx.headers);
-    return { ok: true, data: { content: answer.content ?? null, json: answer.json ?? null, model: answer.model ?? model } };
+    answer = await deps.complete(built.body, ctx.headers);
   } catch (e) {
     return refuse(e instanceof Error ? e.message : String(e));
   }
+  if (name === CHAT_COMPLETE) {
+    const json = answer.json;
+    if (!json || typeof json !== "object" || Array.isArray(json)) return refuse("chat.complete: the model answered no JSON object");
+    return { ok: true, data: json as Record<string, unknown> };
+  }
+  return { ok: true, data: { content: answer.content ?? null, json: answer.json ?? null, model: answer.model ?? null, tokensInput: answer.tokensInput ?? null, tokensOutput: answer.tokensOutput ?? null } };
+}
+
+async function jevNoul(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  const questions = args.questions as Record<string, { instructions?: unknown; whenTrue?: unknown; whenFalse?: unknown }> | undefined;
+  if (!questions || typeof questions !== "object" || Object.keys(questions).length === 0) return refuse("jev.noul needs questions");
+  const wire: Record<string, Record<string, unknown>> = {};
+  for (const [k, q] of Object.entries(questions)) {
+    const instructions = str(q?.instructions);
+    if (!instructions) return refuse(`jev.noul question ${k} needs instructions`);
+    wire[k] = { type: "noul", instructions, ...(str(q.whenTrue) && str(q.whenFalse) ? { criteria: { true: q.whenTrue, false: q.whenFalse } } : {}) };
+  }
+  let out: Record<string, unknown>;
+  try {
+    out = await deps.judge({ ...(args.state !== undefined ? { state: args.state } : {}), questions: wire }, ctx.headers);
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+  const answers = (out.answers ?? {}) as Record<string, Record<string, unknown>>;
+  const probabilities: Record<string, number> = {};
+  for (const k of Object.keys(wire)) {
+    const p = answers[k]?.noul;
+    if (typeof p !== "number" || !Number.isFinite(p) || p < 0 || p > 1) return refuse(`jev.noul: judgment ${k} answered without a readable probability`);
+    probabilities[k] = p;
+  }
+  return { ok: true, data: { probabilities, model: out.model ?? null } };
+}
+
+async function voiceRead(deps: VendorDeps): Promise<VendorAnswer> {
+  const skill = await deps.readSkill(VOICE_SKILL_SLUG).catch(() => null);
+  const content = typeof skill?.content === "string" ? skill.content.trim() : "";
+  if (!content) return refuse(`voice.read: our voice (${VOICE_SKILL_SLUG}) could not be read`);
+  return { ok: true, data: { content, version: typeof skill?.version === "number" ? skill.version : null } };
 }
 
 /** Call one vendor for a script. */
 export async function callVendor(name: string, args: Record<string, unknown> | null, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
-  if (name === LLM_COMPLETE) return llmComplete(args ?? {}, ctx, deps);
+  if (name === LLM_COMPLETE || name === CHAT_COMPLETE) return complete(name, args ?? {}, ctx, deps);
+  if (name === JEV_NOUL) return jevNoul(args ?? {}, ctx, deps);
+  if (name === VOICE_READ) return voiceRead(deps);
   return refuse(`no vendor named ${name} (scripts may call: ${SCRIPT_VENDORS.join(", ")})`);
 }
 
@@ -130,6 +177,18 @@ export function productionVendorDeps(): VendorDeps {
       });
       const text = await res.text();
       if (!res.ok) throw new Error(`chat-service POST /complete -> ${res.status}: ${text.slice(0, 300)}`);
+      return JSON.parse(text) as Record<string, unknown>;
+    },
+    async judge(body, headers) {
+      need();
+      const res = await fetch(`${base}/orgs/judgments`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, ...headers },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(600_000),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`chat-service POST /orgs/judgments -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
     async readSkill(slug) {

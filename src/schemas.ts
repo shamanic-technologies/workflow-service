@@ -2491,7 +2491,7 @@ export const CreateScriptRequestSchema = z
       .min(1)
       .max(500_000)
       .describe(
-        "TypeScript text whose default export is `run(ctx)`; it imports types only. `ctx.get(\"<outcome>\")` (a literal) returns a material Unit `{id, outcome, subject, ageDays, content}`; `ctx.vendor.call(name, args)` returns `{ok, data}` (vendors: `llm.complete`); `ctx.storage.get/set/delete/count(table, key)` are its Engine's notes for this org; `ctx.subject`, `ctx.tactics`, `ctx.day`, `ctx.request`. Return `{content: {...}}` (one Unit) or `null` (none).",
+        "TypeScript text whose default export is `run(ctx)`; it imports types only. `ctx.get(\"<outcome>\")` (a literal) returns a material Unit `{id, outcome, subject, ageDays, content}`; `ctx.vendor.call(name, args)` returns `{ok, data}` (vendors: `llm.complete`, `chat.complete`, `jev.noul`, `voice.read`); `ctx.storage.get/set/delete/count(table, key)` are its Engine's notes for this org; `ctx.subject`, `ctx.tactics`, `ctx.day`, `ctx.request`. Return `{content: {...}}` (one Unit) or `null` (none).",
       ),
     description: z.string().min(1).max(2000),
     tactics: z.record(z.string(), z.unknown()).optional(),
