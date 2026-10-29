@@ -5,11 +5,12 @@
  *
  *  1. features-service: the channel `founder-hello` (conversion, platform, software) and its leg Start -> Positive reply,
  *     reactive on `whatsapp_number_given` (run-time declarations: data, never code).
- *  2. content-generation: the template dynasty `founder-hello-whatsapp` on that pipe, its first version the text in
+ *  2. workflow-service: the workflow on that pipe (created, or UPGRADED in its dynasty when its DAG is behind), FIRST so
+ *     a new template version never reaches a DAG that cannot read it.
+ *  3. content-generation: the template dynasty `founder-hello-whatsapp` on that pipe, its first version the text in
  *     `src/lib/founder-hello-template.ts`; a head whose text differs gets a NEW version (never an edit in place).
- *  3. content-generation: on that pipe only, every writer LLM but GLM is deprecated (owner 2026-10-27: « laisse
+ *  4. content-generation: on that pipe only, every writer LLM but GLM is deprecated (owner 2026-10-27: « laisse
  *     uniquement GLM », « WTF tu as choisi Fable c'est bcp trop cher »).
- *  4. workflow-service: the workflow on that pipe (created, or UPGRADED in its dynasty when its DAG is behind).
  *
  * Usage, from inside the workflow-service container (dist built):
  *   node seed-founder-hello.mjs            # dry run
@@ -129,82 +130,7 @@ if (!published) {
   );
 }
 
-// 2. Template dynasty.
-const dynasty = await call(CG_URL, CG_KEY, "GET", `/internal/template-dynasties/${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG}/head`);
-if (dynasty.status === 404) {
-  await act(`create template dynasty ${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG}`, async () =>
-    must(
-      await call(
-        CG_URL,
-        CG_KEY,
-        "POST",
-        "/internal/template-dynasties",
-        {
-          slug: FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG,
-          name: FOUNDER_HELLO_TEMPLATE_DYNASTY_NAME,
-          description: "The founder's one WhatsApp hello to a person who just set up the product, naming what they set up.",
-          signature: "Hello, who you are in a few words, one line naming what they set up, their one next step. No question about what they told us.",
-          identity: "named",
-          featureSlug: FOUNDER_HELLO_FEATURE_SLUG,
-          legKey: FOUNDER_HELLO_LEG_KEY,
-          template: { prompt: FOUNDER_HELLO_TEMPLATE, variables: FOUNDER_HELLO_TEMPLATE_VARIABLES },
-        },
-        { "x-org-id": ORG_ID, "x-staff-email": STAFF_EMAIL },
-      ),
-      "create template dynasty",
-    ),
-  );
-} else {
-  const head = must(dynasty, "read template head", [200]);
-  if ((head.template?.prompt ?? "").trim() === FOUNDER_HELLO_TEMPLATE.trim()) {
-    console.log(`template dynasty ${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG} head is current (${head.template?.type})`);
-  } else {
-    await act(`add a version to ${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG} (head ${head.template?.type} differs)`, async () =>
-      must(
-        await call(
-          CG_URL,
-          CG_KEY,
-          "POST",
-          `/internal/template-dynasties/${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG}/versions`,
-          { prompt: FOUNDER_HELLO_TEMPLATE, variables: FOUNDER_HELLO_TEMPLATE_VARIABLES },
-          { "x-staff-email": STAFF_EMAIL },
-        ),
-        "add template version",
-      ),
-    );
-  }
-}
-
-// 3. GLM only on this pipe.
-const models = must(
-  await call(CG_URL, CG_KEY, "GET", `/internal/models?featureSlug=${FOUNDER_HELLO_FEATURE_SLUG}&legKey=${FOUNDER_HELLO_LEG_KEY}`),
-  "list models",
-  [200],
-).models;
-const isGlm = (m) => /^glm/i.test(m.model) || /^glm/i.test(m.dynasty ?? "");
-if (!models.some((m) => isGlm(m) && m.status === "active")) throw new Error("no active GLM model on the pipe: nothing would write the hello");
-for (const m of models.filter((x) => !isGlm(x) && x.status !== "deprecated")) {
-  await act(`deprecate ${m.model} on ${FOUNDER_HELLO_PIPE_ID}`, async () =>
-    must(
-      await call(
-        CG_URL,
-        CG_KEY,
-        "PUT",
-        `/internal/models/${encodeURIComponent(m.model)}/status`,
-        {
-          status: "deprecated",
-          reason: "The founder hello writes with GLM only (owner 2026-10-27: « laisse uniquement GLM, c'est très bien »)",
-          featureSlug: FOUNDER_HELLO_FEATURE_SLUG,
-          legKey: FOUNDER_HELLO_LEG_KEY,
-        },
-        { "x-staff-email": STAFF_EMAIL },
-      ),
-      `deprecate ${m.model}`,
-    ),
-  );
-}
-
-// 4. The workflow.
+// 2. The workflow, BEFORE the template: a template version the stored DAG cannot read yet (FOUNDER-HELLO-SOPHIE-NUMBER-1029: the assistant marker) never reaches a live run.
 const wfHeaders = { "x-org-id": ORG_ID, "x-user-id": USER_ID, "x-run-id": RUN_ID };
 const current = buildFounderHelloDag();
 const listed = must(
@@ -250,3 +176,79 @@ for (const w of rows) {
     console.log(`upgraded -> ${(up.workflow ?? up).workflowSlug}`);
   });
 }
+
+// 3. Template dynasty.
+const dynasty = await call(CG_URL, CG_KEY, "GET", `/internal/template-dynasties/${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG}/head`);
+if (dynasty.status === 404) {
+  await act(`create template dynasty ${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG}`, async () =>
+    must(
+      await call(
+        CG_URL,
+        CG_KEY,
+        "POST",
+        "/internal/template-dynasties",
+        {
+          slug: FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG,
+          name: FOUNDER_HELLO_TEMPLATE_DYNASTY_NAME,
+          description: "The founder's one WhatsApp hello to a person who just set up the product, naming what they set up.",
+          signature: "Hello, who you are in a few words, one line naming what they set up, their one next step. No question about what they told us.",
+          identity: "named",
+          featureSlug: FOUNDER_HELLO_FEATURE_SLUG,
+          legKey: FOUNDER_HELLO_LEG_KEY,
+          template: { prompt: FOUNDER_HELLO_TEMPLATE, variables: FOUNDER_HELLO_TEMPLATE_VARIABLES },
+        },
+        { "x-org-id": ORG_ID, "x-staff-email": STAFF_EMAIL },
+      ),
+      "create template dynasty",
+    ),
+  );
+} else {
+  const head = must(dynasty, "read template head", [200]);
+  if ((head.template?.prompt ?? "").trim() === FOUNDER_HELLO_TEMPLATE.trim()) {
+    console.log(`template dynasty ${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG} head is current (${head.template?.type})`);
+  } else {
+    await act(`add a version to ${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG} (head ${head.template?.type} differs)`, async () =>
+      must(
+        await call(
+          CG_URL,
+          CG_KEY,
+          "POST",
+          `/internal/template-dynasties/${FOUNDER_HELLO_TEMPLATE_DYNASTY_SLUG}/versions`,
+          { prompt: FOUNDER_HELLO_TEMPLATE, variables: FOUNDER_HELLO_TEMPLATE_VARIABLES },
+          { "x-staff-email": STAFF_EMAIL },
+        ),
+        "add template version",
+      ),
+    );
+  }
+}
+
+// 4. GLM only on this pipe.
+const models = must(
+  await call(CG_URL, CG_KEY, "GET", `/internal/models?featureSlug=${FOUNDER_HELLO_FEATURE_SLUG}&legKey=${FOUNDER_HELLO_LEG_KEY}`),
+  "list models",
+  [200],
+).models;
+const isGlm = (m) => /^glm/i.test(m.model) || /^glm/i.test(m.dynasty ?? "");
+if (!models.some((m) => isGlm(m) && m.status === "active")) throw new Error("no active GLM model on the pipe: nothing would write the hello");
+for (const m of models.filter((x) => !isGlm(x) && x.status !== "deprecated")) {
+  await act(`deprecate ${m.model} on ${FOUNDER_HELLO_PIPE_ID}`, async () =>
+    must(
+      await call(
+        CG_URL,
+        CG_KEY,
+        "PUT",
+        `/internal/models/${encodeURIComponent(m.model)}/status`,
+        {
+          status: "deprecated",
+          reason: "The founder hello writes with GLM only (owner 2026-10-27: « laisse uniquement GLM, c'est très bien »)",
+          featureSlug: FOUNDER_HELLO_FEATURE_SLUG,
+          legKey: FOUNDER_HELLO_LEG_KEY,
+        },
+        { "x-staff-email": STAFF_EMAIL },
+      ),
+      `deprecate ${m.model}`,
+    ),
+  );
+}
+

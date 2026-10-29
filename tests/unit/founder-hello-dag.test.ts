@@ -11,6 +11,7 @@ import {
   FOUNDER_HELLO_PIPE_ID,
   ONBOARDING_RECORD_SOURCE,
   ONBOARDING_RECORD_STEP,
+  ASSISTANT_PLAN_CODE,
   OUTCOME_CODE,
   PICK_PERSON_CODE,
   PLAN_CLAIM_CODE,
@@ -19,7 +20,7 @@ import {
   VOICE_PLAN_CODE,
   buildFounderHelloDag,
 } from "../../src/lib/founder-hello-dag.js";
-import { FOUNDER_HELLO_TEMPLATE, FOUNDER_HELLO_TEMPLATE_VARIABLES } from "../../src/lib/founder-hello-template.js";
+import { ASSISTANT_PART_MARKER, FOUNDER_HELLO_TEMPLATE, FOUNDER_HELLO_TEMPLATE_VARIABLES } from "../../src/lib/founder-hello-template.js";
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, any>> {
   const body = code.replace(/^export async function main/m, "async function main") + "\nreturn main;";
@@ -116,8 +117,16 @@ describe("founder hello template", () => {
 
   it("hands them to the assistant line when the brand has one, the founder staying reachable (owner 2026-10-28)", () => {
     expect(FOUNDER_HELLO_TEMPLATE).toMatch(/When THE ASSISTANT LINE names one/);
-    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/run their whole service through her directly/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/run their whole service through it there/);
     expect(FOUNDER_HELLO_TEMPLATE).toMatch(/right here on this number if they ever need you/);
+  });
+
+  it("names the assistant's OWN number, never 'this number' for the assistant (FOUNDER-HELLO-SOPHIE-NUMBER-1029)", () => {
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/write the assistant's number exactly as THE ASSISTANT LINE gives it/);
+    expect(FOUNDER_HELLO_TEMPLATE).toMatch(/Never "this number" or "here" for the assistant/);
+    expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/writing to them from that number and that they can run/);
+    expect(FOUNDER_HELLO_TEMPLATE).toContain("write one line holding only " + ASSISTANT_PART_MARKER);
+    expect(FOUNDER_HELLO_TEMPLATE).not.toMatch(/\+\d{8,}/);
   });
 });
 
@@ -282,7 +291,14 @@ describe("compose", () => {
   it("names the brand's assistant line in the context when crm-service serves one", async () => {
     const v = { ...verdict, assistantLine: { phone: "+77776879632", name: "Sophie", role: "Distribute.you Assistant" } };
     const out = await compose(person, v, thread, brand, null, "2026-10-28", null, null, null);
-    expect(out.message).toContain("THE ASSISTANT LINE: Sophie, Distribute.you Assistant, writes to them from +77776879632");
+    expect(out.message).toContain("THE ASSISTANT LINE: Sophie, Distribute.you Assistant, writes to them from the assistant's OWN number +77776879632");
+  });
+
+  it("states the hello goes from the founder's own number, and the assistant's own instructions", async () => {
+    const v = { ...verdict, fromNumber: "+33680478702", assistantLine: { phone: "+77776879632", name: "Sophie", role: "AI assistant", instructions: "Say you are an AI." } };
+    const out = await compose(person, v, thread, brand, null, "2026-10-29", null, null, null);
+    expect(out.message).toMatch(/THIS HELLO GOES FROM: \S+'s own number, \+33680478702/);
+    expect(out.message).toContain("THE ASSISTANT'S OWN INSTRUCTIONS (for the assistant's first message only):\nSay you are an AI.");
   });
 
   it("never writes a hello that cannot name what they set up", async () => {
@@ -338,5 +354,58 @@ describe("finalize + outcome", () => {
       rowReason: "founder_hello_staff",
     });
     expect(await outcome({ go: false, end: "other_person" }, null, null, null, null)).toMatchObject({ endKind: "other_person", skipRecord: true });
+  });
+
+  describe("the assistant's first message, from the assistant line (FOUNDER-HELLO-SOPHIE-NUMBER-1029)", () => {
+    const plan = loadMain(ASSISTANT_PLAN_CODE);
+    const line = { phone: "+77776879632", name: "Sophie", role: "AI assistant", instructions: null };
+    const both = { decision: "write", message: "Hey Chaim, Kevin here\n\nSophie writes to you from +77776879632\n" + ASSISTANT_PART_MARKER + "\nHi Chaim, Sophie here\n\nTell me what to set up first" };
+
+    it("splits the hello from the assistant's message, each from its own line, keyed on the campaign and the person", async () => {
+      const f = await finalize({ skip: false }, both, person, CAMPAIGN, { assistantLine: line });
+      expect(f.sendBody.messages).toEqual(["Hey Chaim, Kevin here", "Sophie writes to you from +77776879632"]);
+      expect(f.sendBody.fromLine).toBe("founder");
+      expect(f.assistantSendBody).toMatchObject({ fromLine: "assistant", messages: ["Hi Chaim, Sophie here", "Tell me what to set up first"], idempotencyKey: `founder-hello-assistant:${CAMPAIGN}:lead-1`, skipIfReplied: false, email: person.email, phone: person.phone, brandId: BRAND });
+      expect(JSON.stringify(f.sendBody)).not.toContain(ASSISTANT_PART_MARKER);
+    });
+
+    it("no assistant line = the hello only, the stray part dropped; no part written = the hello only", async () => {
+      const f = await finalize({ skip: false }, both, person, CAMPAIGN, { assistantLine: null });
+      expect(f.assistantSendBody).toBeNull();
+      expect(f.sendBody.messages).toHaveLength(2);
+      const g = await finalize({ skip: false }, draft, person, CAMPAIGN, { assistantLine: line });
+      expect(g.assistantSendBody).toBeNull();
+    });
+
+    it("goes only once the hello went out, and never changes how the run ends", async () => {
+      const f = await finalize({ skip: false }, both, person, CAMPAIGN, { assistantLine: line });
+      expect(await plan(f, { ok: true })).toEqual({ skip: false, body: f.assistantSendBody });
+      expect(await plan(f, { ok: false, skipped: true, code: "not_on_whatsapp" })).toEqual({ skip: true, body: null });
+      expect(await plan(f, { notCalled: true, skipped: true })).toEqual({ skip: true, body: null });
+      const p = await plan(f, { ok: true });
+      expect(await outcome(person, { skip: false }, { skip: false }, f, { ok: true }, null, p, { ok: true })).toMatchObject({ endKind: "sent", assistant: { state: "sent" } });
+      expect(await outcome(person, { skip: false }, { skip: false }, f, { ok: true }, null, p, { ok: false, skipped: true, code: "automation_not_allowed" })).toMatchObject({
+        endKind: "sent",
+        assistant: { state: "refused", code: "automation_not_allowed" },
+      });
+    });
+
+    it("a staff replay sends both to the staff number only, keyed per run; without it a dry run sends nothing", async () => {
+      const dry = { ...person, dryRun: true };
+      const r = await finalize({ skip: false }, both, dry, CAMPAIGN, { assistantLine: line }, "+33600000000", "run-9");
+      expect(r).toMatchObject({ skipSend: false, dryRun: true, replayTo: "+33600000000" });
+      expect(r.sendBody).toMatchObject({ phone: "+33600000000", fromLine: "founder", idempotencyKey: "founder-hello-replay:run-9" });
+      expect(r.sendBody.email).toBeUndefined();
+      expect(r.assistantSendBody).toMatchObject({ phone: "+33600000000", fromLine: "assistant", idempotencyKey: "founder-hello-replay-assistant:run-9" });
+      expect(r.assistantSendBody.email).toBeUndefined();
+      const n = await finalize({ skip: false }, both, dry, CAMPAIGN, { assistantLine: line }, undefined, "run-9");
+      expect(n).toMatchObject({ skipSend: true, sendBody: null, assistantSendBody: null, assistantText: "Hi Chaim, Sophie here\n\nTell me what to set up first" });
+      await expect(finalize({ skip: false }, both, dry, CAMPAIGN, { assistantLine: line }, "0600", "run-9")).rejects.toThrow(/E.164/);
+      expect(await outcome(dry, {}, { assistantLine: line }, r, { ok: true }, null, { skip: false }, { ok: true })).toMatchObject({
+        endKind: "dry_run",
+        replay: { hello: { state: "sent" }, assistant: { state: "sent" } },
+        assistantLine: line,
+      });
+    });
   });
 });
