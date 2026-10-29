@@ -235,9 +235,12 @@ export const FOUNDER_LINE = "founder";
 /** The assistant's first message goes from the brand's ASSISTANT line (crm-service `fromLine`). */
 export const ASSISTANT_LINE = "assistant";
 
-/** Our staff and the brand's own team are never greeted; then the reach check names exactly the send. */
+/**
+ * Our staff and the brand's own team are never greeted; then the reach check names exactly the send. A staff replay
+ * (dry run + `replayToPhone`) sends to the staff number, so the reach check asks about THAT number (its assistant line).
+ */
 export const REACH_PLAN_CODE = `
-export async function main(person, admission, team) {
+export async function main(person, admission, team, replayToPhone) {
   if (admission?.go !== true) return { skip: true, notAdmitted: admission?.notAdmitted ?? null, code: admission?.code ?? null };
   if (admission.skipTeam !== true) {
     if (!team || team.notCalled === true || typeof team.staff !== "boolean" || typeof team.ownTeam !== "boolean") {
@@ -247,6 +250,8 @@ export async function main(person, admission, team) {
     if (team.staff === true) return { skip: true, code: "${NOT_GREETED_CODES.staff}", notAdmitted: { reason: "${NOT_GREETED_CODES.staff}: one of our own staff (" + via + ")" } };
     if (team.ownTeam === true) return { skip: true, code: "${NOT_GREETED_CODES.ownTeam}", notAdmitted: { reason: "${NOT_GREETED_CODES.ownTeam}: one of the brand's own team (" + via + ")" } };
   }
+  const replay = person.dryRun === true && typeof replayToPhone === "string" && replayToPhone.trim() ? replayToPhone.trim() : null;
+  if (replay) return { skip: false, notAdmitted: null, code: null, reachBody: { brandId: person.brandId, fromLine: "${FOUNDER_LINE}", skipIfReplied: false, phone: replay } };
   return {
     skip: false,
     notAdmitted: null,
@@ -570,7 +575,12 @@ function founderHelloDagUnvoiced(): DAG {
         type: "script",
         config: { code: REACH_PLAN_CODE },
         retries: 0,
-        inputMapping: { person: "$ref:pick-person.output", admission: "$ref:admission.output", team: "$ref:team-membership.output" },
+        inputMapping: {
+          person: "$ref:pick-person.output",
+          admission: "$ref:admission.output",
+          team: "$ref:team-membership.output",
+          replayToPhone: "$ref:flow_input.replayToPhone",
+        },
       },
       {
         id: "reach-check",
