@@ -259,3 +259,24 @@ export const scriptMonitoringDays = pgTable(
   },
   (table) => [primaryKey({ columns: [table.day, table.outcome, table.path] })]
 );
+
+// FACTORY-P3 fleet writer switch: each workflow dynasty upgraded from content-generation's writer to a stored script,
+// and the version a roll-back re-activates (src/lib/scripts/script-writer-switch.ts). Migration 0044.
+export const scriptSwitches = pgTable(
+  "script_switches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: text("outcome").notNull(),
+    dynasty: text("dynasty").notNull(),
+    workflowDynastySlug: text("workflow_dynasty_slug").notNull(),
+    fromWorkflowId: uuid("from_workflow_id").notNull(),
+    fromVersion: integer("from_version").notNull(),
+    toWorkflowId: uuid("to_workflow_id").notNull(),
+    toVersion: integer("to_version").notNull(),
+    state: text("state").notNull().default("switched"),
+    switchedAt: timestamp("switched_at", { withTimezone: true }).notNull().defaultNow(),
+    rolledBackAt: timestamp("rolled_back_at", { withTimezone: true }),
+    rollbackReason: text("rollback_reason"),
+  },
+  (table) => [uniqueIndex("idx_script_switches_to").on(table.toWorkflowId), index("idx_script_switches_outcome").on(table.outcome, table.state)]
+);

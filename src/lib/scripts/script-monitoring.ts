@@ -6,7 +6,8 @@
  * whole-subtree cost per run. Daily runs = the total's day-over-day delta (null on a path's first stored day).
  *
  * Served (`GET /internal/scripts/monitoring`) with two verdicts the Monitoring hub reads, never an email:
- * `red` = the script path's error rate is above the service path's on the latest day (with script runs in sample);
+ * `red` = the script path's error rate is above the service path's on the latest day (with script runs in sample), or
+ * the roll-back guard fired / would fire (`guard`, script-guard.ts: last hour, threshold, switched workflows);
  * `readyToDelete` = the service path made ZERO runs on each of the last 7 stored days (its code may then leave its repo).
  *
  * Refreshed once per UTC day by whatever comes first: a read of the series, a workflow write/dispatch, or the sweep a
@@ -15,6 +16,7 @@
 import { and, desc, eq, gte } from "drizzle-orm";
 import { scriptMonitoringDays, scripts } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
+import { guardView, shouldRollBack } from "./script-guard.js";
 
 /** Which service task makes each outcome today (a fact of the fleet, read in runs-service). */
 export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: string[] }> = {
@@ -146,6 +148,7 @@ export async function readMonitoring(db: AnyPgDb, days: number, now = new Date()
   const rows = await db.select().from(scriptMonitoringDays).where(gte(scriptMonitoringDays.day, since)).orderBy(desc(scriptMonitoringDays.day));
   const actives = await db.select().from(scripts).where(and(eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
   const outcomes = [...new Set([...Object.keys(SERVICE_PATHS), ...actives.map((s) => s.outcome)])].sort();
+  const guards = new Map(await Promise.all(outcomes.map(async (o) => [o, await guardView(db, o, now)] as const)));
   return {
     since,
     outcomes: outcomes.map((outcome) => {
@@ -153,7 +156,13 @@ export async function readMonitoring(db: AnyPgDb, days: number, now = new Date()
       const service = pathDays(rows.filter((r) => r.outcome === outcome && r.path === "service"));
       const lastScript = script.at(-1);
       const lastService = service.at(-1);
-      const red = !!lastScript && lastScript.sample > 0 && lastScript.errorRate !== null && lastScript.errorRate > (lastService?.errorRate ?? 0);
+      const guard = guards.get(outcome)!;
+      // Red = broken: the script path errs more than the service path on the latest stored day, the roll-back guard
+      // fired (the switched workflows run their previous version), or the last hour already crosses its rule.
+      const red =
+        (!!lastScript && lastScript.sample > 0 && lastScript.errorRate !== null && lastScript.errorRate > (lastService?.errorRate ?? 0)) ||
+        guard.state === "rolled_back" ||
+        (guard.state === "watching" && shouldRollBack(guard.lastHour).rollBack);
       const lastWeek = service.slice(-READY_TO_DELETE_DAYS);
       const readyToDelete = lastWeek.length === READY_TO_DELETE_DAYS && lastWeek.every((d) => d.runs === 0);
       return {
@@ -164,6 +173,7 @@ export async function readMonitoring(db: AnyPgDb, days: number, now = new Date()
           .map((s) => ({ scriptSlug: `${s.outcome}/${s.dynasty}/v${s.version}`, proof: s.replay ?? null })),
         red,
         readyToDelete,
+        guard,
         days: [...new Set([...service, ...script].map((d) => d.day))].sort().map((day) => ({
           day,
           service: service.find((x) => x.day === day) ?? null,
