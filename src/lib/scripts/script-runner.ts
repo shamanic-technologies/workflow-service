@@ -1,6 +1,6 @@
 /**
  * FACTORY-P2-ENGINES: one production order of a stored script, as a workflow STEP (`POST /orgs/scripts/run`, called
- * by an `http.call` node like `/orgs/agent/turns`).
+ * by an `http.call` node like `/orgs/figures/read`).
  *
  * The run is accounted like any run today (cost-accounting doctrine): it opens its OWN runs-service run, a child of
  * the caller's (`x-run-id`), under one task name per dynasty (`script:<outcome>/<dynasty>`, so stats pool per
