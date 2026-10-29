@@ -875,8 +875,13 @@ export function readsPersonThread(node: DAGNode): boolean {
   );
 }
 
+/**
+ * A body that already names the line ROLE it writes from (`fromLine` / `fromAccountType`, e.g. the founder hello's
+ * founder line + assistant line) keeps it: crm-service refuses `fromAccount` beside either (400, exclusive), and the
+ * role is the workflow's own design (FOUNDER-HELLO-SOPHIE-NUMBER-1029).
+ */
 export function campaignSenderLineExpr(bodyExpr: string, lineRef: string): string {
-  return `((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) ? { ...b, fromAccount: f.trim() } : b))(${bodyExpr}, ${lineRef})`;
+  return `((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) && !b.fromLine && !b.fromAccountType ? { ...b, fromAccount: f.trim() } : b))(${bodyExpr}, ${lineRef})`;
 }
 
 /**

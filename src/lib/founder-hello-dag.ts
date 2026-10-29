@@ -27,9 +27,16 @@
  *  - The sending account is crm-service's to pick; its persona (`reach.persona`) is who speaks.
  *  - Strictly after the send, the queue row is `stopped` (`FOUNDER_HELLO_SENT_REASON`). The send's idempotency key names
  *    the campaign and the PERSON, never the occurrence: a second number given by the same person is never a second hello.
+ *  - When the brand has an assistant line (crm-service `assistantLine`), the hello names the assistant AND the
+ *    assistant's own number (the hello goes from the founder's number: never "this number" for the assistant), and right
+ *    after it the assistant's first message goes from the ASSISTANT's line, so the person has that thread on their phone
+ *    (FOUNDER-HELLO-SOPHIE-NUMBER-1029, owner 2026-10-29: « the Sophie talk must be from her number »). ONE writer call
+ *    writes both, split on `ASSISTANT_PART_MARKER`; its send is keyed on the campaign and the person too.
  *  - `inputs.dryRun: true` (a staff replay): no chassis, no claim, the person is the trigger's; the admission is decided
  *    and REPORTED (`wouldNotAdmit`) but never blocks the writing; the message is written and recorded by
- *    content-generation exactly as a real one, nothing is sent, no row is touched.
+ *    content-generation exactly as a real one, nothing is sent, no row is touched. With `inputs.replayToPhone` (a staff
+ *    number, E.164) the written messages are sent to THAT number only (hello from the founder line, the assistant's
+ *    first message from the assistant line, keys per run), never to the person.
  */
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { GENERATE_WHATSAPP_PATH, withLegBestWhatsappTemplate } from "./whatsapp-template-writer.js";
@@ -37,6 +44,7 @@ import { CLAIM_PERSON_CODE } from "./claim-person.js";
 import { CRM_WHATSAPP_SEND } from "./ai-meeting-booking-dag.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { BUBBLE_SEND_FN, HAND_TYPED_FN } from "./whatsapp-bubbles.js";
+import { ASSISTANT_PART_MARKER } from "./founder-hello-template.js";
 
 export const FOUNDER_HELLO_FEATURE_SLUG = "founder-hello";
 export const FOUNDER_HELLO_LEG_KEY = "start_to_conversation";
@@ -224,6 +232,9 @@ export async function main(person, sends, thread, campaignId) {
  */
 export const FOUNDER_LINE = "founder";
 
+/** The assistant's first message goes from the brand's ASSISTANT line (crm-service `fromLine`). */
+export const ASSISTANT_LINE = "assistant";
+
 /** Our staff and the brand's own team are never greeted; then the reach check names exactly the send. */
 export const REACH_PLAN_CODE = `
 export async function main(person, admission, team) {
@@ -252,12 +263,12 @@ export async function main(plan, check, person) {
   if (!check || check.notCalled === true || typeof check.reachable !== "boolean") {
     throw new Error("reach-verdict: crm-service's reach check gave no answer; nothing is drafted blind");
   }
-  if (check.reachable === true) return { skip: false, refused: null, persona: senderPersona(check), assistantLine: assistantLineOf(check) };
+  if (check.reachable === true) return { skip: false, refused: null, persona: senderPersona(check), assistantLine: assistantLineOf(check), fromNumber: numberOf(check.fromAccount) };
   const code = typeof check.code === "string" && check.code ? check.code : "not_reachable";
   const reason = typeof check.error === "string" && check.error.trim() ? check.error : "This person cannot be reached on WhatsApp: nothing was sent.";
   console.error("[founder-hello] crm-service says WhatsApp cannot reach this person (" + code + "): nothing drafted, nothing sent");
   // A dry run (staff replay) reports the refusal and still writes, as the account that would send.
-  if (person?.dryRun === true) return { skip: false, refused: null, wouldRefuse: { code, reason }, persona: senderPersona(check), assistantLine: null };
+  if (person?.dryRun === true) return { skip: false, refused: null, wouldRefuse: { code, reason }, persona: senderPersona(check), assistantLine: assistantLineOf(check), fromNumber: numberOf(check.fromAccount) };
   return { skip: true, refused: { code, reason } };
 }
 
@@ -267,7 +278,12 @@ function assistantLineOf(check) {
   if (!a || typeof a.phone !== "string" || !a.phone.trim()) return null;
   const name = typeof a.persona?.name === "string" && a.persona.name.trim() ? a.persona.name.trim() : null;
   const role = typeof a.persona?.role === "string" && a.persona.role.trim() ? a.persona.role.trim() : null;
-  return { phone: a.phone.trim(), name, role };
+  const instructions = typeof a.persona?.instructions === "string" && a.persona.instructions.trim() ? a.persona.instructions.trim() : null;
+  return { phone: a.phone.trim(), name, role, instructions };
+}
+
+function numberOf(v) {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
 ${SENDER_PERSONA_FN}
@@ -343,9 +359,14 @@ export async function main(person, verdict, thread, brand, rep, currentDate, v1,
     "WHAT THEY SET UP WITH " + brandName.toUpperCase() + " (their own choices, the only facts you may use):",
     ...setup,
     "",
-    "THE ASSISTANT LINE: " + (verdict.assistantLine
-      ? (verdict.assistantLine.name ?? "our assistant") + (verdict.assistantLine.role ? ", " + verdict.assistantLine.role : "") + ", writes to them from " + verdict.assistantLine.phone
-      : "none"),
+    "THIS HELLO GOES FROM: " + (verdict.fromNumber ? founderName + "'s own number, " + verdict.fromNumber : founderName + "'s own number"),
+    "",
+    ...(verdict.assistantLine
+      ? [
+          "THE ASSISTANT LINE: " + (verdict.assistantLine.name ?? "our assistant") + (verdict.assistantLine.role ? ", " + verdict.assistantLine.role : "") + ", writes to them from the assistant's OWN number " + verdict.assistantLine.phone + " (not " + founderName + "'s), right after this hello",
+          ...(verdict.assistantLine.instructions ? ["THE ASSISTANT'S OWN INSTRUCTIONS (for the assistant's first message only):", verdict.assistantLine.instructions] : []),
+        ]
+      : ["THE ASSISTANT LINE: none"]),
     "",
     "THE MESSAGES THEY ALREADY GOT FROM US (never repeat them):",
     ...(threadLines.length ? threadLines : ["(none)"]),
@@ -361,20 +382,44 @@ ${SENDER_PERSONA_FN}
 
 /** The written bubbles as crm-service's send body, keyed on the campaign and the PERSON: one hello per person, ever. */
 export const FINALIZE_CODE = `
-export async function main(compose, draft, person, campaignId) {
-  if (compose?.skip !== false) return { skipSend: true, written: false, sendBody: null };
+export async function main(compose, draft, person, campaignId, verdict, replayToPhone, runId) {
+  if (compose?.skip !== false) return { skipSend: true, written: false, sendBody: null, assistantText: null, assistantSendBody: null };
   const json = draft?.json ?? draft ?? {};
   if (json.decision !== "write") throw new Error("finalize: the writer answered " + JSON.stringify(json.decision) + "; a hello is always written now");
-  const text = String(json.message ?? "")
+  const clean = (t) => String(t ?? "")
     .replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-")
     .replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ")
     .trim();
+  // ONE writer call writes the hello, then (after the marker) the assistant's first message.
+  const raw = String(json.message ?? "");
+  const at = raw.indexOf("${ASSISTANT_PART_MARKER}");
+  const text = clean(at >= 0 ? raw.slice(0, at) : raw);
+  const assistantDraft = at >= 0 ? clean(raw.slice(at + ${ASSISTANT_PART_MARKER.length})) || null : null;
   if (!text) throw new Error("finalize: the writer returned an empty message");
+  const line = verdict?.assistantLine ?? null;
+  const assistantText = line ? assistantDraft : null;
+  if (line && !assistantDraft) console.error("[founder-hello] the brand has an assistant line but the writer wrote no first message for the assistant: only the hello goes out");
+  if (!line && assistantDraft) console.error("[founder-hello] the writer wrote an assistant message but the brand has no assistant line: dropped");
   const who = person.leadId ?? person.email ?? person.phone;
   const idempotencyKey = "founder-hello:" + String(campaignId) + ":" + String(who);
+  const assistantKey = "founder-hello-assistant:" + String(campaignId) + ":" + String(who);
   if (person.dryRun === true) {
-    console.log("[founder-hello] DRY RUN, nothing sent to " + String(person.email ?? person.phone) + ":\\n" + text);
-    return { skipSend: true, written: true, dryRun: true, text, idempotencyKey, sendBody: null };
+    const replay = typeof replayToPhone === "string" && /^\\+\\d{8,15}$/.test(replayToPhone.trim()) ? replayToPhone.trim() : null;
+    if (replayToPhone != null && !replay) throw new Error("finalize: replayToPhone must be an E.164 number, got " + JSON.stringify(replayToPhone));
+    console.log("[founder-hello] DRY RUN, nothing sent to " + String(person.email ?? person.phone) + (replay ? " (replayed to " + replay + ")" : "") + ":\\n" + text + (assistantText ? "\\n--- from the assistant line " + line.phone + ":\\n" + assistantText : ""));
+    if (!replay) return { skipSend: true, written: true, dryRun: true, text, idempotencyKey, sendBody: null, assistantText, assistantSendBody: null };
+    // A staff replay: the very messages, sent to the staff number only, keyed per run.
+    return {
+      skipSend: false,
+      written: true,
+      dryRun: true,
+      replayTo: replay,
+      text,
+      idempotencyKey: "founder-hello-replay:" + String(runId),
+      sendBody: { brandId: person.brandId, fromLine: "${FOUNDER_LINE}", ...bubbleSendFields(text), idempotencyKey: "founder-hello-replay:" + String(runId), skipIfReplied: false, phone: replay },
+      assistantText,
+      assistantSendBody: assistantText ? { brandId: person.brandId, fromLine: "${ASSISTANT_LINE}", ...bubbleSendFields(assistantText), idempotencyKey: "founder-hello-replay-assistant:" + String(runId), skipIfReplied: false, phone: replay } : null,
+    };
   }
   return {
     skipSend: false,
@@ -383,18 +428,49 @@ export async function main(compose, draft, person, campaignId) {
     idempotencyKey,
     // Never a null field (crm-service 400s it). skipIfReplied: they wrote to the brand meanwhile = no hello.
     sendBody: { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, fromLine: "${FOUNDER_LINE}", ...bubbleSendFields(text), idempotencyKey, skipIfReplied: true, ...(person.phone ? { phone: person.phone } : {}) },
+    assistantText,
+    // Right after the hello, from the assistant's own line: an answer to the hello never blocks it.
+    assistantSendBody: assistantText
+      ? { ...(person.email ? { email: person.email } : {}), brandId: person.brandId, fromLine: "${ASSISTANT_LINE}", ...bubbleSendFields(assistantText), idempotencyKey: assistantKey, skipIfReplied: false, ...(person.phone ? { phone: person.phone } : {}) }
+      : null,
   };
 }
 
 ${BUBBLE_SEND_FN}
 `.trim();
 
+/** The assistant's first message goes only once the hello went out (sent, or the crm duplicate of a redelivered run). */
+export const ASSISTANT_PLAN_CODE = `
+export async function main(final, send) {
+  if (!final?.assistantSendBody) return { skip: true, body: null };
+  if (!send || send.notCalled === true || send.skipped === true) {
+    console.log("[founder-hello] the hello did not go out: no first message from the assistant");
+    return { skip: true, body: null };
+  }
+  return { skip: false, body: final.assistantSendBody };
+}
+`.trim();
+
+/** What became of the assistant's first message (never the run's end: the hello is what the run answers for). */
+const ASSISTANT_STATE_FN = `
+function assistantState(plan, send) {
+  if (!plan || plan.skip === true || !send || send.notCalled === true) return { state: "none" };
+  if (send.skipped === true) {
+    const code = typeof send.code === "string" && send.code ? send.code : "refused";
+    console.error("[founder-hello] the assistant's first message was refused (" + code + "): only the hello went out");
+    return { state: "refused", code };
+  }
+  return { state: "sent" };
+}
+`.trim();
+
 /** How the run ends, and what is stated on the queue row. */
 export const OUTCOME_CODE = `
-export async function main(person, reach, verdict, final, send, admission) {
+export async function main(person, reach, verdict, final, send, admission, assistantPlan, assistantSend) {
+  const assistant = assistantState(assistantPlan, assistantSend);
   const row = (reason) => ({ skipRecord: !person?.rowId, rowId: person?.rowId ?? null, rowReason: reason });
   if (person?.go !== true) return { endKind: person?.end ?? "nobody_due", skipRecord: true, rowId: null, rowReason: null };
-  if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, wouldNotAdmit: admission?.wouldNotAdmit ?? reach?.notAdmitted ?? null, refused: verdict?.wouldRefuse ?? null };
+  if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, assistantText: final?.assistantText ?? null, assistantLine: verdict?.assistantLine ?? null, replayTo: final?.replayTo ?? null, replay: final?.replayTo ? { hello: send?.skipped === true ? { state: "refused", code: send.code ?? null } : send && send.notCalled !== true ? { state: "sent" } : { state: "none" }, assistant } : null, wouldNotAdmit: admission?.wouldNotAdmit ?? reach?.notAdmitted ?? null, refused: verdict?.wouldRefuse ?? null };
   if (reach?.notAdmitted) return { endKind: "not_admitted", notAdmitted: reach.notAdmitted, ...row("founder_hello_" + String(reach.code)) };
   if (verdict?.refused) return { endKind: "refused", delivery: { state: "refused", code: verdict.refused.code, reason: verdict.refused.reason }, ...row("founder_hello_whatsapp_" + verdict.refused.code) };
   if (send?.skipped === true && send?.notCalled !== true) {
@@ -402,9 +478,11 @@ export async function main(person, reach, verdict, final, send, admission) {
     const reason = typeof send.refusal?.error === "string" ? send.refusal.error : "WhatsApp refused the hello: nothing was sent.";
     return { endKind: "refused", delivery: { state: "refused", code, reason }, ...row("founder_hello_whatsapp_" + code) };
   }
-  if (final?.written === true && send && send.notCalled !== true) return { endKind: "sent", delivery: { state: "delivered" }, ...row("${FOUNDER_HELLO_SENT_REASON}") };
+  if (final?.written === true && send && send.notCalled !== true) return { endKind: "sent", delivery: { state: "delivered" }, assistant, ...row("${FOUNDER_HELLO_SENT_REASON}") };
   throw new Error("outcome: the run reached its end with no hello sent and no reason named");
 }
+
+${ASSISTANT_STATE_FN}
 `.trim();
 
 const crmRead = (id: string, path: string, query: string, skip: string, tolerate = false): DAGNode => ({
@@ -583,6 +661,9 @@ function founderHelloDagUnvoiced(): DAG {
           draft: "$ref:draft-message.output",
           person: "$ref:pick-person.output",
           campaignId: "$ref:flow_input.campaignId",
+          verdict: "$ref:reach-verdict.output",
+          replayToPhone: "$ref:flow_input.replayToPhone",
+          runId: "$ref:flow_input.runId",
         },
       },
       {
@@ -591,6 +672,21 @@ function founderHelloDagUnvoiced(): DAG {
         config: { ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: [...FOUNDER_HELLO_REFUSAL_CODES] },
         retries: 0,
         inputMapping: { body: "$ref:finalize.output.sendBody", skip: "$ref:finalize.output.skipSend" },
+      },
+      {
+        id: "assistant-plan",
+        type: "script",
+        config: { code: ASSISTANT_PLAN_CODE },
+        retries: 0,
+        inputMapping: { final: "$ref:finalize.output", send: "$ref:send-whatsapp.output" },
+      },
+      // From the brand's assistant line, right after the hello.
+      {
+        id: "send-assistant",
+        type: "http.call",
+        config: { ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: [...FOUNDER_HELLO_REFUSAL_CODES] },
+        retries: 0,
+        inputMapping: { body: "$ref:assistant-plan.output.body", skip: "$ref:assistant-plan.output.skip" },
       },
       {
         id: "outcome",
@@ -604,6 +700,8 @@ function founderHelloDagUnvoiced(): DAG {
           final: "$ref:finalize.output",
           send: "$ref:send-whatsapp.output",
           admission: "$ref:admission.output",
+          assistantPlan: "$ref:assistant-plan.output",
+          assistantSend: "$ref:send-assistant.output",
         },
       },
       // Strictly AFTER the send: the row is closed for good, one hello per person.
@@ -653,7 +751,9 @@ function founderHelloDagUnvoiced(): DAG {
       { from: "compose", to: "draft-message" },
       { from: "draft-message", to: "finalize" },
       { from: "finalize", to: "send-whatsapp" },
-      { from: "send-whatsapp", to: "outcome" },
+      { from: "send-whatsapp", to: "assistant-plan" },
+      { from: "assistant-plan", to: "send-assistant" },
+      { from: "send-assistant", to: "outcome" },
       { from: "outcome", to: "record-row" },
       { from: "record-row", to: "check-end" },
       { from: "check-end", to: "end-run-sent", condition: END("sent") },
@@ -670,7 +770,16 @@ function founderHelloDagUnvoiced(): DAG {
 
 export const DRY_SUMMARY_CODE = `
 export async function main(outcome) {
-  return { dryRun: true, text: outcome?.text ?? null, wouldNotAdmit: outcome?.wouldNotAdmit ?? null, refused: outcome?.refused ?? null };
+  return {
+    dryRun: true,
+    text: outcome?.text ?? null,
+    assistantText: outcome?.assistantText ?? null,
+    assistantLine: outcome?.assistantLine ?? null,
+    replayTo: outcome?.replayTo ?? null,
+    replay: outcome?.replay ?? null,
+    wouldNotAdmit: outcome?.wouldNotAdmit ?? null,
+    refused: outcome?.refused ?? null,
+  };
 }
 `.trim();
 
