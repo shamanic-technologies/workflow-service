@@ -13,8 +13,8 @@
  *  - WhatsApp only (`WHATSAPP_ONLY_CHANNEL_PLAN_CODE`): the pipe is a WhatsApp pipe. crm-service picks the sending
  *    account (only an account the brand allows automation on, never a personal one) and states its persona (Sophie);
  *    no reach = nothing drafted, the next look in `NO_CHANNEL_RECHECK_DAYS`.
- *  - The writer is a GLM agent turn (owner: « laisse uniquement GLM »; `agentWriter`, its fallback while the leg is not
- *    ranked): it may read the client's own account (spend, outcomes) before it writes.
+ *  - The writer is the Copilot, inherited from the client check-in audience (ONE-AI-CONVERSES-1029, owner 2026-10-29:
+ *    one AI answers leads and clients): it may read the client's own account (spend, outcomes) before it writes.
  * Every act (sent, later, stop) is on lead-service's follow-up ledger (the claimed row closed, the next date stated):
  * that is how features-service measures the pipe. Who is a positive client message is lead-service's judgment, never
  * this workflow's.
@@ -27,9 +27,6 @@ import { SENDER_PERSONA_FN } from "./sender-persona.js";
 export const CLIENT_SATISFIED_FEATURE_SLUG = "cold-whatsapp-outreach";
 export const CLIENT_SATISFIED_LEG_KEY = "paid_client_to_client_satisfied";
 export const CLIENT_SATISFIED_PIPE_ID = `${CLIENT_SATISFIED_FEATURE_SLUG}|${CLIENT_SATISFIED_LEG_KEY}`;
-
-/** chat-service's GLM alias (Z.ai GLM-5.3). */
-export const CLIENT_SATISFIED_LLM = { provider: "zai", model: "glm" } as const;
 
 export const CLIENT_SATISFIED_DESCRIPTION =
   "Looks after one current client of the brand each time something happens with them, on WhatsApp only: it reads their whole thread and writes now only what is useful to them (an answer, something they need to know, good news, one improvement), or sets a later look and writes nothing. It serves only current clients of the brand, never a prospect, a personal contact or the brand's own team: its follow-up claim states current clients only.";
@@ -91,8 +88,6 @@ export const CLIENT_SATISFIED_AUDIENCE: FollowUpAudience = {
   ...CLIENT_CHECK_IN_AUDIENCE,
   composeCode: COMPOSE_CLIENT_SATISFIED_CODE,
   channelPlanCode: WHATSAPP_ONLY_CHANNEL_PLAN_CODE,
-  // GLM as an agent turn: it reads the client's own account (spend, outcomes) before advising on a budget.
-  agentWriter: CLIENT_SATISFIED_LLM,
 };
 
 /** The DAG; the seed creates it on its pipe as its own dynasty, and upgrades it in place. */

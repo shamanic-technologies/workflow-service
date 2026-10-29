@@ -12,9 +12,8 @@ import {
   RESOLVE_LEAD_CODE,
   buildLeadFollowUpLeadsOnlyDag,
   isLeadsOnlyFollowUpDag,
-  LEAD_EVENT_AGENT_LLM,
 } from "../../src/lib/lead-follow-up-leads-dag.js";
-import { isAgentTurn } from "../../src/lib/agent-turn-node.js";
+import { COPILOT_TURN_PLAN_CODE, isCopilotTurn } from "../../src/lib/copilot-turn-node.js";
 
 /**
  * LEAD-EVENT-LEADS-ONLY-1024 (owner 2026-10-24): the Lead event pipe's lead follow-up answers LEADS only (never a
@@ -56,29 +55,50 @@ describe("the leads-only lead follow-up DAG", () => {
     expect(node(dag, "compose")?.config ?? null).toEqual(node(plain, "compose")?.config ?? null);
     expect(COMPOSE_FOLLOW_UP_CODE).toBeTruthy();
     const differing = dag.nodes.filter((n) => JSON.stringify(n) !== JSON.stringify(plain.nodes.find((p) => p.id === n.id))).map((n) => n.id);
-    expect(differing.sort()).toEqual(["claim-followup", "draft", "end-run-not-admitted", "end-run-pending", "llm-plan", "resolve-person"].sort());
+    expect(differing.sort()).toEqual(["claim-followup", "copilot-turn-plan", "draft", "end-run-not-admitted", "end-run-pending", "resolve-person"].sort());
   });
 
-  it("writes as an AGENT TURN: reads the lead's own account through tools before deciding, GLM unless the leg ranks another (SOPHIE-LEAD-EVENT-AGENT-1027)", () => {
+  it("writes through the COPILOT: one AI, its own model and voice, the composed prompt as context (ONE-AI-CONVERSES-1029)", () => {
     const draft = node(dag, "draft");
-    expect(draft?.config).toMatchObject({ service: "workflow", method: "POST", path: "/orgs/agent/turns" });
-    expect(isAgentTurn(dag, "draft")).toBe(true);
-    expect(isAgentTurn(plain, "draft")).toBe(false);
+    expect(draft?.config).toMatchObject({ service: "chat", method: "POST", path: "/internal/copilot/lead-turns" });
+    expect(isCopilotTurn(dag, "draft")).toBe(true);
+    expect(isCopilotTurn(plain, "draft")).toBe(false);
     const body = draft?.config?.body as Record<string, unknown>;
-    expect(body).not.toHaveProperty("responseFormat");
-    expect(body).not.toHaveProperty("provider");
+    for (const k of ["provider", "model", "responseFormat", "temperature", "maxTokens"]) expect(body).not.toHaveProperty(k);
     expect(body.responseSchema).toBeTruthy();
-    // The leg's best LLM, the voice and the recipient whose account it may read.
-    expect(draft?.inputMapping).toMatchObject({
-      "body.recipientEmail": "$ref:channel-plan.output.email",
-      "body.provider": expect.stringContaining("llm-plan"),
-      "body.model": expect.stringContaining("llm-plan"),
-      "body.systemPrompt": expect.stringContaining("client-comms-voice"),
+    expect(draft?.inputMapping).toEqual({
+      "body.message": "$ref:compose.output.message",
+      "body.systemPrompt": "$ref:compose.output.systemPrompt",
       skip: "$ref:compose.output.skip",
+      "body.brandId": "$ref:resolve-person.output.brandId",
+      "body.medium": "$ref:copilot-turn-plan.output.medium",
+      "body.recipient": "$ref:copilot-turn-plan.output.recipient",
+      "body.assistant": "$ref:copilot-turn-plan.output.assistant",
+      "body.messageField": "$ref:copilot-turn-plan.output.messageField",
+      "body.idempotencyKey": "$ref:copilot-turn-plan.output.idempotencyKey",
     });
-    expect(LEAD_EVENT_AGENT_LLM).toEqual({ provider: "zai", model: "glm" });
-    expect(String(node(dag, "llm-plan")?.config?.code)).toContain('"glm"');
-    expect(String(node(dag, "llm-plan")?.config?.code)).not.toContain('"opus"');
+    // No second brain left on the call: no leg LLM pick, no spliced voice (the Copilot reads the skill itself).
+    for (const id of ["llm-pick", "llm-plan", "read-client-comms", "client-comms-voice"]) expect(node(dag, id)).toBeUndefined();
+    expect(dag.edges).toEqual(expect.arrayContaining([{ from: "compose", to: "copilot-turn-plan" }, { from: "copilot-turn-plan", to: "draft" }]));
+    expect(dag.edges.filter((e) => e.to === "draft")).toHaveLength(1);
+  });
+
+  it("states the medium, the person, the sending line's persona, the text field and one key per occurrence", async () => {
+    const plan = loadMain(COPILOT_TURN_PLAN_CODE);
+    const person = { email: "kevin+t@x.io", phone: "+33600000000", brandId: "b", sendKey: "follow-up:event:ev1", lead: { firstName: "Ann", lastName: "Lee" } };
+    const wa = await plan(person, { channel: "whatsapp", email: "kevin+t@x.io", phone: "+33611111111", persona: { name: "Sophie", role: "AI assistant", instructions: null } });
+    expect(wa).toEqual({
+      skip: false,
+      medium: "whatsapp",
+      recipient: { email: "kevin+t@x.io", phone: "+33611111111", name: "Ann Lee" },
+      assistant: { name: "Sophie", role: "AI assistant", instructions: null },
+      messageField: "message",
+      idempotencyKey: "copilot-lead-turn:follow-up:event:ev1",
+    });
+    const em = await plan(person, { channel: "email", email: "kevin+t@x.io", phone: null });
+    expect(em).toMatchObject({ medium: "email", messageField: "bodyHtml", assistant: null, recipient: { phone: "+33600000000" } });
+    expect(await plan(person, { channel: null, skipModel: true })).toEqual({ skip: true });
+    await expect(plan({ ...person, sendKey: null }, { channel: "email" })).rejects.toThrow(/send key/);
   });
 
   it("is its own signature, never a twin of the lead follow-up or the client check-in", () => {

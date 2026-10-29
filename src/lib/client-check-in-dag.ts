@@ -168,6 +168,8 @@ export const CLIENT_CHECK_IN_AUDIENCE: FollowUpAudience = {
     // lead-service cannot say yet: idle, the occurrence is redelivered later.
     { kind: "pending", body: { success: true, stopCampaign: false, noWorkAvailable: true } },
   ],
+  // The Copilot writes (ONE-AI-CONVERSES-1029): one AI answers clients and leads, with their account in reach.
+  copilotWriter: true,
 };
 
 /** The DAG; the seed creates it on its pipe as its own dynasty, and upgrades it in place. */
