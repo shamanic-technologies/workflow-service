@@ -24,6 +24,9 @@ export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: str
   // The reply judge (a SERVICE switch, script-service-switch.ts): instantly opens one `reply-qualification` run per
   // judgment its own code makes, a child of the org's reply-judging run of the day.
   lead_interested: { serviceName: "instantly-service", taskNames: ["reply-qualification"] },
+  // The verification waterfall's DECISION (a SERVICE switch): apollo opens one `email-verification` run per decision
+  // its own code makes; each verifier call's run hangs under it (under the script's run once switched).
+  email_found: { serviceName: "apollo-service", taskNames: ["email-verification"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";
