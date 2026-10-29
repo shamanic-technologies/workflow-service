@@ -32,6 +32,8 @@ import figuresRoutes from "./routes/figures.js";
 import agentTurnsRoutes from "./routes/agent-turns.js";
 import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
+import { setGuardContext } from "./lib/scripts/script-guard.js";
+import { productionRollbackDeps } from "./lib/scripts/script-guard-deps.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -165,6 +167,8 @@ async function boot(): Promise<void> {
   if (process.env.RUNS_SERVICE_URL && process.env.RUNS_SERVICE_API_KEY) {
     const monitoring = { db, deps: productionMonitoringDeps() };
     setMonitoringContext(monitoring);
+    // The fleet writer's roll-back guard: checked after script runs, at most once a minute (script-guard.ts).
+    setGuardContext({ db, deps: productionRollbackDeps() });
     setTimeout(() => void maybeRefreshMonitoring(monitoring.db, monitoring.deps), 60_000).unref();
   }
 

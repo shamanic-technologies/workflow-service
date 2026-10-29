@@ -2545,6 +2545,11 @@ export const RunScriptRequestSchema = z
       .describe("The materials, by outcome. A Unit that states its `subject` is declared consumed when the script asks for it."),
     tactics: z.record(z.string(), z.unknown()).optional().describe("The run's tactics, on top of the script's own."),
     request: z.record(z.string(), z.unknown()).nullable().optional(),
+    recordedBy: z
+      .enum(["content-generation"])
+      .optional()
+      .describe("The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run). The run then declares nothing itself."),
+    trace: z.boolean().optional().describe("Answer every vendor call in order (`trace`: args, answer; a completion's exact request `sent` + chat-service's whole answer `raw`), for the recording service."),
   })
   .openapi("RunScriptRequest");
 
@@ -2561,6 +2566,10 @@ export const RunScriptResponseSchema = z
     error: z.string().nullable(),
     vendorCalls: z.array(z.object({ name: z.string(), ok: z.boolean(), error: z.string().optional(), ms: z.number() })),
     declared: z.object({ produced: z.array(OccurrenceSchema), consumed: z.array(OccurrenceSchema) }),
+    recordedBy: z.string().optional(),
+    trace: z
+      .array(z.object({ name: z.string(), args: z.unknown(), answer: z.unknown(), sent: z.record(z.string(), z.unknown()).optional(), raw: z.record(z.string(), z.unknown()).optional() }))
+      .optional(),
   })
   .openapi("RunScriptResponse");
 
@@ -2727,6 +2736,27 @@ const MonitoringPathDaySchema = z.object({
   tasks: z.array(z.string()),
 });
 
+const ScriptSwitchSchema = z.object({
+  workflowDynastySlug: z.string(),
+  fromVersion: z.number().int().describe("The version a roll-back re-activates (the content-generation writer)."),
+  toVersion: z.number().int().describe("The version that writes with the stored script."),
+  state: z.enum(["switched", "rolled_back"]),
+});
+
+export const ScriptGuardSchema = z
+  .object({
+    state: z.enum(["off", "watching", "rolled_back"]).describe("`off`: no workflow switched to a script for this outcome; `watching`: switched, checked after script runs; `rolled_back`: the guard (or staff) re-activated the previous versions."),
+    windowMinutes: z.number().int(),
+    lastHour: z.object({ runs: z.number().int(), failed: z.number().int(), errorRate: z.number().nullable() }).describe("Finished script runs of this outcome over the window (failed = failed + stopped)."),
+    baselineErrorRate: z.number().describe("The service path's error rate the script is held to (0.5 %)."),
+    thresholdErrorRate: z.number().describe("Roll back above this rate, with at least `minRuns` runs and a one-sided binomial test vs the baseline below 0.001."),
+    minRuns: z.number().int(),
+    rolledBackAt: z.string().nullable(),
+    reason: z.string().nullable(),
+    switches: z.array(ScriptSwitchSchema),
+  })
+  .openapi("ScriptGuard");
+
 export const ScriptMonitoringResponseSchema = z
   .object({
     since: z.string(),
@@ -2735,13 +2765,53 @@ export const ScriptMonitoringResponseSchema = z
         outcome: z.string(),
         servicePath: z.object({ serviceName: z.string(), taskNames: z.array(z.string()) }).nullable().describe("The service task that makes this outcome today."),
         scripts: z.array(z.object({ scriptSlug: z.string(), proof: z.object({ cases: z.number().int(), matches: z.number().int() }).nullable() })),
-        red: z.boolean().describe("The script path's error rate is above the service path's on the latest day."),
+        red: z.boolean().describe("Broken: the script path's error rate is above the service path's on the latest day, or the roll-back guard fired (or its rule is crossed in the last hour)."),
         readyToDelete: z.boolean().describe("The service path made zero runs on each of the last 7 stored days: its code may leave its repo."),
+        guard: ScriptGuardSchema,
         days: z.array(z.object({ day: z.string(), service: MonitoringPathDaySchema.nullable(), script: MonitoringPathDaySchema.nullable() })),
       }),
     ),
   })
   .openapi("ScriptMonitoringResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/switches",
+  summary: "Record a workflow dynasty upgraded onto the stored script writer (service key only)",
+  description: "FACTORY-P3 fleet writer switch. `toWorkflowId` = the upgraded version: it must write with the script, and its predecessor (an upgrade in the same dynasty) must be the content-generation writer. Idempotent.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ toWorkflowId: z.string().uuid() }) } } } },
+  responses: {
+    201: { description: "Recorded (or already recorded)", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+    404: { description: "Unknown workflow", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Not a switch", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/scripts/switches",
+  summary: "The roll-back guard of one outcome: last hour, rule, switched workflows (service key only)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { query: z.object({ outcome: z.string().optional().describe("Default message_written.") }) },
+  responses: { 200: { description: "The guard", content: { "application/json": { schema: ScriptGuardSchema } } } },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/switches/rollback",
+  summary: "Roll back switched workflows by hand: re-activate each previous version, deprecate the script version (service key only)",
+  description: "The function the guard runs. `workflowDynastySlugs` limits it (a drill); default every switched dynasty of the outcome.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), reason: z.string().min(5), workflowDynastySlugs: z.array(z.string()).optional() }) } } } },
+  responses: {
+    200: { description: "Rolled back / skipped", content: { "application/json": { schema: z.object({ rolledBack: z.array(z.object({ workflowDynastySlug: z.string(), fromVersion: z.number().int(), toVersion: z.number().int() })), skipped: z.array(z.object({ workflowDynastySlug: z.string(), reason: z.string() })) }) } } },
+    400: { description: "Missing outcome or reason", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
 
 registry.registerPath({
   method: "get",

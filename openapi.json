@@ -3607,6 +3607,41 @@
               "produced",
               "consumed"
             ]
+          },
+          "recordedBy": {
+            "type": "string"
+          },
+          "trace": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "args": {
+                  "nullable": true
+                },
+                "answer": {
+                  "nullable": true
+                },
+                "sent": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                },
+                "raw": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
           }
         },
         "required": [
@@ -3742,6 +3777,17 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "recordedBy": {
+            "type": "string",
+            "enum": [
+              "content-generation"
+            ],
+            "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run). The run then declares nothing itself."
+          },
+          "trace": {
+            "type": "boolean",
+            "description": "Answer every vendor call in order (`trace`: args, answer; a completion's exact request `sent` + chat-service's whole answer `raw`), for the recording service."
           }
         },
         "required": [
@@ -3775,6 +3821,106 @@
         "required": [
           "source",
           "cases"
+        ]
+      },
+      "ScriptGuard": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "off",
+              "watching",
+              "rolled_back"
+            ],
+            "description": "`off`: no workflow switched to a script for this outcome; `watching`: switched, checked after script runs; `rolled_back`: the guard (or staff) re-activated the previous versions."
+          },
+          "windowMinutes": {
+            "type": "integer"
+          },
+          "lastHour": {
+            "type": "object",
+            "properties": {
+              "runs": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "errorRate": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "runs",
+              "failed",
+              "errorRate"
+            ],
+            "description": "Finished script runs of this outcome over the window (failed = failed + stopped)."
+          },
+          "baselineErrorRate": {
+            "type": "number",
+            "description": "The service path's error rate the script is held to (0.5 %)."
+          },
+          "thresholdErrorRate": {
+            "type": "number",
+            "description": "Roll back above this rate, with at least `minRuns` runs and a one-sided binomial test vs the baseline below 0.001."
+          },
+          "minRuns": {
+            "type": "integer"
+          },
+          "rolledBackAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "switches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "workflowDynastySlug": {
+                  "type": "string"
+                },
+                "fromVersion": {
+                  "type": "integer",
+                  "description": "The version a roll-back re-activates (the content-generation writer)."
+                },
+                "toVersion": {
+                  "type": "integer",
+                  "description": "The version that writes with the stored script."
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "switched",
+                    "rolled_back"
+                  ]
+                }
+              },
+              "required": [
+                "workflowDynastySlug",
+                "fromVersion",
+                "toVersion",
+                "state"
+              ]
+            }
+          }
+        },
+        "required": [
+          "state",
+          "windowMinutes",
+          "lastHour",
+          "baselineErrorRate",
+          "thresholdErrorRate",
+          "minRuns",
+          "rolledBackAt",
+          "reason",
+          "switches"
         ]
       },
       "ScriptMonitoringResponse": {
@@ -3844,11 +3990,14 @@
                 },
                 "red": {
                   "type": "boolean",
-                  "description": "The script path's error rate is above the service path's on the latest day."
+                  "description": "Broken: the script path's error rate is above the service path's on the latest day, or the roll-back guard fired (or its rule is crossed in the last hour)."
                 },
                 "readyToDelete": {
                   "type": "boolean",
                   "description": "The service path made zero runs on each of the last 7 stored days: its code may leave its repo."
+                },
+                "guard": {
+                  "$ref": "#/components/schemas/ScriptGuard"
                 },
                 "days": {
                   "type": "array",
@@ -3963,6 +4112,7 @@
                 "scripts",
                 "red",
                 "readyToDelete",
+                "guard",
                 "days"
               ]
             }
@@ -9822,6 +9972,220 @@
                     "total",
                     "reproved"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/scripts/switches": {
+      "post": {
+        "summary": "Record a workflow dynasty upgraded onto the stored script writer (service key only)",
+        "description": "FACTORY-P3 fleet writer switch. `toWorkflowId` = the upgraded version: it must write with the script, and its predecessor (an upgrade in the same dynasty) must be the content-generation writer. Idempotent.",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "toWorkflowId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "toWorkflowId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Recorded (or already recorded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not a switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "The roll-back guard of one outcome: last hour, rule, switched workflows (service key only)",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Default message_written."
+            },
+            "required": false,
+            "description": "Default message_written.",
+            "name": "outcome",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptGuard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/scripts/switches/rollback": {
+      "post": {
+        "summary": "Roll back switched workflows by hand: re-activate each previous version, deprecate the script version (service key only)",
+        "description": "The function the guard runs. `workflowDynastySlugs` limits it (a drill); default every switched dynasty of the outcome.",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 5
+                  },
+                  "workflowDynastySlugs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rolled back / skipped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rolledBack": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "workflowDynastySlug": {
+                            "type": "string"
+                          },
+                          "fromVersion": {
+                            "type": "integer"
+                          },
+                          "toVersion": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "workflowDynastySlug",
+                          "fromVersion",
+                          "toVersion"
+                        ]
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "workflowDynastySlug": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "workflowDynastySlug",
+                          "reason"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "rolledBack",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing outcome or reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
