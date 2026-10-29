@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { activeLegsOfDynasty, assignWorkflowToLeg } from "./catalogue-client.js";
 import { db } from "../db/index.js";
 import { workflows } from "../db/schema.js";
@@ -111,11 +111,22 @@ export interface UpgradeWorkflowParams {
  * Inserts the next version of `existing`'s dynasty and deprecates `existing`.
  * The caller has already checked for a signature conflict.
  */
+/** The next version number of a dynasty: above every version it holds, not only above the one being upgraded. */
+export function nextDynastyVersion(upgradedVersion: number, dynastyMaxVersion: number | null | undefined): number {
+  return Math.max(upgradedVersion, Number(dynastyMaxVersion ?? 0)) + 1;
+}
+
 export async function upgradeWorkflowRow(params: UpgradeWorkflowParams): Promise<WorkflowRow> {
   const { existing, dag, signature, orgId, userId, runId } = params;
 
   // The dynasty signature name is immutable per dynasty — reuse the existing one.
-  const newVersion = existing.version + 1;
+  // The NEXT number of the dynasty, never `existing.version + 1`: a re-activated earlier version (un-retire, the script
+  // writer's roll-back) is not the dynasty's highest, and its +1 is a slug a later version already holds.
+  const [highest] = await db
+    .select({ maxVersion: sql<number>`max(${workflows.version})::int` })
+    .from(workflows)
+    .where(eq(workflows.workflowDynastySlug, existing.workflowDynastySlug));
+  const newVersion = nextDynastyVersion(existing.version, highest?.maxVersion);
   const newSlug = composeSlug(existing.workflowDynastySlug, newVersion);
   const newName = composeName(existing.workflowDynastyName, newVersion);
 
