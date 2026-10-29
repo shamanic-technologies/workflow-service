@@ -47,6 +47,27 @@ export type RunOutcome =
 
 /** Builds the script's context inside the engine: every call goes through `__host`, text in, text out. */
 const BOOT = `
+// QuickJS ships no Intl. Scripts read a time zone's local time (send windows): Intl.DateTimeFormat is answered by
+// the host's own (a pure function of locale, options and an instant; no I/O), through __intl, removed below.
+(function (intl) {
+  "use strict";
+  var call = function (locale, options, instant, method) {
+    var a = JSON.parse(intl(JSON.stringify(locale === undefined ? null : locale), JSON.stringify(options || {}), instant, method));
+    if (a.error) throw new RangeError(a.error);
+    return a.v;
+  };
+  var instantOf = function (d) { return d === undefined ? Date.now() : d instanceof Date ? d.getTime() : Number(d); };
+  function DateTimeFormat(locale, options) {
+    if (!(this instanceof DateTimeFormat)) return new DateTimeFormat(locale, options);
+    call(locale, options, 0, "check");
+    this.__locale = locale; this.__options = options;
+  }
+  DateTimeFormat.prototype.format = function (d) { return call(this.__locale, this.__options, instantOf(d), "format"); };
+  DateTimeFormat.prototype.formatToParts = function (d) { return call(this.__locale, this.__options, instantOf(d), "formatToParts"); };
+  DateTimeFormat.prototype.resolvedOptions = function () { return call(this.__locale, this.__options, 0, "resolvedOptions"); };
+  if (typeof globalThis.Intl === "undefined") globalThis.Intl = Object.freeze({ DateTimeFormat: DateTimeFormat });
+})(__intl);
+delete globalThis.__intl;
 var __make = (function (host) {
   "use strict";
   var call = function (op, args) {
@@ -128,7 +149,7 @@ export async function validateSource(source: string): Promise<{ materials: strin
   const calls = (source.match(/\.get\s*\(/g) ?? []).length - (source.match(/storage\.get\s*\(/g) ?? []).length;
   const literal = (source.match(/(?<!storage)\.get\s*\(\s*["'`][a-z0-9_]+["'`]\s*\)/g) ?? []).length;
   if (literal !== calls) throw new ScriptSourceError("every ctx.get(...) must name its outcome with a literal string, so the materials can be read from the code");
-  const checked = await evaluate(`${moduleOf(js)}JSON.stringify(null);`, () => ({ stop: "a script calls nothing while it loads" }));
+  const checked = await evaluate(`${BOOT}${moduleOf(js)}JSON.stringify(null);`, () => ({ stop: "a script calls nothing while it loads" }));
   if (checked.kind !== "done") throw new ScriptSourceError(checked.kind === "error" ? checked.message : checked.reason);
   return { materials: readMaterials(source), vendors: readVendors(source) };
 }
@@ -145,6 +166,22 @@ export async function runScript(source: string, spec: ScriptSpec, bridge: Bridge
     `${BOOT}${moduleOf(js)}` +
     `JSON.stringify((function () { var r = __run(__make(${JSON.stringify(JSON.stringify(spec))})); return r === undefined ? null : r; })());`;
   return evaluate(program, bridge);
+}
+
+/** Intl.DateTimeFormat for the sandbox: the host's own, a pure function (JSON in, JSON out). */
+function hostIntl(localeJson: string, optionsJson: string, instant: number, method: string): string {
+  try {
+    const locale = JSON.parse(localeJson) as string | string[] | null;
+    const options = JSON.parse(optionsJson) as Intl.DateTimeFormatOptions;
+    const fmt = new Intl.DateTimeFormat(locale ?? undefined, options);
+    if (method === "check") return JSON.stringify({ v: null });
+    if (method === "format") return JSON.stringify({ v: fmt.format(new Date(instant)) });
+    if (method === "formatToParts") return JSON.stringify({ v: fmt.formatToParts(new Date(instant)) });
+    if (method === "resolvedOptions") return JSON.stringify({ v: fmt.resolvedOptions() });
+    return JSON.stringify({ error: `Intl.DateTimeFormat has no ${method}` });
+  } catch (e) {
+    return JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
+  }
 }
 
 /** Evaluate a program in a fresh engine with the bridge as its only door; the program's value is JSON text. */
@@ -197,6 +234,11 @@ async function evaluate(program: string, bridge: Bridge): Promise<RunOutcome> {
   });
   context.setProp(context.global, "__host", host);
   host.dispose();
+  const intl = context.newFunction("__intl", (localeH: QuickJSHandle, optionsH: QuickJSHandle, instantH: QuickJSHandle, methodH: QuickJSHandle) =>
+    context.newString(hostIntl(context.getString(localeH), context.getString(optionsH), context.getNumber(instantH), context.getString(methodH))),
+  );
+  context.setProp(context.global, "__intl", intl);
+  intl.dispose();
 
   try {
     const evaluated = await context.evalCodeAsync(program, "script.js");

@@ -20,14 +20,14 @@ describe("script sandbox isolation", () => {
       var viaFunction = (function () { return Function("return typeof process")(); })();
       return { content: {
         process: typeof g.process, require: typeof g.require, fetch: typeof g.fetch, xhr: typeof g.XMLHttpRequest,
-        setTimeout: typeof g.setTimeout, Buffer: typeof g.Buffer, module: typeof g.module, host: typeof g.__host,
+        setTimeout: typeof g.setTimeout, Buffer: typeof g.Buffer, module: typeof g.module, host: typeof g.__host, intlHost: typeof g.__intl,
         std: typeof g.std, os: typeof g.os, viaFunction: viaFunction,
         secretInGlobals: JSON.stringify(Object.getOwnPropertyNames(g)).indexOf("s3cret") >= 0,
       } };
     `);
     expect(content).toEqual({
       process: "undefined", require: "undefined", fetch: "undefined", xhr: "undefined", setTimeout: "undefined", Buffer: "undefined",
-      module: "undefined", host: "undefined", std: "undefined", os: "undefined", viaFunction: "undefined", secretInGlobals: false,
+      module: "undefined", host: "undefined", intlHost: "undefined", std: "undefined", os: "undefined", viaFunction: "undefined", secretInGlobals: false,
     });
   });
 
@@ -61,6 +61,16 @@ describe("script sandbox isolation", () => {
     expect(content).toEqual({ name: "Ana", mutated: "frozen", n: 2, subject: "lead-1", tactic: 1 });
     expect(seen.map(([op]) => op)).toEqual(["get", "vendor"]);
     expect(seen[1]![1]).toEqual(["llm.complete", { message: "hi Ana" }]);
+  });
+
+  it("reads a time zone's local time through Intl.DateTimeFormat (the host's, pure); a bad zone throws RangeError", async () => {
+    const content = await value(`
+      var f = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", hourCycle: "h23", hour: "2-digit", weekday: "short" });
+      var parts = f.formatToParts(new Date(Date.UTC(2026, 9, 29, 6, 0)));
+      var bad = (function () { try { new Intl.DateTimeFormat("en-US", { timeZone: "Mars/Olympus" }); return "accepted"; } catch (e) { return e instanceof RangeError ? "RangeError" : String(e); } })();
+      return { content: { hour: parts.find(function (p) { return p.type === "hour"; }).value, weekday: parts.find(function (p) { return p.type === "weekday"; }).value, text: f.format(Date.UTC(2026, 9, 29, 6, 0)), bad: bad } };
+    `);
+    expect(content).toEqual({ hour: "11", weekday: "Thu", text: "Thu, 11", bad: "RangeError" });
   });
 
   it("stops a script that computes forever", async () => {
