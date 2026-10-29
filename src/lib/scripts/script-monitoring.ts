@@ -21,6 +21,9 @@ import { guardView, shouldRollBack } from "./script-guard.js";
 /** Which service task makes each outcome today (a fact of the fleet, read in runs-service). */
 export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: string[] }> = {
   message_written: { serviceName: "content-generation-service", taskNames: ["single-generation"] },
+  // The reply judge (a SERVICE switch, script-service-switch.ts): instantly opens one `reply-qualification` run per
+  // judgment its own code makes, a child of the org's reply-judging run of the day.
+  lead_interested: { serviceName: "instantly-service", taskNames: ["reply-qualification"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";

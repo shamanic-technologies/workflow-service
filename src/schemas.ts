@@ -2481,9 +2481,9 @@ export const RunScriptRequestSchema = z
     tactics: z.record(z.string(), z.unknown()).optional().describe("The run's tactics, on top of the script's own."),
     request: z.record(z.string(), z.unknown()).nullable().optional(),
     recordedBy: z
-      .enum(["content-generation"])
+      .enum(["content-generation", "instantly"])
       .optional()
-      .describe("The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run). The run then declares nothing itself."),
+      .describe("The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run). The run then declares nothing itself."),
     trace: z.boolean().optional().describe("Answer every vendor call in order (`trace`: args, answer; a completion's exact request `sent` + chat-service's whole answer `raw`), for the recording service."),
   })
   .openapi("RunScriptRequest");
@@ -2652,6 +2652,28 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/run",
+  summary: "Run a stored script for a service's own sweep, platform-billed (service key only)",
+  description:
+    "FACTORY-P3 service switch. The door a service calls in place of its own code for an outcome it makes with no org request behind it (instantly's reply judge). Same run as `POST /orgs/scripts/run` (own runs-service run, child of `x-run-id` = the CALLER's own run, e.g. its reply-judging run), but every vendor is billed as that service's own code was: chat-service's platform completion and judgment doors, on the script's run. `x-org-id` names the org the work is for; `x-user-id` is optional (a sweep has no person).",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: {
+    headers: z.object({ "x-org-id": z.string(), "x-run-id": z.string(), "x-user-id": z.string().optional() }),
+    body: { required: true, content: { "application/json": { schema: RunScriptRequestSchema } } },
+  },
+  responses: {
+    200: { description: "The run (made or nothing)", content: { "application/json": { schema: RunScriptResponseSchema } } },
+    400: { description: "Validation error or missing x-org-id / x-run-id", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Unknown script", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "A port not proven on all its cases", content: { "application/json": { schema: ErrorResponseSchema } } },
+    410: { description: "Dynasty retired", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "The script stopped or failed, or the ledger refused", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
   method: "put",
   path: "/internal/scripts/dynasty/{outcome}/{dynasty}/cases",
   summary: "Store recorded production cases for a ported dynasty (service key only; personal data, never served back)",
@@ -2672,11 +2694,25 @@ const MonitoringPathDaySchema = z.object({
 });
 
 const ScriptSwitchSchema = z.object({
-  workflowDynastySlug: z.string(),
-  fromVersion: z.number().int().describe("The version a roll-back re-activates (the content-generation writer)."),
-  toVersion: z.number().int().describe("The version that writes with the stored script."),
+  workflowDynastySlug: z.string().describe("The switched workflow dynasty, or `service:<caller>` for a SERVICE switch."),
+  fromVersion: z.number().int().describe("The version a roll-back re-activates (the content-generation writer); 0 on a service switch (the service's own code)."),
+  toVersion: z.number().int().describe("The version that runs the stored script; on a service switch, the script version it was proven on."),
   state: z.enum(["switched", "rolled_back"]),
+  callerService: z.string().optional().describe("A SERVICE switch: the service that makes the outcome in its own code and calls the script while switched."),
 });
+
+export const ServiceSwitchStateSchema = z
+  .object({
+    outcome: z.string(),
+    callerService: z.string(),
+    switched: z.boolean().describe("true: call `POST /internal/scripts/run` with `dynasty` in place of the service's own code; false: the service's own code (never switched, or rolled back)."),
+    dynasty: z.string().nullable(),
+    scriptVersion: z.number().int().nullable(),
+    switchedAt: z.string().nullable(),
+    rolledBackAt: z.string().nullable(),
+    rollbackReason: z.string().nullable(),
+  })
+  .openapi("ServiceSwitchState");
 
 export const ScriptGuardSchema = z
   .object({
@@ -2736,9 +2772,35 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
+  path: "/internal/scripts/switches/service",
+  summary: "Switch an outcome a service makes in its own code onto a stored script (service key only)",
+  description: "FACTORY-P3 service switch: no workflow step calls it, so there is no dynasty to upgrade; the caller service reads the state before each call. Refused (409) unless the dynasty's active version replays 100 % of its recorded cases. Idempotent while switched.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), dynasty: z.string(), callerService: z.string() }) } } } },
+  responses: {
+    201: { description: "Switched (or already switched)", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+    400: { description: "Unknown caller service or missing field", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "No active version", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Not a proven port, or switched to another dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/scripts/switches/service",
+  summary: "Whether a service runs the stored script or its own code for one outcome (service key only)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { query: z.object({ outcome: z.string(), callerService: z.string() }) },
+  responses: { 200: { description: "The state", content: { "application/json": { schema: ServiceSwitchStateSchema } } } },
+});
+
+registry.registerPath({
+  method: "post",
   path: "/internal/scripts/switches/rollback",
   summary: "Roll back switched workflows by hand: re-activate each previous version, deprecate the script version (service key only)",
-  description: "The function the guard runs. `workflowDynastySlugs` limits it (a drill); default every switched dynasty of the outcome.",
+  description: "The function the guard runs. `workflowDynastySlugs` limits it (a drill; `service:<caller>` names a service switch); default every switched dynasty of the outcome.",
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
   request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), reason: z.string().min(5), workflowDynastySlugs: z.array(z.string()).optional() }) } } } },

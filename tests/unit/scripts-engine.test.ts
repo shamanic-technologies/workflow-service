@@ -168,7 +168,9 @@ describe("a script run as a step: isolation and ledger declaration", () => {
       async judge() {
         return { answers: {} };
       },
-      async readSkill() {
+      async platformComplete() { throw new Error("not a platform run"); },
+  async platformJudge() { throw new Error("not a platform run"); },
+  async readSkill() {
         return { content: "Write short and warm.", version: 3 };
       },
     };
