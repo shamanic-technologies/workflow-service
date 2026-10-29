@@ -60,7 +60,74 @@ SELECT coalesce(json_agg(r), '[]') FROM (
   },
 };
 
+/**
+ * The FULL writer's cases (FACTORY-P3 a): content-generation records the exact `/complete` request per generation
+ * since 2026-10-29 and serves it on `GET /internal/generations/recorded` (service key, personal data): read through
+ * that route from inside this container, never from its database. Each case asserts the system prompt too.
+ */
+async function recordedWriterCases(from, maxCases) {
+  const base = (process.env.CONTENT_GENERATION_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.CONTENT_GENERATION_SERVICE_API_KEY;
+  if (!base || !key) throw new Error("CONTENT_GENERATION_SERVICE_URL and CONTENT_GENERATION_SERVICE_API_KEY are required");
+  const rows = [];
+  let cursor = null;
+  do {
+    const q = new URLSearchParams({ limit: "100", ...(from ? { from } : {}), ...(cursor ? { cursor } : {}) });
+    const res = await fetch(`${base}/internal/generations/recorded?${q}`, { headers: { "x-api-key": key } });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`content-generation recorded generations -> ${res.status}: ${text.slice(0, 200)}`);
+    const page = JSON.parse(text);
+    rows.push(...page.generations);
+    cursor = page.hasMore ? page.nextCursor : null;
+  } while (cursor && rows.length < maxCases);
+  return rows.slice(0, maxCases);
+}
+
+function fullWriterCase(g) {
+  const i = g.inputs ?? {};
+  if (!g.request || !g.response || !g.output || typeof i.promptTemplate !== "string" || typeof i.clientCommsVoice !== "string") {
+    return { excluded: "a part of the generation is not recorded" };
+  }
+  const lead = {};
+  const brand = {};
+  for (const [k, v] of Object.entries(g.variables ?? {})) (k.startsWith("lead") ? lead : brand)[k] = v;
+  return {
+    case: {
+      id: g.generationId,
+      units: {
+        lead_identified: { variables: lead, ...(i.language ? { language: i.language } : {}) },
+        brand_context: {
+          variables: brand,
+          ...(i.campaignContext ? { campaignContext: i.campaignContext } : {}),
+          ...(i.giveLists ? { giveLists: i.giveLists } : {}),
+          ...(i.instruction ? { instruction: i.instruction } : {}),
+        },
+        template_written: { text: i.promptTemplate },
+      },
+      tactics: { llm: { provider: g.request.provider, model: g.request.model } },
+      calls: [
+        { name: "voice.read", answer: { ok: true, data: { content: i.clientCommsVoice, version: null } } },
+        { name: "llm.complete", args: g.request, answer: { ok: true, data: g.response } },
+      ],
+      expect: { content: { subject: g.output.subject, sequence: g.output.sequence } },
+    },
+  };
+}
+
 const outcome = args.outcome;
+if (args.from === "recorded" || args.source === "recorded") {
+  if (outcome !== "message_written") throw new Error("--source recorded serves message_written only");
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
+  const built = gens.map(fullWriterCase);
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  console.log(`${outcome}/${args.dynasty}: ${gens.length} recorded generations, ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply) await storeCases(cases, `content-generation-service recorded generations ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 const recorder = RECORDERS[outcome];
 if (!recorder) throw new Error(`--outcome must be one of: ${Object.keys(RECORDERS).join(", ")}`);
 if (args["print-sql"]) {
@@ -76,10 +143,12 @@ for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.exclud
 const span = rows.length ? `${rows.map((r) => r.created_at).sort()[0]}..${rows.map((r) => r.created_at).sort().at(-1)}` : "none";
 console.log(`${outcome}/${args.dynasty}: ${rows.length} rows (${span}), ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
 if (!args.apply) process.exit(0);
+await storeCases(cases, `${recorder.database} recorded ${new Date().toISOString().slice(0, 10)} (${span})`);
+
+async function storeCases(cases, source) {
 const key = process.env.WORKFLOW_SERVICE_API_KEY;
 if (!key) throw new Error("WORKFLOW_SERVICE_API_KEY is required");
 const base = (process.env.WORKFLOW_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, "");
-const source = `${recorder.database} recorded ${new Date().toISOString().slice(0, 10)} (${span})`;
 for (let i = 0; i < cases.length; i += 8) {
   const last = i + 8 >= cases.length;
   const res = await fetch(`${base}/internal/scripts/dynasty/${outcome}/${args.dynasty}/cases${last ? "?reprove=true" : ""}`, {
@@ -93,4 +162,5 @@ for (let i = 0; i < cases.length; i += 8) {
     const out = JSON.parse(text);
     console.log(`  stored; the dynasty now holds ${out.total} cases; active version re-proven: ${JSON.stringify(out.reproved)}`);
   }
+}
 }

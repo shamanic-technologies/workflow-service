@@ -95,7 +95,8 @@ function completionBody(args: Record<string, unknown>, ctx: VendorCallContext): 
     body.responseFormat = "json";
     body.responseSchema = named;
   } else if (args.responseSchema && typeof args.responseSchema === "object") {
-    body.responseFormat = "json";
+    // A spelled schema is passed as stated (chat-service enforces JSON from the schema alone), byte for byte the
+    // request the service path sends.
     body.responseSchema = args.responseSchema;
   }
   for (const f of PASSTHROUGH_FIELDS) if (args[f] !== undefined) body[f] = args[f];
