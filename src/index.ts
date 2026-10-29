@@ -30,6 +30,7 @@ import publicWorkflowsRoutes from "./routes/public-workflows.js";
 import internalRoutes from "./routes/internal.js";
 import figuresRoutes from "./routes/figures.js";
 import agentTurnsRoutes from "./routes/agent-turns.js";
+import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -53,6 +54,7 @@ app.use(publicWorkflowsRoutes);
 
 // Internal routes (x-api-key only, no identity headers)
 app.use(internalRoutes);
+app.use(internalScriptsRouter);
 
 // Identity-gated routes
 app.use(requireIdentity);
@@ -63,6 +65,7 @@ app.use(workflowsRoutes);
 app.use(workflowRunsRoutes);
 app.use(figuresRoutes);
 app.use(agentTurnsRoutes);
+app.use(scriptsRoutes);
 
 // 404 fallback
 app.use((_req, res) => {

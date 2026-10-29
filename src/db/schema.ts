@@ -159,3 +159,81 @@ export const workflowSiblingLinePipes = pgTable(
   },
   (table) => [primaryKey({ columns: [table.featureSlug, table.legKey] })]
 );
+
+// FACTORY-P2-ENGINES: scripts as data (src/lib/scripts/*). Migration 0042.
+export const scripts = pgTable(
+  "scripts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: text("outcome").notNull(),
+    dynasty: text("dynasty").notNull(),
+    version: integer("version").notNull(),
+    code: text("code").notNull(),
+    materials: jsonb("materials").$type<string[]>().notNull().default([]),
+    vendors: jsonb("vendors").$type<string[]>().notNull().default([]),
+    tactics: jsonb("tactics").$type<Record<string, unknown>>().notNull().default({}),
+    description: text("description").notNull(),
+    status: text("status").notNull().default("active"),
+    dynastyStatus: text("dynasty_status").notNull().default("active"),
+    creationType: text("creation_type").notNull(),
+    createdFromScript: uuid("created_from_script"),
+    orgId: text("org_id").notNull(),
+    createdBy: text("created_by").notNull(),
+    replay: jsonb("replay").$type<{ cases: number; matches: number } | null>(),
+    deprecationReason: text("deprecation_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_scripts_version").on(table.outcome, table.dynasty, table.version),
+    uniqueIndex("idx_scripts_active").on(table.outcome, table.dynasty).where(sql`status = 'active'`),
+  ]
+);
+export type ScriptRow = typeof scripts.$inferSelect;
+
+export const scriptCases = pgTable(
+  "script_cases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: text("outcome").notNull(),
+    dynasty: text("dynasty").notNull(),
+    caseId: text("case_id").notNull(),
+    body: jsonb("body").notNull(),
+    source: text("source").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("idx_script_cases_case").on(table.outcome, table.dynasty, table.caseId)]
+);
+
+export const scriptStorage = pgTable(
+  "script_storage",
+  {
+    orgId: text("org_id").notNull(),
+    outcome: text("outcome").notNull(),
+    tableName: text("table_name").notNull(),
+    key: text("key").notNull(),
+    value: jsonb("value").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.orgId, table.outcome, table.tableName, table.key] })]
+);
+
+export const scriptRuns = pgTable(
+  "script_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scriptId: uuid("script_id").notNull(),
+    orgId: text("org_id").notNull(),
+    runId: text("run_id").notNull(),
+    parentRunId: text("parent_run_id").notNull(),
+    subject: jsonb("subject"),
+    status: text("status").notNull(),
+    result: jsonb("result"),
+    error: text("error"),
+    vendorCalls: jsonb("vendor_calls").notNull().default([]),
+    declared: jsonb("declared"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [index("idx_script_runs_script").on(table.scriptId, table.createdAt)]
+);
