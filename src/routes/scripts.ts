@@ -25,6 +25,7 @@ import {
   productionCatalogueDeps,
   proveOnCases,
   putCases,
+  reproveActive,
   serveScript,
   setDynastyStatus,
   summarizeScript,
@@ -243,8 +244,9 @@ internalScriptsRouter.put("/internal/scripts/dynasty/:outcome/:dynasty/cases", r
   }
   try {
     const out = await putCases(db, req.params.outcome, req.params.dynasty, parsed.data.cases as unknown as ReplayCase[], parsed.data.source);
-    console.log(`[workflow-service] script cases ${req.params.outcome}/${req.params.dynasty}: stored ${out.stored}, total ${out.total}`);
-    res.json(out);
+    const reproved = req.query.reprove === "true" ? await reproveActive(db, req.params.outcome, req.params.dynasty) : null;
+    console.log(`[workflow-service] script cases ${req.params.outcome}/${req.params.dynasty}: stored ${out.stored}, total ${out.total}, reproved ${JSON.stringify(reproved)}`);
+    res.json({ ...out, reproved });
   } catch (err) {
     fail(res, err, "store script cases");
   }

@@ -2713,6 +2713,6 @@ registry.registerPath({
   summary: "Store recorded production cases for a ported dynasty (service key only; personal data, never served back)",
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
-  request: { params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: PutScriptCasesRequestSchema } } } },
-  responses: { 200: { description: "Stored", content: { "application/json": { schema: z.object({ stored: z.number().int(), total: z.number().int() }) } } } },
+  request: { params: scriptDynastyParams, query: z.object({ reprove: z.enum(["true", "false"]).optional().describe("`true` (the last batch): re-replay the active version on every case and store its proof; a miss makes the runner refuse it (409 not_proven) until a version replaying 100 % is upgraded in.") }), body: { required: true, content: { "application/json": { schema: PutScriptCasesRequestSchema } } } },
+  responses: { 200: { description: "Stored", content: { "application/json": { schema: z.object({ stored: z.number().int(), total: z.number().int(), reproved: z.object({ scriptSlug: z.string(), cases: z.number().int(), matches: z.number().int() }).nullable() }) } } } },
 });
