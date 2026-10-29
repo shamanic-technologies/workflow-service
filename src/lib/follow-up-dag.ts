@@ -217,6 +217,12 @@ export const RESOLVE_CLAIMED_PERSON_CODE = `
 export async function main(claim, detail, trigger) {
   if (claim?.found !== true) {
     const carries = !!(trigger && typeof trigger === "object" && typeof trigger.eventId === "string" && trigger.eventId.trim());
+    // An occurrence that names nobody claimed nobody on purpose (claim-person skipClaim): final, never redelivered,
+    // never answered with someone else's row (OCCURRENCE-NAMES-NOBODY-1029).
+    if (carries && claim?.notCalled === true) {
+      console.log("[follow-up] the occurrence names nobody (no email, phone or lead): nothing claimed, nothing written");
+      return { ok: false, why: "occurrence names nobody", endKind: "names_nobody", notAdmitted: { reason: "occurrence_names_nobody" } };
+    }
     // A run with no occurrence that finds nobody due: nothing to do. One carrying an occurrence: it must claim someone.
     return { ok: false, why: "nobody claimed", endKind: carries ? "unclaimed" : "idle" };
   }
@@ -1198,7 +1204,11 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
           ...(a ? { body: a.claimBody } : {}),
         },
         retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId", "body.person": "$ref:claim-person.output.person" },
+        inputMapping: {
+          "params.campaignId": "$ref:flow_input.campaignId",
+          "body.person": "$ref:claim-person.output.person",
+          skip: "$ref:claim-person.output.skipClaim",
+        },
       },
       { id: "claim-plan", type: "script", config: { code: CLAIM_PLAN_CODE }, retries: 0, inputMapping: { claim: "$ref:claim-followup.output" } },
       {
@@ -1224,6 +1234,8 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
       // A run carrying an occurrence that claims nobody, or someone else: fails, so the occurrence is redelivered.
       endRun("end-run-unclaimed", { success: false, stopCampaign: false }),
       endRun("end-run-other-person", { success: false, stopCampaign: false }),
+      // An occurrence naming nobody: final (campaign-service settles it skipped and never redelivers it).
+      endRun("end-run-names-nobody", { success: true, stopCampaign: false }, { "body.personNotAdmitted": "$ref:resolve-person.output.notAdmitted" }),
       ...(a?.claimEnds ?? []).map((e) => endRun(`end-run-${e.kind.replace(/_/g, "-")}`, e.body, e.inputMapping)),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
@@ -1241,6 +1253,7 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
       { from: "check-end", to: "end-run-idle", condition: "results['outcome']?.endKind == 'idle'" },
       { from: "check-end", to: "end-run-unclaimed", condition: "results['outcome']?.endKind == 'unclaimed'" },
       { from: "check-end", to: "end-run-other-person", condition: "results['outcome']?.endKind == 'other_person'" },
+      { from: "check-end", to: "end-run-names-nobody", condition: "results['outcome']?.endKind == 'names_nobody'" },
       ...(a?.claimEnds ?? []).map((e) => ({
         from: "check-end",
         to: `end-run-${e.kind.replace(/_/g, "-")}`,
