@@ -3597,9 +3597,10 @@
           "recordedBy": {
             "type": "string",
             "enum": [
-              "content-generation"
+              "content-generation",
+              "instantly"
             ],
-            "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run). The run then declares nothing itself."
+            "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run). The run then declares nothing itself."
           },
           "trace": {
             "type": "boolean",
@@ -3700,15 +3701,16 @@
               "type": "object",
               "properties": {
                 "workflowDynastySlug": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "The switched workflow dynasty, or `service:<caller>` for a SERVICE switch."
                 },
                 "fromVersion": {
                   "type": "integer",
-                  "description": "The version a roll-back re-activates (the content-generation writer)."
+                  "description": "The version a roll-back re-activates (the content-generation writer); 0 on a service switch (the service's own code)."
                 },
                 "toVersion": {
                   "type": "integer",
-                  "description": "The version that writes with the stored script."
+                  "description": "The version that runs the stored script; on a service switch, the script version it was proven on."
                 },
                 "state": {
                   "type": "string",
@@ -3716,6 +3718,10 @@
                     "switched",
                     "rolled_back"
                   ]
+                },
+                "callerService": {
+                  "type": "string",
+                  "description": "A SERVICE switch: the service that makes the outcome in its own code and calls the script while switched."
                 }
               },
               "required": [
@@ -3737,6 +3743,51 @@
           "rolledBackAt",
           "reason",
           "switches"
+        ]
+      },
+      "ServiceSwitchState": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string"
+          },
+          "callerService": {
+            "type": "string"
+          },
+          "switched": {
+            "type": "boolean",
+            "description": "true: call `POST /internal/scripts/run` with `dynasty` in place of the service's own code; false: the service's own code (never switched, or rolled back)."
+          },
+          "dynasty": {
+            "type": "string",
+            "nullable": true
+          },
+          "scriptVersion": {
+            "type": "integer",
+            "nullable": true
+          },
+          "switchedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "rolledBackAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "rollbackReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "outcome",
+          "callerService",
+          "switched",
+          "dynasty",
+          "scriptVersion",
+          "switchedAt",
+          "rolledBackAt",
+          "rollbackReason"
         ]
       },
       "ScriptMonitoringResponse": {
@@ -9565,6 +9616,118 @@
         }
       }
     },
+    "/internal/scripts/run": {
+      "post": {
+        "summary": "Run a stored script for a service's own sweep, platform-billed (service key only)",
+        "description": "FACTORY-P3 service switch. The door a service calls in place of its own code for an outcome it makes with no org request behind it (instantly's reply judge). Same run as `POST /orgs/scripts/run` (own runs-service run, child of `x-run-id` = the CALLER's own run, e.g. its reply-judging run), but every vendor is billed as that service's own code was: chat-service's platform completion and judgment doors, on the script's run. `x-org-id` names the org the work is for; `x-user-id` is optional (a sweep has no person).",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunScriptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The run (made or nothing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunScriptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or missing x-org-id / x-run-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown script",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A port not proven on all its cases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Dynasty retired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The script stopped or failed, or the ledger refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/scripts/dynasty/{outcome}/{dynasty}/cases": {
       "put": {
         "summary": "Store recorded production cases for a ported dynasty (service key only; personal data, never served back)",
@@ -9770,10 +9933,136 @@
         }
       }
     },
+    "/internal/scripts/switches/service": {
+      "post": {
+        "summary": "Switch an outcome a service makes in its own code onto a stored script (service key only)",
+        "description": "FACTORY-P3 service switch: no workflow step calls it, so there is no dynasty to upgrade; the caller service reads the state before each call. Refused (409) unless the dynasty's active version replays 100 % of its recorded cases. Idempotent while switched.",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "dynasty": {
+                    "type": "string"
+                  },
+                  "callerService": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "dynasty",
+                  "callerService"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Switched (or already switched)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown caller service or missing field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not a proven port, or switched to another dynasty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Whether a service runs the stored script or its own code for one outcome (service key only)",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "callerService",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSwitchState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/scripts/switches/rollback": {
       "post": {
         "summary": "Roll back switched workflows by hand: re-activate each previous version, deprecate the script version (service key only)",
-        "description": "The function the guard runs. `workflowDynastySlugs` limits it (a drill); default every switched dynasty of the outcome.",
+        "description": "The function the guard runs. `workflowDynastySlugs` limits it (a drill; `service:<caller>` names a service switch); default every switched dynasty of the outcome.",
         "tags": [
           "Scripts"
         ],

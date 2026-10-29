@@ -64,6 +64,8 @@ describe("call sites", () => {
       `git grep -lE "platform-(complete|judgments|images|transcriptions)|chatServicePlatformComplete" -- src scripts`,
       { encoding: "utf8" },
     ).trim().split("\n").sort();
-    expect(hits).toEqual(["src/lib/chat-service-client.ts", "src/lib/sibling-line-refresher.ts"]);
+    // src/lib/scripts/vendors.ts: a stored script run for a service's own sweep (POST /internal/scripts/run) calls the
+    // platform doors with ITS run as x-run-id, always (pinned in script-service-switch.test.ts).
+    expect(hits).toEqual(["src/lib/chat-service-client.ts", "src/lib/scripts/vendors.ts", "src/lib/sibling-line-refresher.ts"]);
   });
 });

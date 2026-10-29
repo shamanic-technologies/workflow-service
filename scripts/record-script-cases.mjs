@@ -114,9 +114,66 @@ function fullWriterCase(g) {
   };
 }
 
+/**
+ * The reply judge's cases (FACTORY-P3 next outcomes, lead_interested): instantly-service records every judgment with
+ * the exact completion body it sent and chat-service's whole answer, on either path (its own code, or the stored
+ * script while switched), and serves them on `GET /internal/reply-qualifications/recorded` (service key, personal
+ * data). Each case asserts the request byte for byte and the label + what it means for the reply.
+ */
+async function recordedJudgments(from, maxCases) {
+  const base = (process.env.INSTANTLY_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.INSTANTLY_SERVICE_API_KEY;
+  if (!base || !key) throw new Error("INSTANTLY_SERVICE_URL and INSTANTLY_SERVICE_API_KEY are required");
+  const rows = [];
+  let cursor = null;
+  do {
+    const q = new URLSearchParams({ limit: "200", from: from ?? new Date(Date.now() - 7 * 86_400_000).toISOString(), ...(cursor ? { cursor } : {}) });
+    const res = await fetch(`${base}/internal/reply-qualifications/recorded?${q}`, { headers: { "x-api-key": key } });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`instantly recorded reply qualifications -> ${res.status}: ${text.slice(0, 200)}`);
+    const page = JSON.parse(text);
+    rows.push(...page.qualifications);
+    cursor = page.hasMore ? page.nextCursor : null;
+  } while (cursor && rows.length < maxCases);
+  return rows.slice(0, maxCases);
+}
+
+function judgmentCase(q) {
+  const i = q.inputs ?? {};
+  if (typeof i.replyText !== "string") return { excluded: "the reply text is not recorded" };
+  if (q.error) return { excluded: "the judgment failed (no answer to replay)" };
+  if (q.request && !q.response) return { excluded: "the answer is not recorded" };
+  if (q.kind && !q.classification) return { excluded: "a label production does not classify" };
+  const r = q.response ?? null;
+  return {
+    case: {
+      id: q.id,
+      units: { reply_received: { text: i.replyText, subject: i.subject ?? null, ourOutreach: i.ourOutreach ?? null } },
+      calls: q.request
+        ? [{ name: "llm.complete", args: q.request, answer: { ok: true, data: { content: r.content ?? null, json: r.json ?? null, model: r.model ?? null, tokensInput: r.tokensInput ?? null, tokensOutput: r.tokensOutput ?? null } } }]
+        : [],
+      expect: q.kind ? { content: { kind: q.kind, classification: q.classification, interested: q.classification === "positive" } } : { nothing: true },
+    },
+  };
+}
+
 const outcome = args.outcome;
+if ((args.from === "recorded" || args.source === "recorded") && outcome === "lead_interested") {
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const rows = await recordedJudgments(typeof args.since === "string" ? args.since : null, Number(args.max ?? 500));
+  const built = rows.map(judgmentCase);
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  const paths = {};
+  for (const r of rows) paths[r.path] = (paths[r.path] ?? 0) + 1;
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} recorded judgments ${JSON.stringify(paths)}, ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply && cases.length > 0) await storeCases(cases, `instantly-service recorded reply judgments ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 if (args.from === "recorded" || args.source === "recorded") {
-  if (outcome !== "message_written") throw new Error("--source recorded serves message_written only");
+  if (outcome !== "message_written") throw new Error("--source recorded serves message_written and lead_interested");
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
   const built = gens.map(fullWriterCase);

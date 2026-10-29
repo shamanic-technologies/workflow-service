@@ -162,6 +162,8 @@ const vendorDeps = (fail = false): VendorDeps => ({
     return { content: "{}", json: { subject: "Hi Ana" }, model: "claude-sonnet-4-6", tokensInput: 10, tokensOutput: 5, extra: "whole answer" };
   },
   async judge() { return { answers: {} }; },
+  async platformComplete() { throw new Error("not a platform run"); },
+  async platformJudge() { throw new Error("not a platform run"); },
   async readSkill() { return { content: "Short, warm.", version: 4 }; },
 });
 const who = { orgId: "org-test", userId: "user-1", parentRunId: "run-workflow", headers: { "x-brand-id": "brand-1" } };
@@ -281,7 +283,7 @@ describe("switch + roll-back on a real Postgres", () => {
     const after = await db.select().from(workflows);
     expect(after.find((w) => w.id === from.id)).toMatchObject({ status: "active", deprecationReason: null });
     expect(after.find((w) => w.id === to.id)).toMatchObject({ status: "deprecated" });
-    expect(after.find((w) => w.id === to.id)!.deprecationReason).toMatch(/^Rolled back: the stored script's error rate on writing was 20\.0 %/);
+    expect(after.find((w) => w.id === to.id)!.deprecationReason).toMatch(/^Rolled back: the stored script.s error rate on message_written was 20\.0 %/);
     const [sw] = await db.select().from(scriptSwitches);
     expect(sw).toMatchObject({ state: "rolled_back" });
     const view = await guardView(db, "message_written", now);
