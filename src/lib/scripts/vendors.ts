@@ -24,6 +24,11 @@ export interface VendorCallContext {
   headers: Record<string, string>;
   /** The script's tactics (its own, then the run's on top). */
   tactics: Record<string, unknown>;
+  /**
+   * A completion's exact request and chat-service's WHOLE answer, handed to the run's trace (a step run with
+   * `trace: true`): the service that records the Unit stores them (the fleet writer: content-generation's row).
+   */
+  onCompletion?: (exchange: { sent: Record<string, unknown>; raw: Record<string, unknown> }) => void;
 }
 
 /** An LLM completion, answered with chat-service's whole answer `{content, json, model, tokensInput, tokensOutput}`. */
@@ -112,6 +117,7 @@ async function complete(name: string, args: Record<string, unknown>, ctx: Vendor
   } catch (e) {
     return refuse(e instanceof Error ? e.message : String(e));
   }
+  ctx.onCompletion?.({ sent: built.body, raw: answer });
   if (name === CHAT_COMPLETE) {
     const json = answer.json;
     if (!json || typeof json !== "object" || Array.isArray(json)) return refuse("chat.complete: the model answered no JSON object");

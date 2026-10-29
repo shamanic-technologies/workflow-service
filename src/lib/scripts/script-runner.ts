@@ -43,6 +43,14 @@ export interface RunScriptInput {
   /** The run's tactics, on top of the script's own. */
   tactics?: Record<string, unknown>;
   request?: Record<string, unknown> | null;
+  /**
+   * The service that RECORDS the Unit declares its occurrences on this run, with its own never-lost machinery
+   * (FACTORY-P3 fleet writer: content-generation stores the email row and declares its ONE `message_written` on the
+   * script's run). The run then declares nothing itself: one declaration per Unit, never two.
+   */
+  recordedBy?: string;
+  /** Answer every vendor call (args, answer; a completion's exact request + whole answer) for the recording service. */
+  trace?: boolean;
 }
 
 export interface RunIdentity {
@@ -76,6 +84,10 @@ export interface ScriptRunResult {
   error: string | null;
   vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number }>;
   declared: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] };
+  /** Who declares this run's occurrences when not the run itself. */
+  recordedBy?: string;
+  /** Every vendor call in order (only when the step asked `trace: true`). */
+  trace?: Array<{ name: string; args: unknown; answer: unknown; sent?: Record<string, unknown>; raw?: Record<string, unknown> }>;
 }
 
 /** The step failed after its run was opened (the run is closed failed, declared, and named). */
@@ -142,6 +154,7 @@ export async function runStoredScript(
   const gotten = new Map<string, number>();
   const consumed: OccurrenceInput[] = [];
   const vendorCalls: ScriptRunResult["vendorCalls"] = [];
+  const trace: NonNullable<ScriptRunResult["trace"]> = [];
 
   const bridge: Bridge = async (op, args) => {
     if (op === "get") {
@@ -159,8 +172,15 @@ export async function runStoredScript(
     if (op === "vendor") {
       const name = String(args[0]);
       const t = Date.now();
-      const answer = await callVendor(name, (args[1] ?? null) as Record<string, unknown> | null, { headers: vendorHeaders, tactics }, deps.vendors);
+      let exchange: { sent: Record<string, unknown>; raw: Record<string, unknown> } | null = null;
+      const answer = await callVendor(
+        name,
+        (args[1] ?? null) as Record<string, unknown> | null,
+        { headers: vendorHeaders, tactics, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
+        deps.vendors,
+      );
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }) });
+      if (input.trace) trace.push({ name, args: args[1] ?? null, answer, ...(exchange ? (exchange as { sent: Record<string, unknown>; raw: Record<string, unknown> }) : {}) });
       return { v: answer };
     }
     if (op === "storage.get" || op === "storage.set" || op === "storage.delete" || op === "storage.count") {
@@ -175,7 +195,10 @@ export async function runStoredScript(
   const out = await runScript(row.code, { subject: input.subject.id, brand: who.headers["x-brand-id"] ?? "", day: Math.floor(Date.now() / 86_400_000), tactics, request: input.request ?? null }, bridge);
   const made = out.kind === "done" && out.result !== null && typeof out.result === "object" ? (out.result as NonNullable<ScriptResult>) : null;
   const status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : "nothing";
-  const produced: OccurrenceInput[] = status === "made" ? [{ outcomeKey: row.outcome, subjectService: input.subject.service, subjectId: input.subject.id }] : [];
+  // A Unit recorded by its owning service is declared there (one declaration, never two).
+  const produced: OccurrenceInput[] =
+    status === "made" && !input.recordedBy ? [{ outcomeKey: row.outcome, subjectService: input.subject.service, subjectId: input.subject.id }] : [];
+  if (input.recordedBy) consumed.length = 0;
   let error: string | null = out.kind === "error" ? out.message : out.kind === "stopped" ? out.reason : null;
 
   let declaredOk = true;
@@ -198,6 +221,8 @@ export async function runStoredScript(
     error,
     vendorCalls,
     declared: { produced: declaredOk ? produced : [], consumed: declaredOk ? consumed : [] },
+    ...(input.recordedBy ? { recordedBy: input.recordedBy } : {}),
+    ...(input.trace ? { trace } : {}),
   };
   await deps.ledger.closeRun(runId, finalStatus === "made" || finalStatus === "nothing" ? "completed" : "failed", who.orgId);
   await db

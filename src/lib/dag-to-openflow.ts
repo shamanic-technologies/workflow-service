@@ -795,7 +795,9 @@ function callsContentGeneration(node: DAGNode): boolean {
     node.type === "http.call" &&
     (service === "content-generation" || service === "content_generation") &&
     typeof path === "string" &&
-    /\/generate$/.test(path)
+    // `/generate/materials` (FACTORY-P3 script writer) builds the script's materials from the SAME body as the writer
+    // call, so it gets every field the writer call gets (scripts/script-writer-switch.ts).
+    /\/generate(\/materials)?$/.test(path)
   );
 }
 
@@ -892,7 +894,7 @@ function callsOfferScopedEndpoint(node: DAGNode): boolean {
     service === "brand" && path.includes("/orgs/brands/extract-fields");
   const isContentGeneration =
     (service === "content-generation" || service === "content_generation") &&
-    /\/generate$/.test(path);
+    /\/generate(\/materials)?$/.test(path);
   return isBrandExtractFields || isContentGeneration;
 }
 
