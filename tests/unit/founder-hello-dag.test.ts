@@ -361,6 +361,14 @@ describe("finalize + outcome", () => {
     const line = { phone: "+77776879632", name: "Sophie", role: "AI assistant", instructions: null };
     const both = { decision: "write", message: "Hey Chaim, Kevin here\n\nSophie writes to you from +77776879632\n" + ASSISTANT_PART_MARKER + "\nHi Chaim, Sophie here\n\nTell me what to set up first" };
 
+    it("a staff replay checks the reach of the staff number it sends to", async () => {
+      const reachPlan = loadMain(REACH_PLAN_CODE);
+      const r = await reachPlan({ ...person, dryRun: true }, { go: true, skipTeam: true }, null, "+33600000000");
+      expect(r.reachBody).toEqual({ brandId: BRAND, fromLine: "founder", skipIfReplied: false, phone: "+33600000000" });
+      const n = await reachPlan({ ...person, dryRun: false }, { go: true, skipTeam: true }, null, "+33600000000");
+      expect(n.reachBody).toMatchObject({ email: person.email, phone: person.phone, skipIfReplied: true });
+    });
+
     it("splits the hello from the assistant's message, each from its own line, keyed on the campaign and the person", async () => {
       const f = await finalize({ skip: false }, both, person, CAMPAIGN, { assistantLine: line });
       expect(f.sendBody.messages).toEqual(["Hey Chaim, Kevin here", "Sophie writes to you from +77776879632"]);
