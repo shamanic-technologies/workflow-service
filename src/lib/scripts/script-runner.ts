@@ -181,7 +181,7 @@ export async function runStoredScript(
       const answer = await callVendor(
         name,
         (args[1] ?? null) as Record<string, unknown> | null,
-        { headers: vendorHeaders, tactics, billing: input.billing ?? "org", ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
+        { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
         deps.vendors,
       );
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }) });

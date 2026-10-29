@@ -171,3 +171,39 @@ describe("the platform-billed door (a service's own sweep)", () => {
     expect((await db.select().from(scripts))[0]!.status).toBe("active");
   });
 });
+
+describe("apollo's verifier doors (email_found)", () => {
+  async function call(name: string, args: Record<string, unknown>, ctx: Record<string, unknown>, answers: { verify?: { status: number; body: Record<string, unknown> }; apify?: { status: number; body: Record<string, unknown> } }) {
+    const { callVendor } = await import("../../src/lib/scripts/vendors.js");
+    const seen: unknown[] = [];
+    const deps = {
+      async complete() { return {}; },
+      async judge() { return {}; },
+      async readSkill() { return null; },
+      async platformComplete() { return {}; },
+      async platformJudge() { return {}; },
+      async apolloVerify(body: Record<string, unknown>, headers: Record<string, string>) { seen.push(["verify", body, headers]); return answers.verify!; },
+      async apolloApifyAvailable(email: string, headers: Record<string, string>) { seen.push(["apify", email, headers]); return answers.apify!; },
+    } as unknown as VendorDeps;
+    const out = await callVendor(name, args, { headers: { "x-run-id": "script-run", "x-org-id": "org-a", "x-user-id": "u" }, tactics: {}, ...ctx }, deps);
+    return { out, seen };
+  }
+
+  it("a verifier call names the script's run AND the caller's run (whose verification apollo has in flight)", async () => {
+    const row = { verificationId: "v1", verifier: "contactout", verdict: "valid", error: null };
+    const { out, seen } = await call("apollo.email.verify", { verifier: "contactout", email: "a@b.co" }, { callerRunId: "caller-run" }, { verify: { status: 200, body: row } });
+    expect(out).toEqual({ ok: true, data: row });
+    expect(seen).toEqual([["verify", { verifier: "contactout", email: "a@b.co" }, { "x-run-id": "script-run", "x-org-id": "org-a", "x-user-id": "u", "x-caller-run-id": "caller-run" }]]);
+  });
+
+  it("a refusal is a refusal the script reads (never a verifier that did not answer)", async () => {
+    const { out } = await call("apollo.email.verify", { verifier: "trykitt", email: "a@b.co" }, { callerRunId: "c" }, { verify: { status: 502, body: { error: "Insufficient credits" } } });
+    expect(out).toEqual({ ok: false, data: { error: "Insufficient credits" } });
+  });
+
+  it("apify availability: ok = BounceVerify is asked now; no caller run = refused", async () => {
+    expect((await call("apollo.apify.available", { email: "a@b.co" }, { callerRunId: "c" }, { apify: { status: 200, body: { available: true } } })).out).toEqual({ ok: true, data: {} });
+    expect((await call("apollo.apify.available", { email: "a@b.co" }, { callerRunId: "c" }, { apify: { status: 200, body: { available: false } } })).out).toEqual({ ok: false, data: {} });
+    expect((await call("apollo.apify.available", { email: "a@b.co" }, {}, {})).out.ok).toBe(false);
+  });
+});

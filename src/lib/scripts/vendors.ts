@@ -25,6 +25,14 @@ export interface VendorDeps {
   platformComplete(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
   /** chat-service `POST /internal/platform-judgments` (Jev, platform-billed) on the script's run. */
   platformJudge(body: Record<string, unknown>, headers: Record<string, string>): Promise<Record<string, unknown>>;
+  /**
+   * apollo-service `POST /internal/email-verifier-calls` (FACTORY-P3 email_found): ONE verifier call on apollo's own
+   * metered door, for the verification apollo has in flight for the caller's run (hold, run under the script's run,
+   * bronze row, email_checked). Answers `{status, body}`: 200 = the call's row, anything else = refused.
+   */
+  apolloVerify(body: Record<string, unknown>, headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> }>;
+  /** apollo-service `GET /internal/email-verifier-calls/apify?email=`: is BounceVerify asked now. */
+  apolloApifyAvailable(email: string, headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> }>;
 }
 
 export interface VendorCallContext {
@@ -42,6 +50,8 @@ export interface VendorCallContext {
    * or `platform` (a service's own sweep with no org request: chat-service's platform doors, x-run-id = the run).
    */
   billing?: "org" | "platform";
+  /** The run that asked for the script (its parent): a service's door serves only the work it has in flight for it. */
+  callerRunId?: string;
 }
 
 /** The headers of a platform call: only whose work it is (the script's run), as chat-service's platform doors read. */
@@ -60,7 +70,11 @@ export const CHAT_COMPLETE = "chat.complete";
 export const JEV_NOUL = "jev.noul";
 /** Our one voice (chat-service skill `client-comms`), for a writer that builds its own system prompt: `{content, version}`. */
 export const VOICE_READ = "voice.read";
-export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ] as const;
+/** One email verifier call on apollo's metered door: `{verifier, email}` -> `{verificationId, verifier, verdict, error}`. */
+export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
+/** Whether BounceVerify is asked now (Apify not out of usage): `ok` = available. */
+export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
+export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, APOLLO_EMAIL_VERIFY, APOLLO_APIFY_AVAILABLE] as const;
 
 /** Response schemas a script may name instead of spelling one (Anthropic needs a strict schema). */
 export const NAMED_RESPONSE_SCHEMAS: Record<string, Record<string, unknown>> = {
@@ -180,12 +194,56 @@ async function voiceRead(deps: VendorDeps): Promise<VendorAnswer> {
   return { ok: true, data: { content, version: typeof skill?.version === "number" ? skill.version : null } };
 }
 
+/** The headers of an apollo door call: the run's identity + tracking, and whose verification it is (the caller's run). */
+function apolloHeaders(ctx: VendorCallContext): Record<string, string> | null {
+  if (!ctx.callerRunId || !ctx.headers["x-run-id"]) return null;
+  return { ...ctx.headers, "x-caller-run-id": ctx.callerRunId };
+}
+
+async function apolloVerify(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  const verifier = str(args.verifier);
+  const email = str(args.email);
+  if (!verifier || !email) return refuse(`${APOLLO_EMAIL_VERIFY} needs a verifier and an email`);
+  const headers = apolloHeaders(ctx);
+  if (!headers) return refuse(`${APOLLO_EMAIL_VERIFY} serves only a run a service asked for`);
+  try {
+    const out = await deps.apolloVerify({ verifier, email }, headers);
+    if (out.status !== 200) return refuse(String(out.body.error ?? `apollo-service answered ${out.status}`));
+    return { ok: true, data: out.body };
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function apolloApifyAvailable(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  // The address names the verification in flight (apollo serves only one it holds).
+  const email = str(args.email);
+  const headers = apolloHeaders(ctx);
+  if (!email || !headers) return refuse(`${APOLLO_APIFY_AVAILABLE} serves only a verification in flight`);
+  try {
+    const out = await deps.apolloApifyAvailable(email, headers);
+    if (out.status !== 200) return refuse(String(out.body.error ?? `apollo-service answered ${out.status}`));
+    return out.body.available === true ? { ok: true, data: {} } : { ok: false, data: {} };
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** Call one vendor for a script. */
 export async function callVendor(name: string, args: Record<string, unknown> | null, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   if (name === LLM_COMPLETE || name === CHAT_COMPLETE) return complete(name, args ?? {}, ctx, deps);
   if (name === JEV_NOUL) return jevNoul(args ?? {}, ctx, deps);
   if (name === VOICE_READ) return voiceRead(deps);
+  if (name === APOLLO_EMAIL_VERIFY) return apolloVerify(args ?? {}, ctx, deps);
+  if (name === APOLLO_APIFY_AVAILABLE) return apolloApifyAvailable(args ?? {}, ctx, deps);
   return refuse(`no vendor named ${name} (scripts may call: ${SCRIPT_VENDORS.join(", ")})`);
+}
+
+function apolloDoor(): { base: string; key: string } {
+  const base = (process.env.APOLLO_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.APOLLO_SERVICE_API_KEY ?? "";
+  if (!base || !key) throw new Error("APOLLO_SERVICE_URL and APOLLO_SERVICE_API_KEY must be set for apollo's script doors");
+  return { base, key };
 }
 
 /** The production doors (chat-service with its own key). */
@@ -243,6 +301,38 @@ export function productionVendorDeps(): VendorDeps {
       const text = await res.text();
       if (!res.ok) throw new Error(`chat-service POST /internal/platform-judgments -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
+    },
+    async apolloVerify(body, headers) {
+      const { base: apollo, key: apolloKey } = apolloDoor();
+      const res = await fetch(`${apollo}/internal/email-verifier-calls`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": apolloKey, ...headers },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(600_000),
+      });
+      const text = await res.text();
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        parsed = { error: text.slice(0, 300) };
+      }
+      return { status: res.status, body: parsed };
+    },
+    async apolloApifyAvailable(email, headers) {
+      const { base: apollo, key: apolloKey } = apolloDoor();
+      const res = await fetch(`${apollo}/internal/email-verifier-calls/apify?${new URLSearchParams({ email })}`, {
+        headers: { "x-api-key": apolloKey, ...headers },
+        signal: AbortSignal.timeout(600_000),
+      });
+      const text = await res.text();
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        parsed = { error: text.slice(0, 300) };
+      }
+      return { status: res.status, body: parsed };
     },
     async readSkill(slug) {
       need();
