@@ -26,6 +26,11 @@ describe("campaign WhatsApp line", () => {
     expect(run(`null`, "+77776879632")).toBeNull();
   });
 
+  it("never adds fromAccount beside a line role the body states (crm-service 400s them together)", () => {
+    expect(run(`({brandId: "b", fromLine: "founder"})`, "+77776879632")).toEqual({ brandId: "b", fromLine: "founder" });
+    expect(run(`({brandId: "b", fromAccountType: "pro_ai"})`, "+77776879632")).toEqual({ brandId: "b", fromAccountType: "pro_ai" });
+  });
+
   for (const [name, dag, ids] of [
     ["the Lead event follow-up", buildLeadFollowUpLeadsOnlyDag({ readFigures: false }), ["reach_check", "send_whatsapp"]],
     ["cold WhatsApp", buildColdWhatsappOutreachDag(), ["reach_check"]],
