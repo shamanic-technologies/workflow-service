@@ -36,6 +36,9 @@ import { ScriptRunFailed, productionLedgerDeps, runStoredScript } from "../lib/s
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
 import type { ReplayCase } from "../lib/scripts/replay.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, readMonitoring } from "../lib/scripts/script-monitoring.js";
+import { noteScriptRunForGuard, rollBackSwitches, guardView } from "../lib/scripts/script-guard.js";
+import { SwitchError, recordSwitch } from "../lib/scripts/script-writer-switch.js";
+import { productionRollbackDeps } from "../lib/scripts/script-guard-deps.js";
 
 /**
  * FACTORY-P2-ENGINES: scripts as data (src/lib/scripts/*). Identity-gated (mounted after `requireIdentity`), except
@@ -227,8 +230,10 @@ router.post("/orgs/scripts/run", requireApiKey, async (req, res) => {
         `produced=${result.declared.produced.length} consumed=${result.declared.consumed.length}`,
     );
     res.json(result);
+    noteScriptRunForGuard(parsed.data.outcome);
   } catch (err) {
     if (err instanceof ScriptRunFailed) {
+      noteScriptRunForGuard(parsed.data.outcome);
       console.error(`[workflow-service] script run ${err.result.scriptSlug} run=${err.result.runId} ${err.result.status}: ${err.result.error}`);
       res.status(502).json({ error: `script ${err.result.scriptSlug} ${err.result.status}: ${err.result.error}`, details: err.result });
       return;
@@ -250,6 +255,51 @@ internalScriptsRouter.put("/internal/scripts/dynasty/:outcome/:dynasty/cases", r
     res.json({ ...out, reproved });
   } catch (err) {
     fail(res, err, "store script cases");
+  }
+});
+
+// FACTORY-P3 fleet writer switch: record a dynasty upgraded onto the stored script writer (the ops script calls it right
+// after `POST /workflows/upgrade`), so the roll-back guard knows which version to re-activate.
+internalScriptsRouter.post("/internal/scripts/switches", requireApiKey, async (req, res) => {
+  const toWorkflowId = typeof req.body?.toWorkflowId === "string" ? req.body.toWorkflowId : "";
+  if (!UUID_RE.test(toWorkflowId)) {
+    res.status(400).json({ error: "toWorkflowId (a workflow uuid) is required" });
+    return;
+  }
+  try {
+    res.status(201).json(await recordSwitch(db, toWorkflowId));
+  } catch (err) {
+    if (err instanceof SwitchError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    fail(res, err, "record script switch");
+  }
+});
+
+internalScriptsRouter.get("/internal/scripts/switches", requireApiKey, async (req, res) => {
+  const outcome = typeof req.query.outcome === "string" ? req.query.outcome : "message_written";
+  try {
+    res.json(await guardView(db, outcome));
+  } catch (err) {
+    fail(res, err, "read script switches");
+  }
+});
+
+// The roll-back by hand (staff, or a drill on named dynasties): the same function the guard runs.
+internalScriptsRouter.post("/internal/scripts/switches/rollback", requireApiKey, async (req, res) => {
+  const outcome = typeof req.body?.outcome === "string" ? req.body.outcome : "";
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const slugs = Array.isArray(req.body?.workflowDynastySlugs) ? (req.body.workflowDynastySlugs as unknown[]).filter((x): x is string => typeof x === "string") : undefined;
+  if (!outcome || reason.length < 5) {
+    res.status(400).json({ error: "outcome and a reason (5+ characters) are required" });
+    return;
+  }
+  try {
+    const decidedBy = typeof req.headers["x-email"] === "string" && req.headers["x-email"] ? req.headers["x-email"] : "workflow-service (manual roll-back)";
+    res.json(await rollBackSwitches(db, productionRollbackDeps(), outcome, reason, decidedBy, slugs));
+  } catch (err) {
+    fail(res, err, "roll back script switches");
   }
 });
 
