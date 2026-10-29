@@ -294,6 +294,9 @@ describe("vendors", () => {
     const c = await callVendor("chat.complete", { message: "m", systemPrompt: "s", provider: "google", model: "pro", disableThinking: true }, ctx, deps);
     expect(seen[1]).toMatchObject({ disableThinking: true });
     expect(c).toEqual({ ok: true, data: { axes: ["size"], segments: [] } });
+    const schema = { type: "object", properties: { subject: { type: "string" } }, required: ["subject"] };
+    await callVendor("llm.complete", { message: "m", systemPrompt: "s", responseSchema: schema, provider: "anthropic", model: "sonnet" }, ctx, deps);
+    expect(seen[2]).toEqual({ message: "m", systemPrompt: "s", responseSchema: schema, provider: "anthropic", model: "sonnet" });
   });
   it("jev.noul asks chat-service's judgments and answers probabilities; voice.read serves our voice", async () => {
     seen.length = 0;
