@@ -14,7 +14,7 @@ import {
   isClientSatisfiedDag,
 } from "../../src/lib/client-satisfied-dag.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { isAgentTurn } from "../../src/lib/agent-turn-node.js";
+import { isCopilotTurn } from "../../src/lib/copilot-turn-node.js";
 
 /**
  * CLIENT-SATISFIED-1027-WF (owner 2026-10-27): the Paid client -> Client Satisfied pipe's workflow writes to a CURRENT
@@ -54,11 +54,10 @@ describe("the client satisfied DAG", () => {
     expect(buildFollowUpReactiveDag({ readFigures: false }).nodes.find((n) => n.id === "channel-plan")?.config).toEqual({ code: CHANNEL_PLAN_CODE });
   });
 
-  it("writes with GLM as an agent turn reading the client's own account (never Opus, never Fable)", () => {
-    expect(isAgentTurn(dag, "draft")).toBe(true);
-    const plan = dag.nodes.find((n) => n.id === "llm-plan");
-    expect(String(plan?.config?.code)).toContain('{"provider":"zai","model":"glm"}');
-    expect(JSON.stringify(dag)).not.toMatch(/"model":"(opus|fable)"/);
+  it("writes through the Copilot, one AI (never a pinned model, never a leg LLM pick)", () => {
+    expect(isCopilotTurn(dag, "draft")).toBe(true);
+    expect(dag.nodes.find((n) => n.id === "llm-plan")).toBeUndefined();
+    expect(JSON.stringify(dag)).not.toMatch(/"model":"(opus|fable|glm)"/);
   });
 
   it("records every act on lead-service's follow-up ledger (next date, stop, claimed row)", () => {
