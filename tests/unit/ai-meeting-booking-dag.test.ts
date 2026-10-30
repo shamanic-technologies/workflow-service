@@ -15,6 +15,8 @@ import {
   FEATURE_SLUG,
   PREDECESSOR_READ,
   PREDECESSOR_CAMPAIGN_REF,
+  EMAIL_THREAD_CAMPAIGN_REF,
+  needsThreadCampaignReply,
   NAME_MISSING_PREDECESSOR_CODE,
   CLASSIFY_SEND_CODE,
   REPLY_RESPONSE_SCHEMA,
@@ -262,9 +264,8 @@ describe("ai-meeting-booking DAG", () => {
     expect(byId.get("conversation")?.inputMapping?.["query.campaign_id"]).toBe(
       PREDECESSOR_CAMPAIGN_REF,
     );
-    expect(byId.get("send-reply")?.inputMapping?.["body.campaign_id"]).toBe(
-      PREDECESSOR_CAMPAIGN_REF,
-    );
+    // The answer goes into the thread the prospect wrote in, read off the conversation (REPLY-WRONG-CAMPAIGN-1030).
+    expect(byId.get("send-reply")?.inputMapping?.["body.campaign_id"]).toBe(EMAIL_THREAD_CAMPAIGN_REF);
   });
 
   it("keeps the gate and the run accounting on the campaign that was dispatched", () => {
@@ -991,7 +992,7 @@ describe("handing an unanswerable question to a human", () => {
       validateResponse: { field: "success", equals: true },
     });
     expect(esc?.inputMapping).toEqual({
-      "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
+      "body.campaign_id": EMAIL_THREAD_CAMPAIGN_REF,
       "body.email": "$ref:claimed.output.followup.email",
       "body.question": "$ref:ground-draft.output.json.question",
       skip: "$ref:thread.output.skipEmail",
@@ -2035,8 +2036,8 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
   it("an email prospect is answered by email exactly as before; a later WhatsApp message moves the reply there", async () => {
     const l = log();
     const email = { conversation: { messages: [
-      { direction: "outbound", text: "cold email", at: "2026-10-01T10:00:00.000Z" },
-      { direction: "inbound", text: "tell me more", at: "2026-10-02T10:00:00.000Z" },
+      { direction: "outbound", text: "cold email", at: "2026-10-01T10:00:00.000Z", campaignId: "c-1" },
+      { direction: "inbound", text: "tell me more", at: "2026-10-02T10:00:00.000Z", campaignId: "c-1" },
     ] } };
     const onlyEmail = await loadMain(THREAD_CODE)(email, { ok: false, status: 404, error: "person_not_found" });
     expect(onlyEmail).toMatchObject({ replyChannel: "email", skipEmail: false, skipWhatsapp: true, skipHandOver: true });
@@ -2044,9 +2045,44 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     expect(both.replyChannel).toBe("whatsapp");
     expect((both.conversation as { messages: unknown[] }).messages).toHaveLength(3);
     // A ladder follow-up on a thread where they never wrote stays on email.
-    const silent = await loadMain(THREAD_CODE)({ conversation: { messages: [{ direction: "outbound", text: "x" }] } }, null);
+    const silent = await loadMain(THREAD_CODE)({ conversation: { messages: [{ direction: "outbound", text: "x", campaignId: "c-1" }] } }, null);
     expect(silent.replyChannel).toBe("email");
     l.mockRestore();
+  });
+
+  it("names the campaign the prospect's email thread lives in, never the first predecessor (REPLY-WRONG-CAMPAIGN-1030)", async () => {
+    const l = log();
+    // Richard's shape: the leg runs 3 campaigns, the read (asked on the first) spans the family and his thread is the third.
+    const richard = { conversation: { campaignId: "first-67510170", campaignIds: ["third-0ef16779"], messages: [
+      { direction: "outbound", text: "Hi Richard", at: "2026-10-30T19:08:53.237Z", campaignId: "third-0ef16779" },
+      { direction: "inbound", text: "Yes", at: "2026-10-30T21:57:00.000Z", campaignId: "third-0ef16779" },
+    ] } };
+    const out = await loadMain(THREAD_CODE)(richard, { ok: false, status: 404 });
+    expect(out).toMatchObject({ replyChannel: "email", emailThreadCampaignId: "third-0ef16779" });
+    // Two threads: the one they wrote in last wins, not the one we wrote in last.
+    const two = { conversation: { messages: [
+      { direction: "inbound", text: "older", at: "2026-10-01T10:00:00.000Z", campaignId: "a" },
+      { direction: "inbound", text: "newest", at: "2026-10-02T10:00:00.000Z", campaignId: "b" },
+      { direction: "outbound", text: "our later step", at: "2026-10-03T10:00:00.000Z", campaignId: "a" },
+    ] } };
+    expect((await loadMain(THREAD_CODE)(two, null)).emailThreadCampaignId).toBe("b");
+    // A single campaign: unchanged, its own id.
+    const one = { conversation: { messages: [{ direction: "inbound", text: "hi", at: "2026-10-02T10:00:00.000Z", campaignId: "only" }] } };
+    expect((await loadMain(THREAD_CODE)(one, null)).emailThreadCampaignId).toBe("only");
+    // A WhatsApp answer names no email thread.
+    const waOnly = await loadMain(THREAD_CODE)({ ok: false, status: 404 }, timeline([wa("inbound", "hi", "2026-10-12T16:05:00.000Z")]));
+    expect(waOnly.emailThreadCampaignId).toBeNull();
+    l.mockRestore();
+    // Replying by email with no campaign on any email message is a broken read, never a guess.
+    await expect(loadMain(THREAD_CODE)({ conversation: { messages: [{ direction: "inbound", text: "x", at: "2026-10-02T10:00:00.000Z" }] } }, null))
+      .rejects.toThrow("no email message names the campaign");
+  });
+
+  it("needsThreadCampaignReply flags a stored DAG answering under the predecessor, not the current one", () => {
+    expect(needsThreadCampaignReply(buildAiMeetingBookingDag(DAG_OPTS) as never)).toBe(false);
+    const stale = JSON.parse(JSON.stringify(buildAiMeetingBookingDag(DAG_OPTS)));
+    stale.nodes.find((n: { id: string }) => n.id === "send-reply").inputMapping["body.campaign_id"] = PREDECESSOR_CAMPAIGN_REF;
+    expect(needsThreadCampaignReply(stale)).toBe(true);
   });
 
   it("fails loud instead of answering off half a conversation, or on a channel nothing sends on", async () => {

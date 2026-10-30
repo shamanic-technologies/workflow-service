@@ -49,6 +49,7 @@ import {
   needsWhatsappBubbles,
   needsEscalationHandOver,
   needsSettledThreadRefusal,
+  needsThreadCampaignReply,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 import { needsMessageWrittenDeclaration } from "../dist/lib/message-written-outcome.js";
@@ -422,7 +423,8 @@ async function main() {
         needsLegBestLlm(w.dag) ||
         needsMessageWrittenDeclaration(w.dag) ||
         needsEscalationHandOver(w.dag) ||
-        needsSettledThreadRefusal(w.dag))
+        needsSettledThreadRefusal(w.dag) ||
+        needsThreadCampaignReply(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
