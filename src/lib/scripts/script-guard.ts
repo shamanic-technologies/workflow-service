@@ -20,7 +20,7 @@
  * Evaluated after every script run of a switched outcome (at most once a minute per process): no timer.
  */
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
-import { scriptMonitoringDays, scriptRuns, scriptSwitches, scripts, workflows } from "../../db/schema.js";
+import { scriptMonitoringDays, scriptRuns, scriptSwitches, scripts, workflowRuns, workflows } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 import { CLEAR_DEPRECATION, recordDeprecation } from "../deprecation.js";
 import { STILL_EXECUTABLE, stopExecutable } from "../executable-until.js";
@@ -188,7 +188,46 @@ export async function rollBackSwitches(
   return out;
 }
 
-/** Check one outcome now; roll back when the rule says so. */
+/** How long before a workflow switch the dynasty's own failure rate is read (its previous version's baseline). */
+export const WORKFLOW_BASELINE_DAYS = 7;
+
+/**
+ * The switched WORKFLOWS' own runs (INCIDENT 2026-10-30: the script made every email, `made`, no error, and every
+ * cold-email run still failed one step later: content-generation's record step answered 413 on the script's traced
+ * answer, so no email was queued for ~22 hours while the script-run window read healthy). A switch is judged on what
+ * the workflow it changed actually finishes, not only on the script run inside it: the last hour of `workflow_runs` of
+ * every switched version (failed over finished) against the same dynasties' previous versions over the
+ * WORKFLOW_BASELINE_DAYS before the switch (measured; 0.5 % when they ran nothing).
+ */
+export async function workflowWindow(db: AnyPgDb, outcome: string, now = new Date()): Promise<{ window: WindowStats; baseline: Baseline } | null> {
+  const live = await db
+    .select()
+    .from(scriptSwitches)
+    .where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
+  const switched = live.filter((r) => r.toWorkflowId && r.fromWorkflowId);
+  if (switched.length === 0) return null;
+  const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);
+  const count = async (ids: string[], from: Date, to: Date) => {
+    const [row] = await db
+      .select({
+        runs: sql<number>`count(*) filter (where ${workflowRuns.status} in ('completed', 'failed'))::int`,
+        failed: sql<number>`count(*) filter (where ${workflowRuns.status} = 'failed')::int`,
+      })
+      .from(workflowRuns)
+      .where(and(inArray(workflowRuns.workflowId, ids), gte(workflowRuns.createdAt, from), sql`${workflowRuns.createdAt} <= ${to.toISOString()}::timestamptz`));
+    return { runs: Number(row?.runs ?? 0), failed: Number(row?.failed ?? 0) };
+  };
+  const cur = await count(switched.map((r) => r.toWorkflowId!), since, now);
+  const firstSwitch = new Date(Math.min(...switched.map((r) => r.switchedAt.getTime())));
+  const before = await count(switched.map((r) => r.fromWorkflowId!), new Date(firstSwitch.getTime() - WORKFLOW_BASELINE_DAYS * 86_400_000), firstSwitch);
+  const baseline: Baseline =
+    before.runs > 0
+      ? { errorRate: before.failed / before.runs, source: "measured", day: firstSwitch.toISOString().slice(0, 10), sample: before.runs }
+      : { errorRate: BASELINE_ERROR_RATE, source: "default", day: null, sample: 0 };
+  return { window: { runs: cur.runs, failed: cur.failed, errorRate: cur.runs > 0 ? cur.failed / cur.runs : null }, baseline };
+}
+
+/** Check one outcome now; roll back when the rule says so (the script runs, or the switched workflows' own runs). */
 export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: string, now = new Date()) {
   const [live] = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -198,7 +237,17 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
   const w = await lastHour(db, outcome, now);
   const baseline = await measuredBaseline(db, outcome);
   const verdict = shouldRollBack(w, baseline.errorRate);
-  if (!verdict.rollBack) return { checked: true as const, window: w, ...verdict, result: null };
+  if (!verdict.rollBack) {
+    const flows = await workflowWindow(db, outcome, now);
+    const flowVerdict = flows ? shouldRollBack(flows.window, flows.baseline.errorRate) : { rollBack: false, pValue: null };
+    if (!flows || !flowVerdict.rollBack) return { checked: true as const, window: w, ...verdict, workflows: flows?.window ?? null, result: null };
+    const flowReason =
+      `the switched workflows failed ${(100 * flows.window.errorRate!).toFixed(1)} % of their runs over the last ${WINDOW_MINUTES} minutes ` +
+      `(${flows.window.failed} of ${flows.window.runs}), above ${(100 * thresholdFor(flows.baseline.errorRate)).toFixed(1)} % and above their previous versions' ` +
+      `${(100 * flows.baseline.errorRate).toFixed(1)} % ${flows.baseline.source} rate beyond chance (p = ${flowVerdict.pValue!.toExponential(1)})`;
+    const result = await rollBackSwitches(db, deps, outcome, flowReason, "workflow-service script guard");
+    return { checked: true as const, window: w, ...flowVerdict, workflows: flows.window, result };
+  }
   const reason =
     `the stored script's error rate on ${outcome} was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
     `(${w.failed} of ${w.runs} runs), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
@@ -226,6 +275,21 @@ export function noteScriptRunForGuard(outcome: string, now = Date.now()): Promis
     .finally(() => inFlight.delete(outcome));
   inFlight.set(outcome, p);
   return p;
+}
+
+/**
+ * A workflow run finished (the run poll): check every outcome with a live workflow switch, each at most once a minute
+ * (a switched flow can fail AFTER its script, where no script run notes anything).
+ */
+export function noteWorkflowRunForGuard(now = Date.now()): void {
+  if (!guardContext) return;
+  const ctx = guardContext;
+  void ctx.db
+    .selectDistinct({ outcome: scriptSwitches.outcome })
+    .from(scriptSwitches)
+    .where(and(eq(scriptSwitches.state, "switched"), sql`${scriptSwitches.toWorkflowId} is not null`))
+    .then((rows: Array<{ outcome: string }>) => rows.forEach((r) => noteScriptRunForGuard(r.outcome, now)))
+    .catch((err: unknown) => console.error(`[workflow-service] script guard (workflow runs) FAILED: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 /** Test hook. */
