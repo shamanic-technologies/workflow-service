@@ -401,12 +401,14 @@ async function storeCases(cases, source) {
 const key = process.env.WORKFLOW_SERVICE_API_KEY;
 if (!key) throw new Error("WORKFLOW_SERVICE_API_KEY is required");
 const base = (process.env.WORKFLOW_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, "");
-for (let i = 0; i < cases.length; i += 8) {
-  const last = i + 8 >= cases.length;
+// Large cases (a send selection's whole queue) go one per request: `--batch 1`.
+const BATCH = Number(args.batch ?? 8);
+for (let i = 0; i < cases.length; i += BATCH) {
+  const last = i + BATCH >= cases.length;
   const res = await fetch(`${base}/internal/scripts/dynasty/${outcome}/${args.dynasty}/cases${last ? "?reprove=true" : ""}`, {
     method: "PUT",
     headers: { "content-type": "application/json", "x-api-key": key },
-    body: JSON.stringify({ source: source.slice(0, 200), cases: cases.slice(i, i + 8) }),
+    body: JSON.stringify({ source: source.slice(0, 200), cases: cases.slice(i, i + BATCH) }),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`cases ${i}: ${res.status} ${text.slice(0, 300)}`);
