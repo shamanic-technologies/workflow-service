@@ -408,7 +408,7 @@ export async function main(conversation, timeline) {
     return refuse(UNSUPPORTED_CHANNEL_REASON_LITERAL, "their last message came on " + replyChannel + ", which no reply transport sends on (" + CHANNELS.join(", ") + ")");
   }
   // The campaign row the email thread lives in: the one their newest email came under (else our newest email to
-  // them). The read spans every sibling campaign of the leg, so this is the thread the prospect wrote in, never the
+  // them). The read spans every campaign of the org holding them, so this is the thread the prospect wrote in, never the
   // first predecessor campaign-service lists (REPLY-WRONG-CAMPAIGN-1030: 404 campaign_not_found on a 3-campaign leg).
   const emailRows = (list) => list.filter((m) => typeof m.campaignId === "string" && m.campaignId !== "");
   const newestOf = (list) => (list.length > 0 ? list[list.length - 1] : null);
@@ -1878,14 +1878,18 @@ export function needsEscalationHandOver(dag: { nodes?: Array<{ id?: string; conf
  */
 /**
  * True when the stored DAG answers or escalates under the FIRST predecessor campaign instead of the campaign the
- * prospect's email thread lives in (REPLY-WRONG-CAMPAIGN-1030).
+ * prospect's email thread lives in (REPLY-WRONG-CAMPAIGN-1030), or reads their thread on one campaign only
+ * (REPLY-READ-ANY-THREAD-1030).
  */
 export function needsThreadCampaignReply(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, unknown> }> } | null | undefined): boolean {
   const nodes = dag?.nodes ?? [];
-  return ["send-reply", "escalate-unanswerable"].some((id) => {
+  const stale = ["send-reply", "escalate-unanswerable"].some((id) => {
     const node = nodes.find((n) => n?.id === id);
     return node !== undefined && node.inputMapping?.["body.campaign_id"] !== EMAIL_THREAD_CAMPAIGN_REF;
   });
+  // The thread read names no campaign: it reads every thread of the person (REPLY-READ-ANY-THREAD-1030).
+  const conversation = nodes.find((n) => n?.id === "conversation");
+  return stale || (conversation !== undefined && "query.campaign_id" in (conversation.inputMapping ?? {}));
 }
 
 export function needsSettledThreadRefusal(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown>; inputMapping?: Record<string, unknown> }> } | null | undefined): boolean {
@@ -2411,8 +2415,10 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           path: CONVERSATION_READ.path,
           tolerateFailure: true,
         },
+        // No campaign named: every thread this org holds with them, whatever campaign, channel or leg wrote to them
+        // (instantly-service, REPLY-READ-ANY-THREAD-1030). Naming the first predecessor read only its family, and a
+        // person written by another family read as "nobody to answer".
         inputMapping: {
-          "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
           "query.email": "$ref:claimed.output.followup.email",
           // A person known only by phone has no email thread: not asked (`thread` reads it as none).
           skip: "$ref:claimed.output.skipEmailThread",

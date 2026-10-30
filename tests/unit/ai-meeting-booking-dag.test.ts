@@ -222,8 +222,8 @@ describe("ai-meeting-booking DAG", () => {
       path: "/orgs/conversations",
     });
     expect(byId.get("conversation")?.config?.tolerateFailure).toBe(true);
+    // Every thread of the person, whatever campaign wrote to them (REPLY-READ-ANY-THREAD-1030).
     expect(byId.get("conversation")?.inputMapping).toEqual({
-      "query.campaign_id": PREDECESSOR_CAMPAIGN_REF,
       "query.email": "$ref:claimed.output.followup.email",
       skip: "$ref:claimed.output.skipEmailThread",
     });
@@ -261,9 +261,8 @@ describe("ai-meeting-booking DAG", () => {
     expect(byId.get("lead-detail")?.inputMapping?.["query.campaignId"]).toBe(
       "$ref:claimed.output.heldCampaignId",
     );
-    expect(byId.get("conversation")?.inputMapping?.["query.campaign_id"]).toBe(
-      PREDECESSOR_CAMPAIGN_REF,
-    );
+    // The thread read names no campaign: every thread of the person (REPLY-READ-ANY-THREAD-1030).
+    expect(byId.get("conversation")?.inputMapping).not.toHaveProperty("query.campaign_id");
     // The answer goes into the thread the prospect wrote in, read off the conversation (REPLY-WRONG-CAMPAIGN-1030).
     expect(byId.get("send-reply")?.inputMapping?.["body.campaign_id"]).toBe(EMAIL_THREAD_CAMPAIGN_REF);
   });
@@ -2083,6 +2082,9 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
     const stale = JSON.parse(JSON.stringify(buildAiMeetingBookingDag(DAG_OPTS)));
     stale.nodes.find((n: { id: string }) => n.id === "send-reply").inputMapping["body.campaign_id"] = PREDECESSOR_CAMPAIGN_REF;
     expect(needsThreadCampaignReply(stale)).toBe(true);
+    const oneCampaignRead = JSON.parse(JSON.stringify(buildAiMeetingBookingDag(DAG_OPTS)));
+    oneCampaignRead.nodes.find((n: { id: string }) => n.id === "conversation").inputMapping["query.campaign_id"] = PREDECESSOR_CAMPAIGN_REF;
+    expect(needsThreadCampaignReply(oneCampaignRead)).toBe(true);
   });
 
   it("fails loud instead of answering off half a conversation, or on a channel nothing sends on", async () => {
