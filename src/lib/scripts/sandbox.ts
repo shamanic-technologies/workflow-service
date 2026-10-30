@@ -38,7 +38,12 @@ export interface ScriptSpec {
   request?: Record<string, unknown> | null;
 }
 
-export type ScriptResult = { content?: Record<string, unknown>; found?: string } | null;
+/**
+ * What a script answers. `unmade` (FACTORY-P3): no Unit, for a reason the WORLD gave (a verifier with no verdict for
+ * this address), never a bug: the run closes completed, counted apart from errors by the roll-back guard, and a replay
+ * case expecting that failure (`expect.fails`) matches it.
+ */
+export type ScriptResult = { content?: Record<string, unknown>; found?: string; unmade?: string } | null;
 
 export type RunOutcome =
   | { kind: "done"; result: ScriptResult }

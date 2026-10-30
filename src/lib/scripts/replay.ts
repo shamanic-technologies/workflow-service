@@ -162,8 +162,12 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
   if (c.asks !== undefined && !sameJson(asked, c.asks)) diffs.push(firstDiff("asks", asked, c.asks));
   if (next < c.calls.length) diffs.push(`made ${next} calls, the record made ${c.calls.length} (next: ${c.calls[next]!.name})`);
   const want = c.expect;
+  const unmade = typeof result?.unmade === "string" ? result.unmade : null;
   if (want.fails !== undefined) {
-    if (failed === null) diffs.push(`returned a result, the record failed: ${want.fails}`);
+    // A failure the world gave may be answered as `unmade` (no Unit, not an error): it matches the same record.
+    if (failed === null && unmade !== null) {
+      if (!unmade.includes(want.fails)) diffs.push(`unmade "${unmade.slice(0, 200)}", want a failure naming "${want.fails}"`);
+    } else if (failed === null) diffs.push(`returned a result, the record failed: ${want.fails}`);
     else if (!failed.includes(want.fails)) diffs.push(`failed with "${failed.slice(0, 200)}", want a failure naming "${want.fails}"`);
   } else if (failed !== null) {
     diffs.push(`failed: ${failed.slice(0, 300)}`);
