@@ -338,3 +338,12 @@ describe("a run with no org (fleet work): a platform run", () => {
     expect(JSON.parse(String(calls[0]![1].body))).toEqual({ serviceName: "workflow", taskName: "script:message_sent/dy", parentRunId: "sel-run" });
   });
 });
+
+describe("a service's material may be large (the send selection's whole queue)", () => {
+  it("the script run and the cases routes take 32 MB; the rest keeps 2 MB", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../../src/index.ts", import.meta.url), "utf8");
+    expect(src.indexOf('app.use(["/internal/scripts/run", "/internal/scripts/dynasty"], express.json({ limit: "32mb" }));')).toBeGreaterThan(-1);
+    expect(src.indexOf('express.json({ limit: "32mb" })')).toBeLessThan(src.indexOf('express.json({ limit: "2mb" })'));
+  });
+});
