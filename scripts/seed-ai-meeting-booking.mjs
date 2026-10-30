@@ -8,7 +8,7 @@
  *
  * ONE cell (`CELLS`). It once ran one dynasty per model (Gemini and Opus, owner 2026-10-10, to compare ROIs);
  * since BEST-TPL-LLM-1022 (owner 2026-10-22) a workflow fixes no LLM: the reply's writer takes its leg's best LLM per
- * run, the cell's model only lists the questions and is the writer's fallback while the leg is not ranked. The Gemini
+ * run, the cell's model only lists the questions (a leg ranking no LLM fails the run, NO-WRITER-FALLBACK-1030). The Gemini
  * dynasty (rhodium) was merged into the Opus one (avior). Never add a cell per model again.
  *
  * IDEMPOTENCE — enforced HERE as well as by the route. `POST /workflows` answers
