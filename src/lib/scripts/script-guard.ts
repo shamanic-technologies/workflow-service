@@ -22,6 +22,7 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import { scriptMonitoringDays, scriptRuns, scriptSwitches, scripts, workflowRuns, workflows } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
+import type { DAG } from "../dag-validator.js";
 import { CLEAR_DEPRECATION, recordDeprecation } from "../deprecation.js";
 import { STILL_EXECUTABLE, stopExecutable } from "../executable-until.js";
 import { serviceSwitchLabel } from "./script-service-switch.js";
@@ -199,19 +200,23 @@ export const WORKFLOW_BASELINE_DAYS = 7;
  * every switched version (failed over finished) against the same dynasties' previous versions over the
  * WORKFLOW_BASELINE_DAYS before the switch (measured; 0.5 % when they ran nothing).
  */
-export async function workflowWindow(db: AnyPgDb, outcome: string, now = new Date()): Promise<{ window: WindowStats; baseline: Baseline } | null> {
+export async function workflowWindow(db: AnyPgDb, outcome: string, now = new Date()): Promise<{ window: WindowStats; baseline: Baseline; steps: string[] } | null> {
   const live = await db
     .select()
     .from(scriptSwitches)
     .where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
   const switched = live.filter((r) => r.toWorkflowId && r.fromWorkflowId);
   if (switched.length === 0) return null;
+  // Only failures AT the steps the switch changed count (owner 2026-10-30: a vendor outage at the send step, Primeforge,
+  // must never roll a writer back): the switched versions' writer steps vs the previous versions' writer call.
+  const versions = await db.select().from(workflows).where(inArray(workflows.id, switched.flatMap((r) => [r.toWorkflowId!, r.fromWorkflowId!])));
+  const steps = [...new Set(versions.flatMap((w) => switchedStepIds(w.dag as DAG)))].sort();
   const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);
   const count = async (ids: string[], from: Date, to: Date) => {
     const [row] = await db
       .select({
         runs: sql<number>`count(*) filter (where ${workflowRuns.status} in ('completed', 'failed'))::int`,
-        failed: sql<number>`count(*) filter (where ${workflowRuns.status} = 'failed')::int`,
+        failed: sql<number>`count(*) filter (where ${workflowRuns.status} = 'failed' and ${workflowRuns.failedStep} in (${sql.join(steps.map((x) => sql`${x}`), sql`, `)}))::int`,
       })
       .from(workflowRuns)
       .where(and(inArray(workflowRuns.workflowId, ids), gte(workflowRuns.createdAt, from), sql`${workflowRuns.createdAt} <= ${to.toISOString()}::timestamptz`));
@@ -221,10 +226,17 @@ export async function workflowWindow(db: AnyPgDb, outcome: string, now = new Dat
   const firstSwitch = new Date(Math.min(...switched.map((r) => r.switchedAt.getTime())));
   const before = await count(switched.map((r) => r.fromWorkflowId!), new Date(firstSwitch.getTime() - WORKFLOW_BASELINE_DAYS * 86_400_000), firstSwitch);
   const baseline: Baseline =
-    before.runs > 0
+    before.runs > 0 && before.failed > 0
       ? { errorRate: before.failed / before.runs, source: "measured", day: firstSwitch.toISOString().slice(0, 10), sample: before.runs }
-      : { errorRate: BASELINE_ERROR_RATE, source: "default", day: null, sample: 0 };
-  return { window: { runs: cur.runs, failed: cur.failed, errorRate: cur.runs > 0 ? cur.failed / cur.runs : null }, baseline };
+      : { errorRate: BASELINE_ERROR_RATE, source: "default", day: null, sample: before.runs };
+  return { window: { runs: cur.runs, failed: cur.failed, errorRate: cur.runs > 0 ? cur.failed / cur.runs : null }, baseline, steps };
+}
+
+/** The Windmill module ids of the steps a writer switch changes (the writer call, its materials read, the script). */
+export function switchedStepIds(dag: DAG | null | undefined): string[] {
+  return (dag?.nodes ?? [])
+    .filter((n) => n.type === "http.call" && ((n.config?.service === "content-generation" && (n.config?.path === "/generate" || n.config?.path === "/generate/materials")) || (n.config?.service === "workflow" && n.config?.path === "/orgs/scripts/run")))
+    .map((n) => n.id.replace(/-/g, "_"));
 }
 
 /** Check one outcome now; roll back when the rule says so (the script runs, or the switched workflows' own runs). */
@@ -242,8 +254,8 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
     const flowVerdict = flows ? shouldRollBack(flows.window, flows.baseline.errorRate) : { rollBack: false, pValue: null };
     if (!flows || !flowVerdict.rollBack) return { checked: true as const, window: w, ...verdict, workflows: flows?.window ?? null, result: null };
     const flowReason =
-      `the switched workflows failed ${(100 * flows.window.errorRate!).toFixed(1)} % of their runs over the last ${WINDOW_MINUTES} minutes ` +
-      `(${flows.window.failed} of ${flows.window.runs}), above ${(100 * thresholdFor(flows.baseline.errorRate)).toFixed(1)} % and above their previous versions' ` +
+      `the switched workflows failed ${(100 * flows.window.errorRate!).toFixed(1)} % of their runs at the switched steps over the last ${WINDOW_MINUTES} minutes ` +
+      `(${flows.window.failed} of ${flows.window.runs}, at ${flows.steps.join("/")}), above ${(100 * thresholdFor(flows.baseline.errorRate)).toFixed(1)} % and above their previous versions' ` +
       `${(100 * flows.baseline.errorRate).toFixed(1)} % ${flows.baseline.source} rate beyond chance (p = ${flowVerdict.pValue!.toExponential(1)})`;
     const result = await rollBackSwitches(db, deps, outcome, flowReason, "workflow-service script guard");
     return { checked: true as const, window: w, ...flowVerdict, workflows: flows.window, result };
