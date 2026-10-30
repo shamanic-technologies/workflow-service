@@ -30,6 +30,9 @@ export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: str
   // A candidate's decision in a candidates serve (a SERVICE switch): lead-service opens one `candidate-decision` run per
   // decision its own code makes (the screen's Jev hangs under it).
   lead_identified: { serviceName: "lead-service", taskNames: ["candidate-decision"] },
+  // A candidates walk of an apollo audience (a SERVICE switch): human-service opens one `candidate-walk` run per walk
+  // its own code makes.
+  lead_found: { serviceName: "human-service", taskNames: ["candidate-walk"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";

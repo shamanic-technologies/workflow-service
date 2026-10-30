@@ -82,6 +82,10 @@ export const SERVICE_DOOR_VENDORS: Record<string, { service: string; method: "GE
   "lead.candidate.must_pass": { service: "lead", method: "POST", path: "/internal/candidate-decisions/must-pass", args: ["candidateId"] },
   "lead.candidate.reveal": { service: "lead", method: "POST", path: "/internal/candidate-decisions/reveal", args: ["candidateId"] },
   "lead.candidate.decline": { service: "lead", method: "POST", path: "/internal/candidate-decisions/decline", args: ["candidateId", "reason"] },
+  // lead_found (human-service): a PAGE of teasers with the facts each free rule reads, then the page's verdicts
+  // (one run per walk, never per person: a walk stays far under the 500 host calls).
+  "human.walk.page": { service: "human", method: "POST", path: "/internal/candidate-walks/page", args: ["walk", "limit"] },
+  "human.walk.decide": { service: "human", method: "POST", path: "/internal/candidate-walks/decide", args: ["walk", "verdicts"] },
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
@@ -208,16 +212,18 @@ async function voiceRead(deps: VendorDeps): Promise<VendorAnswer> {
 /** One service door call: the run's identity + tracking, and whose in-flight work it is (the caller's run). */
 async function serviceDoor(name: string, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   const door = SERVICE_DOOR_VENDORS[name]!;
-  const fields: Record<string, string> = {};
+  // Every field is required: a string (non-blank), a number, or a list/object, passed as stated (a GET sends text).
+  const fields: Record<string, unknown> = {};
   for (const f of door.args) {
-    const v = str(args[f]);
-    if (!v) return refuse(`${name} needs ${door.args.join(", ")}`);
-    fields[f] = v;
+    const v = args[f];
+    const present = typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? Number.isFinite(v) : v !== null && typeof v === "object";
+    if (!present) return refuse(`${name} needs ${door.args.join(", ")}`);
+    fields[f] = typeof v === "string" ? v.trim() : v;
   }
   if (!ctx.callerRunId || !ctx.headers["x-run-id"]) return refuse(`${name} serves only a run a service asked for`);
   const headers = { ...ctx.headers, "x-caller-run-id": ctx.callerRunId };
   try {
-    const path = door.method === "GET" ? `${door.path}?${new URLSearchParams(fields)}` : door.path;
+    const path = door.method === "GET" ? `${door.path}?${new URLSearchParams(Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, String(v)])))}` : door.path;
     const out = await deps.serviceDoor(door.service, door.method, path, door.method === "GET" ? null : fields, headers);
     if (out.status !== 200) return refuse(String(out.body.error ?? `${door.service}-service answered ${out.status}`));
     if (door.okFrom) return { ok: out.body[door.okFrom] === true, data: {} };

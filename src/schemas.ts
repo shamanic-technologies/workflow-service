@@ -2481,7 +2481,7 @@ export const RunScriptRequestSchema = z
     tactics: z.record(z.string(), z.unknown()).optional().describe("The run's tactics, on top of the script's own."),
     request: z.record(z.string(), z.unknown()).nullable().optional(),
     recordedBy: z
-      .enum(["content-generation", "instantly", "apollo", "lead"])
+      .enum(["content-generation", "instantly", "apollo", "lead", "human"])
       .optional()
       .describe("The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run; the email verification waterfall: apollo's verifier doors store each bronze row and declare email_checked; a candidate decision: lead-service's doors screen, reveal or decline as before). The run then declares nothing itself."),
     trace: z.boolean().optional().describe("Answer every vendor call in order (`trace`: args, answer; a completion's exact request `sent` + chat-service's whole answer `raw`), for the recording service."),
