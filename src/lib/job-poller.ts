@@ -4,6 +4,7 @@ import { closeRun } from "./runs-client.js";
 import { windmillJobState } from "./windmill-job-state.js";
 import { traceEvent } from "./trace-event.js";
 import { attributionContextToHeaders } from "./attribution-context.js";
+import { noteWorkflowRunForGuard } from "./scripts/script-guard.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -198,6 +199,8 @@ export class JobPoller {
             }
 
             console.log(`[workflow-service] JobPoller: run ${run.id} → ${newStatus}`);
+            // FACTORY-P3: a switched workflow is judged on how its runs finish (script-guard.ts workflowWindow).
+            noteWorkflowRunForGuard();
 
             if (run.runId) {
               const pollerHeaders: Record<string, string> = {};

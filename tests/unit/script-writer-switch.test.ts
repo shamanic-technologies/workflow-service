@@ -317,3 +317,32 @@ describe("switch + roll-back on a real Postgres", () => {
     expect((await db.select().from(workflows).where(eq(workflows.id, to.id)))[0]!.status).toBe("active");
   });
 });
+
+// INCIDENT 2026-10-30: the script made every email and every switched cold-email run still failed one step later
+// (content-generation's record step answered 413), so no email was queued for ~22 h while the script-run window read
+// healthy. The guard must judge the switched workflows' own runs too.
+describe("the guard reads the switched workflows' own runs", () => {
+  it("rolls back when the switched versions fail far more than their previous versions did, the script runs all made", async () => {
+    const from = await insertWorkflow({ version: 10, dag: coldEmailDag() });
+    await db.update(workflows).set({ status: "deprecated" }).where(eq(workflows.id, from.id));
+    const to = await insertWorkflow({ version: 11, dag: withScriptWriter(coldEmailDag()), creationType: "upgrade", createdFromWorkflow: from.id });
+    const sw = await recordSwitch(db, to.id);
+    const [script] = await db.insert(scripts).values({ outcome: "message_written", dynasty: "dy_template_writer_full", version: 1, code: "x", description: "x", createdBy: "t", orgId: "org-staff", creationType: "scratch" } as typeof scripts.$inferInsert).returning();
+    const now = new Date();
+    // The script: 25 runs, all made.
+    await db.insert(scriptRuns).values(Array.from({ length: 25 }, (_, i) => ({ scriptId: script!.id, orgId: "o", runId: `r${i}`, parentRunId: "p", status: "made", createdAt: now })));
+    const { workflowRuns } = await import("../../src/db/schema.js");
+    const before = new Date(sw.switchedAt.getTime() - 86_400_000);
+    // The previous version: 100 runs the day before the switch, 2 failed.
+    await db.insert(workflowRuns).values(Array.from({ length: 100 }, (_, i) => ({ workflowId: from.id, orgId: "o", status: i < 2 ? "failed" : "completed", createdAt: before })));
+    const healthy = await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now);
+    expect(healthy).toMatchObject({ checked: true, result: null });
+    // The switched version: 25 runs this hour, 20 failed (after the script).
+    await db.insert(workflowRuns).values(Array.from({ length: 25 }, (_, i) => ({ workflowId: to.id, orgId: "o", status: i < 20 ? "failed" : "completed", createdAt: now })));
+    const out = await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now);
+    expect(out.result?.rolledBack).toEqual([{ workflowDynastySlug: "sales-cold-email-outreach-test", fromVersion: 10, toVersion: 11 }]);
+    const rows = await db.select().from(workflows);
+    expect(rows.find((w) => w.id === from.id)!.status).toBe("active");
+    expect(rows.find((w) => w.id === to.id)!.deprecationReason).toMatch(/the switched workflows failed 80\.0 % of their runs/);
+  });
+});
