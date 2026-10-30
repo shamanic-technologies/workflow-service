@@ -294,3 +294,47 @@ describe("human-service's split doors (audience_built)", () => {
     expect(seen).toEqual([["/internal/audience-splits/complete", { proposal: "p", message: " Clinics ", systemPrompt: "S", provider: "anthropic", disableThinking: true }]]);
   });
 });
+
+describe("a SHADOW before a switch (message_sent)", () => {
+  it("needs no proof, is read as shadow, and becomes the switch once proven", async () => {
+    const { createScript: create } = await import("../../src/lib/scripts/script-catalogue.js");
+    await create(db, { outcome: "message_sent", dynasty: "dy_select", code: "export default function run(ctx) { return null; }", description: "x" }, author, known);
+    instantlyCaller();
+    const shadow = await switchService(db, { outcome: "message_sent", dynasty: "dy_select", callerService: "instantly", mode: "shadow" });
+    expect(shadow.state).toBe("shadow");
+    expect(await serviceSwitchState(db, "message_sent", "instantly")).toMatchObject({ switched: false, shadow: true, dynasty: "dy_select" });
+    // A switch still needs the proven port.
+    await expect(switchService(db, { outcome: "message_sent", dynasty: "dy_select", callerService: "instantly" })).rejects.toThrow(/not a proven port/);
+    // The guard never acts on a shadow.
+    const { checkGuard } = await import("../../src/lib/scripts/script-guard.js");
+    expect((await checkGuard(db, { restoreFlow: async () => {} }, "message_sent")).checked).toBe(false);
+  });
+});
+
+function instantlyCaller() {
+  /* instantly is a known caller */
+}
+
+describe("a run with no org (fleet work): a platform run", () => {
+  it("opens and closes on runs-service's platform doors, child of the caller's platform run; declares nothing", async () => {
+    const { productionLedgerDeps } = await import("../../src/lib/scripts/script-runner.js");
+    process.env.RUNS_SERVICE_URL = "http://runs";
+    process.env.RUNS_SERVICE_API_KEY = "k";
+    const calls: Array<[string, RequestInit]> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ id: "plat-run" }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const ledger = productionLedgerDeps();
+      expect(await ledger.createRun({ parentRunId: "sel-run", orgId: "", userId: "", taskName: "script:message_sent/dy", headers: {} })).toBe("plat-run");
+      await ledger.closeRun("plat-run", "completed", "");
+      await expect(ledger.declareOutcomes("plat-run", "", { produced: [], consumed: [] })).rejects.toThrow(/declares nothing/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(calls.map(([u, i]) => [u, i.method])).toEqual([["http://runs/v1/platform-runs", "POST"], ["http://runs/v1/platform-runs/plat-run", "PATCH"]]);
+    expect(JSON.parse(String(calls[0]![1].body))).toEqual({ serviceName: "workflow", taskName: "script:message_sent/dy", parentRunId: "sel-run" });
+  });
+});

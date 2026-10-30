@@ -285,6 +285,18 @@ export function productionLedgerDeps(): LedgerDeps {
   return {
     async createRun(opts) {
       need();
+      if (!opts.orgId) {
+        // A PLATFORM run (fleet work, no org): child of the caller's own platform run.
+        const res = await fetch(`${base}/v1/platform-runs`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": key, "x-service-name": "workflow" },
+          body: JSON.stringify({ serviceName: "workflow", taskName: opts.taskName, parentRunId: opts.parentRunId }),
+          signal: AbortSignal.timeout(600_000),
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(`runs-service POST /v1/platform-runs -> ${res.status}: ${text.slice(0, 300)}`);
+        return (JSON.parse(text) as { id: string }).id;
+      }
       const headers: Record<string, string> = { ...opts.headers, "content-type": "application/json", "x-api-key": key, "x-org-id": opts.orgId, "x-user-id": opts.userId, "x-run-id": opts.parentRunId };
       // A service's own sweep runs for an org with no person behind it (instantly's reply-judging run): no user.
       if (!opts.userId) delete headers["x-user-id"];
@@ -295,6 +307,7 @@ export function productionLedgerDeps(): LedgerDeps {
     },
     async declareOutcomes(runId, orgId, body) {
       need();
+      if (!orgId) throw new Error("a platform run (no org) declares nothing here: its occurrences are its caller service's (recordedBy)");
       const res = await fetch(`${base}/v1/runs/${encodeURIComponent(runId)}/outcomes`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, "x-org-id": orgId },
@@ -307,6 +320,16 @@ export function productionLedgerDeps(): LedgerDeps {
     },
     async closeRun(runId, status, orgId) {
       need();
+      if (!orgId) {
+        const res = await fetch(`${base}/v1/platform-runs/${encodeURIComponent(runId)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json", "x-api-key": key, "x-service-name": "workflow" },
+          body: JSON.stringify({ status }),
+          signal: AbortSignal.timeout(600_000),
+        });
+        if (!res.ok) throw new Error(`runs-service PATCH /v1/platform-runs/${runId} -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
+        return;
+      }
       const res = await fetch(`${base}/v1/runs/${encodeURIComponent(runId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json", "x-api-key": key, "x-org-id": orgId },
