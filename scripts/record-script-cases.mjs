@@ -243,7 +243,39 @@ function walkCase(d) {
   return { case: { id: d.id, units: { audience_built: { ...d.units, walk } }, calls, expect } };
 }
 
+/**
+ * A split proposal's case (FACTORY-P3 next outcomes, audience_built): human-service records each proposal in the
+ * script's words. The icon vocabulary rides the material (read from the recorded judgment's criteria).
+ */
+function splitCase(d) {
+  if (!Array.isArray(d.calls) || d.calls.length === 0) return { excluded: "no call recorded" };
+  const proposal = d.calls.find((c) => typeof c.args?.proposal === "string")?.args.proposal ?? `proposal-${d.id}`;
+  const calls = d.calls.map((c) => ({ ...c, args: { proposal, ...(c.args ?? {}) } }));
+  const judged = d.calls.find((c) => c.name === "human.split.judge");
+  const icons = judged ? (Object.values(judged.args?.questions ?? {})[0]?.criteria ?? {}) : {};
+  let expect;
+  if (d.proposal) expect = { content: d.proposal };
+  else if (typeof d.error === "string" && d.error.includes("LLM split")) expect = { fails: "LLM split" };
+  else if (calls.at(-1)?.answer?.ok === false) expect = { fails: `${calls.at(-1).name}:` };
+  else return { excluded: "an error the proposal's calls do not explain" };
+  return { case: { id: d.id, units: { offer_described: { proposal, targetAudience: d.targetAudience, allowEmpty: d.allowEmpty, icons } }, calls, expect } };
+}
+
 const outcome = args.outcome;
+if ((args.from === "recorded" || args.source === "recorded") && outcome === "audience_built") {
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const rows = await recordedFeed("human", "/internal/audience-splits/recorded", Number(args.after ?? 0), Number(args.max ?? 500));
+  const built = rows.map(splitCase);
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  const paths = {};
+  for (const r of rows) paths[r.path] = (paths[r.path] ?? 0) + 1;
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} recorded proposals ${JSON.stringify(paths)}, ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply && cases.length > 0) await storeCases(cases, `human-service recorded split proposals ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 if ((args.from === "recorded" || args.source === "recorded") && outcome === "lead_found") {
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const rows = await recordedFeed("human", "/internal/candidate-walks/recorded", Number(args.after ?? 0), Number(args.max ?? 500));
@@ -301,7 +333,7 @@ if ((args.from === "recorded" || args.source === "recorded") && outcome === "lea
   process.exit(0);
 }
 if (args.from === "recorded" || args.source === "recorded") {
-  if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found, lead_identified and lead_found");
+  if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found, lead_identified, lead_found and audience_built");
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
   const built = gens.map(fullWriterCase);

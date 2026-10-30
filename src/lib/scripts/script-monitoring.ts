@@ -33,6 +33,9 @@ export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: str
   // A candidates walk of an apollo audience (a SERVICE switch): human-service opens one `candidate-walk` run per walk
   // its own code makes.
   lead_found: { serviceName: "human-service", taskNames: ["candidate-walk"] },
+  // An audience split proposal (a SERVICE switch): human-service opens one `audience-split-proposal` run per proposal
+  // its own code makes for a caller's run.
+  audience_built: { serviceName: "human-service", taskNames: ["audience-split-proposal"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";

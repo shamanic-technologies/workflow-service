@@ -221,7 +221,8 @@ router.post("/orgs/scripts/run", requireApiKey, async (req, res) => {
   try {
     const result = await runStoredScript(
       db,
-      parsed.data,
+      // A gateway caller never chooses who pays: the org, always.
+      { ...parsed.data, billing: "org" },
       { orgId: String(res.locals.orgId), userId: String(res.locals.userId), parentRunId: String(res.locals.runId), headers: extractDownstreamHeaders(req) },
       { ledger: productionLedgerDeps(), vendors: productionVendorDeps() },
     );
@@ -262,7 +263,8 @@ internalScriptsRouter.post("/internal/scripts/run", requireApiKey, async (req, r
   try {
     const result = await runStoredScript(
       db,
-      { ...parsed.data, billing: "platform" },
+      // Who pays the chat vendors is the caller's own code's choice: platform (a sweep, the default) or org.
+      { ...parsed.data, billing: parsed.data.billing === "org" ? "org" : "platform" },
       { orgId, userId: header("x-user-id"), parentRunId, headers: extractDownstreamHeaders(req) },
       { ledger: productionLedgerDeps(), vendors: productionVendorDeps() },
     );

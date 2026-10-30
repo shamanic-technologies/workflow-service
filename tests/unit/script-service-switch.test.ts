@@ -283,3 +283,14 @@ describe("human-service's walk doors (lead_found)", () => {
     ]);
   });
 });
+
+describe("human-service's split doors (audience_built)", () => {
+  it("the completion passes its optional fields as stated and the message byte for byte", async () => {
+    const { callVendor } = await import("../../src/lib/scripts/vendors.js");
+    const seen: unknown[] = [];
+    const deps = { async serviceDoor(service: string, method: string, path: string, body: unknown) { seen.push([path, body]); return { status: 200, body: { axes: [] } }; } } as unknown as VendorDeps;
+    const ctx = { headers: { "x-run-id": "script-run" }, tactics: {}, callerRunId: "caller" };
+    await callVendor("human.split.complete", { proposal: "p", message: " Clinics ", systemPrompt: "S", provider: "anthropic", disableThinking: true }, ctx, deps);
+    expect(seen).toEqual([["/internal/audience-splits/complete", { proposal: "p", message: " Clinics ", systemPrompt: "S", provider: "anthropic", disableThinking: true }]]);
+  });
+});

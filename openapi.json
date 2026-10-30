@@ -3610,6 +3610,14 @@
           "trace": {
             "type": "boolean",
             "description": "Answer every vendor call in order (`trace`: args, answer; a completion's exact request `sent` + chat-service's whole answer `raw`), for the recording service."
+          },
+          "billing": {
+            "type": "string",
+            "enum": [
+              "org",
+              "platform"
+            ],
+            "description": "`POST /internal/scripts/run` only: who pays the chat vendors, as the calling service's own code did (default platform: a sweep with no org request). Ignored on `/orgs/scripts/run` (always the org)."
           }
         },
         "required": [

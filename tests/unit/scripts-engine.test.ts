@@ -283,7 +283,7 @@ describe("vendors", () => {
     readSkill: async () => ({ content: "voice", version: 4 }),
   };
   it("refuses an unknown vendor, no LLM stated, no system prompt, and Haiku 4.5", async () => {
-    expect(await callVendor("http.get", {}, ctx, deps)).toEqual({ ok: false, data: { error: "no vendor named http.get (scripts may call: llm.complete, chat.complete, jev.noul, voice.read, apollo.email.verify, apollo.apify.available, lead.candidate.screen, lead.candidate.must_pass, lead.candidate.reveal, lead.candidate.decline, human.walk.page, human.walk.decide)" } });
+    expect(await callVendor("http.get", {}, ctx, deps)).toEqual({ ok: false, data: { error: "no vendor named http.get (scripts may call: llm.complete, chat.complete, jev.noul, voice.read, apollo.email.verify, apollo.apify.available, lead.candidate.screen, lead.candidate.must_pass, lead.candidate.reveal, lead.candidate.decline, human.walk.page, human.walk.decide, human.split.complete, human.split.judge)" } });
     expect((await callVendor("llm.complete", { message: "x", systemPrompt: "s" }, ctx, deps)).data.error).toMatch(/needs an LLM/);
     expect((await callVendor("llm.complete", { message: "x", provider: "anthropic", model: "sonnet" }, ctx, deps)).data.error).toMatch(/needs a systemPrompt/);
     expect((await callVendor("llm.complete", { message: "x", systemPrompt: "s", provider: "anthropic", model: "claude-haiku-4-5" }, ctx, deps)).data.error).toMatch(/Haiku 4.5/);
