@@ -21,7 +21,7 @@
  *    site's prefill), its profile, and the campaign's instruction (`/start-run`).
  *  - chat-service with live web search finds this week's fresh angles in the brand's industry (angles only, never a
  *    figure: tolerated, a run without angles still writes from the facts).
- *  - The leg's best LLM (features-service, `withLegBestLlm`, Opus when the leg ranks none) writes the thread under
+ *  - The leg's best LLM (features-service, `withLegBestLlm`; none ranked = the run fails, nothing published) writes the thread under
  *    THREADS_WRITING_RULES, a different subject from every main post of the last HISTORY_DAYS days and a different
  *    shape from today's. The model is TRUSTED (owner 2026-10-16): its thread is published as written, never validated,
  *    retried or refused; `final-thread` only rewrites dashes and places the GET STARTED line.

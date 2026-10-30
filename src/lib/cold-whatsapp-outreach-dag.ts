@@ -793,7 +793,7 @@ export const CHANNEL_UNREACHABLE_CODES = ["no_phone_known", "not_on_whatsapp"] a
  * before this node.
  */
 export const RECORD_PLAN_CODE = `
-// The LLM the writer actually used this run (llm-plan: the leg's pick, else the workflow's own).
+// The LLM the writer actually used this run (the leg's pick).
 let WRITER_MODEL = null;
 export async function main(person, send, currentDate, reach, final, writer) {
   WRITER_MODEL = writer && typeof writer.model === "string" ? writer.model : null;

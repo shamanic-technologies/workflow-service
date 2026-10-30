@@ -1935,9 +1935,7 @@ describe("a second model cell on the same pipe (owner 2026-10-10: compare ROIs)"
             ? { ...n, config: { ...(n.config as object), body: null } }
             : n.id === "record-followup"
               ? { ...n, config: { ...(n.config as object), body: { kind: "acted" } } }
-              : n.id === "llm-plan"
-                ? { ...n, config: null } // its fallback is the cell's own LLM (BEST-TPL-LLM-1022)
-                : n,
+              : n,
         ),
       });
     expect(strip(opus)).toBe(strip(gemini));
