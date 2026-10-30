@@ -16,7 +16,7 @@ import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
 
 /** The services that may switch an outcome they make in their own code (one entry per service that ships its door). */
-export const SERVICE_CALLERS = ["instantly", "apollo", "lead"] as const;
+export const SERVICE_CALLERS = ["instantly", "apollo", "lead", "human"] as const;
 export type ServiceCaller = (typeof SERVICE_CALLERS)[number];
 
 /** How a service switch is named where workflow switches name their dynasty (Monitoring, roll-back by name). */

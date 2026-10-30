@@ -262,3 +262,24 @@ describe("the roll-back baseline is each outcome's own measured service rate; a 
     expect(closed).toEqual(["completed"]);
   });
 });
+
+describe("human-service's walk doors (lead_found)", () => {
+  it("a page asks with a number, a decision with a list; both reach human-service's door as stated", async () => {
+    const { callVendor } = await import("../../src/lib/scripts/vendors.js");
+    const seen: unknown[] = [];
+    const deps = {
+      async serviceDoor(service: string, method: string, path: string, body: unknown) {
+        seen.push([service, method, path, body]);
+        return { status: 200, body: { ok: 1 } };
+      },
+    } as unknown as VendorDeps;
+    const ctx = { headers: { "x-run-id": "script-run" }, tactics: {}, callerRunId: "serve-run" };
+    expect((await callVendor("human.walk.page", { walk: "w1", limit: 20 }, ctx, deps)).ok).toBe(true);
+    expect((await callVendor("human.walk.decide", { walk: "w1", verdicts: [{ ref: "p1", verdict: "offer" }] }, ctx, deps)).ok).toBe(true);
+    expect((await callVendor("human.walk.page", { walk: "w1" }, ctx, deps)).ok).toBe(false);
+    expect(seen).toEqual([
+      ["human", "POST", "/internal/candidate-walks/page", { walk: "w1", limit: 20 }],
+      ["human", "POST", "/internal/candidate-walks/decide", { walk: "w1", verdicts: [{ ref: "p1", verdict: "offer" }] }],
+    ]);
+  });
+});
