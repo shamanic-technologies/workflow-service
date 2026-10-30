@@ -194,7 +194,56 @@ function decisionCase(d) {
   return { case: { id: d.id, units: { email_found: { email: d.email, held: d.held ?? null } }, calls: d.calls, expect } };
 }
 
+/** A service's recorded decisions feed (`?after=<seq>`), oldest first. */
+async function recordedFeed(service, path, after, maxCases) {
+  const prefix = service.toUpperCase();
+  const base = (process.env[`${prefix}_SERVICE_URL`] ?? "").replace(/\/$/, "");
+  const key = process.env[`${prefix}_SERVICE_API_KEY`];
+  if (!base || !key) throw new Error(`${prefix}_SERVICE_URL and ${prefix}_SERVICE_API_KEY are required`);
+  const rows = [];
+  let cursor = after;
+  for (;;) {
+    const res = await fetch(`${base}${path}?${new URLSearchParams({ after: String(cursor), limit: "1000" })}`, { headers: { "x-api-key": key } });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`${service} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
+    const page = JSON.parse(text);
+    rows.push(...page.decisions);
+    cursor = page.nextAfter;
+    if (!page.hasMore || rows.length >= maxCases) break;
+  }
+  return rows.slice(-maxCases);
+}
+
+/**
+ * A candidate decision's case (FACTORY-P3 next outcomes, lead_identified): lead-service records each decision's calls
+ * already in the script's words (`lead.candidate.*`), on either path.
+ */
+function candidateCase(d) {
+  if (!Array.isArray(d.calls)) return { excluded: "the calls are not recorded" };
+  if (d.error && d.calls.length === 0) return { excluded: "failed before any call" };
+  const last = d.calls[d.calls.length - 1];
+  let expect;
+  if (d.decision) expect = { content: { decision: d.decision } };
+  else if (last && last.answer && last.answer.ok === false) expect = { fails: `${last.name}:` };
+  else return { excluded: "an error the decision's calls do not explain" };
+  return { case: { id: d.id, units: { lead_found: { candidateId: d.candidateId }, audience_built: { hasTarget: d.hasTarget } }, calls: d.calls, expect } };
+}
+
 const outcome = args.outcome;
+if ((args.from === "recorded" || args.source === "recorded") && outcome === "lead_identified") {
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const rows = await recordedFeed("lead", "/internal/candidate-decisions/recorded", Number(args.after ?? 0), Number(args.max ?? 500));
+  const built = rows.map(candidateCase);
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  const paths = {};
+  for (const r of rows) paths[r.path] = (paths[r.path] ?? 0) + 1;
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} recorded decisions ${JSON.stringify(paths)} (seq ${rows[0]?.seq ?? "-"}..${rows.at(-1)?.seq ?? "-"}), ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply && cases.length > 0) await storeCases(cases, `lead-service recorded candidate decisions ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 if ((args.from === "recorded" || args.source === "recorded") && outcome === "email_found") {
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const rows = await recordedDecisions(Number(args.after ?? 0), Number(args.max ?? 500));
@@ -224,7 +273,7 @@ if ((args.from === "recorded" || args.source === "recorded") && outcome === "lea
   process.exit(0);
 }
 if (args.from === "recorded" || args.source === "recorded") {
-  if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested and email_found");
+  if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found and lead_identified");
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
   const built = gens.map(fullWriterCase);
