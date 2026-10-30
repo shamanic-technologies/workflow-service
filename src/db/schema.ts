@@ -89,6 +89,9 @@ export const workflowRuns = pgTable(
     inputs: jsonb("inputs"),
     result: jsonb("result"),
     error: text("error"),
+    /** The leaf step a failed run failed at, and its error (failed-step.ts, migration 0047). */
+    failedStep: text("failed_step"),
+    failedReason: text("failed_reason"),
     reservedAt: timestamp("reserved_at", { withTimezone: true }),
     dispatchStartedAt: timestamp("dispatch_started_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),

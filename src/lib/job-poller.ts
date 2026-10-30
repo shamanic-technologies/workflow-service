@@ -5,6 +5,7 @@ import { windmillJobState } from "./windmill-job-state.js";
 import { traceEvent } from "./trace-event.js";
 import { attributionContextToHeaders } from "./attribution-context.js";
 import { noteWorkflowRunForGuard } from "./scripts/script-guard.js";
+import { failedStepOf } from "./failed-step.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -179,12 +180,14 @@ export class JobPoller {
             const success = jobState.success;
             const newStatus = success ? "completed" : "failed";
 
+            const failure = success ? null : await failedStepOf(job, (id) => this.windmillClient.getJob(id));
             await this.db
               .update(table)
               .set({
                 status: newStatus,
                 result: success ? job.result : null,
                 error: success ? null : (typeof job.result === "string" ? job.result : JSON.stringify(job.result ?? "Unknown error")),
+                ...(failure ? { failedStep: failure.step, failedReason: failure.reason } : {}),
                 completedAt: new Date(),
               })
               .where(eq(table.id, run.id));

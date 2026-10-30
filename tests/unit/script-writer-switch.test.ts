@@ -334,15 +334,18 @@ describe("the guard reads the switched workflows' own runs", () => {
     const { workflowRuns } = await import("../../src/db/schema.js");
     const before = new Date(sw.switchedAt.getTime() - 86_400_000);
     // The previous version: 100 runs the day before the switch, 2 failed.
-    await db.insert(workflowRuns).values(Array.from({ length: 100 }, (_, i) => ({ workflowId: from.id, orgId: "o", status: i < 2 ? "failed" : "completed", createdAt: before })));
+    await db.insert(workflowRuns).values(Array.from({ length: 100 }, (_, i) => ({ workflowId: from.id, orgId: "o", status: i < 2 ? "failed" : "completed", failedStep: i < 2 ? "email_generate" : null, createdAt: before })));
     const healthy = await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now);
     expect(healthy).toMatchObject({ checked: true, result: null });
-    // The switched version: 25 runs this hour, 20 failed (after the script).
-    await db.insert(workflowRuns).values(Array.from({ length: 25 }, (_, i) => ({ workflowId: to.id, orgId: "o", status: i < 20 ? "failed" : "completed", createdAt: now })));
+    // A vendor outage at the SEND step (Primeforge, owner 2026-10-30): 25 failures this hour, never the switch's fault.
+    await db.insert(workflowRuns).values(Array.from({ length: 25 }, () => ({ workflowId: to.id, orgId: "o", status: "failed", failedStep: "email_send", failedReason: "Primeforge 402", createdAt: now })));
+    expect(await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now)).toMatchObject({ checked: true, result: null });
+    // The switched version: 25 more runs this hour, 20 failed AT the writer's record step (after the script).
+    await db.insert(workflowRuns).values(Array.from({ length: 25 }, (_, i) => ({ workflowId: to.id, orgId: "o", status: i < 20 ? "failed" : "completed", failedStep: i < 20 ? "email_generate" : null, createdAt: now })));
     const out = await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now);
     expect(out.result?.rolledBack).toEqual([{ workflowDynastySlug: "sales-cold-email-outreach-test", fromVersion: 10, toVersion: 11 }]);
     const rows = await db.select().from(workflows);
     expect(rows.find((w) => w.id === from.id)!.status).toBe("active");
-    expect(rows.find((w) => w.id === to.id)!.deprecationReason).toMatch(/the switched workflows failed 80\.0 % of their runs/);
+    expect(rows.find((w) => w.id === to.id)!.deprecationReason).toMatch(/the switched workflows failed 40\.0 % of their runs at the switched steps over the last 60 minutes \(20 of 50, at email_generate\/email_generate_materials\/email_generate_script\)/);
   });
 });

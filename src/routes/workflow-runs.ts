@@ -29,6 +29,7 @@ import {
 } from "../lib/execution-admission.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
 import { noteWorkflowRunForGuard } from "../lib/scripts/script-guard.js";
+import { failedStepOf } from "../lib/failed-step.js";
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
@@ -548,12 +549,14 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
           const success = jobState.success;
           const newStatus = success ? "completed" : "failed";
 
+          const failure = success ? null : await failedStepOf(job, (id) => pollClient.getJob(id));
           const [updated] = await db
             .update(workflowRuns)
             .set({
               status: newStatus,
               result: success ? (job.result as Record<string, unknown>) : null,
               error: success ? null : (typeof job.result === "string" ? job.result : JSON.stringify(job.result ?? "Unknown error")),
+              ...(failure ? { failedStep: failure.step, failedReason: failure.reason } : {}),
               completedAt: new Date(),
             })
             .where(eq(workflowRuns.id, run.id))
