@@ -36,6 +36,9 @@ export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: str
   // An audience split proposal (a SERVICE switch): human-service opens one `audience-split-proposal` run per proposal
   // its own code makes for a caller's run.
   audience_built: { serviceName: "human-service", taskNames: ["audience-split-proposal"] },
+  // The send selection (a SERVICE switch, shadow first): instantly opens one `dispatch-selection` platform run per
+  // selection it asks the script (shadow or switched).
+  message_sent: { serviceName: "instantly-service", taskNames: ["dispatch-selection"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";

@@ -35,8 +35,8 @@ describe("script monitoring series", () => {
       workflow: [task("script:message_written/dy_template_writer", 10, 9, 1, 30), task("execute-workflow", 9999, 10, 0, 1)],
     };
     const deps = { taskOutcomes: async (s: string) => answers[s] ?? [] };
-    // Two rows (service, script) per outcome with a service path: message_written, lead_interested, email_found, lead_identified, lead_found, audience_built.
-    expect(await refreshMonitoring(db, deps, day(20))).toBe(12);
+    // Two rows (service, script) per outcome with a service path: message_written, lead_interested, email_found, lead_identified, lead_found, audience_built, message_sent.
+    expect(await refreshMonitoring(db, deps, day(20))).toBe(14);
     answers["content-generation-service"] = [task("single-generation", 1100, 98, 2, 196)];
     answers.workflow = [task("script:message_written/dy_template_writer", 14, 12, 2, 28)];
     await refreshMonitoring(db, deps, day(21));
