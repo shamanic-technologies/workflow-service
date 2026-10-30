@@ -146,12 +146,14 @@ function statesTemplate(gen: DAGNode): boolean {
 /**
  * The write-path rule (creation, upgrade, fork): a DAG whose single content call names NO template is a workflow
  * that lets its leg choose, so it is stored freed. A DAG stating one is stored as written; a DAG with no or several
- * content calls is untouched.
+ * content calls is untouched. Every write path also gets the current `llm-plan` (`withCurrentLlmPlan`): a DAG cannot be
+ * stored with a default writer (NO-WRITER-FALLBACK-1030).
  */
 export function freeUnstatedWriter(dag: DAG): DAG {
-  const gens = dag.nodes.filter(isGenerate);
-  if (gens.length !== 1 || writesWithLegBest(dag) || statesTemplate(gens[0])) return dag;
-  return withLegBestWriter(dag);
+  const current = withCurrentLlmPlan(dag);
+  const gens = current.nodes.filter(isGenerate);
+  if (gens.length !== 1 || writesWithLegBest(current) || statesTemplate(gens[0])) return current;
+  return withLegBestWriter(current);
 }
 
 /**
@@ -160,7 +162,8 @@ export function freeUnstatedWriter(dag: DAG): DAG {
  * is freed. A DAG with no or several content calls is untouched.
  */
 export function freeGeneratedWriter(dag: DAG): DAG {
-  return dag.nodes.filter(isGenerate).length === 1 ? withLegBestWriter(dag) : dag;
+  const current = withCurrentLlmPlan(dag);
+  return current.nodes.filter(isGenerate).length === 1 ? withLegBestWriter(current) : current;
 }
 
 export const LLM_PICK_NODE_ID = "llm-pick";
@@ -169,35 +172,35 @@ export const LEG_BEST_LLM_MODEL_REF = `$ref:${LLM_PLAN_NODE_ID}.output.model`;
 export const LEG_BEST_LLM_PROVIDER_REF = `$ref:${LLM_PLAN_NODE_ID}.output.provider`;
 
 /**
- * features-service's `llmUnavailableReason` codes that mean the campaign's STRATEGY leaves no LLM (features v0.179.342
- * list): such a run writes nothing (a strategy excluding an LLM never gets it). Any other null (a leg not measured per writer yet) keeps the LLM
- * the workflow states, loudly.
+ * The LLM pick for a chat-service `/complete` writer (a pipe with an LLM and no template), read loudly. A run whose
+ * writer is skipped (nobody to write to) plans nothing. A pick with no LLM THROWS, whatever features-service's reason
+ * (a strategy leaving none, a leg not ranked yet, anything else): nothing is written, the reason is in the run log.
+ * There is no default writer (NO-WRITER-FALLBACK-1030, owner 2026-10-30: « WTF is that???? c'est une exception à notre
+ * infra?????????? »): the workflow's own LLM used to write when the leg was not ranked, which ignored the per-pipe LLM
+ * statuses. Returns the LLM the pick served.
  */
-export const STRATEGY_EXCLUSION_REASONS = ["strategy_excludes_every_candidate", "play_not_catalogued_on_pipe"] as const;
-
-/**
- * The LLM pick for a chat-service `/complete` writer (a pipe with an LLM and no template). A run whose writer is
- * skipped (nobody to write to) plans nothing. A strategy leaving no LLM THROWS (nothing written); a leg features-service
- * does not rank yet writes with `fallback`, the LLM the workflow states, logged as such. Returns the LLM actually used.
- */
-export function llmPlanCode(fallback: { provider: string; model: string }): string {
-  return `export async function main(pick, skip) {
+export const LLM_PLAN_CODE = `export async function main(pick, skip) {
   if (skip === true) return { skipped: true, provider: null, model: null, picked: false };
   const leg = pick && pick.legKey ? pick.legKey : "unknown leg";
   const l = pick ? pick.llm : null;
   if (!l || typeof l.model !== "string" || l.model.length === 0 || typeof l.provider !== "string" || l.provider.length === 0) {
     const reason = (pick && pick.llmUnavailableReason) || "features-service served none";
-    if (${JSON.stringify([...STRATEGY_EXCLUSION_REASONS])}.includes(reason)) {
-      throw new Error("[llm-plan] the campaign's strategy leaves no LLM on " + leg + ": " + reason + ". Nothing is written.");
-    }
-    const fallback = ${JSON.stringify(fallback)};
-    console.warn("[llm-plan] " + leg + " has no ranked LLM yet (" + reason + "): writing with the workflow's own " + fallback.provider + "/" + fallback.model);
-    return { skipped: false, provider: fallback.provider, model: fallback.model, picked: false, reason, legKey: pick && pick.legKey ? pick.legKey : null };
+    throw new Error("[llm-plan] no LLM to write with on " + leg + ": " + reason + ". Nothing is written.");
   }
   console.log("[llm-plan] " + leg + (pick.strategyId ? " (strategy " + pick.strategyId + ")" : "") + ": LLM " + l.provider + "/" + l.model +
     " (place " + l.place + ", " + (l.isMature ? "mature" : "learning") + ", $" + l.spentUsd + " spent, " + l.outcomes + " outcomes)");
   return { skipped: false, provider: l.provider, model: l.model, picked: true, legKey: pick.legKey ?? null, strategyId: pick.strategyId ?? null };
 }`;
+
+/** True when the DAG carries an `llm-plan` that is not the current one (a stored DAG still holding a default writer). */
+export function hasStaleLlmPlan(dag: { nodes?: DAGNode[] } | null | undefined): boolean {
+  return (dag?.nodes ?? []).some((n) => n.id === LLM_PLAN_NODE_ID && n.config?.code !== LLM_PLAN_CODE);
+}
+
+/** The DAG with its `llm-plan` (if any) set to the current code: no workflow keeps a default writer. Idempotent. */
+export function withCurrentLlmPlan<T extends { nodes: DAGNode[] }>(dag: T): T {
+  if (!hasStaleLlmPlan(dag)) return dag;
+  return { ...dag, nodes: dag.nodes.map((n) => (n.id === LLM_PLAN_NODE_ID ? { ...n, config: { ...n.config, code: LLM_PLAN_CODE } } : n)) };
 }
 
 const isComplete = (n: DAGNode) => n.type === "http.call" && n.config?.service === "chat" && n.config?.path === "/complete";
@@ -211,19 +214,15 @@ export function writesWithLegBestLlm(dag: { nodes?: DAGNode[] } | null | undefin
 /**
  * The DAG whose chat-service `/complete` writer `nodeId` writes with the LLM features-service ranks best on the leg
  * (BEST-TPL-LLM-1022): `llm-pick` -> `llm-plan` spliced into every edge running into it, its static
- * `body.provider`/`body.model` replaced by the plan's (and no `temperature`, which a picked model may refuse); the
- * stated LLM becomes the plan's fallback for a leg not ranked yet. The writer's `skip` mapping (if any) rides both, so
+ * `body.provider`/`body.model` replaced by the plan's (and no `temperature`, which a picked model may refuse). The
+ * LLM the builder stated is DROPPED, never kept as a default (NO-WRITER-FALLBACK-1030). The writer's `skip` mapping (if any) rides both, so
  * a run with nobody to write to asks nothing. Idempotent. Only the WRITER is picked: a reading/classifying call keeps its model.
  */
 export function withLegBestLlm(dag: DAG, nodeId: string): DAG {
   const node = dag.nodes.find((n) => n.id === nodeId);
   if (!node || !isComplete(node)) throw new Error(`withLegBestLlm: "${nodeId}" is not a chat-service /complete call`);
-  if (writesWithLegBestLlm(dag, nodeId)) return dag;
+  if (writesWithLegBestLlm(dag, nodeId)) return withCurrentLlmPlan(dag);
   if (dag.nodes.some((n) => n.id === LLM_PICK_NODE_ID || n.id === LLM_PLAN_NODE_ID)) throw new Error("withLegBestLlm: the DAG already picks an LLM for another writer");
-  const stated = node.config?.body as Record<string, unknown> | undefined;
-  if (typeof stated?.provider !== "string" || typeof stated?.model !== "string") {
-    throw new Error(`withLegBestLlm: "${nodeId}" states no provider/model to write with while its leg is not ranked`);
-  }
   const skip: Record<string, string> = node.inputMapping?.skip ? { skip: node.inputMapping.skip } : {};
   const pick: DAGNode = {
     id: LLM_PICK_NODE_ID,
@@ -235,7 +234,7 @@ export function withLegBestLlm(dag: DAG, nodeId: string): DAG {
   const plan: DAGNode = {
     id: LLM_PLAN_NODE_ID,
     type: "script",
-    config: { code: llmPlanCode({ provider: stated.provider, model: stated.model }) },
+    config: { code: LLM_PLAN_CODE },
     retries: 0,
     inputMapping: { pick: `$ref:${LLM_PICK_NODE_ID}.output`, ...skip },
   };

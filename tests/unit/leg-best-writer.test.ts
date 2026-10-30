@@ -18,7 +18,9 @@ import {
   writesWithLegBestLlm,
   LLM_PICK_NODE_ID,
   LLM_PLAN_NODE_ID,
-  llmPlanCode,
+  LLM_PLAN_CODE,
+  hasStaleLlmPlan,
+  withCurrentLlmPlan,
   LEG_BEST_LLM_MODEL_REF,
   LEG_BEST_LLM_PROVIDER_REF,
 } from "../../src/lib/leg-best-writer.js";
@@ -217,7 +219,7 @@ describe("BEST-TPL-LLM-1022 chat writers (withLegBestLlm)", () => {
   });
 
   const plan = async (pick: unknown, skip?: boolean) => {
-    const main = new Function(llmPlanCode({ provider: "anthropic", model: "opus" }).replace("export async function main", "return async function main"))() as (p: unknown, s?: boolean) => Promise<Record<string, unknown>>;
+    const main = new Function(LLM_PLAN_CODE.replace("export async function main", "return async function main"))() as (p: unknown, s?: boolean) => Promise<Record<string, unknown>>;
     return main(pick, skip);
   };
 
@@ -226,14 +228,37 @@ describe("BEST-TPL-LLM-1022 chat writers (withLegBestLlm)", () => {
     await expect(plan(null, true)).resolves.toEqual({ skipped: true, provider: null, model: null, picked: false });
   });
 
-  it("a strategy leaving no LLM throws: nothing is written, never the workflow's own", async () => {
-    for (const reason of ["strategy_excludes_every_candidate", "play_not_catalogued_on_pipe"]) {
-      await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: reason })).rejects.toThrow(new RegExp(`strategy leaves no LLM.*${reason}`));
-    }
+  it("passes exactly the LLM features-service picked, never the one the workflow stated", async () => {
+    await expect(plan(servedPick)).resolves.toMatchObject({ provider: servedPick.llm.provider, model: servedPick.llm.model, picked: true });
   });
 
-  it("a leg features-service does not rank yet writes with the workflow's own LLM, and says so", async () => {
-    await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: "no_sequence_recorded_on_pipe" })).resolves.toMatchObject({ provider: "anthropic", model: "opus", picked: false, reason: "no_sequence_recorded_on_pipe" });
+  it("a pick with no LLM throws naming features-service's reason, whatever it is: nothing is written, no default writer (NO-WRITER-FALLBACK-1030)", async () => {
+    for (const reason of ["strategy_excludes_every_candidate", "play_not_catalogued_on_pipe", "no_sequence_recorded_on_pipe", "writer_ranking_not_computed_yet", "a reason added later"]) {
+      await expect(plan({ ...servedPick, template: null, llm: null, llmUnavailableReason: reason })).rejects.toThrow(new RegExp(`no LLM to write with.*${reason}.*Nothing is written`));
+    }
+    await expect(plan(null)).rejects.toThrow(/features-service served none/);
+    await expect(plan({ ...servedPick, llm: { ...servedPick.llm, provider: "" } })).rejects.toThrow(/no LLM to write with/);
+  });
+
+  it("the plan names no model of its own: the stated LLM leaves the DAG entirely", () => {
+    expect(LLM_PLAN_CODE).not.toMatch(/opus|sonnet|gemini|fallback/i);
+    expect(JSON.stringify(picked)).not.toMatch(/"opus"|"anthropic"/);
+  });
+
+  it("a writer stating no LLM is picked all the same: nothing to fall back on is needed", () => {
+    const bare = { ...chatDag, nodes: chatDag.nodes.map((n) => (n.id === "draft" ? { ...n, config: { ...n.config, body: { responseFormat: "json" } } } : n)) };
+    expect(writesWithLegBestLlm(withLegBestLlm(bare, "draft"), "draft")).toBe(true);
+  });
+
+  it("a stored DAG holding an older llm-plan (a default writer) is brought current, by the builder and by every write path", () => {
+    const stale = { ...picked, nodes: picked.nodes.map((n) => (n.id === LLM_PLAN_NODE_ID ? { ...n, config: { code: "export async function main(pick) { return { provider: 'anthropic', model: 'opus' }; }" } } : n)) };
+    expect(hasStaleLlmPlan(stale)).toBe(true);
+    expect(hasStaleLlmPlan(picked)).toBe(false);
+    expect(withCurrentLlmPlan(stale)).toEqual(picked);
+    expect(withCurrentLlmPlan(picked)).toBe(picked);
+    expect(withLegBestLlm(stale, "draft")).toEqual(picked);
+    expect(freeUnstatedWriter(stale)).toEqual(picked);
+    expect(hasStaleLlmPlan(chatDag)).toBe(false);
   });
 
   it("refuses a node that is not a chat /complete call", () => {

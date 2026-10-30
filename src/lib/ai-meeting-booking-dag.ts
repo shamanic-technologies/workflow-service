@@ -143,7 +143,7 @@
 import { readsClientComms, withClientCommsVoice } from "./client-comms.js";
 import { withMessageWrittenDeclaration } from "./message-written-outcome.js";
 import { CLAIM_PERSON_CODE } from "./claim-person.js";
-import { LEG_BEST_LLM_MODEL_REF, withLegBestLlm, writesWithLegBestLlm } from "./leg-best-writer.js";
+import { LEG_BEST_LLM_MODEL_REF, hasStaleLlmPlan, withLegBestLlm, writesWithLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
@@ -2194,12 +2194,16 @@ export function needsLlmAliasOnActs(dag: { nodes?: Array<{ id?: string; config?:
   return !!rec && body?.kind === "acted" && typeof body.llmAlias !== "string";
 }
 
-/** True when a stored responder DAG's `draft-reply` still states its own LLM (BEST-TPL-LLM-1022: the leg picks it). */
+/**
+ * True when a stored responder DAG's `draft-reply` still states its own LLM (BEST-TPL-LLM-1022: the leg picks it), or
+ * picks one through an older `llm-plan` that wrote with the workflow's own LLM when the leg ranked none
+ * (NO-WRITER-FALLBACK-1030).
+ */
 export function needsLegBestLlm(dag: DAG | null | undefined): boolean {
-  return (dag?.nodes ?? []).some((n) => n?.id === "draft-reply") && !writesWithLegBestLlm(dag, "draft-reply");
+  return (dag?.nodes ?? []).some((n) => n?.id === "draft-reply") && (!writesWithLegBestLlm(dag, "draft-reply") || hasStaleLlmPlan(dag));
 }
 
-/** The sent reply's act names the LLM the writer actually used (the leg's pick, else the workflow's own). */
+/** The sent reply's act names the LLM the writer actually used (the leg's pick). */
 export function withActNamingWriter(dag: DAG): DAG {
   return {
     ...dag,
