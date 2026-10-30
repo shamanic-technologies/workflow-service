@@ -3298,9 +3298,11 @@
             "enum": [
               "made",
               "nothing",
+              "unmade",
               "stopped",
               "failed"
-            ]
+            ],
+            "description": "`unmade`: no Unit for a reason the world gave (`error` says it), never a script error."
           },
           "unit": {
             "type": "object",
@@ -3669,6 +3671,9 @@
               "errorRate": {
                 "type": "number",
                 "nullable": true
+              },
+              "unmade": {
+                "type": "integer"
               }
             },
             "required": [
@@ -3676,15 +3681,22 @@
               "failed",
               "errorRate"
             ],
-            "description": "Finished script runs of this outcome over the window (failed = failed + stopped)."
+            "description": "Finished script runs of this outcome over the window (failed = failed + stopped; `unmade` = no Unit for a reason the world gave, counted apart, never an error)."
           },
           "baselineErrorRate": {
             "type": "number",
-            "description": "The service path's error rate the script is held to (0.5 %)."
+            "description": "The service path's error rate the script is held to: its latest stored Monitoring day (`baselineSource` measured), else 0.5 % (default)."
+          },
+          "baselineSource": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "default"
+            ]
           },
           "thresholdErrorRate": {
             "type": "number",
-            "description": "Roll back above this rate, with at least `minRuns` runs and a one-sided binomial test vs the baseline below 0.001."
+            "description": "Roll back above this rate (the larger of 2 % and 4x the baseline), with at least `minRuns` runs and a one-sided binomial test vs the baseline below 0.001."
           },
           "minRuns": {
             "type": "integer"
@@ -3740,6 +3752,7 @@
           "windowMinutes",
           "lastHour",
           "baselineErrorRate",
+          "baselineSource",
           "thresholdErrorRate",
           "minRuns",
           "rolledBackAt",
