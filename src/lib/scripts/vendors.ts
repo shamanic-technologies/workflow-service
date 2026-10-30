@@ -86,6 +86,9 @@ export const SERVICE_DOOR_VENDORS: Record<string, { service: string; method: "GE
   // (one run per walk, never per person: a walk stays far under the 500 host calls).
   "human.walk.page": { service: "human", method: "POST", path: "/internal/candidate-walks/page", args: ["walk", "limit"] },
   "human.walk.decide": { service: "human", method: "POST", path: "/internal/candidate-walks/decide", args: ["walk", "verdicts"] },
+  // audience_built (human-service): the split's completion and its icon judgment, human-service's exact chat calls.
+  "human.split.complete": { service: "human", method: "POST", path: "/internal/audience-splits/complete", args: ["proposal", "message", "systemPrompt"], optional: ["provider", "model", "responseSchema", "disableThinking"] },
+  "human.split.judge": { service: "human", method: "POST", path: "/internal/audience-splits/judge", args: ["proposal", "state", "questions"] },
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
@@ -218,8 +221,10 @@ async function serviceDoor(name: string, args: Record<string, unknown>, ctx: Ven
     const v = args[f];
     const present = typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? Number.isFinite(v) : v !== null && typeof v === "object";
     if (!present) return refuse(`${name} needs ${door.args.join(", ")}`);
-    fields[f] = typeof v === "string" ? v.trim() : v;
+    fields[f] = v;
   }
+  // Optional fields pass as stated when present (never a default).
+  for (const f of door.optional ?? []) if (args[f] !== undefined) fields[f] = args[f];
   if (!ctx.callerRunId || !ctx.headers["x-run-id"]) return refuse(`${name} serves only a run a service asked for`);
   const headers = { ...ctx.headers, "x-caller-run-id": ctx.callerRunId };
   try {
