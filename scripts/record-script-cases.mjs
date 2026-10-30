@@ -261,7 +261,42 @@ function splitCase(d) {
   return { case: { id: d.id, units: { offer_described: { proposal, targetAudience: d.targetAudience, allowEmpty: d.allowEmpty, icons } }, calls, expect } };
 }
 
+/**
+ * A send selection's case (FACTORY-P3 next outcomes, message_sent): instantly-service records each selection it asked
+ * the script, with the exact material and its OWN selection (the truth the script must equal, shadow or switched).
+ */
+function selectionCase(d) {
+  if (!d.material || !d.ours) return { excluded: "the material or our selection is not recorded" };
+  return { case: { id: d.id, units: { message_queued: d.material }, calls: [], expect: { content: d.ours } } };
+}
+
 const outcome = args.outcome;
+if ((args.from === "recorded" || args.source === "recorded") && outcome === "message_sent") {
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const base = (process.env.INSTANTLY_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.INSTANTLY_SERVICE_API_KEY;
+  if (!base || !key) throw new Error("INSTANTLY_SERVICE_URL and INSTANTLY_SERVICE_API_KEY are required");
+  const rows = [];
+  let cursor = Number(args.after ?? 0);
+  for (;;) {
+    const res = await fetch(`${base}/internal/dispatch-selections/recorded?${new URLSearchParams({ after: String(cursor), limit: "20" })}`, { headers: { "x-api-key": key } });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`instantly dispatch selections -> ${res.status}: ${text.slice(0, 200)}`);
+    const page = JSON.parse(text);
+    rows.push(...page.decisions);
+    cursor = page.nextAfter;
+    if (!page.hasMore || rows.length >= Number(args.max ?? 200)) break;
+  }
+  const built = rows.map(selectionCase);
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  const same = rows.filter((r) => r.same === true).length;
+  const sends = rows.filter((r) => r.same === true).reduce((n, r) => n + r.sends, 0);
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} recorded selections (${same} the same as ours, ${sends} emails), ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.apply && cases.length > 0) await storeCases(cases, `instantly-service recorded send selections ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 if ((args.from === "recorded" || args.source === "recorded") && outcome === "audience_built") {
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const rows = await recordedFeed("human", "/internal/audience-splits/recorded", Number(args.after ?? 0), Number(args.max ?? 500));

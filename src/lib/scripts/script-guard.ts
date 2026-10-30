@@ -258,7 +258,7 @@ export async function guardView(db: AnyPgDb, outcome: string, now = new Date()) 
         workflowDynastySlug: switchLabel(r),
         fromVersion: r.fromVersion ?? 0,
         toVersion: r.toVersion ?? 0,
-        state: r.state as "switched" | "rolled_back",
+        state: r.state as "switched" | "rolled_back" | "shadow",
         // A service switch: the caller service (fromVersion 0 = its own code, toVersion = the script version).
         ...(r.callerService ? { callerService: r.callerService } : {}),
       })),

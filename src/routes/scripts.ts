@@ -249,10 +249,12 @@ router.post("/orgs/scripts/run", requireApiKey, async (req, res) => {
 // PLATFORM-billed exactly as that service's own code was, on the script's run, a child of the caller's own run.
 internalScriptsRouter.post("/internal/scripts/run", requireApiKey, async (req, res) => {
   const header = (k: string) => (typeof req.headers[k] === "string" ? (req.headers[k] as string).trim() : "");
+  // No org = fleet work with no org behind it (instantly's send selection): a PLATFORM run, child of the caller's own
+  // platform run, its vendors platform-billed.
   const orgId = header("x-org-id");
   const parentRunId = header("x-run-id");
-  if (!orgId || !parentRunId) {
-    res.status(400).json({ error: "x-org-id (whose work it is) and x-run-id (the caller's own run) are required" });
+  if (!parentRunId) {
+    res.status(400).json({ error: "x-run-id (the caller's own run) is required" });
     return;
   }
   const parsed = RunScriptRequestSchema.safeParse(req.body);
@@ -264,7 +266,7 @@ internalScriptsRouter.post("/internal/scripts/run", requireApiKey, async (req, r
     const result = await runStoredScript(
       db,
       // Who pays the chat vendors is the caller's own code's choice: platform (a sweep, the default) or org.
-      { ...parsed.data, billing: parsed.data.billing === "org" ? "org" : "platform" },
+      { ...parsed.data, billing: orgId && parsed.data.billing === "org" ? "org" : "platform" },
       { orgId, userId: header("x-user-id"), parentRunId, headers: extractDownstreamHeaders(req) },
       { ledger: productionLedgerDeps(), vendors: productionVendorDeps() },
     );
@@ -287,7 +289,7 @@ internalScriptsRouter.post("/internal/scripts/run", requireApiKey, async (req, r
 
 internalScriptsRouter.post("/internal/scripts/switches/service", requireApiKey, async (req, res) => {
   const str = (k: string) => (typeof req.body?.[k] === "string" ? (req.body[k] as string).trim() : "");
-  const input = { outcome: str("outcome"), dynasty: str("dynasty"), callerService: str("callerService") };
+  const input = { outcome: str("outcome"), dynasty: str("dynasty"), callerService: str("callerService"), mode: str("mode") === "shadow" ? ("shadow" as const) : ("switched" as const) };
   if (!input.outcome || !input.dynasty || !input.callerService) {
     res.status(400).json({ error: "outcome, dynasty and callerService are required" });
     return;

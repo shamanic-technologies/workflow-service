@@ -2661,7 +2661,7 @@ registry.registerPath({
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-run-id": z.string(), "x-user-id": z.string().optional() }),
+    headers: z.object({ "x-org-id": z.string().optional().describe("Absent = fleet work with no org (a PLATFORM run, child of the caller's platform run; vendors platform-billed; declares nothing)."), "x-run-id": z.string(), "x-user-id": z.string().optional() }),
     body: { required: true, content: { "application/json": { schema: RunScriptRequestSchema } } },
   },
   responses: {
@@ -2698,7 +2698,7 @@ const ScriptSwitchSchema = z.object({
   workflowDynastySlug: z.string().describe("The switched workflow dynasty, or `service:<caller>` for a SERVICE switch."),
   fromVersion: z.number().int().describe("The version a roll-back re-activates (the content-generation writer); 0 on a service switch (the service's own code)."),
   toVersion: z.number().int().describe("The version that runs the stored script; on a service switch, the script version it was proven on."),
-  state: z.enum(["switched", "rolled_back"]),
+  state: z.enum(["switched", "rolled_back", "shadow"]),
   callerService: z.string().optional().describe("A SERVICE switch: the service that makes the outcome in its own code and calls the script while switched."),
 });
 
@@ -2707,6 +2707,7 @@ export const ServiceSwitchStateSchema = z
     outcome: z.string(),
     callerService: z.string(),
     switched: z.boolean().describe("true: call `POST /internal/scripts/run` with `dynasty` in place of the service's own code; false: the service's own code (never switched, or rolled back)."),
+    shadow: z.boolean().describe("Not switched: keep your own answer and ask `dynasty` the same question beside it, comparing both (the live proof before a switch)."),
     dynasty: z.string().nullable(),
     scriptVersion: z.number().int().nullable(),
     switchedAt: z.string().nullable(),
@@ -2779,7 +2780,7 @@ registry.registerPath({
   description: "FACTORY-P3 service switch: no workflow step calls it, so there is no dynasty to upgrade; the caller service reads the state before each call. Refused (409) unless the dynasty's active version replays 100 % of its recorded cases. Idempotent while switched.",
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
-  request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), dynasty: z.string(), callerService: z.string() }) } } } },
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), dynasty: z.string(), callerService: z.string(), mode: z.enum(["switched", "shadow"]).optional().describe("`shadow`: the caller keeps its own answer and asks the script beside it (no proof needed: nothing it answers is used); default `switched` (a proven port; ends the shadow).") }) } } } },
   responses: {
     201: { description: "Switched (or already switched)", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
     400: { description: "Unknown caller service or missing field", content: { "application/json": { schema: ErrorResponseSchema } } },

@@ -3739,7 +3739,8 @@
                   "type": "string",
                   "enum": [
                     "switched",
-                    "rolled_back"
+                    "rolled_back",
+                    "shadow"
                   ]
                 },
                 "callerService": {
@@ -3782,6 +3783,10 @@
             "type": "boolean",
             "description": "true: call `POST /internal/scripts/run` with `dynasty` in place of the service's own code; false: the service's own code (never switched, or rolled back)."
           },
+          "shadow": {
+            "type": "boolean",
+            "description": "Not switched: keep your own answer and ask `dynasty` the same question beside it, comparing both (the live proof before a switch)."
+          },
           "dynasty": {
             "type": "string",
             "nullable": true
@@ -3807,6 +3812,7 @@
           "outcome",
           "callerService",
           "switched",
+          "shadow",
           "dynasty",
           "scriptVersion",
           "switchedAt",
@@ -9655,9 +9661,11 @@
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "description": "Absent = fleet work with no org (a PLATFORM run, child of the caller's platform run; vendors platform-billed; declares nothing)."
             },
-            "required": true,
+            "required": false,
+            "description": "Absent = fleet work with no org (a PLATFORM run, child of the caller's platform run; vendors platform-billed; declares nothing).",
             "name": "x-org-id",
             "in": "header"
           },
@@ -9984,6 +9992,14 @@
                   },
                   "callerService": {
                     "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "switched",
+                      "shadow"
+                    ],
+                    "description": "`shadow`: the caller keeps its own answer and asks the script beside it (no proof needed: nothing it answers is used); default `switched` (a proven port; ends the shadow)."
                   }
                 },
                 "required": [
