@@ -3599,9 +3599,10 @@
             "enum": [
               "content-generation",
               "instantly",
-              "apollo"
+              "apollo",
+              "lead"
             ],
-            "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run; the email verification waterfall: apollo's verifier doors store each bronze row and declare email_checked). The run then declares nothing itself."
+            "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run; the email verification waterfall: apollo's verifier doors store each bronze row and declare email_checked; a candidate decision: lead-service's doors screen, reveal or decline as before). The run then declares nothing itself."
           },
           "trace": {
             "type": "boolean",
