@@ -19,8 +19,8 @@
  * `rolled_back`, which the Monitoring series serves red. Never an email.
  * Evaluated after every script run of a switched outcome (at most once a minute per process): no timer.
  */
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
-import { scriptRuns, scriptSwitches, scripts, workflows } from "../../db/schema.js";
+import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
+import { scriptMonitoringDays, scriptRuns, scriptSwitches, scripts, workflows } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 import { CLEAR_DEPRECATION, recordDeprecation } from "../deprecation.js";
 import { STILL_EXECUTABLE, stopExecutable } from "../executable-until.js";
@@ -28,9 +28,37 @@ import { serviceSwitchLabel } from "./script-service-switch.js";
 
 export const WINDOW_MINUTES = 60;
 export const MIN_RUNS = 20;
-/** content-generation's writer error rate, the service path the script replaced. */
+/**
+ * The baseline when the service path has no measured day yet (content-generation's writer, 2026-10-29). Every outcome
+ * is held to its OWN service path's measured error rate once one is stored (`measuredBaseline`).
+ */
 export const BASELINE_ERROR_RATE = 0.005;
+/** The absolute floor; the threshold is the larger of it and 4x the baseline (2 % at the 0.5 % writer baseline). */
 export const THRESHOLD_ERROR_RATE = 0.02;
+export const THRESHOLD_BASELINE_MULTIPLE = 4;
+
+export interface Baseline {
+  errorRate: number;
+  /** `measured` = the service path's latest stored day (Monitoring series); `default` = none stored yet. */
+  source: "measured" | "default";
+  day: string | null;
+  sample: number;
+}
+
+/** The service path's error rate the script is held to: its latest stored Monitoring day with a sample. */
+export async function measuredBaseline(db: AnyPgDb, outcome: string): Promise<Baseline> {
+  const [row] = await db
+    .select()
+    .from(scriptMonitoringDays)
+    .where(and(eq(scriptMonitoringDays.outcome, outcome), eq(scriptMonitoringDays.path, "service"), gt(scriptMonitoringDays.sampleSize, 0)))
+    .orderBy(desc(scriptMonitoringDays.day))
+    .limit(1);
+  const done = row ? row.completedCount + row.failedCount : 0;
+  if (!row || done === 0) return { errorRate: BASELINE_ERROR_RATE, source: "default", day: null, sample: 0 };
+  return { errorRate: row.failedCount / done, source: "measured", day: row.day, sample: done };
+}
+
+export const thresholdFor = (baseline: number) => Math.max(THRESHOLD_ERROR_RATE, THRESHOLD_BASELINE_MULTIPLE * baseline);
 export const ALPHA = 0.001;
 const CHECK_EVERY_MS = 60_000;
 
@@ -51,14 +79,18 @@ export function binomialTail(n: number, k: number, p: number): number {
 
 export interface WindowStats {
   runs: number;
+  /** Script errors: failed + stopped. A failure the world gave (`unmade`) is NOT one. */
   failed: number;
   errorRate: number | null;
+  /** Runs that made no Unit for a reason the world gave (a verifier with no verdict), counted apart. */
+  unmade?: number;
 }
 
-export function shouldRollBack(w: WindowStats): { rollBack: boolean; pValue: number | null } {
+export function shouldRollBack(w: WindowStats, baseline: number = BASELINE_ERROR_RATE): { rollBack: boolean; pValue: number | null } {
   if (w.runs < MIN_RUNS || w.errorRate === null) return { rollBack: false, pValue: null };
-  const pValue = binomialTail(w.runs, w.failed, BASELINE_ERROR_RATE);
-  return { rollBack: w.errorRate > THRESHOLD_ERROR_RATE && pValue < ALPHA, pValue };
+  // A baseline of 0 would make any single error "beyond chance": test against at least the default.
+  const pValue = binomialTail(w.runs, w.failed, Math.max(baseline, BASELINE_ERROR_RATE));
+  return { rollBack: w.errorRate > thresholdFor(baseline) && pValue < ALPHA, pValue };
 }
 
 /** The last hour of finished script runs of one outcome. */
@@ -68,13 +100,14 @@ export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): 
     .select({
       runs: sql<number>`count(*) filter (where ${scriptRuns.status} <> 'running')::int`,
       failed: sql<number>`count(*) filter (where ${scriptRuns.status} in ('failed', 'stopped'))::int`,
+      unmade: sql<number>`count(*) filter (where ${scriptRuns.status} = 'unmade')::int`,
     })
     .from(scriptRuns)
     .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
     .where(and(eq(scripts.outcome, outcome), gte(scriptRuns.createdAt, since)));
   const runs = Number(row?.runs ?? 0);
   const failed = Number(row?.failed ?? 0);
-  return { runs, failed, errorRate: runs > 0 ? failed / runs : null };
+  return { runs, failed, errorRate: runs > 0 ? failed / runs : null, unmade: Number(row?.unmade ?? 0) };
 }
 
 export interface RollbackDeps {
@@ -163,12 +196,13 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
     .where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
   if (!live || Number(live.n) === 0) return { checked: false as const };
   const w = await lastHour(db, outcome, now);
-  const verdict = shouldRollBack(w);
+  const baseline = await measuredBaseline(db, outcome);
+  const verdict = shouldRollBack(w, baseline.errorRate);
   if (!verdict.rollBack) return { checked: true as const, window: w, ...verdict, result: null };
   const reason =
     `the stored script's error rate on ${outcome} was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
-    `(${w.failed} of ${w.runs} runs), above ${(100 * THRESHOLD_ERROR_RATE).toFixed(0)} % and above the service path's ${(100 * BASELINE_ERROR_RATE).toFixed(1)} % ` +
-    `baseline beyond chance (p = ${verdict.pValue!.toExponential(1)})`;
+    `(${w.failed} of ${w.runs} runs), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
+    `${baseline.source} baseline beyond chance (p = ${verdict.pValue!.toExponential(1)})`;
   const result = await rollBackSwitches(db, deps, outcome, reason, "workflow-service script guard");
   return { checked: true as const, window: w, ...verdict, result };
 }
@@ -204,6 +238,7 @@ export function resetGuardMemo(): void {
 export async function guardView(db: AnyPgDb, outcome: string, now = new Date()) {
   const rows = await db.select().from(scriptSwitches).where(eq(scriptSwitches.outcome, outcome));
   const window = await lastHour(db, outcome, now);
+  const baseline = await measuredBaseline(db, outcome);
   const switched = rows.filter((r) => r.state === "switched");
   const rolled = rows.filter((r) => r.state === "rolled_back").sort((a, b) => (b.rolledBackAt?.getTime() ?? 0) - (a.rolledBackAt?.getTime() ?? 0));
   const state: "off" | "watching" | "rolled_back" = switched.length > 0 ? "watching" : rolled.length > 0 ? "rolled_back" : "off";
@@ -211,8 +246,9 @@ export async function guardView(db: AnyPgDb, outcome: string, now = new Date()) 
     state,
     windowMinutes: WINDOW_MINUTES,
     lastHour: window,
-    baselineErrorRate: BASELINE_ERROR_RATE,
-    thresholdErrorRate: THRESHOLD_ERROR_RATE,
+    baselineErrorRate: baseline.errorRate,
+    baselineSource: baseline.source,
+    thresholdErrorRate: thresholdFor(baseline.errorRate),
     minRuns: MIN_RUNS,
     rolledBackAt: state === "rolled_back" ? (rolled[0]?.rolledBackAt?.toISOString() ?? null) : null,
     reason: state === "rolled_back" ? (rolled[0]?.rollbackReason ?? null) : null,

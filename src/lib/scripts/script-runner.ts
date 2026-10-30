@@ -84,7 +84,8 @@ export interface ScriptRunResult {
   scriptSlug: string;
   version: number;
   runId: string;
-  status: "made" | "nothing" | "stopped" | "failed";
+  /** `unmade` = no Unit for a reason the world gave (the script's `unmade`), never an error. */
+  status: "made" | "nothing" | "unmade" | "stopped" | "failed";
   unit: { outcome: string; subject: SubjectRef; content: Record<string, unknown>; found?: string } | null;
   error: string | null;
   vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number }>;
@@ -199,12 +200,12 @@ export async function runStoredScript(
 
   const out = await runScript(row.code, { subject: input.subject.id, brand: who.headers["x-brand-id"] ?? "", day: Math.floor(Date.now() / 86_400_000), tactics, request: input.request ?? null }, bridge);
   const made = out.kind === "done" && out.result !== null && typeof out.result === "object" ? (out.result as NonNullable<ScriptResult>) : null;
-  const status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : "nothing";
+  const status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
   // A Unit recorded by its owning service is declared there (one declaration, never two).
   const produced: OccurrenceInput[] =
     status === "made" && !input.recordedBy ? [{ outcomeKey: row.outcome, subjectService: input.subject.service, subjectId: input.subject.id }] : [];
   if (input.recordedBy) consumed.length = 0;
-  let error: string | null = out.kind === "error" ? out.message : out.kind === "stopped" ? out.reason : null;
+  let error: string | null = out.kind === "error" ? out.message : out.kind === "stopped" ? out.reason : status === "unmade" ? made!.unmade! : null;
 
   let declaredOk = true;
   if (produced.length > 0 || consumed.length > 0) {
@@ -229,7 +230,7 @@ export async function runStoredScript(
     ...(input.recordedBy ? { recordedBy: input.recordedBy } : {}),
     ...(input.trace ? { trace } : {}),
   };
-  await deps.ledger.closeRun(runId, finalStatus === "made" || finalStatus === "nothing" ? "completed" : "failed", who.orgId);
+  await deps.ledger.closeRun(runId, finalStatus === "failed" || finalStatus === "stopped" ? "failed" : "completed", who.orgId);
   await db
     .update(scriptRuns)
     .set({

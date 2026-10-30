@@ -226,3 +226,39 @@ describe("lead-service's candidate doors (lead_identified)", () => {
     expect(seen).toEqual([["lead", "POST", "/internal/candidate-decisions/reveal", { candidateId: "c1" }, "serve-run"]]);
   });
 });
+
+describe("the roll-back baseline is each outcome's own measured service rate; a failure the world gave is apart", () => {
+  it("holds email_found to its measured ~1 % (threshold 4 %), not the writer's 0.5 %; unmade runs are not errors", async () => {
+    const { measuredBaseline, checkGuard, guardView } = await import("../../src/lib/scripts/script-guard.js");
+    const { scriptMonitoringDays } = await import("../../src/db/schema.js");
+    expect(await measuredBaseline(db, "lead_interested")).toMatchObject({ source: "default", errorRate: 0.005 });
+    await db.insert(scriptMonitoringDays).values({ day: "2026-10-29", outcome: "lead_interested", path: "service", serviceName: "instantly-service", taskNames: ["x"], totalRunCount: 500, sampleSize: 200, completedCount: 198, failedCount: 2, avgCostCents: null, computedAt: new Date() });
+    expect(await measuredBaseline(db, "lead_interested")).toMatchObject({ source: "measured", errorRate: 0.01, day: "2026-10-29" });
+
+    const script = await provenJudge();
+    await switchService(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", callerService: "instantly" });
+    const now = new Date();
+    // 100 runs: 3 script errors (3 %, under the 4 % threshold at a 1 % baseline) + 20 unmade (not errors).
+    await db.insert(scriptRuns).values(Array.from({ length: 100 }, (_, i) => ({ scriptId: script.id, orgId: "o", runId: `r${i}`, parentRunId: "p", status: i < 3 ? "failed" : i < 23 ? "unmade" : "made", createdAt: now })));
+    const out = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
+    expect(out).toMatchObject({ checked: true, rollBack: false, window: { runs: 100, failed: 3, unmade: 20 } });
+    expect(await guardView(db, "lead_interested", now)).toMatchObject({ baselineErrorRate: 0.01, baselineSource: "measured", thresholdErrorRate: 0.04 });
+    // 3 more errors: 6 %, beyond chance at 1 %: rolled back.
+    await db.insert(scriptRuns).values(Array.from({ length: 3 }, (_, i) => ({ scriptId: script.id, orgId: "o", runId: `x${i}`, parentRunId: "p", status: "failed", createdAt: now })));
+    expect((await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now)).result?.rolledBack).toHaveLength(1);
+  });
+
+  it("a script answering `unmade` closes its run completed, throws nothing, and replays against a recorded failure", async () => {
+    const code = `export default function run(ctx) { ctx.get("reply_received"); return { unmade: "bounceban: no verdict" }; }`;
+    const { replayCase } = await import("../../src/lib/scripts/replay.js");
+    expect((await replayCase(code, { id: "u", units: { reply_received: {} }, calls: [], expect: { fails: "bounceban:" } })).match).toBe(true);
+    expect((await replayCase(code, { id: "u", units: { reply_received: {} }, calls: [], expect: { fails: "trykitt:" } })).match).toBe(false);
+    await putCases(db, "lead_interested", "dy_unmade", [{ id: "u", units: { reply_received: {} }, calls: [], expect: { fails: "bounceban:" } }], "t");
+    await createScript(db, { outcome: "lead_interested", dynasty: "dy_unmade", code, description: "x" }, author, known);
+    const closed: string[] = [];
+    const ledger: LedgerDeps = { async createRun() { return "r-u"; }, async declareOutcomes() { return {}; }, async closeRun(_r, status) { closed.push(status); } };
+    const out = await runStoredScript(db, { outcome: "lead_interested", dynasty: "dy_unmade", subject: { service: "s", id: "1" }, units: { reply_received: { content: {} } } }, { orgId: "o", userId: "u", parentRunId: "p", headers: {} }, { ledger, vendors: {} as VendorDeps });
+    expect(out).toMatchObject({ status: "unmade", error: "bounceban: no verdict", unit: null });
+    expect(closed).toEqual(["completed"]);
+  });
+});

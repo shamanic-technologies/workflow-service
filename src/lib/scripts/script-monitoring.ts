@@ -171,7 +171,7 @@ export async function readMonitoring(db: AnyPgDb, days: number, now = new Date()
       const red =
         (!!lastScript && lastScript.sample > 0 && lastScript.errorRate !== null && lastScript.errorRate > (lastService?.errorRate ?? 0)) ||
         guard.state === "rolled_back" ||
-        (guard.state === "watching" && shouldRollBack(guard.lastHour).rollBack);
+        (guard.state === "watching" && shouldRollBack(guard.lastHour, guard.baselineErrorRate).rollBack);
       const lastWeek = service.slice(-READY_TO_DELETE_DAYS);
       const readyToDelete = lastWeek.length === READY_TO_DELETE_DAYS && lastWeek.every((d) => d.runs === 0);
       return {
