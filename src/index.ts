@@ -41,6 +41,10 @@ app.use(cors());
 // A workflow write carries its whole DAG. The ai-meeting-booking responders are ~100 KB of DAG (prompt and guard
 // code live in script nodes), past Express's 100 KB default: the offer-document responder's upgrade was refused
 // with a 413 (2026-10-14) and the parent sat at 93 KB. Keep this well above the largest stored DAG.
+// A service's stored-script run (`POST /internal/scripts/run`) carries its whole material: the send selection hands
+// the fleet's dispatch queue (~1.5 MB at 3.8k sequences, 2026-10-30), and its recorded cases the same. Service-key
+// routes only: parsed first with room for twice the queue; everything else keeps 2 MB.
+app.use(["/internal/scripts/run", "/internal/scripts/dynasty"], express.json({ limit: "32mb" }));
 app.use(express.json({ limit: "2mb" }));
 
 // Static routes — reachable before migrations have been applied.
