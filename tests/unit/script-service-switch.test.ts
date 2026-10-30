@@ -182,8 +182,10 @@ describe("apollo's verifier doors (email_found)", () => {
       async readSkill() { return null; },
       async platformComplete() { return {}; },
       async platformJudge() { return {}; },
-      async apolloVerify(body: Record<string, unknown>, headers: Record<string, string>) { seen.push(["verify", body, headers]); return answers.verify!; },
-      async apolloApifyAvailable(email: string, headers: Record<string, string>) { seen.push(["apify", email, headers]); return answers.apify!; },
+      async serviceDoor(service: string, method: string, path: string, body: Record<string, unknown> | null, headers: Record<string, string>) {
+        seen.push([service, method, path, body, headers]);
+        return (path.includes("/apify") ? answers.apify : answers.verify)!;
+      },
     } as unknown as VendorDeps;
     const out = await callVendor(name, args, { headers: { "x-run-id": "script-run", "x-org-id": "org-a", "x-user-id": "u" }, tactics: {}, ...ctx }, deps);
     return { out, seen };
@@ -193,7 +195,7 @@ describe("apollo's verifier doors (email_found)", () => {
     const row = { verificationId: "v1", verifier: "contactout", verdict: "valid", error: null };
     const { out, seen } = await call("apollo.email.verify", { verifier: "contactout", email: "a@b.co" }, { callerRunId: "caller-run" }, { verify: { status: 200, body: row } });
     expect(out).toEqual({ ok: true, data: row });
-    expect(seen).toEqual([["verify", { verifier: "contactout", email: "a@b.co" }, { "x-run-id": "script-run", "x-org-id": "org-a", "x-user-id": "u", "x-caller-run-id": "caller-run" }]]);
+    expect(seen).toEqual([["apollo", "POST", "/internal/email-verifier-calls", { verifier: "contactout", email: "a@b.co" }, { "x-run-id": "script-run", "x-org-id": "org-a", "x-user-id": "u", "x-caller-run-id": "caller-run" }]]);
   });
 
   it("a refusal is a refusal the script reads (never a verifier that did not answer)", async () => {
@@ -205,5 +207,22 @@ describe("apollo's verifier doors (email_found)", () => {
     expect((await call("apollo.apify.available", { email: "a@b.co" }, { callerRunId: "c" }, { apify: { status: 200, body: { available: true } } })).out).toEqual({ ok: true, data: {} });
     expect((await call("apollo.apify.available", { email: "a@b.co" }, { callerRunId: "c" }, { apify: { status: 200, body: { available: false } } })).out).toEqual({ ok: false, data: {} });
     expect((await call("apollo.apify.available", { email: "a@b.co" }, {}, {})).out.ok).toBe(false);
+  });
+});
+
+describe("lead-service's candidate doors (lead_identified)", () => {
+  it("each call is lead-service's door for the candidate in flight; a decline needs its reason", async () => {
+    const { callVendor } = await import("../../src/lib/scripts/vendors.js");
+    const seen: unknown[] = [];
+    const deps = {
+      async serviceDoor(service: string, method: string, path: string, body: unknown, headers: Record<string, string>) {
+        seen.push([service, method, path, body, headers["x-caller-run-id"]]);
+        return { status: 200, body: { status: "served" } };
+      },
+    } as unknown as VendorDeps;
+    const ctx = { headers: { "x-run-id": "script-run", "x-org-id": "o" }, tactics: {}, callerRunId: "serve-run" };
+    expect(await callVendor("lead.candidate.reveal", { candidateId: "c1" }, ctx, deps)).toEqual({ ok: true, data: { status: "served" } });
+    expect((await callVendor("lead.candidate.decline", { candidateId: "c1" }, ctx, deps)).ok).toBe(false);
+    expect(seen).toEqual([["lead", "POST", "/internal/candidate-decisions/reveal", { candidateId: "c1" }, "serve-run"]]);
   });
 });
