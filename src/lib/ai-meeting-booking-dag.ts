@@ -399,7 +399,7 @@ export async function main(conversation, timeline) {
   // every run on the same row, which the queue handed back first, forever.
   const refuse = (reason, detail) => {
     console.log("[ai-meeting-booking] not answered (" + reason + "): " + detail);
-    return { refusal: { reason, detail }, conversation: { messages }, person: null, replyChannel: null, skipEmail: true, skipWhatsapp: true, skipHandOver: true };
+    return { refusal: { reason, detail }, conversation: { messages }, person: null, replyChannel: null, emailThreadCampaignId: null, skipEmail: true, skipWhatsapp: true, skipHandOver: true };
   };
   if (!replyChannel) {
     return refuse(NO_THREAD_REASON_LITERAL, "no conversation with this person on any channel we read (email thread, chats); never writing to someone we have never talked with");
@@ -407,13 +407,26 @@ export async function main(conversation, timeline) {
   if (!CHANNELS.includes(replyChannel)) {
     return refuse(UNSUPPORTED_CHANNEL_REASON_LITERAL, "their last message came on " + replyChannel + ", which no reply transport sends on (" + CHANNELS.join(", ") + ")");
   }
-  console.log("[ai-meeting-booking] conversation: " + emailMessages.length + " email, " + chatMessages.length + " chat message(s); replying on " + replyChannel);
+  // The campaign row the email thread lives in: the one their newest email came under (else our newest email to
+  // them). The read spans every sibling campaign of the leg, so this is the thread the prospect wrote in, never the
+  // first predecessor campaign-service lists (REPLY-WRONG-CAMPAIGN-1030: 404 campaign_not_found on a 3-campaign leg).
+  const emailRows = (list) => list.filter((m) => typeof m.campaignId === "string" && m.campaignId !== "");
+  const newestOf = (list) => (list.length > 0 ? list[list.length - 1] : null);
+  const emailThreadOf = newestOf(emailRows(messages.filter((m) => m.channel === "email" && m.direction === "inbound")))
+    ?? newestOf(emailRows(messages.filter((m) => m.channel === "email")));
+  const emailThreadCampaignId = emailThreadOf ? emailThreadOf.campaignId : null;
+  if (replyChannel === "email" && emailThreadCampaignId === null) {
+    throw new Error("[ai-meeting-booking] replying by email, but no email message names the campaign its thread lives in");
+  }
+  console.log("[ai-meeting-booking] conversation: " + emailMessages.length + " email, " + chatMessages.length + " chat message(s); replying on " + replyChannel +
+    (emailThreadCampaignId ? " (email thread under campaign " + emailThreadCampaignId + ")" : ""));
   const person = timeline && timeline.ok !== false ? timeline.person ?? null : null;
   return {
     conversation: { messages },
     person: { name: person?.displayName ?? null, phone: (person?.phones ?? [])[0] ?? null },
     refusal: null,
     replyChannel,
+    emailThreadCampaignId,
     skipEmail: replyChannel !== "email",
     skipWhatsapp: replyChannel !== "whatsapp",
     skipHandOver: replyChannel === "email",
@@ -541,6 +554,13 @@ SEND_KEY_FN
  */
 export const PREDECESSOR_CAMPAIGN_REF =
   "$ref:predecessor-campaign.output.predecessor.campaignId";
+
+/**
+ * The campaign the answer (and an escalation) names: the row the prospect's email thread lives in, read off the
+ * conversation by `thread`. Never the predecessor: a leg run by several campaigns lists them in an order that says
+ * nothing about who wrote to this person, and instantly-service uses a named campaign as-is (REPLY-WRONG-CAMPAIGN-1030).
+ */
+export const EMAIL_THREAD_CAMPAIGN_REF = "$ref:thread.output.emailThreadCampaignId";
 
 /**
  * States, in the log, that this campaign has no preceding leg to answer on.
@@ -1856,6 +1876,18 @@ export function needsEscalationHandOver(dag: { nodes?: Array<{ id?: string; conf
  * step throws instead of returning a refusal, it has no `check-thread` settling their turn, or its claims do not
  * state the occurrence's person. The seed upgrades it.
  */
+/**
+ * True when the stored DAG answers or escalates under the FIRST predecessor campaign instead of the campaign the
+ * prospect's email thread lives in (REPLY-WRONG-CAMPAIGN-1030).
+ */
+export function needsThreadCampaignReply(dag: { nodes?: Array<{ id?: string; inputMapping?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  return ["send-reply", "escalate-unanswerable"].some((id) => {
+    const node = nodes.find((n) => n?.id === id);
+    return node !== undefined && node.inputMapping?.["body.campaign_id"] !== EMAIL_THREAD_CAMPAIGN_REF;
+  });
+}
+
 export function needsSettledThreadRefusal(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown>; inputMapping?: Record<string, unknown> }> } | null | undefined): boolean {
   const nodes = dag?.nodes ?? [];
   const byId = (id: string) => nodes.find((n) => n?.id === id);
@@ -2635,7 +2667,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         },
         retries: 0,
         inputMapping: {
-          "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
+          "body.campaign_id": EMAIL_THREAD_CAMPAIGN_REF,
           "body.email": "$ref:claimed.output.followup.email",
           "body.question": "$ref:ground-draft.output.json.question",
           skip: "$ref:thread.output.skipEmail",
@@ -2771,7 +2803,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         },
         retries: 0,
         inputMapping: {
-          "body.campaign_id": PREDECESSOR_CAMPAIGN_REF,
+          "body.campaign_id": EMAIL_THREAD_CAMPAIGN_REF,
           "body.email": "$ref:claimed.output.followup.email",
           "body.body_html": "$ref:ground-draft.output.json.replyHtml",
           skip: "$ref:thread.output.skipEmail",
