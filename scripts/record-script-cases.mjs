@@ -229,7 +229,35 @@ function candidateCase(d) {
   return { case: { id: d.id, units: { lead_found: { candidateId: d.candidateId }, audience_built: { hasTarget: d.hasTarget } }, calls: d.calls, expect } };
 }
 
+/**
+ * A walk's case (FACTORY-P3 next outcomes, lead_found): human-service records each walk's pages and verdicts in the
+ * script's words (our own walk: pages of one, a sample; the script's walks: all). The walk token rides the material
+ * and every door call (our own walk states none: the case names one).
+ */
+function walkCase(d) {
+  if (!Array.isArray(d.calls) || d.calls.length === 0) return { excluded: "no call recorded" };
+  if (d.error) return { excluded: "the walk failed" };
+  const walk = d.calls.find((c) => typeof c.args?.walk === "string")?.args.walk ?? `walk-${d.id}`;
+  const calls = d.calls.map((c) => ({ ...c, args: { walk, ...(c.args ?? {}) } }));
+  const expect = d.candidateId ? { content: { candidateId: d.candidateId } } : { nothing: true };
+  return { case: { id: d.id, units: { audience_built: { ...d.units, walk } }, calls, expect } };
+}
+
 const outcome = args.outcome;
+if ((args.from === "recorded" || args.source === "recorded") && outcome === "lead_found") {
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const rows = await recordedFeed("human", "/internal/candidate-walks/recorded", Number(args.after ?? 0), Number(args.max ?? 500));
+  const built = rows.map(walkCase);
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  const paths = {};
+  for (const r of rows) paths[r.path] = (paths[r.path] ?? 0) + 1;
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} recorded walks ${JSON.stringify(paths)} (seq ${rows[0]?.seq ?? "-"}..${rows.at(-1)?.seq ?? "-"}), ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply && cases.length > 0) await storeCases(cases, `human-service recorded candidate walks ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 if ((args.from === "recorded" || args.source === "recorded") && outcome === "lead_identified") {
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const rows = await recordedFeed("lead", "/internal/candidate-decisions/recorded", Number(args.after ?? 0), Number(args.max ?? 500));
@@ -273,7 +301,7 @@ if ((args.from === "recorded" || args.source === "recorded") && outcome === "lea
   process.exit(0);
 }
 if (args.from === "recorded" || args.source === "recorded") {
-  if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found and lead_identified");
+  if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found, lead_identified and lead_found");
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
   const built = gens.map(fullWriterCase);
