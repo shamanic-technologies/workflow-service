@@ -28,6 +28,7 @@ import {
   type ExecutionConflictPolicy,
 } from "../lib/execution-admission.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
+import { noteWorkflowRunForGuard } from "../lib/scripts/script-guard.js";
 const router = Router();
 
 function formatRun(r: typeof workflowRuns.$inferSelect) {
@@ -563,6 +564,9 @@ router.get("/workflow-runs/:id", requireApiKey, async (req, res) => {
             ...attributionContextToHeaders(run.attributionContext as Record<string, unknown> | null | undefined),
           };
           traceEvent(run.runId ?? req.params.id, { service: "workflow-service", event: "job-completed", detail: `Run ${run.id} finished: status=${newStatus}, windmillJobId=${run.windmillJobId}` }, runTraceHeaders).catch(() => {});
+
+          // FACTORY-P3: a switched workflow is judged on how its runs finish (script-guard.ts workflowWindow).
+          noteWorkflowRunForGuard();
 
           // Close the run in runs-service
           if (run.runId && run.orgId) {
