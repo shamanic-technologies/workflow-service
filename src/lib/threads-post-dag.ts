@@ -19,10 +19,13 @@
  *    used first), so a newly connected Pro (AI) account joins the rotation with no change.
  *  - The brand's own facts (offer answers + the fields the client CONFIRMED, `GATHER_CLIENT_FACTS_CODE`: never the
  *    site's prefill), its profile, and the campaign's instruction (`/start-run`).
- *  - chat-service with live web search, two reading calls (tolerated: a run without them still writes, logged):
- *    this week's fresh angles in the brand's industry (angles only, never a figure), and `read-own-figures`, what
- *    the brand ITSELF publishes on its own domain (its figures with their page, its named customer results, what it
- *    published in the last 14 days), generic for every brand: that is where a "finding from our data" thread gets
+ *  - Two tolerated reads (a run without them still writes, logged): chat-service with live web search finds this
+ *    week's fresh angles in the brand's industry (angles only, never a figure); and what the brand ITSELF publishes
+ *    on its own domain, generic for every brand: scraping-service maps the site (`map-own-site`), the reading model
+ *    picks at most OWN_PAGES pages on the domain likely to hold its figures, customer results and latest items
+ *    (`pick-own-pages`, never a keyword rule here), scraping-service reads them (`scrape-own-1..4`), and the reading
+ *    model lists their figures with what each counts, its reliability label and its page (`read-own-figures`, no
+ *    web search: web search cannot read the brand's own pages). That is where a "finding from our data" thread gets
  *    real served figures.
  *  - The writer holds NO prompt and NO model (THREADS-IDEAS-AB, owner 2026-10-31): content-generation-service
  *    `POST /generate-thread` writes with the pipe's best template dynasty and best LLM, both picked per run by
@@ -61,7 +64,7 @@ export const THREADS_POST_PIPE_ID = `${THREADS_POST_FEATURE_SLUG}|${THREADS_POST
 export const THREADS_POST_DESCRIPTION =
   "Publishes one Threads thread per run, a main post and two or three replies, on the brand's Threads accounts typed Pro (AI), rotating across them and never on a personal account. Threads go out at least an hour apart during the day, each on a new subject, written only from the brand's own facts.";
 
-/** The LLM of the two READING calls (live web: industry angles, the brand's own published figures). Never the writer. */
+/** The LLM of the READING calls (industry angles, picking and reading the brand's own pages). Never the writer. */
 export const THREADS_ANGLES_LLM = { provider: "anthropic", model: "sonnet" } as const;
 
 /** UTC hours [from, to) in which a live run may publish: 09:00 to 17:00 in New York, 14:00 to 22:00 in Paris. */
@@ -69,6 +72,23 @@ export const PUBLISH_WINDOW_UTC = [13, 21] as const;
 
 /** The least time between two threads of one brand. */
 export const MIN_GAP_MINUTES = 60;
+
+/** At most this many of the brand's own pages are read per run (one scrape each). */
+export const OWN_PAGES = 4;
+
+/** Per own page, at most this much text reaches the reader. */
+export const OWN_PAGE_CHARS = 12_000;
+
+/** At most this many of the site's URLs are offered to the page picker. */
+export const OWN_SITE_URLS = 300;
+
+/** The page picker's answer. */
+export const OWN_PAGES_SCHEMA = {
+  type: "object",
+  properties: { urls: { type: "array", items: { type: "string" } } },
+  required: ["urls"],
+  additionalProperties: false,
+} as const;
 
 /** How far back the subjects are read (never twice). */
 export const HISTORY_DAYS = 30;
@@ -171,24 +191,80 @@ export async function main(brand, facts, plan) {
 const DOMAIN_OF_BRAND = `const b = brand?.brand ?? brand ?? {};
   const domain = String(b.domain ?? b.url ?? "").replace(/^https?:\\/\\//, "").replace(/^www\\./, "").replace(/\\/.*$/, "");`;
 
-/**
- * The live-web read of what the brand ITSELF publishes on its own domain (generic, any brand): its figures with their
- * page, its customer results, what it published in the last 14 days. Read, never written: the writer quotes it.
- */
-export const COMPOSE_OWN_FIGURES_CODE = `
+/** The brand's own site: its bare domain, the URL scraping-service maps, the brand the reads are billed under. */
+export const PLAN_OWN_SITE_CODE = `
 export async function main(brand, plan) {
   ${DOMAIN_OF_BRAND}
-  if (!domain) throw new Error("compose-own-figures: the brand has no domain to read");
+  if (!domain) throw new Error("plan-own-site: the brand has no domain to read");
+  return { domain, brandName: String(b.name ?? domain), url: "https://" + domain, brandIds: [plan.brandId] };
+}
+`.trim();
+
+/** A URL on the brand's own domain (its subdomains included), never another site's. */
+const ON_DOMAIN = `const onDomain = (u, domain) => {
+    try { const h = new URL(String(u)).hostname.toLowerCase().replace(/^www\\./, ""); return h === domain || h.endsWith("." + domain); } catch { return false; }
+  };`;
+
+/**
+ * The page picker's input: the site's URLs on the brand's own domain (scraping-service `/map`), at most
+ * OWN_SITE_URLS. Which pages hold figures is the reading model's call, never a keyword rule here.
+ */
+export const COMPOSE_PICK_PAGES_CODE = `
+export async function main(site, map, plan) {
+  ${ON_DOMAIN}
+  const all = map && map.ok !== false && Array.isArray(map.urls) ? map.urls : null;
+  if (!all) console.error("[threads-post] could not map " + site.domain + " (" + JSON.stringify(map?.error ?? map?.status ?? null) + "): no own pages read this run");
+  const urls = [...new Set((all ?? []).filter((u) => onDomain(u, site.domain)).map((u) => String(u).replace(/#.*$/, "")))].slice(0, ${OWN_SITE_URLS});
   return {
+    candidates: urls,
+    count: urls.length,
     systemPrompt: [
-      "You read ONE brand's own website for a social media writer. Read only pages on " + domain + " (its subdomains included). Never a page from another domain, never a figure another site states.",
-      "Answer in plain text, at most 15 short lines, each one of:",
-      "- a figure the brand itself publishes: the number, what it counts, the sample if the page states it, the page URL;",
-      "- a customer result the brand publishes: the result, the customer's name only if that page names it, the page URL;",
-      "- something the brand published in the last 14 days: the title, the date, the URL.",
-      "Never an opinion, never a guess. If the site publishes none of these, answer exactly: (none)",
+      "You pick pages of ONE brand's own website for a social media writer who quotes only what the brand itself publishes.",
+      "From the URL list, choose at most ${OWN_PAGES} pages most likely to hold: figures the brand publishes about its own results or data, customer results or case studies, and its most recent articles or launches.",
+      "Copy each URL exactly as listed. Never a URL that is not in the list.",
     ].join("\\n"),
-    message: ["BRAND: " + (b.name ?? domain) + " (" + domain + ")", "TODAY: " + plan.date, "", "Read " + domain + " today (its data or research pages, blog, case studies, results) and list what it publishes, as asked."].join("\\n"),
+    message: ["BRAND: " + site.brandName + " (" + site.domain + ")", "TODAY: " + plan.date, "", "URLS:", ...urls].join("\\n"),
+  };
+}
+`.trim();
+
+/** The picked pages: only URLs the map served on the brand's domain, at most OWN_PAGES. A failed pick reads nothing. */
+export const PLAN_OWN_PAGES_CODE = `
+export async function main(pick, offered) {
+  const listed = new Set(offered?.candidates ?? []);
+  const asked = pick && pick.ok !== false && Array.isArray(pick.json?.urls) ? pick.json.urls : null;
+  if (asked === null && (offered?.count ?? 0) > 0) console.error("[threads-post] no own pages picked (" + JSON.stringify(pick?.error ?? pick?.status ?? null) + "): no own pages read this run");
+  const urls = [...new Set((asked ?? []).map((u) => String(u)).filter((u) => listed.has(u)))].slice(0, ${OWN_PAGES});
+  console.log("[threads-post] own pages to read: " + (urls.length ? urls.join(", ") : "(none)"));
+  return { count: urls.length, urls, url1: urls[0] ?? null, url2: urls[1] ?? null, url3: urls[2] ?? null, url4: urls[3] ?? null };
+}
+`.trim();
+
+/**
+ * The reader's input: each scraped page's text (link-only and image-only lines dropped, at most OWN_PAGE_CHARS), with
+ * its URL. `pageCount: 0` skips the read (the writer gets "(none)").
+ */
+export const COMPOSE_OWN_FIGURES_CODE = `
+export async function main(site, plan, p1, p2, p3, p4) {
+  const pages = [];
+  for (const p of [p1, p2, p3, p4]) {
+    const r = p && p.ok !== false ? p.result : null;
+    const text = typeof r?.rawMarkdown === "string" ? r.rawMarkdown : "";
+    const kept = text.split("\\n").filter((l) => !/^\\s*([-*+]\\s*)?(!?\\[[^\\]]*\\]\\([^)]*\\)\\s*)+$/.test(l)).join("\\n").replace(/\\n{3,}/g, "\\n\\n").trim();
+    if (kept) pages.push("PAGE: " + (r.url ?? "?") + "\\n" + kept.slice(0, ${OWN_PAGE_CHARS}));
+    else if (p) console.error("[threads-post] an own page read nothing (" + JSON.stringify(p?.error ?? p?.status ?? null) + ")");
+  }
+  return {
+    pageCount: pages.length,
+    systemPrompt: [
+      "You read pages of ONE brand's own website for a social media writer. Use only the page text given; never another source, never a figure the pages do not state.",
+      "Answer in plain text, at most 15 short lines, each one of:",
+      "- a figure a page publishes: the number, what it counts, the sample if stated, the reliability label the page gives it if any (for example Robust, Signal, Early read), the page URL;",
+      "- a customer result a page publishes: the result, the customer's name only if that page names it, the page URL;",
+      "- an item published recently: the title, the date, the URL.",
+      "Never an opinion, never a guess. If the pages publish none of these, answer exactly: (none)",
+    ].join("\\n"),
+    message: ["BRAND: " + site.brandName + " (" + site.domain + ")", "TODAY: " + plan.date, "", ...pages].join("\\n\\n"),
   };
 }
 `.trim();
@@ -317,6 +393,27 @@ const publishReply = (n: 1 | 2 | 3, parentRef: string) => ({
   },
 });
 
+/** scraping-service reads the n-th picked own page (raw text, no enrichment); skipped past the picked list. */
+const scrapeOwn = (n: 1 | 2 | 3 | 4) => ({
+  id: `scrape-own-${n}`,
+  type: "http.call" as const,
+  config: {
+    service: "scraping",
+    method: "POST",
+    path: "/scrape",
+    body: { enrich: false, featureSlug: THREADS_POST_FEATURE_SLUG },
+    tolerateFailure: true,
+    skipIf: `(results.plan_own_pages?.count ?? 0) < ${n}`,
+  },
+  retries: 0,
+  inputMapping: {
+    "body.url": `$ref:plan-own-pages.output.url${n}`,
+    "body.brandIds": "$ref:plan-own-site.output.brandIds",
+    "body.campaignId": "$ref:flow_input.campaignId",
+    "body.workflowSlug": "$ref:flow_input.workflowSlug",
+  },
+});
+
 const TURN = "results['check-turn']";
 const MAIN = "results['classify-main']";
 const DRY = "results['plan-run']?.dryRun";
@@ -423,22 +520,82 @@ export function buildThreadsPostDag(): DAG {
         inputMapping: { "body.message": "$ref:compose-angles.output.message", "body.systemPrompt": "$ref:compose-angles.output.systemPrompt" },
       },
       {
-        id: "compose-own-figures",
+        id: "plan-own-site",
         type: "script",
-        config: { code: COMPOSE_OWN_FIGURES_CODE },
+        config: { code: PLAN_OWN_SITE_CODE },
         retries: 0,
         inputMapping: { brand: "$ref:brand-profile.output", plan: "$ref:plan-run.output" },
       },
       {
-        id: "read-own-figures",
+        id: "map-own-site",
         type: "http.call",
-        // Enrichment: a run without the brand's published figures still writes (compose-write logs it).
+        // Enrichment, like every own-site read: a failure leaves the writer "(none)" under OUR PUBLISHED FIGURES.
+        config: { service: "scraping", method: "POST", path: "/map", body: { featureSlug: THREADS_POST_FEATURE_SLUG }, tolerateFailure: true },
+        retries: 0,
+        inputMapping: {
+          "body.url": "$ref:plan-own-site.output.url",
+          "body.brandIds": "$ref:plan-own-site.output.brandIds",
+          "body.campaignId": "$ref:flow_input.campaignId",
+          "body.workflowSlug": "$ref:flow_input.workflowSlug",
+        },
+      },
+      {
+        id: "compose-pick-pages",
+        type: "script",
+        config: { code: COMPOSE_PICK_PAGES_CODE },
+        retries: 0,
+        inputMapping: { site: "$ref:plan-own-site.output", map: "$ref:map-own-site.output", plan: "$ref:plan-run.output" },
+      },
+      {
+        id: "pick-own-pages",
+        type: "http.call",
         config: {
           service: "chat",
           method: "POST",
           path: "/complete",
-          body: { provider: THREADS_ANGLES_LLM.provider, model: THREADS_ANGLES_LLM.model, webSearch: true, maxTokens: 4_000 },
+          body: { provider: THREADS_ANGLES_LLM.provider, model: THREADS_ANGLES_LLM.model, responseFormat: "json", responseSchema: OWN_PAGES_SCHEMA, maxTokens: 2_000 },
           tolerateFailure: true,
+          skipIf: "(results.compose_pick_pages?.count ?? 0) == 0",
+        },
+        retries: 0,
+        inputMapping: { "body.message": "$ref:compose-pick-pages.output.message", "body.systemPrompt": "$ref:compose-pick-pages.output.systemPrompt" },
+      },
+      {
+        id: "plan-own-pages",
+        type: "script",
+        config: { code: PLAN_OWN_PAGES_CODE },
+        retries: 0,
+        inputMapping: { pick: "$ref:pick-own-pages.output", offered: "$ref:compose-pick-pages.output" },
+      },
+      scrapeOwn(1),
+      scrapeOwn(2),
+      scrapeOwn(3),
+      scrapeOwn(4),
+      {
+        id: "compose-own-figures",
+        type: "script",
+        config: { code: COMPOSE_OWN_FIGURES_CODE },
+        retries: 0,
+        inputMapping: {
+          site: "$ref:plan-own-site.output",
+          plan: "$ref:plan-run.output",
+          p1: "$ref:scrape-own-1.output",
+          p2: "$ref:scrape-own-2.output",
+          p3: "$ref:scrape-own-3.output",
+          p4: "$ref:scrape-own-4.output",
+        },
+      },
+      {
+        id: "read-own-figures",
+        type: "http.call",
+        // No web search: the reader sees only the brand's own pages. Skipped (writer gets "(none)") with no page read.
+        config: {
+          service: "chat",
+          method: "POST",
+          path: "/complete",
+          body: { provider: THREADS_ANGLES_LLM.provider, model: THREADS_ANGLES_LLM.model, maxTokens: 4_000 },
+          tolerateFailure: true,
+          skipIf: "(results.compose_own_figures?.pageCount ?? 0) == 0",
         },
         retries: 0,
         inputMapping: { "body.message": "$ref:compose-own-figures.output.message", "body.systemPrompt": "$ref:compose-own-figures.output.systemPrompt" },
@@ -538,7 +695,16 @@ export function buildThreadsPostDag(): DAG {
       { from: "brand-user-fields", to: "gather-facts" },
       { from: "gather-facts", to: "compose-angles" },
       { from: "compose-angles", to: "read-angles" },
-      { from: "read-angles", to: "compose-own-figures" },
+      { from: "read-angles", to: "plan-own-site" },
+      { from: "plan-own-site", to: "map-own-site" },
+      { from: "map-own-site", to: "compose-pick-pages" },
+      { from: "compose-pick-pages", to: "pick-own-pages" },
+      { from: "pick-own-pages", to: "plan-own-pages" },
+      { from: "plan-own-pages", to: "scrape-own-1" },
+      { from: "scrape-own-1", to: "scrape-own-2" },
+      { from: "scrape-own-2", to: "scrape-own-3" },
+      { from: "scrape-own-3", to: "scrape-own-4" },
+      { from: "scrape-own-4", to: "compose-own-figures" },
       { from: "compose-own-figures", to: "read-own-figures" },
       { from: "read-own-figures", to: "compose-write" },
       { from: "compose-write", to: "write-thread" },
