@@ -19,7 +19,7 @@
  * `rolled_back`, which the Monitoring series serves red. Never an email.
  * Evaluated after every script run of a switched outcome (at most once a minute per process): no timer.
  */
-import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, sql, type AnyColumn } from "drizzle-orm";
 import { scriptMonitoringDays, scriptRuns, scriptSwitches, scripts, workflowRuns, workflows } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 import type { DAG } from "../dag-validator.js";
@@ -95,13 +95,24 @@ export function shouldRollBack(w: WindowStats, baseline: number = BASELINE_ERROR
 }
 
 /** The last hour of finished script runs of one outcome. */
+/**
+ * A failure billing gave (INCIDENT 2026-10-31 01:32 UTC: the writer rolled back on 3 runs whose org had reached the
+ * max budget its owner set on that sales funnel; chat-service answered 402 to the script's LLM call, exactly as it
+ * answers content-generation's own call, which then fails the same step). Not the script's error: counted apart, on
+ * both sides of every comparison (the script runs and the switched workflows' runs vs their previous versions).
+ */
+export const BILLING_REFUSED_PATTERN = "insufficient.credits|max budget";
+export const billingRefused = (col: AnyColumn) => sql`coalesce(${col} ~* ${BILLING_REFUSED_PATTERN}, false)`;
+/** The same rule on a stored reason (tests and readers). */
+export const isBillingRefused = (reason: string | null | undefined) => !!reason && new RegExp(BILLING_REFUSED_PATTERN, "i").test(reason);
+
 export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): Promise<WindowStats> {
   const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);
   const [row] = await db
     .select({
       runs: sql<number>`count(*) filter (where ${scriptRuns.status} <> 'running')::int`,
-      failed: sql<number>`count(*) filter (where ${scriptRuns.status} in ('failed', 'stopped'))::int`,
-      unmade: sql<number>`count(*) filter (where ${scriptRuns.status} = 'unmade')::int`,
+      failed: sql<number>`count(*) filter (where ${scriptRuns.status} in ('failed', 'stopped') and not ${billingRefused(scriptRuns.error)})::int`,
+      unmade: sql<number>`count(*) filter (where ${scriptRuns.status} = 'unmade' or (${scriptRuns.status} in ('failed', 'stopped') and ${billingRefused(scriptRuns.error)}))::int`,
     })
     .from(scriptRuns)
     .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
@@ -216,7 +227,7 @@ export async function workflowWindow(db: AnyPgDb, outcome: string, now = new Dat
     const [row] = await db
       .select({
         runs: sql<number>`count(*) filter (where ${workflowRuns.status} in ('completed', 'failed'))::int`,
-        failed: sql<number>`count(*) filter (where ${workflowRuns.status} = 'failed' and ${workflowRuns.failedStep} in (${sql.join(steps.map((x) => sql`${x}`), sql`, `)}))::int`,
+        failed: sql<number>`count(*) filter (where ${workflowRuns.status} = 'failed' and ${workflowRuns.failedStep} in (${sql.join(steps.map((x) => sql`${x}`), sql`, `)}) and not ${billingRefused(workflowRuns.failedReason)})::int`,
       })
       .from(workflowRuns)
       .where(and(inArray(workflowRuns.workflowId, ids), gte(workflowRuns.createdAt, from), sql`${workflowRuns.createdAt} <= ${to.toISOString()}::timestamptz`));

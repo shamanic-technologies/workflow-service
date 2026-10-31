@@ -8,7 +8,7 @@ import { createScript, type AnyPgDb } from "../../src/lib/scripts/script-catalog
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { withScriptWriter, writesWithScript, switchableToScript, recordSwitch, SCRIPT_WRITER } from "../../src/lib/scripts/script-writer-switch.js";
-import { binomialTail, checkGuard, shouldRollBack, rollBackSwitches, guardView, MIN_RUNS } from "../../src/lib/scripts/script-guard.js";
+import { binomialTail, checkGuard, shouldRollBack, rollBackSwitches, guardView, MIN_RUNS, isBillingRefused } from "../../src/lib/scripts/script-guard.js";
 import { readMonitoring } from "../../src/lib/scripts/script-monitoring.js";
 import { writesWithLegBest } from "../../src/lib/leg-best-writer.js";
 import { templateDynastyOf } from "../../src/lib/template-dynasty.js";
@@ -340,12 +340,23 @@ describe("the guard reads the switched workflows' own runs", () => {
     // A vendor outage at the SEND step (Primeforge, owner 2026-10-30): 25 failures this hour, never the switch's fault.
     await db.insert(workflowRuns).values(Array.from({ length: 25 }, () => ({ workflowId: to.id, orgId: "o", status: "failed", failedStep: "email_send", failedReason: "Primeforge 402", createdAt: now })));
     expect(await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now)).toMatchObject({ checked: true, result: null });
+    // INCIDENT 2026-10-31 01:32 UTC: the org reached its sales funnel max budget; chat-service refused the script's LLM
+    // call (402), as it refuses content-generation's own. 20 such runs, each failed at the script step, and 20 script runs
+    // failed with the same refusal: billing's answer, never the switch's fault, so nothing rolls back.
+    const refusal = 'POST workflow/orgs/scripts/run failed (502): {"error":"script message_written/dy_template_writer_full/v1 failed: llm.complete failed: chat-service POST /complete -> 402: {\\"error\\":\\"Sales funnel max budget reached\\"';
+    expect(isBillingRefused(refusal)).toBe(true);
+    expect(isBillingRefused('POST email-gateway/orgs/send failed (402): {"error":"Insufficient credits","code":"insufficient_credits"}')).toBe(true);
+    expect(isBillingRefused("POST content-generation/generate failed (413): request entity too large")).toBe(false);
+    await db.insert(workflowRuns).values(Array.from({ length: 20 }, () => ({ workflowId: to.id, orgId: "o", status: "failed", failedStep: "email_generate_script", failedReason: refusal, createdAt: now })));
+    await db.insert(scriptRuns).values(Array.from({ length: 20 }, (_, i) => ({ scriptId: script!.id, orgId: "o", runId: `b${i}`, parentRunId: "p", status: "failed", error: "llm.complete failed: chat-service POST /complete -> 402: Sales funnel max budget reached", createdAt: now })));
+    const refused = await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now);
+    expect(refused).toMatchObject({ checked: true, result: null, window: { failed: 0, unmade: 20 } });
     // The switched version: 25 more runs this hour, 20 failed AT the writer's record step (after the script).
     await db.insert(workflowRuns).values(Array.from({ length: 25 }, (_, i) => ({ workflowId: to.id, orgId: "o", status: i < 20 ? "failed" : "completed", failedStep: i < 20 ? "email_generate" : null, createdAt: now })));
     const out = await checkGuard(db, { restoreFlow: async () => {} }, "message_written", now);
     expect(out.result?.rolledBack).toEqual([{ workflowDynastySlug: "sales-cold-email-outreach-test", fromVersion: 10, toVersion: 11 }]);
     const rows = await db.select().from(workflows);
     expect(rows.find((w) => w.id === from.id)!.status).toBe("active");
-    expect(rows.find((w) => w.id === to.id)!.deprecationReason).toMatch(/the switched workflows failed 40\.0 % of their runs at the switched steps over the last 60 minutes \(20 of 50, at email_generate\/email_generate_materials\/email_generate_script\)/);
+    expect(rows.find((w) => w.id === to.id)!.deprecationReason).toMatch(/the switched workflows failed 28\.6 % of their runs at the switched steps over the last 60 minutes \(20 of 70, at email_generate\/email_generate_materials\/email_generate_script\)/);
   });
 });
