@@ -74,6 +74,7 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
       "body.context": "$ref:compose-write.output.context",
       "body.workflowSlug": "$ref:flow_input.workflowSlug",
       "body.campaignId": "$ref:flow_input.campaignId",
+      "body.dryRun": "$ref:plan-run.output.dryRun",
     });
     expect(writesWithLegBestTemplate(dag, "write-thread")).toBe(true);
     expect(dag.edges).toEqual(expect.arrayContaining([

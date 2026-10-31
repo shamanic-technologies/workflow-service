@@ -627,6 +627,8 @@ export function buildThreadsPostDag(): DAG {
           "body.brandIds": "$ref:compose-write.output.brandIds",
           "body.workflowSlug": "$ref:flow_input.workflowSlug",
           "body.campaignId": "$ref:flow_input.campaignId",
+          // A staff dry run's thread is stored as such, so features-service never counts it against the template.
+          "body.dryRun": "$ref:plan-run.output.dryRun",
         },
       },
       {
