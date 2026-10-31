@@ -4,16 +4,18 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import {
   CHECK_TURN_CODE,
   CLASSIFY_MAIN_CODE,
+  COMPOSE_OWN_FIGURES_CODE,
   COMPOSE_WRITE_CODE,
+  DRY_SUMMARY_CODE,
   FINAL_THREAD_CODE,
   MIN_GAP_MINUTES,
   PLAN_RUN_CODE,
   PUBLISH_WINDOW_UTC,
   THREADS_POST_PIPE_ID,
-  THREAD_RESPONSE_SCHEMA,
   THREAD_SHAPES,
   buildThreadsPostDag,
 } from "../../src/lib/threads-post-dag.js";
+import { GENERATE_THREAD_PATH, THREAD_WRITER_PLAN_CODE, writesWithLegBestTemplate } from "../../src/lib/whatsapp-template-writer.js";
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, any>> {
   const body = code.replace(/^export async function main/m, "async function main") + "\nreturn main;";
@@ -58,11 +60,32 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     expect(mods.some((m) => m.id === "publish_reply_3")).toBe(true);
   });
 
-  it("writes with the leg's best LLM and a strict schema, and publishes nothing through any other service", () => {
-    expect(dag.nodes.some((n) => n.id === "llm-pick")).toBe(true);
+  it("THREADS-IDEAS-AB: writes through content-generation with the pipe's best template dynasty and LLM, no prompt and no model of its own", () => {
     const writer = dag.nodes.find((n) => n.id === "write-thread")!;
-    expect(writer.inputMapping?.["body.model"]).toBe("$ref:llm-plan.output.model");
-    expect(THREAD_RESPONSE_SCHEMA.additionalProperties).toBe(false);
+    expect(writer.config).toMatchObject({ service: "content-generation", method: "POST", path: GENERATE_THREAD_PATH });
+    expect(writer.config?.body).toEqual({ featureSlug: "threads-post" });
+    expect(writer.inputMapping).toMatchObject({
+      "body.type": "$ref:template-head.output.template.type",
+      "body.model": "$ref:writer-plan.output.model",
+      "body.variables": "$ref:compose-write.output.variables",
+      "body.context": "$ref:compose-write.output.context",
+      "body.workflowSlug": "$ref:flow_input.workflowSlug",
+      "body.campaignId": "$ref:flow_input.campaignId",
+    });
+    expect(writesWithLegBestTemplate(dag, "write-thread")).toBe(true);
+    expect(dag.edges).toEqual(expect.arrayContaining([
+      { from: "compose-write", to: "writer-pick" },
+      { from: "writer-pick", to: "writer-plan" },
+      { from: "writer-plan", to: "template-head" },
+      { from: "template-head", to: "write-thread" },
+    ]));
+    expect(dag.nodes.find((n) => n.id === "writer-plan")?.config?.code).toBe(THREAD_WRITER_PLAN_CODE);
+    // Only the two READING calls go to chat-service, each with its own model; no LLM pick of a chat writer is left.
+    const chats = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
+    expect(chats.map((n) => n.id)).toEqual(["read-angles", "read-own-figures"]);
+    for (const c of chats) expect(c.config).toMatchObject({ tolerateFailure: true, body: { webSearch: true } });
+    expect(dag.nodes.some((n) => n.id === "llm-pick" || n.id === "llm-plan")).toBe(false);
+    expect(JSON.stringify(dag)).not.toMatch(/haiku|"opus"|THREAD_RESPONSE|You write ONE Threads thread/i);
     const publishers = dag.nodes.filter((n) => n.config?.method === "POST" && /posts$/.test(String(n.config?.path)));
     expect(publishers.map((n) => n.config?.service)).toEqual(["meta", "meta", "meta", "meta"]);
     for (const p of publishers) expect(p.inputMapping?.["body.idempotencyKey"]).toMatch(/^\$ref:final-thread\.output\.keys\./);
@@ -127,34 +150,92 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     await expect(checkTurn(planAt("2026-10-29T15:00:00Z"), { accounts: ACCOUNTS }, { posts: [] })).rejects.toThrow(/no publications list/);
   });
 
-  it("the writer gets the facts, the subjects already posted, today's shape and the brand's GET STARTED line", async () => {
+  it("the writer gets its variables and one context whose section headers come in the contract's order", async () => {
     const compose = loadMain(COMPOSE_WRITE_CODE);
     const turn = { account: { username: "sophie_ai" }, shape: "myth vs fact", history: ["2026-10-28: Old subject"] };
-    const out = await compose({ date: "2026-10-29", instruction: "Never call us an agency." }, turn, { brand: { name: "distribute.you", domain: "distribute.you" } }, FACTS, { content: "Angle A" });
-    expect(out.getStarted).toBe("Get started: distribute.you");
-    expect(out.message).toContain("[E1]");
-    expect(out.message).toContain("2026-10-28: Old subject");
-    expect(out.message).toContain("TODAY'S SHAPE: myth vs fact");
-    expect(out.message).toContain("Never call us an agency.");
-    expect(out.message).toContain("Angle A");
-    const noAngles = await compose({ date: "2026-10-29", instruction: null }, turn, { name: "X", domain: "https://www.x.com/" }, FACTS, { ok: false, status: 502 });
-    expect(noAngles.getStarted).toBe("Get started: x.com");
+    const facts = { ...FACTS, neverGive: ["a discount"] };
+    const out = await compose(
+      { date: "2026-10-29", brandId: "brand-1", instruction: "Never call us an agency." },
+      turn,
+      { brand: { name: "distribute.you", domain: "distribute.you" } },
+      facts,
+      { content: "Angle A" },
+      { content: "- 412 positive replies measured across 9 clients (https://distribute.you/indexes)" },
+    );
+    expect(out.variables).toEqual({ brandName: "distribute.you", getStartedLine: "Get started: distribute.you" });
+    expect(out.brandIds).toEqual(["brand-1"]);
+    const headers = [
+      "BRAND: distribute.you (distribute.you)",
+      "PUBLISHED ON: @sophie_ai",
+      "TODAY: 2026-10-29",
+      "SUGGESTED SHAPE: myth vs fact",
+      "OUR FACTS (the only source of numbers besides OUR PUBLISHED FIGURES):",
+      "NEVER STATE OR OFFER:",
+      "THE BRAND'S INSTRUCTION FOR THESE THREADS:",
+      "OUR PUBLISHED FIGURES (read today on distribute.you, each with its page):",
+      "THIS WEEK IN THE INDUSTRY (angles only):",
+      "ALREADY POSTED (never repeat a subject):",
+    ];
+    const at = headers.map((h) => out.context.indexOf(h));
+    expect(at.every((i: number) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(out.context.split("\n").slice(0, 5)).toEqual([...headers.slice(0, 4), ""]);
+    for (const piece of ["[E1]", "- a discount", "Never call us an agency.", "412 positive replies", "Angle A", "2026-10-28: Old subject"]) expect(out.context).toContain(piece);
+    // No rule and no prompt here: those are the template's.
+    expect(out).not.toHaveProperty("systemPrompt");
+    const bare = await compose({ date: "2026-10-29", brandId: "b", instruction: null }, { ...turn, history: [] }, { name: "X", domain: "https://www.x.com/" }, { exact: [], neverGive: [] }, { ok: false, status: 502 }, null);
+    expect(bare.variables.getStartedLine).toBe("Get started: x.com");
+    expect(bare.context).not.toContain("NEVER STATE OR OFFER:");
+    expect(bare.context).not.toContain("INSTRUCTION");
+    expect(bare.context).toContain("OUR FACTS (the only source of numbers besides OUR PUBLISHED FIGURES):\n(none)");
+    expect(bare.context).toContain("OUR PUBLISHED FIGURES (read today on x.com, each with its page):\n(none)");
+    expect(bare.context).toContain("THIS WEEK IN THE INDUSTRY (angles only):\n(none)");
+    expect(bare.context).toContain("ALREADY POSTED (never repeat a subject):\n(none yet)");
+  });
+
+  it("reads the brand's OWN published figures on its own domain only, tolerated, for any brand", async () => {
+    const read = dag.nodes.find((n) => n.id === "read-own-figures")!;
+    expect(read.config).toMatchObject({ service: "chat", path: "/complete", tolerateFailure: true, body: { webSearch: true } });
+    expect(dag.edges).toEqual(expect.arrayContaining([{ from: "read-angles", to: "compose-own-figures" }, { from: "compose-own-figures", to: "read-own-figures" }, { from: "read-own-figures", to: "compose-write" }]));
+    const compose = loadMain(COMPOSE_OWN_FIGURES_CODE);
+    const out = await compose({ brand: { name: "Acme", domain: "https://www.acme.io/pricing" } }, { date: "2026-10-29" });
+    expect(out.systemPrompt).toContain("Read only pages on acme.io");
+    expect(out.systemPrompt).toMatch(/Never a page from another domain/);
+    expect(out.systemPrompt).toMatch(/last 14 days/);
+    expect(out.message).toContain("BRAND: Acme (acme.io)");
+    expect(COMPOSE_OWN_FIGURES_CODE).not.toMatch(/distribute/i);
+    expect(`${out.systemPrompt}${out.message}`).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it("a writer pick with no template or no LLM writes nothing", async () => {
+    const plan = loadMain(THREAD_WRITER_PLAN_CODE);
+    await expect(plan({ legKey: "start_to_post_published", template: null, templateUnavailableReason: "none_ranked", llm: { model: "opus" } }, undefined)).rejects.toThrow(/no Threads template.*none_ranked/);
+    await expect(plan({ legKey: "start_to_post_published", template: { templateDynastySlug: "threads-research-finding" }, llm: null }, undefined)).rejects.toThrow(/no LLM/);
+    expect(await plan({ legKey: "l", template: { templateDynastySlug: "t" }, llm: { model: "m", provider: "p" } }, undefined)).toMatchObject({ templateDynastySlug: "t", model: "m" });
+  });
+
+  it("a dry run says which template dynasty and LLM wrote it", async () => {
+    const dry = dag.nodes.find((n) => n.id === "dry-summary")!;
+    expect(dry.inputMapping?.writer).toBe("$ref:writer-plan.output");
+    const summary = loadMain(DRY_SUMMARY_CODE);
+    const out = await summary({ username: "sophie_ai", subject: "s", post: "p", replies: ["r"] }, { candidates: ["@sophie_ai"], shape: "insight" }, { templateDynastySlug: "threads-research-finding", model: "m" });
+    expect(out).toMatchObject({ dryRun: true, published: false, templateDynastySlug: "threads-research-finding", model: "m", post: "p" });
   });
 
   it("publishes the model's thread as written (owner: the writer is TRUSTED): dashes and the last line only", async () => {
     const final = loadMain(FINAL_THREAD_CODE);
     const plan = { campaignId: "c", now: "2026-10-29T13:00:00.000Z" };
     const turn = { account: { id: "acc-ai-1", username: "sophie_ai" } };
-    const out = await final({ json: { subject: "s", post: "Fast replies win \u2014 at least 30% arrive within 24 hours.", replies: ["Get started: distribute.you\nAnswer the same day, 47 of them.", "Your team already does this well.\n\nGet started: distribute.you"] } }, COMPOSE, plan, turn);
+    const out = await final({ subject: "s", post: "Fast replies win \u2014 at least 30% arrive within 24 hours.", replies: ["Get started: distribute.you\nAnswer the same day, 47 of them.", "Your team already does this well.\n\nGet started: distribute.you"] }, COMPOSE, plan, turn);
     expect(out.post).toBe("Fast replies win, at least 30% arrive within 24 hours.");
     expect(out.reply1).toBe("Answer the same day, 47 of them.");
     expect(out.reply2).toBe("Your team already does this well.\n\nGet started: distribute.you");
     expect(out).toMatchObject({ accountId: "acc-ai-1", replyCount: 2, reply3: null });
     expect(new Set(Object.values(out.keys)).size).toBe(4);
-    const long = await final({ json: { subject: "s", post: "P", replies: ["1", "2", "3", "4"] } }, COMPOSE, plan, turn);
+    const long = await final({ subject: "s", post: "P", replies: ["1", "2", "3", "4"] }, COMPOSE, plan, turn);
     expect(long.replyCount).toBe(3);
     expect(long.reply3).toBe("3\n\nGet started: distribute.you");
-    await expect(final({ json: { subject: "s", post: "", replies: [] } }, COMPOSE, plan, turn)).rejects.toThrow(/no main post/);
+    await expect(final({ subject: "s", post: "", replies: [] }, COMPOSE, plan, turn)).rejects.toThrow(/no main post/);
   });
 
   it("no validation, retry or refusal sits on the writer's output", () => {

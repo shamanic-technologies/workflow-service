@@ -6,7 +6,7 @@
  *
  * Its own channel and pipe (`founder-hello|start_to_conversation`, reactive on `whatsapp_number_given`), its own
  * WhatsApp template dynasty (the text in `founder-hello-template.ts`) and the leg's best LLM, both picked per run by
- * features-service (`withLegBestWhatsappTemplate`). Nothing here names a brand: any brand whose customers onboard on it
+ * features-service (`withLegBestTemplate`). Nothing here names a brand: any brand whose customers onboard on it
  * can run it.
  *
  * One run, one straight line (every node skip-gated by the plan before it), ONE condition at the end (`check-end`)
@@ -39,7 +39,7 @@
  *    first message from the assistant line, keys per run), never to the person.
  */
 import type { DAG, DAGNode } from "./dag-validator.js";
-import { GENERATE_WHATSAPP_PATH, withLegBestWhatsappTemplate } from "./whatsapp-template-writer.js";
+import { GENERATE_WHATSAPP_PATH, withLegBestTemplate } from "./whatsapp-template-writer.js";
 import { CLAIM_PERSON_CODE } from "./claim-person.js";
 import { CRM_WHATSAPP_SEND } from "./ai-meeting-booking-dag.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
@@ -794,5 +794,5 @@ export async function main(outcome) {
 `.trim();
 
 export function buildFounderHelloDag(): DAG {
-  return withLegBestWhatsappTemplate(founderHelloDagUnvoiced(), "draft-message");
+  return withLegBestTemplate(founderHelloDagUnvoiced(), "draft-message");
 }

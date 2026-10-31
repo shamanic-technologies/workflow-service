@@ -19,17 +19,26 @@
  *    used first), so a newly connected Pro (AI) account joins the rotation with no change.
  *  - The brand's own facts (offer answers + the fields the client CONFIRMED, `GATHER_CLIENT_FACTS_CODE`: never the
  *    site's prefill), its profile, and the campaign's instruction (`/start-run`).
- *  - chat-service with live web search finds this week's fresh angles in the brand's industry (angles only, never a
- *    figure: tolerated, a run without angles still writes from the facts).
- *  - The leg's best LLM (features-service, `withLegBestLlm`; none ranked = the run fails, nothing published) writes the thread under
- *    THREADS_WRITING_RULES, a different subject from every main post of the last HISTORY_DAYS days and a different
- *    shape from today's. The model is TRUSTED (owner 2026-10-16): its thread is published as written, never validated,
- *    retried or refused; `final-thread` only rewrites dashes and places the GET STARTED line.
+ *  - chat-service with live web search, two reading calls (tolerated: a run without them still writes, logged):
+ *    this week's fresh angles in the brand's industry (angles only, never a figure), and `read-own-figures`, what
+ *    the brand ITSELF publishes on its own domain (its figures with their page, its named customer results, what it
+ *    published in the last 14 days), generic for every brand: that is where a "finding from our data" thread gets
+ *    real served figures.
+ *  - The writer holds NO prompt and NO model (THREADS-IDEAS-AB, owner 2026-10-31): content-generation-service
+ *    `POST /generate-thread` writes with the pipe's best template dynasty and best LLM, both picked per run by
+ *    features-service (`withLegBestTemplate`: writer-pick, writer-plan, template-head; a pick missing either = the
+ *    run fails, nothing published), so the dynasties of this pipe are A/B tested like every writer's. `compose-write`
+ *    hands it `variables` (`brandName`, `getStartedLine`) and one `context` whose section headers the templates read
+ *    by name (BRAND, PUBLISHED ON, TODAY, SUGGESTED SHAPE, OUR FACTS, NEVER STATE OR OFFER, THE BRAND'S INSTRUCTION,
+ *    OUR PUBLISHED FIGURES, THIS WEEK IN THE INDUSTRY, ALREADY POSTED). The writer is TRUSTED (owner 2026-10-16):
+ *    its thread is published as written, never validated, retried or refused; `final-thread` only rewrites dashes,
+ *    keeps at most 3 replies and places the GET STARTED line on the last part.
  *  - meta-service publishes the main post, then each reply under the previous one, each with an idempotency key
  *    (a retried node never publishes twice). A main post refused because the account needs reconnecting ends the
  *    run IDLE (the next run picks another account); every other refusal fails the run loud.
  *
- * Spend: the model calls by chat-service on this run, the features pick by features-service. The outcome
+ * Spend: the reading calls by chat-service and the writing by content-generation, both on this run (x-run-id), the
+ * features pick by features-service. The outcome
  * (`post_published`, one per thread) is meta-service's, the publisher's (cost-accounting doctrine).
  *
  * Shape: three decisions (`decide-turn`, `check-ship`, `check-main`) are SIBLING top-level branchones, each pinned by
@@ -37,9 +46,8 @@
  * which silently does nothing); every arm reads positive evidence with `?.`.
  */
 import type { DAG } from "./dag-validator.js";
-import { CHAT_STEP_MAX_TOKENS } from "./ai-meeting-booking-dag.js";
 import { GATHER_CLIENT_FACTS_CODE } from "./cold-whatsapp-outreach-dag.js";
-import { withLegBestLlm } from "./leg-best-writer.js";
+import { GENERATE_THREAD_PATH, withLegBestTemplate } from "./whatsapp-template-writer.js";
 
 export const THREADS_POST_FEATURE_SLUG = "threads-post";
 
@@ -53,10 +61,7 @@ export const THREADS_POST_PIPE_ID = `${THREADS_POST_FEATURE_SLUG}|${THREADS_POST
 export const THREADS_POST_DESCRIPTION =
   "Publishes one Threads thread per run, a main post and two or three replies, on the brand's Threads accounts typed Pro (AI), rotating across them and never on a personal account. Threads go out at least an hour apart during the day, each on a new subject, written only from the brand's own facts.";
 
-/** The LLM a thread is written with while features-service ranks none on the leg. */
-export const THREADS_WRITER_LLM = { provider: "anthropic", model: "opus" } as const;
-
-/** The LLM that reads the live web for fresh industry angles. */
+/** The LLM of the two READING calls (live web: industry angles, the brand's own published figures). Never the writer. */
 export const THREADS_ANGLES_LLM = { provider: "anthropic", model: "sonnet" } as const;
 
 /** UTC hours [from, to) in which a live run may publish: 09:00 to 17:00 in New York, 14:00 to 22:00 in Paris. */
@@ -68,9 +73,6 @@ export const MIN_GAP_MINUTES = 60;
 /** How far back the subjects are read (never twice). */
 export const HISTORY_DAYS = 30;
 
-/** Threads' own limit is 500; our rule is 400 per post or reply. */
-export const MAX_POST_CHARS = 400;
-
 /** meta-service's account types (`src/lib/account-types.ts` there): only this one is posted on by software. */
 export const PRO_AI_ACCOUNT_TYPE = "pro_ai";
 
@@ -79,34 +81,6 @@ export const META_PUBLICATIONS = { service: "meta", method: "GET", path: "/orgs/
 
 /** The five shapes a day's threads take, each once while one is free. */
 export const THREAD_SHAPES = ["insight", "question to the reader", "short story from our facts", "myth vs fact", "practical tip"] as const;
-
-/** The rules every thread is written under. The campaign's instruction adds the brand's own. */
-export const THREADS_WRITING_RULES = [
-  "You write ONE Threads thread for the brand below, published on the brand's own Threads account.",
-  "A thread is a main post plus 2 or 3 replies posted right under it. The main post stands alone and hooks. Each reply adds one new idea: the example, the how, the takeaway.",
-  `Each post and each reply is at most ${MAX_POST_CHARS} characters.`,
-  "English. Short plain words. One idea per sentence. Readable in one pass.",
-  "Most important first: the main insight or value opens, a qualifier closes.",
-  "Never open a sentence on a pronoun (It, They, This) whose noun is not in that same sentence.",
-  'Never a list like "No X, no Y" or "without X, without Y".',
-  'Tone: reward, value, growth, joy. Congratulate what the reader already does well and encourage them. Never the words effort, cost or risk. Never a label like "Proof:".',
-  "No em dash or en dash. No hashtags. At most one emoji in the whole thread.",
-  "A number only if it is written in OUR FACTS below, exactly as written there. Never a number from the web angles, never an invented one.",
-  "The web angles are inspiration for a timely subject only: never copy them, never name their authors.",
-  "A subject different from every main post listed under ALREADY POSTED, and the shape named under TODAY'S SHAPE.",
-  "The last line of the LAST reply is exactly the GET STARTED line given below, and it appears nowhere else.",
-].join("\n");
-
-export const THREAD_RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    subject: { type: "string" },
-    post: { type: "string" },
-    replies: { type: "array", items: { type: "string" } },
-  },
-  required: ["subject", "post", "replies"],
-  additionalProperties: false,
-} as const;
 
 /** The run's plan: dry run or live, the window, the history window, the brand and offer. */
 export const PLAN_RUN_CODE = `
@@ -193,28 +167,63 @@ export async function main(brand, facts, plan) {
 }
 `.trim();
 
-/** The writer's input: the rules, the brand, its facts, the instruction, the angles, the history, today's shape. */
+/** The brand's domain, bare (`https://www.x.com/` -> `x.com`). */
+const DOMAIN_OF_BRAND = `const b = brand?.brand ?? brand ?? {};
+  const domain = String(b.domain ?? b.url ?? "").replace(/^https?:\\/\\//, "").replace(/^www\\./, "").replace(/\\/.*$/, "");`;
+
+/**
+ * The live-web read of what the brand ITSELF publishes on its own domain (generic, any brand): its figures with their
+ * page, its customer results, what it published in the last 14 days. Read, never written: the writer quotes it.
+ */
+export const COMPOSE_OWN_FIGURES_CODE = `
+export async function main(brand, plan) {
+  ${DOMAIN_OF_BRAND}
+  if (!domain) throw new Error("compose-own-figures: the brand has no domain to read");
+  return {
+    systemPrompt: [
+      "You read ONE brand's own website for a social media writer. Read only pages on " + domain + " (its subdomains included). Never a page from another domain, never a figure another site states.",
+      "Answer in plain text, at most 15 short lines, each one of:",
+      "- a figure the brand itself publishes: the number, what it counts, the sample if the page states it, the page URL;",
+      "- a customer result the brand publishes: the result, the customer's name only if that page names it, the page URL;",
+      "- something the brand published in the last 14 days: the title, the date, the URL.",
+      "Never an opinion, never a guess. If the site publishes none of these, answer exactly: (none)",
+    ].join("\\n"),
+    message: ["BRAND: " + (b.name ?? domain) + " (" + domain + ")", "TODAY: " + plan.date, "", "Read " + domain + " today (its data or research pages, blog, case studies, results) and list what it publishes, as asked."].join("\\n"),
+  };
+}
+`.trim();
+
+/**
+ * The writer's input, for content-generation `/generate-thread`: `variables` (`brandName`, `getStartedLine`) and one
+ * `context` whose section headers, in this order, the template dynasties read by name. No rule, no prompt: those are
+ * the template's.
+ */
 export const COMPOSE_WRITE_CODE = `
-export async function main(plan, turn, brand, facts, angles) {
-  const b = brand?.brand ?? brand ?? {};
-  const domain = String(b.domain ?? b.url ?? "").replace(/^https?:\\/\\//, "").replace(/^www\\./, "").replace(/\\/.*$/, "");
+export async function main(plan, turn, brand, facts, angles, ownFigures) {
+  ${DOMAIN_OF_BRAND}
   if (!domain) throw new Error("compose-write: the brand has no domain to close the thread on");
+  const brandName = String(b.name ?? domain);
   const getStarted = "Get started: " + domain;
   const exact = (facts?.exact ?? []).map((f) => "- [" + f.id + "] " + f.label + ": " + f.value);
   const never = (facts?.neverGive ?? []).map((t) => "- " + t);
-  const web = angles && angles.ok !== false && typeof angles.content === "string" ? angles.content.slice(0, 3000) : null;
-  if (!web) console.error("[threads-post] no web angles this run (" + JSON.stringify(angles?.error ?? angles?.status ?? null) + "): writing from the facts alone");
-  const message = [
-    "BRAND: " + (b.name ?? domain) + " (" + domain + ")",
+  const read = (r) => (r && r.ok !== false && typeof r.content === "string" && r.content.trim() ? r.content.trim().slice(0, 3000) : null);
+  const web = read(angles);
+  if (!web) console.error("[threads-post] no web angles this run (" + JSON.stringify(angles?.error ?? angles?.status ?? null) + "): writing without them");
+  const own = read(ownFigures);
+  if (!own) console.error("[threads-post] no published figures read on " + domain + " this run (" + JSON.stringify(ownFigures?.error ?? ownFigures?.status ?? null) + "): writing without them");
+  const context = [
+    "BRAND: " + brandName + " (" + domain + ")",
     "PUBLISHED ON: @" + turn.account.username,
     "TODAY: " + plan.date,
-    "TODAY'S SHAPE: " + turn.shape,
-    "GET STARTED line: " + getStarted,
+    "SUGGESTED SHAPE: " + turn.shape,
     "",
-    "OUR FACTS (the only source of numbers):",
-    ...(exact.length ? exact : ["(none: write without any number)"]),
+    "OUR FACTS (the only source of numbers besides OUR PUBLISHED FIGURES):",
+    ...(exact.length ? exact : ["(none)"]),
     ...(never.length ? ["", "NEVER STATE OR OFFER:", ...never] : []),
     ...(plan.instruction ? ["", "THE BRAND'S INSTRUCTION FOR THESE THREADS:", plan.instruction] : []),
+    "",
+    "OUR PUBLISHED FIGURES (read today on " + domain + ", each with its page):",
+    own ?? "(none)",
     "",
     "THIS WEEK IN THE INDUSTRY (angles only):",
     web ?? "(none)",
@@ -222,19 +231,20 @@ export async function main(plan, turn, brand, facts, angles) {
     "ALREADY POSTED (never repeat a subject):",
     ...(turn.history.length ? turn.history : ["(none yet)"]),
   ].join("\\n");
-  return { systemPrompt: ${JSON.stringify(THREADS_WRITING_RULES)}, message, getStarted };
+  return { variables: { brandName, getStartedLine: getStarted }, context, getStarted, brandIds: [plan.brandId] };
 }
 `.trim();
 
 /**
- * The thread to publish: the model's draft AS WRITTEN (owner 2026-10-16: the writer is TRUSTED, never a validation,
+ * The thread to publish: the writer's draft AS WRITTEN (owner 2026-10-16: the writer is TRUSTED, never a validation,
  * a retry or a refusal of its output). Only the deterministic cleanups: em/en dashes rewritten (between digits a
  * hyphen, otherwise a comma), the GET STARTED line closing the last part and nowhere else, at most 3 replies (the
  * DAG chains 3). Each part gets its own idempotency key.
  */
 export const FINAL_THREAD_CODE = `
 export async function main(draft, compose, plan, turn) {
-  const j = draft?.json ?? {};
+  // content-generation /generate-thread answers at top level: { subject, post, replies }.
+  const j = draft ?? {};
   const undash = (s) => String(s ?? "").replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-").replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ").trim();
   const strip = (s) => undash(s).split("\\n").filter((l) => l.trim() !== compose.getStarted).join("\\n").trim();
   const post = strip(j.post);
@@ -275,8 +285,8 @@ export async function main(published, thread) {
 `.trim();
 
 export const DRY_SUMMARY_CODE = `
-export async function main(thread, turn) {
-  return { dryRun: true, published: false, account: "@" + thread.username, candidates: turn.candidates, shape: turn.shape, subject: thread.subject, post: thread.post, replies: thread.replies };
+export async function main(thread, turn, writer) {
+  return { dryRun: true, published: false, account: "@" + thread.username, candidates: turn.candidates, shape: turn.shape, templateDynastySlug: writer?.templateDynastySlug ?? null, model: writer?.model ?? null, subject: thread.subject, post: thread.post, replies: thread.replies };
 }
 `.trim();
 
@@ -413,6 +423,27 @@ export function buildThreadsPostDag(): DAG {
         inputMapping: { "body.message": "$ref:compose-angles.output.message", "body.systemPrompt": "$ref:compose-angles.output.systemPrompt" },
       },
       {
+        id: "compose-own-figures",
+        type: "script",
+        config: { code: COMPOSE_OWN_FIGURES_CODE },
+        retries: 0,
+        inputMapping: { brand: "$ref:brand-profile.output", plan: "$ref:plan-run.output" },
+      },
+      {
+        id: "read-own-figures",
+        type: "http.call",
+        // Enrichment: a run without the brand's published figures still writes (compose-write logs it).
+        config: {
+          service: "chat",
+          method: "POST",
+          path: "/complete",
+          body: { provider: THREADS_ANGLES_LLM.provider, model: THREADS_ANGLES_LLM.model, webSearch: true, maxTokens: 4_000 },
+          tolerateFailure: true,
+        },
+        retries: 0,
+        inputMapping: { "body.message": "$ref:compose-own-figures.output.message", "body.systemPrompt": "$ref:compose-own-figures.output.systemPrompt" },
+      },
+      {
         id: "compose-write",
         type: "script",
         config: { code: COMPOSE_WRITE_CODE },
@@ -423,25 +454,23 @@ export function buildThreadsPostDag(): DAG {
           brand: "$ref:brand-profile.output",
           facts: "$ref:gather-facts.output",
           angles: "$ref:read-angles.output",
+          ownFigures: "$ref:read-own-figures.output",
         },
       },
+      // content-generation writes with the pipe's best template dynasty (its head) and the leg's best LLM, both picked
+      // per run by features-service (withLegBestTemplate): no prompt and no model here.
       {
         id: "write-thread",
         type: "http.call",
-        config: {
-          service: "chat",
-          method: "POST",
-          path: "/complete",
-          body: {
-            provider: THREADS_WRITER_LLM.provider,
-            model: THREADS_WRITER_LLM.model,
-            responseFormat: "json",
-            responseSchema: THREAD_RESPONSE_SCHEMA,
-            maxTokens: CHAT_STEP_MAX_TOKENS,
-          },
-        },
+        config: { service: "content-generation", method: "POST", path: GENERATE_THREAD_PATH, body: { featureSlug: THREADS_POST_FEATURE_SLUG } },
         retries: 0,
-        inputMapping: { "body.message": "$ref:compose-write.output.message", "body.systemPrompt": "$ref:compose-write.output.systemPrompt" },
+        inputMapping: {
+          "body.variables": "$ref:compose-write.output.variables",
+          "body.context": "$ref:compose-write.output.context",
+          "body.brandIds": "$ref:compose-write.output.brandIds",
+          "body.workflowSlug": "$ref:flow_input.workflowSlug",
+          "body.campaignId": "$ref:flow_input.campaignId",
+        },
       },
       {
         id: "final-thread",
@@ -461,7 +490,7 @@ export function buildThreadsPostDag(): DAG {
         type: "script",
         config: { code: DRY_SUMMARY_CODE },
         retries: 0,
-        inputMapping: { thread: "$ref:final-thread.output", turn: "$ref:check-turn.output" },
+        inputMapping: { thread: "$ref:final-thread.output", turn: "$ref:check-turn.output", writer: "$ref:writer-plan.output" },
       },
       {
         id: "publish-main",
@@ -509,7 +538,9 @@ export function buildThreadsPostDag(): DAG {
       { from: "brand-user-fields", to: "gather-facts" },
       { from: "gather-facts", to: "compose-angles" },
       { from: "compose-angles", to: "read-angles" },
-      { from: "read-angles", to: "compose-write" },
+      { from: "read-angles", to: "compose-own-figures" },
+      { from: "compose-own-figures", to: "read-own-figures" },
+      { from: "read-own-figures", to: "compose-write" },
       { from: "compose-write", to: "write-thread" },
       { from: "write-thread", to: "final-thread" },
       // Converges (edge from check-turn, outside decide-turn's branches) so it is top level.
@@ -529,5 +560,5 @@ export function buildThreadsPostDag(): DAG {
     ],
     onError: "end-run-error",
   };
-  return withLegBestLlm(dag, "write-thread");
+  return withLegBestTemplate(dag, "write-thread");
 }
