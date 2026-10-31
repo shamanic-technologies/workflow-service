@@ -72,7 +72,7 @@
  * condition nested in a branch as an ordinary module, which silently does nothing); every arm reads its evidence
  * with `?.`, because on another path the node it reads never ran.
  */
-import { GENERATE_WHATSAPP_PATH, withLegBestWhatsappTemplate } from "./whatsapp-template-writer.js";
+import { GENERATE_WHATSAPP_PATH, withLegBestTemplate } from "./whatsapp-template-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { CHAT_STEP_MAX_TOKENS, CRM_WHATSAPP_SEND, GATHER_FACTS_CODE } from "./ai-meeting-booking-dag.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
@@ -928,7 +928,7 @@ const RECORDED_DELIVERY = { "body.delivery": "$ref:record-plan.output.delivery" 
 
 /** The writer: the pipe's best WhatsApp template + LLM, written by content-generation in our voice (WA-BUBBLES-1023). */
 export function buildColdWhatsappOutreachDag(): DAG {
-  return withLegBestWhatsappTemplate(coldWhatsappOutreachDagUnvoiced(), "draft-message");
+  return withLegBestTemplate(coldWhatsappOutreachDagUnvoiced(), "draft-message");
 }
 
 function coldWhatsappOutreachDagUnvoiced(): DAG {
@@ -1193,7 +1193,7 @@ function coldWhatsappOutreachDagUnvoiced(): DAG {
         },
       },
       // content-generation writes with the pipe's WhatsApp template (its head) and the leg's best LLM, both picked
-      // per run by features-service (withLegBestWhatsappTemplate), our client-comms voice added there.
+      // per run by features-service (withLegBestTemplate), our client-comms voice added there.
       {
         id: "draft-message",
         type: "http.call",

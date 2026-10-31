@@ -1,13 +1,15 @@
 /**
- * THE COLD WHATSAPP WRITER WRITES WITH ITS PIPE'S BEST WHATSAPP TEMPLATE AND BEST LLM (WA-BUBBLES-1023, owner
- * 2026-10-23: the Cold WhatsApp pipes are built like Dotterel, « No inline prompt left, no fixed model »).
+ * A CONTENT-GENERATION TEMPLATE WRITER WRITES WITH ITS PIPE'S BEST TEMPLATE DYNASTY AND BEST LLM (WA-BUBBLES-1023,
+ * owner 2026-10-23: « No inline prompt left, no fixed model »; THREADS-IDEAS-AB 2026-10-31: the Threads writer too).
  *
- * The workflow holds no prompt text: content-generation-service owns the WhatsApp template dynasties (one per pipe)
- * and writes with the head (`POST /generate-whatsapp`: renders the template from the run's variables, adds our
- * client-comms voice, calls the LLM with the decision schema, records what wrote). features-service ranks the
- * template dynasty and the LLM per leg (`GET /internal/writer-pick`), exactly as for cold email (BEST-TPL-LLM-1022).
+ * The workflow holds no prompt text: content-generation-service owns the template dynasties (one per pipe) and writes
+ * with the head (`POST /generate-whatsapp`, `POST /generate-thread`: renders the template from the run's variables,
+ * calls the LLM with the endpoint's schema, records what wrote). features-service ranks the template dynasty and the
+ * LLM per leg (`GET /internal/writer-pick`), exactly as for cold email (BEST-TPL-LLM-1022), and A/B tests the
+ * dynasties of a pipe through that pick.
  *
- * `withLegBestWhatsappTemplate(dag, nodeId)` splices into every edge running into the writer `nodeId`:
+ * `withLegBestTemplate(dag, nodeId)` splices into every edge running into the writer `nodeId` (any endpoint of
+ * TEMPLATE_WRITER_PATHS, one shared code path, never a per-pipe branch):
  *
  *   writer-pick   (features-service: the leg's best template dynasty + LLM for this workflow and campaign)
  *   writer-plan   (script: both or THROW, nothing written; a run with nobody to write to plans nothing)
@@ -21,16 +23,25 @@ import { TEMPLATE_HEAD_NODE_ID, TEMPLATE_HEAD_PATH, TEMPLATE_HEAD_TYPE_REF } fro
 import { WRITER_PICK_NODE_ID, WRITER_PICK_PATH, WRITER_PLAN_NODE_ID } from "./leg-best-writer.js";
 
 export const GENERATE_WHATSAPP_PATH = "/generate-whatsapp";
-export const WHATSAPP_WRITER_MODEL_REF = `$ref:${WRITER_PLAN_NODE_ID}.output.model`;
+export const GENERATE_THREAD_PATH = "/generate-thread";
+export const TEMPLATE_WRITER_MODEL_REF = `$ref:${WRITER_PLAN_NODE_ID}.output.model`;
+export const WHATSAPP_WRITER_MODEL_REF = TEMPLATE_WRITER_MODEL_REF;
+
+/** content-generation's template writers, each with the name its plan uses in a "nothing to write with" error. */
+export const TEMPLATE_WRITER_PATHS: Readonly<Record<string, string>> = {
+  [GENERATE_WHATSAPP_PATH]: "WhatsApp template",
+  [GENERATE_THREAD_PATH]: "Threads template",
+};
 
 /** The pick, read loudly: a template dynasty AND an LLM, or the run fails naming features-service's reason. */
-export const WHATSAPP_WRITER_PLAN_CODE = `export async function main(pick, skip) {
+export function templateWriterPlanCode(what: string): string {
+  return `export async function main(pick, skip) {
   if (skip === true) return { skipped: true, templateDynastySlug: null, model: null };
   const leg = pick && pick.legKey ? pick.legKey : "unknown leg";
   const templateDynastySlug = pick && pick.template ? pick.template.templateDynastySlug : null;
   const model = pick && pick.llm ? pick.llm.model : null;
   if (typeof templateDynastySlug !== "string" || templateDynastySlug.length === 0) {
-    throw new Error("[writer-plan] no WhatsApp template to write with on " + leg + ": " + ((pick && pick.templateUnavailableReason) || "features-service served none") + ". Nothing is written.");
+    throw new Error("[writer-plan] no ${what} to write with on " + leg + ": " + ((pick && pick.templateUnavailableReason) || "features-service served none") + ". Nothing is written.");
   }
   if (typeof model !== "string" || model.length === 0) {
     throw new Error("[writer-plan] no LLM to write with on " + leg + ": " + ((pick && pick.llmUnavailableReason) || "features-service served none") + ". Nothing is written.");
@@ -38,28 +49,36 @@ export const WHATSAPP_WRITER_PLAN_CODE = `export async function main(pick, skip)
   console.log("[writer-plan] " + leg + (pick.strategyId ? " (strategy " + pick.strategyId + ")" : "") + ": template dynasty " + templateDynastySlug + ", LLM " + model);
   return { skipped: false, templateDynastySlug, model, provider: pick.llm.provider ?? null, legKey: pick.legKey ?? null, strategyId: pick.strategyId ?? null };
 }`;
+}
 
-const isWhatsappWriter = (n: DAGNode | undefined): boolean =>
-  !!n && n.type === "http.call" && n.config?.service === "content-generation" && n.config?.path === GENERATE_WHATSAPP_PATH;
+export const WHATSAPP_WRITER_PLAN_CODE = templateWriterPlanCode(TEMPLATE_WRITER_PATHS[GENERATE_WHATSAPP_PATH]);
+export const THREAD_WRITER_PLAN_CODE = templateWriterPlanCode(TEMPLATE_WRITER_PATHS[GENERATE_THREAD_PATH]);
 
-/** True when the DAG's WhatsApp writer `nodeId` writes with its leg's best template + LLM, picked per run. */
-export function writesWithLegBestWhatsappTemplate(dag: { nodes?: DAGNode[] } | null | undefined, nodeId: string): boolean {
+const templateWriterPath = (n: DAGNode | undefined): string | null => {
+  if (!n || n.type !== "http.call" || n.config?.service !== "content-generation") return null;
+  const path = String(n.config?.path ?? "");
+  return Object.prototype.hasOwnProperty.call(TEMPLATE_WRITER_PATHS, path) ? path : null;
+};
+
+/** True when the DAG's template writer `nodeId` writes with its leg's best template + LLM, picked per run. */
+export function writesWithLegBestTemplate(dag: { nodes?: DAGNode[] } | null | undefined, nodeId: string): boolean {
   const nodes = dag?.nodes ?? [];
   const node = nodes.find((n) => n.id === nodeId);
   return (
-    isWhatsappWriter(node) &&
+    templateWriterPath(node) !== null &&
     node!.inputMapping?.["body.type"] === TEMPLATE_HEAD_TYPE_REF &&
-    node!.inputMapping?.["body.model"] === WHATSAPP_WRITER_MODEL_REF &&
+    node!.inputMapping?.["body.model"] === TEMPLATE_WRITER_MODEL_REF &&
     nodes.some((n) => n.id === WRITER_PICK_NODE_ID)
   );
 }
 
-export function withLegBestWhatsappTemplate(dag: DAG, nodeId: string): DAG {
+export function withLegBestTemplate(dag: DAG, nodeId: string): DAG {
   const node = dag.nodes.find((n) => n.id === nodeId);
-  if (!isWhatsappWriter(node)) throw new Error(`withLegBestWhatsappTemplate: "${nodeId}" is not a content-generation ${GENERATE_WHATSAPP_PATH} call`);
-  if (writesWithLegBestWhatsappTemplate(dag, nodeId)) return dag;
+  const path = templateWriterPath(node);
+  if (path === null) throw new Error(`withLegBestTemplate: "${nodeId}" is not a content-generation template writer (${Object.keys(TEMPLATE_WRITER_PATHS).join(", ")})`);
+  if (writesWithLegBestTemplate(dag, nodeId)) return dag;
   const managed = [WRITER_PICK_NODE_ID, WRITER_PLAN_NODE_ID, TEMPLATE_HEAD_NODE_ID];
-  if (dag.nodes.some((n) => managed.includes(n.id))) throw new Error("withLegBestWhatsappTemplate: the DAG already picks a writer");
+  if (dag.nodes.some((n) => managed.includes(n.id))) throw new Error("withLegBestTemplate: the DAG already picks a writer");
   const skip: Record<string, string> = node!.inputMapping?.skip ? { skip: node!.inputMapping.skip } : {};
   const pick: DAGNode = {
     id: WRITER_PICK_NODE_ID,
@@ -71,7 +90,7 @@ export function withLegBestWhatsappTemplate(dag: DAG, nodeId: string): DAG {
   const plan: DAGNode = {
     id: WRITER_PLAN_NODE_ID,
     type: "script",
-    config: { code: WHATSAPP_WRITER_PLAN_CODE },
+    config: { code: templateWriterPlanCode(TEMPLATE_WRITER_PATHS[path]) },
     retries: 0,
     inputMapping: { pick: `$ref:${WRITER_PICK_NODE_ID}.output`, ...skip },
   };
@@ -84,7 +103,7 @@ export function withLegBestWhatsappTemplate(dag: DAG, nodeId: string): DAG {
   };
   const writer: DAGNode = {
     ...node!,
-    inputMapping: { ...node!.inputMapping, "body.type": TEMPLATE_HEAD_TYPE_REF, "body.model": WHATSAPP_WRITER_MODEL_REF },
+    inputMapping: { ...node!.inputMapping, "body.type": TEMPLATE_HEAD_TYPE_REF, "body.model": TEMPLATE_WRITER_MODEL_REF },
   };
   return {
     ...dag,
@@ -97,3 +116,4 @@ export function withLegBestWhatsappTemplate(dag: DAG, nodeId: string): DAG {
     ],
   };
 }
+
