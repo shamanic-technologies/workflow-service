@@ -5,6 +5,9 @@ import {
   CHECK_TURN_CODE,
   CLASSIFY_MAIN_CODE,
   COMPOSE_OWN_FIGURES_CODE,
+  COMPOSE_PICK_PAGES_CODE,
+  PLAN_OWN_PAGES_CODE,
+  PLAN_OWN_SITE_CODE,
   COMPOSE_WRITE_CODE,
   DRY_SUMMARY_CODE,
   FINAL_THREAD_CODE,
@@ -80,10 +83,10 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
       { from: "template-head", to: "write-thread" },
     ]));
     expect(dag.nodes.find((n) => n.id === "writer-plan")?.config?.code).toBe(THREAD_WRITER_PLAN_CODE);
-    // Only the two READING calls go to chat-service, each with its own model; no LLM pick of a chat writer is left.
+    // Only the READING calls go to chat-service, each tolerated with its own model; no LLM pick of a chat writer is left.
     const chats = dag.nodes.filter((n) => n.config?.service === "chat" && n.config?.path === "/complete");
-    expect(chats.map((n) => n.id)).toEqual(["read-angles", "read-own-figures"]);
-    for (const c of chats) expect(c.config).toMatchObject({ tolerateFailure: true, body: { webSearch: true } });
+    expect(chats.map((n) => n.id)).toEqual(["read-angles", "pick-own-pages", "read-own-figures"]);
+    for (const c of chats) expect(c.config).toMatchObject({ tolerateFailure: true, body: { model: "sonnet" } });
     expect(dag.nodes.some((n) => n.id === "llm-pick" || n.id === "llm-plan")).toBe(false);
     expect(JSON.stringify(dag)).not.toMatch(/haiku|"opus"|THREAD_RESPONSE|You write ONE Threads thread/i);
     const publishers = dag.nodes.filter((n) => n.config?.method === "POST" && /posts$/.test(String(n.config?.path)));
@@ -193,18 +196,63 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     expect(bare.context).toContain("ALREADY POSTED (never repeat a subject):\n(none yet)");
   });
 
-  it("reads the brand's OWN published figures on its own domain only, tolerated, for any brand", async () => {
-    const read = dag.nodes.find((n) => n.id === "read-own-figures")!;
-    expect(read.config).toMatchObject({ service: "chat", path: "/complete", tolerateFailure: true, body: { webSearch: true } });
-    expect(dag.edges).toEqual(expect.arrayContaining([{ from: "read-angles", to: "compose-own-figures" }, { from: "compose-own-figures", to: "read-own-figures" }, { from: "read-own-figures", to: "compose-write" }]));
-    const compose = loadMain(COMPOSE_OWN_FIGURES_CODE);
-    const out = await compose({ brand: { name: "Acme", domain: "https://www.acme.io/pricing" } }, { date: "2026-10-29" });
-    expect(out.systemPrompt).toContain("Read only pages on acme.io");
-    expect(out.systemPrompt).toMatch(/Never a page from another domain/);
-    expect(out.systemPrompt).toMatch(/last 14 days/);
-    expect(out.message).toContain("BRAND: Acme (acme.io)");
-    expect(COMPOSE_OWN_FIGURES_CODE).not.toMatch(/distribute/i);
-    expect(`${out.systemPrompt}${out.message}`).not.toMatch(/[\u2013\u2014]/);
+  it("reads the brand's OWN pages through scraping-service, tolerated end to end, never web search", () => {
+    const chain = ["read-angles", "plan-own-site", "map-own-site", "compose-pick-pages", "pick-own-pages", "plan-own-pages", "scrape-own-1", "scrape-own-2", "scrape-own-3", "scrape-own-4", "compose-own-figures", "read-own-figures", "compose-write"];
+    for (let i = 1; i < chain.length; i++) expect(dag.edges).toContainEqual({ from: chain[i - 1], to: chain[i] });
+    const byId = new Map(dag.nodes.map((n) => [n.id, n]));
+    expect(byId.get("map-own-site")?.config).toMatchObject({ service: "scraping", method: "POST", path: "/map", tolerateFailure: true });
+    for (const n of [1, 2, 3, 4]) {
+      const scrape = byId.get(`scrape-own-${n}`)!;
+      expect(scrape.config).toMatchObject({ service: "scraping", method: "POST", path: "/scrape", tolerateFailure: true, body: { enrich: false, featureSlug: "threads-post" }, skipIf: `(results.plan_own_pages?.count ?? 0) < ${n}` });
+      expect(scrape.inputMapping?.["body.url"]).toBe(`$ref:plan-own-pages.output.url${n}`);
+    }
+    expect(byId.get("pick-own-pages")?.config).toMatchObject({ tolerateFailure: true, body: { responseFormat: "json" } });
+    const read = byId.get("read-own-figures")!;
+    expect(read.config).toMatchObject({ service: "chat", path: "/complete", tolerateFailure: true, skipIf: "(results.compose_own_figures?.pageCount ?? 0) == 0" });
+    expect((read.config?.body as Record<string, unknown>).webSearch).toBeUndefined();
+    expect(byId.get("read-angles")?.config).toMatchObject({ body: { webSearch: true } });
+    for (const code of [PLAN_OWN_SITE_CODE, COMPOSE_PICK_PAGES_CODE, PLAN_OWN_PAGES_CODE, COMPOSE_OWN_FIGURES_CODE]) {
+      expect(code).not.toMatch(/distribute|indexes|blog|case-stud/i);
+      expect(code).not.toMatch(/[–—]/);
+    }
+  });
+
+  // A probe of the whole own-site read on canned producer answers: no network.
+  it("probe: map -> pick -> scrape -> read, only pages on the brand's domain, a failure anywhere reads nothing", async () => {
+    const plan = { date: "2026-10-31", brandId: "brand-1" };
+    const site = await loadMain(PLAN_OWN_SITE_CODE)({ brand: { name: "Acme", domain: "https://www.acme.io/pricing" } }, plan);
+    expect(site).toEqual({ domain: "acme.io", brandName: "Acme", url: "https://acme.io", brandIds: ["brand-1"] });
+
+    const map = { success: true, urls: ["https://acme.io/", "https://www.acme.io/results#top", "https://blog.acme.io/launch", "https://other.com/acme-review", ...Array.from({ length: 400 }, (_, i) => `https://acme.io/p/${i}`)] };
+    const offered = await loadMain(COMPOSE_PICK_PAGES_CODE)(site, map, plan);
+    expect(offered.candidates).toContain("https://www.acme.io/results");
+    expect(offered.candidates).toContain("https://blog.acme.io/launch");
+    expect(offered.candidates).not.toContain("https://other.com/acme-review");
+    expect(offered.count).toBe(300);
+    expect(offered.message).toContain("BRAND: Acme (acme.io)");
+
+    const pick = { content: "", json: { urls: ["https://www.acme.io/results", "https://other.com/acme-review", "https://blog.acme.io/launch", "https://www.acme.io/results"] } };
+    const pages = await loadMain(PLAN_OWN_PAGES_CODE)(pick, offered);
+    expect(pages).toMatchObject({ count: 2, url1: "https://www.acme.io/results", url2: "https://blog.acme.io/launch", url3: null, url4: null });
+
+    const scraped = (url: string, md: string) => ({ cached: false, result: { url, rawMarkdown: md } });
+    const p1 = scraped("https://www.acme.io/results", "[Home](/)\n- [Pricing](/pricing)\n![logo](/l.png)\n\n# Results\n\n$58.69 per positive reply, Robust\n" + "x".repeat(20_000));
+    const p2 = { ok: false, status: 502, error: "scrape failed" };
+    const composed = await loadMain(COMPOSE_OWN_FIGURES_CODE)(site, plan, p1, p2, null, null);
+    expect(composed.pageCount).toBe(1);
+    expect(composed.message).toContain("PAGE: https://www.acme.io/results");
+    expect(composed.message).toContain("$58.69 per positive reply, Robust");
+    expect(composed.message).not.toContain("[Pricing]");
+    expect(composed.message.length).toBeLessThan(12_000 + 200);
+    expect(composed.systemPrompt).toMatch(/reliability label/);
+
+    // Any failure upstream = nothing read, the writer gets "(none)".
+    const unmapped = await loadMain(COMPOSE_PICK_PAGES_CODE)(site, { ok: false, status: 502, error: "x" }, plan);
+    expect(unmapped.count).toBe(0);
+    expect(await loadMain(PLAN_OWN_PAGES_CODE)({ ok: false, status: 502 }, offered)).toMatchObject({ count: 0, url1: null });
+    expect((await loadMain(COMPOSE_OWN_FIGURES_CODE)(site, plan, null, null, null, null)).pageCount).toBe(0);
+    const write = await loadMain(COMPOSE_WRITE_CODE)({ date: "2026-10-31", brandId: "brand-1", instruction: null }, { account: { username: "a" }, shape: "insight", history: [] }, { name: "Acme", domain: "acme.io" }, { exact: [], neverGive: [] }, null, null);
+    expect(write.context).toContain("OUR PUBLISHED FIGURES (read today on acme.io, each with its page):\n(none)");
   });
 
   it("a writer pick with no template or no LLM writes nothing", async () => {
