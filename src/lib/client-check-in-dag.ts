@@ -80,7 +80,9 @@ export async function main(claim, detail, trigger) {
       console.log("[${o.tag}] lead-service cannot say yet whether they are ${o.noun}: asked again later");
       return { ok: false, why: "relationship pending", endKind: "pending" };
     }
-    if (t && (email || digits || leadId) && claim?.reason === "${QUEUE_EXCLUDED_REASON}") {
+    // lead-service naming WHY it holds them back (heldBack) wins over the bare "${QUEUE_EXCLUDED_REASON}" (WF-SILENT-FOLLOWUP-1101).
+    const heldTheirs = Array.isArray(claim?.heldBack) && claim.heldBack.some(isTheirs);
+    if (t && (email || digits || leadId) && claim?.reason === "${QUEUE_EXCLUDED_REASON}" && !heldTheirs) {
       console.log("[${o.tag}] lead-service keeps them off the queue (${QUEUE_EXCLUDED_REASON}): nothing written");
       return { ok: false, why: "kept off the queue", endKind: "not_admitted", notAdmitted: { reason: "${QUEUE_EXCLUDED_REASON}" } };
     }
