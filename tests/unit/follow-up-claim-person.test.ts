@@ -70,3 +70,74 @@ describe("the claim states the occurrence's person", () => {
     expect(flow).toContain("claim_person");
   });
 });
+
+/**
+ * WF-SILENT-FOLLOWUP-1101: the Copilot named a client who had just paid; lead-service's claim held them back (a payment
+ * ends the follow-ups) and the run read that as "nobody due": ended idle, no email, while the Copilot told the client
+ * it was sent. A held-back person now ends the run with the reason stated (personNotAdmitted), never idle.
+ */
+describe("a due person lead-service holds back ends the run with the reason, never idle", () => {
+  const held = {
+    leadCampaignId: "row-1",
+    leadId: "lead-1",
+    campaignId: "c-1",
+    email: "info@martiandbb.com",
+    phone: null,
+    reason: "booked_outcome",
+    outcome: "sale",
+    message: "This person already paid, and a payment ends the follow-ups on this campaign, so no message was sent.",
+  };
+  const claim = { found: false, reason: "nothing_due", heldBack: [held] };
+
+  it("a run naming nobody (a campaign naming its people, no occurrence) states the held person's reason", async () => {
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
+    expect(await resolve(claim, null, null)).toMatchObject({
+      ok: false,
+      endKind: "held_back",
+      notAdmitted: { reason: "booked_outcome" },
+      heldMessage: held.message,
+    });
+  });
+
+  it("an occurrence reads only ITS person's entry: by lead id, by email; someone else's hold is not theirs", async () => {
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
+    expect(await resolve(claim, null, { eventId: "e", leadId: "lead-1" })).toMatchObject({ endKind: "held_back" });
+    expect(await resolve(claim, null, { eventId: "e", person: { email: "INFO@martiandbb.com" } })).toMatchObject({ endKind: "held_back" });
+    expect(await resolve(claim, null, { eventId: "e", person: { email: "other@x.com" } })).toMatchObject({ endKind: "unclaimed" });
+  });
+
+  it("no heldBack (lead-service before it, or nobody due): today's endings, byte for byte", async () => {
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
+    expect(await resolve({ found: false, reason: "nothing_due" }, null, null)).toEqual({ ok: false, why: "nobody claimed", endKind: "idle" });
+    expect(await resolve({ found: false, reason: "nothing_due", heldBack: [] }, null, { eventId: "e", leadId: "l" })).toMatchObject({ endKind: "unclaimed" });
+  });
+
+  it("the client check-in and leads-only resolvers fall through to it too", async () => {
+    const { RESOLVE_CLIENT_CODE } = await import("../../src/lib/client-check-in-dag.js");
+    const { RESOLVE_LEAD_CODE } = await import("../../src/lib/lead-follow-up-leads-dag.js");
+    for (const code of [RESOLVE_CLIENT_CODE, RESOLVE_LEAD_CODE]) {
+      expect(await loadMain(code)(claim, null, { eventId: "e", leadId: "lead-1" })).toMatchObject({
+        endKind: "held_back",
+        notAdmitted: { reason: "booked_outcome" },
+      });
+    }
+  });
+
+  for (const [name, dag] of [
+    ["lead follow-up", buildFollowUpReactiveDag({ readFigures: true })],
+    ["leads-only", buildLeadFollowUpLeadsOnlyDag({ readFigures: false })],
+    ["client check-in", buildClientCheckInDag()],
+  ] as const) {
+    it(`${name}: held_back routes to its own end-run stating personNotAdmitted`, () => {
+      expect(dag.edges).toContainEqual({ from: "check-end", to: "end-run-held-back", condition: "results['outcome']?.endKind == 'held_back'" });
+      const end = dag.nodes.find((n) => n.id === "end-run-held-back");
+      expect(end?.inputMapping).toMatchObject({ "body.personNotAdmitted": "$ref:resolve-person.output.notAdmitted" });
+      expect(JSON.stringify(end?.config)).toContain('"success":true');
+      expect(validateDAG(dag).errors).toEqual([]);
+      expect(() => dagToOpenFlow(dag, "x")).not.toThrow();
+    });
+  }
+});

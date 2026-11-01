@@ -223,6 +223,30 @@ export async function main(claim, detail, trigger) {
       console.log("[follow-up] the occurrence names nobody (no email, phone or lead): nothing claimed, nothing written");
       return { ok: false, why: "occurrence names nobody", endKind: "names_nobody", notAdmitted: { reason: "occurrence_names_nobody" } };
     }
+    // The person IS due here but lead-service holds them back (they paid, a journalist, opted out: heldBack, final):
+    // said, never read as "nobody due" (WF-SILENT-FOLLOWUP-1101: a paid client named by the Copilot ended idle, no
+    // email, the Copilot told them it was sent). An occurrence naming someone reads only THEIR entry; a run naming
+    // nobody (a campaign naming its people, dispatched with no occurrence) reads the first one.
+    const heldBack = Array.isArray(claim?.heldBack) ? claim.heldBack.filter((h) => h && typeof h.reason === "string" && h.reason.trim()) : [];
+    if (heldBack.length > 0) {
+      const t = trigger && typeof trigger === "object" ? trigger : null;
+      const fold = (s) => (typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null);
+      const email = fold(t?.person?.email);
+      const digits = phoneDigits(t?.person?.phone ?? null);
+      const leadId = t && typeof t.leadId === "string" && t.leadId.trim() ? t.leadId.trim() : null;
+      const namesSomeone = !!(email || digits || leadId);
+      const held = namesSomeone
+        ? heldBack.find((h) =>
+            (email !== null && fold(h.email) === email) ||
+            (digits !== "" && phoneDigits(h.phone ?? null) === digits) ||
+            (leadId !== null && h.leadId === leadId))
+        : heldBack[0];
+      if (held) {
+        console.log("[follow-up] lead-service holds " + String(held.email ?? held.phone ?? held.leadId) + " back (" + held.reason +
+          "): nothing written. " + String(held.message ?? ""));
+        return { ok: false, why: "held back", endKind: "held_back", notAdmitted: { reason: held.reason.trim().slice(0, 200) }, heldMessage: held.message ?? null };
+      }
+    }
     // A run with no occurrence that finds nobody due: nothing to do. One carrying an occurrence: it must claim someone.
     return { ok: false, why: "nobody claimed", endKind: carries ? "unclaimed" : "idle" };
   }
@@ -1236,6 +1260,8 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
       endRun("end-run-other-person", { success: false, stopCampaign: false }),
       // An occurrence naming nobody: final (campaign-service settles it skipped and never redelivers it).
       endRun("end-run-names-nobody", { success: true, stopCampaign: false }, { "body.personNotAdmitted": "$ref:resolve-person.output.notAdmitted" }),
+      // The person is due but lead-service holds them back (they paid, opted out...): final, the reason stated.
+      endRun("end-run-held-back", { success: true, stopCampaign: false }, { "body.personNotAdmitted": "$ref:resolve-person.output.notAdmitted" }),
       ...(a?.claimEnds ?? []).map((e) => endRun(`end-run-${e.kind.replace(/_/g, "-")}`, e.body, e.inputMapping)),
       endRun("end-run-error", { success: false, stopCampaign: false }),
     ],
@@ -1254,6 +1280,7 @@ export function buildFollowUpReactiveDag(opts: { readFigures: boolean; audience?
       { from: "check-end", to: "end-run-unclaimed", condition: "results['outcome']?.endKind == 'unclaimed'" },
       { from: "check-end", to: "end-run-other-person", condition: "results['outcome']?.endKind == 'other_person'" },
       { from: "check-end", to: "end-run-names-nobody", condition: "results['outcome']?.endKind == 'names_nobody'" },
+      { from: "check-end", to: "end-run-held-back", condition: "results['outcome']?.endKind == 'held_back'" },
       ...(a?.claimEnds ?? []).map((e) => ({
         from: "check-end",
         to: `end-run-${e.kind.replace(/_/g, "-")}`,

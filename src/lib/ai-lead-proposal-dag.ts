@@ -124,6 +124,12 @@ export async function main(plan, claim, trigger, orgId, brandId) {
     // The door made them due right before this dispatch, so an EMPTY queue means lead-service keeps them off it
     // for good (a booked meeting or a sale on record: a customer; a thread handed to a person...). Final, named.
     if (claim?.reason === "${QUEUE_EXCLUDED_REASON}") {
+      // lead-service names WHY it holds them back when it does (heldBack, WF-SILENT-FOLLOWUP-1101): that reason wins.
+      const held = (Array.isArray(claim?.heldBack) ? claim.heldBack : []).find((h) => isTriggerPerson(h) && filled(h?.reason));
+      if (held) {
+        console.log("[ai-lead-proposal] lead-service holds " + String(triggerEmail ?? triggerPhone ?? triggerLeadId) + " back (" + held.reason + "): nothing asked. " + String(held.message ?? ""));
+        return { ...base, outcome: "not_admitted", notAdmitted: { reason: String(held.reason).trim().slice(0, 200) } };
+      }
       console.log("[ai-lead-proposal] lead-service keeps " + String(triggerEmail ?? triggerPhone ?? triggerLeadId) + " off the queue (${QUEUE_EXCLUDED_REASON}): nothing asked");
       return { ...base, outcome: "not_admitted", notAdmitted: { reason: "${QUEUE_EXCLUDED_REASON}" } };
     }

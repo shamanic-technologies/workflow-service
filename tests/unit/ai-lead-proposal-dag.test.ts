@@ -169,6 +169,16 @@ describe("AI Lead Proposal DAG", () => {
     expect(byId.get("end-run-person-not-admitted")?.config?.body).toEqual({ success: true, stopCampaign: false });
   });
 
+  it("lead-service naming WHY it holds the person back (heldBack) states that reason, never the bare nothing_due (WF-SILENT-FOLLOWUP-1101)", async () => {
+    const heldBack = [{ leadCampaignId: "r", leadId: "lead-1", campaignId: "c", email: "jo@example.com", phone: null, reason: "booked_outcome", outcome: "sale", message: "This person already paid." }];
+    const empty = { found: false, reason: "nothing_due", heldBack, relationships: { policy: "pure_prospect", pending: [], refused: [] } };
+    const claimed = await loadMain(CLAIMED_CODE)({ skip: false }, empty, trigger(), ORG, BRAND);
+    expect(claimed).toMatchObject({ outcome: "not_admitted", notAdmitted: { reason: "booked_outcome" }, request: null });
+    // Someone else's hold is not theirs: the bare reason, as before.
+    const other = { ...empty, heldBack: [{ ...heldBack[0], leadId: "lead-9", email: "x@y.com" }] };
+    expect(await loadMain(CLAIMED_CODE)({ skip: false }, other, trigger(), ORG, BRAND)).toMatchObject({ notAdmitted: { reason: "nothing_due" } });
+  });
+
   it("a row another worker holds (all_claimed, e.g. a failed run's lease) still fails, so the redelivery claims them later", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const held = { found: false, reason: "all_claimed", relationships: { policy: "pure_prospect", pending: [], refused: [] } };
