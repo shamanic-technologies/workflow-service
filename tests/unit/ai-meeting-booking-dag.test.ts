@@ -41,6 +41,7 @@ import {
   UNSUPPORTED_CHANNEL_REASON,
   NAME_THREAD_REFUSAL_CODE,
   needsSettledThreadRefusal,
+  needsGeneralInterestAnswer,
   FINALIZE_REPLY_CODE,
   CRM_WHATSAPP_SEND,
   PERSON_TIMELINE_READ,
@@ -994,6 +995,8 @@ describe("handing an unanswerable question to a human", () => {
       "body.campaign_id": EMAIL_THREAD_CAMPAIGN_REF,
       "body.email": "$ref:claimed.output.followup.email",
       "body.question": "$ref:ground-draft.output.json.question",
+      "body.handoff_text": "$ref:ground-draft.output.json.handoffText",
+      "body.booking_url": "$ref:compose-prompt.output.handoffBookingUrl",
       skip: "$ref:thread.output.skipEmail",
     });
 
@@ -2511,5 +2514,90 @@ describe("a person this responder cannot answer is settled, never a crash (MEETI
     const noPerson = JSON.parse(JSON.stringify(dag)) as DAG;
     delete (noPerson.nodes.find((n) => n.id === "claim-own")!.inputMapping as Record<string, string>)["body.person"];
     expect(needsSettledThreadRefusal(noPerson)).toBe(true);
+  });
+});
+
+describe("a prospect who asks to know more is answered, never escalated (MB-ANSWER-NOT-ESCALATE-1102)", () => {
+  const dag = buildAiMeetingBookingDag(DAG_OPTS);
+  const offer = { offerId: "o1", name: "Fixed-Price Software Build", bookingUrl: "https://calendly.com/x/intro" };
+  const brand = { brand: { name: "Beyond Logic" } };
+  const conversation = {
+    conversation: {
+      messages: [
+        { direction: "outbound", channel: "email", text: "Hi Edmund,\n\nBeyond Logic builds custom internal tools in thirty days.\n\nWe recently built RosterABA.\n\n--\nKevin Lourd\nDistribute.you | Marketing Agency" },
+        { direction: "inbound", channel: "email", text: "I would like to learn more about your company and what you can do for us." },
+      ],
+    },
+  };
+
+  it("the identity read never calls a body speaking for the client under an agency signature unclear", async () => {
+    const message = (await loadMain(COMPOSE_QUESTIONS_PROMPT_CODE)(conversation, offer, brand)).message as string;
+    expect(message).toContain("signed by an agency or another company is external");
+    expect(message).toContain("The body and the signature of one message never contradict each other");
+    expect(message).not.toContain("or contradict each other.");
+  });
+
+  it("the writer answers a request to know more from the facts and proposes the meeting; only a specific question escalates", async () => {
+    const facts = { questions: [{ key: "q1", question: "What can you do for us?" }], exact: [{ id: "E1", source: "offer-user-fields", label: "services", value: "Fixed-price build in 30 days" }], neverGive: [], withheld: [] };
+    const booking = { timezone: "America/New_York", degraded: false, bookingUrl: offer.bookingUrl, slots: ["2026-11-03T11:15:00-05:00"] };
+    const out = await composeReply({ followup: { followupCount: 0 } }, { leadDetail: { lead: { firstName: "Edmund" } } }, conversation, null, booking, offer, brand, "2026-11-02", facts, { stance: "external", evidence: "Distribute.you | Marketing Agency" });
+    const message = out.message as string;
+    const system = out.systemPrompt as string;
+    expect(message).toContain("WHEN THEY ASK TO KNOW MORE");
+    expect(message).toContain("A request to know more is never a reason to escalate.");
+    expect(message).toContain("If they ask a SPECIFIC question whose answer is a fact that is not there");
+    expect(system).toContain("When they ask to know more or what you can do for them, you answer in a line or two from the facts in front of you and propose the meeting.");
+    expect(system).not.toContain("When you cannot answer from what is in front of you, you say so and hand over");
+    expect(REPLY_RESPONSE_SCHEMA.properties.decision.description).toContain("A request to learn more or to hear what we can do for them is never one");
+  });
+
+  const repBrand = { brand: { name: "Beyond Logic", salesRepFirstName: "Chaim", salesRepEmail: "chaim@beyondlogic.tech" } };
+  const handoffFacts = { questions: [{ key: "q1", question: "What is the price?" }], exact: [], neverGive: [], withheld: [] };
+  const handoffBooking = { timezone: "America/New_York", degraded: false, bookingUrl: offer.bookingUrl, slots: ["2026-11-03T11:15:00-05:00"] };
+  const composeHandoff = (b: unknown, identity: unknown, conv: unknown = conversation) =>
+    composeReply({ followup: { followupCount: 0 } }, { leadDetail: { lead: { firstName: "Edmund" } } }, conv, null, handoffBooking, offer, b, "2026-11-02", handoffFacts, identity);
+
+  it("the same writer call writes the hand-over email on an email thread whose brand names a rep, with the booking link", async () => {
+    const out = await composeHandoff(repBrand, { stance: "external", evidence: "x" });
+    const message = out.message as string;
+    expect(message).toContain("THE HAND-OVER EMAIL");
+    expect(message).toContain("Chaim (Beyond Logic) copied on it");
+    expect(message).toContain("give the link to pick a time: https://calendly.com/x/intro");
+    expect(message).toContain("Never restate what they asked.");
+    expect(out.handoffBookingUrl).toBe("https://calendly.com/x/intro");
+    expect(REPLY_RESPONSE_SCHEMA.properties.handoffText.type).toBe("string");
+  });
+
+  it("a blind thread's hand-over names the rep by first name only and carries no link", async () => {
+    const out = await composeHandoff(repBrand, { stance: "blind", evidence: "" });
+    const message = out.message as string;
+    expect(message).toContain("name Chaim by first name only");
+    expect(message).not.toContain("give the link to pick a time");
+    expect(out.handoffBookingUrl).toBeNull();
+  });
+
+  it("no hand-over email without a named rep, nor on a chat thread (the rep is alerted on WhatsApp there)", async () => {
+    expect((await composeHandoff(brand, { stance: "external", evidence: "x" })).message).not.toContain("THE HAND-OVER EMAIL");
+    const onWhatsapp = { ...conversation, replyChannel: "whatsapp" };
+    expect((await composeHandoff(repBrand, { stance: "external", evidence: "x" }, onWhatsapp)).message).not.toContain("THE HAND-OVER EMAIL");
+  });
+
+  it("ground-draft keeps the writer's hand-over on every escalation, its own included, and drops an empty one", async () => {
+    const ground = loadMain(GROUND_DRAFT_CODE);
+    const l = vi.spyOn(console, "error").mockImplementation(() => {});
+    const forced = await ground({ json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>x</p>", answers: [], handoffText: "Hi Edmund,\n\nChaim is copied.\n\nBest," } }, { questions: [], exact: [] }, { stance: "unclear" }, offer, repBrand, "none", { asked: false });
+    expect(forced.json).toMatchObject({ decision: "escalate", handoffText: "Hi Edmund,\n\nChaim is copied.\n\nBest," });
+    const empty = await ground({ json: { decision: "escalate", question: "q", reason: "r", answers: [], handoffText: "  " } }, { questions: [], exact: [] }, { stance: "external" }, offer, repBrand, "none", { asked: false });
+    expect("handoffText" in (empty.json as Record<string, unknown>)).toBe(false);
+    l.mockRestore();
+  });
+
+  it("the seed upgrades a stored DAG still carrying the old prompts, and leaves the current one alone", () => {
+    expect(needsGeneralInterestAnswer(dag)).toBe(false);
+    const old = JSON.parse(JSON.stringify(dag)) as DAG;
+    const node = old.nodes.find((n) => n.id === "compose-prompt")!;
+    node.config = { ...node.config, code: String(node.config?.code).replace("WHEN THEY ASK TO KNOW MORE", "X") };
+    expect(needsGeneralInterestAnswer(old)).toBe(true);
+    expect(needsGeneralInterestAnswer({ nodes: [] })).toBe(false);
   });
 });
