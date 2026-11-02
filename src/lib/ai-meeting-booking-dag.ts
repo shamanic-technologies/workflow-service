@@ -1658,13 +1658,15 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   // instantly-service sends it as written, the rep in Cc.
   const rep = brand?.brand ?? {};
   const repName = typeof rep.salesRepFirstName === "string" && rep.salesRepFirstName.trim() ? rep.salesRepFirstName.trim() : null;
-  const writesHandoff = replyChannel === "email" && !!repName && !!rep.salesRepEmail;
+  const writesHandoff = replyChannel === "email" && !!rep.salesRepEmail;
+  // No first name stated: the copied person is named as the team, never an invented name.
+  const copied = repName ?? (stance === "blind" ? "the team I work with" : "the " + client + " team");
   const handoffBookingUrl = stance === "blind" ? null : (offer?.bookingUrl ?? null);
   const handoffSection = !writesHandoff ? [] : [
     "THE HAND-OVER EMAIL",
-    "On every reply, an answer included, also return handoffText: the email we send them if this thread is handed to a person, now or after your draft is checked. It goes in their thread with " + repName + (stance === "blind" ? "" : " (" + client + ")") + " copied on it.",
-    "Plain text, two or three short lines with a blank line between them: greet them by first name, say " + repName + " is copied and will answer them here" + (handoffBookingUrl ? ", give the link to pick a time: " + handoffBookingUrl : "") + ", then end on \\"Best,\\" alone. Never restate what they asked. No name and no signature after it: the mailbox appends its own. Never an em dash or an en dash.",
-    ...(stance === "blind" ? ["This thread never named our client: name " + repName + " by first name only, never a company, a website or a link."] : []),
+    "On every reply, an answer included, also return handoffText: the email we send them if this thread is handed to a person, now or after your draft is checked. It goes in their thread with " + copied + (repName && stance !== "blind" ? " (" + client + ")" : "") + " copied on it." + (repName ? "" : " We know no name for that person: call them " + copied + ", never invent a name."),
+    "Plain text, two or three short lines with a blank line between them: greet them by first name, say " + copied + " is copied and will answer them here" + (handoffBookingUrl ? ", give the link to pick a time: " + handoffBookingUrl : "") + ", then end on \\"Best,\\" alone. Never restate what they asked. No name and no signature after it: the mailbox appends its own. Never an em dash or an en dash.",
+    ...(stance === "blind" ? ["This thread never named our client: " + (repName ? "name " + repName + " by first name only" : "say " + copied) + ", never a company, a website or a link."] : []),
     "",
   ];
 

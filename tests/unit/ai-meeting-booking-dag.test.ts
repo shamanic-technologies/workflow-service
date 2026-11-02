@@ -2576,7 +2576,17 @@ describe("a prospect who asks to know more is answered, never escalated (MB-ANSW
     expect(out.handoffBookingUrl).toBeNull();
   });
 
-  it("no hand-over email without a named rep, nor on a chat thread (the rep is alerted on WhatsApp there)", async () => {
+  it("a rep stated by email only is copied as the brand's team, never an invented name", async () => {
+    const teamOnly = { brand: { name: "Beyond Logic", salesRepEmail: "team@beyondlogic.tech" } };
+    const message = (await composeHandoff(teamOnly, { stance: "external", evidence: "x" })).message as string;
+    expect(message).toContain("with the Beyond Logic team copied on it");
+    expect(message).toContain("never invent a name");
+    const blind = (await composeHandoff(teamOnly, { stance: "blind", evidence: "" })).message as string;
+    expect(blind).toContain("the team I work with");
+    expect(blind).not.toContain("the Beyond Logic team");
+  });
+
+  it("no hand-over email without a rep email, nor on a chat thread (the rep is alerted on WhatsApp there)", async () => {
     expect((await composeHandoff(brand, { stance: "external", evidence: "x" })).message).not.toContain("THE HAND-OVER EMAIL");
     const onWhatsapp = { ...conversation, replyChannel: "whatsapp" };
     expect((await composeHandoff(repBrand, { stance: "external", evidence: "x" }, onWhatsapp)).message).not.toContain("THE HAND-OVER EMAIL");
