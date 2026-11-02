@@ -50,6 +50,7 @@ import {
   needsEscalationHandOver,
   needsSettledThreadRefusal,
   needsThreadCampaignReply,
+  needsGeneralInterestAnswer,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 import { needsMessageWrittenDeclaration } from "../dist/lib/message-written-outcome.js";
@@ -424,7 +425,8 @@ async function main() {
         needsMessageWrittenDeclaration(w.dag) ||
         needsEscalationHandOver(w.dag) ||
         needsSettledThreadRefusal(w.dag) ||
-        needsThreadCampaignReply(w.dag))
+        needsThreadCampaignReply(w.dag) ||
+        needsGeneralInterestAnswer(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }

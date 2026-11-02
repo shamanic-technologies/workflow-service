@@ -1018,9 +1018,9 @@ export async function main(conversation, offer, brand) {
     "Then read the messages WE sent (marked US), signatures included, and say how they presented the sender relative to our client" +
       (brand?.brand?.name ? ", " + brand.brand.name : "") + ". Return identity.stance:",
     "- insider: the sender writes AS our client, as part of it (\\"I'm with [client]\\", \\"I'm [name] at [client]\\", \\"our company\\" meaning the client).",
-    "- external: the sender works with or represents our client from outside it (\\"I work with [client]\\", \\"I represent these folks\\", an agency signature).",
+    "- external: the sender works with or represents our client from outside it (\\"I work with [client]\\", \\"I represent these folks\\", an agency signature). A message whose body speaks for the client (\\"[client] builds...\\", \\"we recently built...\\") and is signed by an agency or another company is external: someone from that agency writing on the client's behalf.",
     "- blind: our messages never name our client at all.",
-    "- unclear: there is no message from us on record, or our messages name the client but give no way to tell which of the above, or contradict each other.",
+    "- unclear: there is no message from us on record, or two of our messages present the sender in two different ways (one as the client, another from outside it). The body and the signature of one message never contradict each other: the signature says who sent it.",
     "Put in identity.evidence the words from our messages that decided it, quoted exactly (empty for unclear when there are none).",
     "",
     "Then say whether their LAST message asks US for a call or a meeting (\\"can we have a quick call this week?\\", \\"happy to jump on a call\\", \\"let's meet\\"). Return callRequest.asked true only when they ask for one or agree to one, and put in callRequest.evidence their words that do, quoted exactly. Our own proposal of a call, which they did not take up, is not one: asked false, evidence empty.",
@@ -1298,13 +1298,15 @@ export async function main(draft, facts, identity, offer, brand, playbook, callR
     }
   }
   const writes = json.decision === "answer" || json.decision === "confirm_booking" || json.decision === "close_with_thanks";
+  // An empty hand-over is no hand-over: instantly-service then writes its own.
+  if (typeof json.handoffText !== "string" || json.handoffText.trim() === "") delete json.handoffText;
 
   // An identity we could not read off the thread is never guessed at.
   if (writes && identity?.stance === "unclear") {
     const asked = String(json.question ?? "").trim() || "(their last message)";
     console.error("[ai-meeting-booking] our identity in this thread is unclear; nothing is sent and the thread is escalated");
     return {
-      json: { decision: "escalate", question: asked, reason: "Our identity in this thread is unclear (insider, external or unnamed), so a person answers in the right voice.", answers: json.answers ?? [] },
+      json: { decision: "escalate", question: asked, reason: "Our identity in this thread is unclear (insider, external or unnamed), so a person answers in the right voice.", answers: json.answers ?? [], handoffText: json.handoffText },
       overridden: true,
       audit: [],
     };
@@ -1322,7 +1324,7 @@ export async function main(draft, facts, identity, offer, brand, playbook, callR
       const asked = String(json.question ?? "").trim() || "(their last message)";
       console.error("[ai-meeting-booking] the draft names our client in a blind thread (" + leaked.join(", ") + "); nothing is sent and the thread is escalated");
       return {
-        json: { decision: "escalate", question: asked, reason: "The draft would have named our client in a thread that never named them: " + leaked.join(", "), answers: json.answers ?? [] },
+        json: { decision: "escalate", question: asked, reason: "The draft would have named our client in a thread that never named them: " + leaked.join(", "), answers: json.answers ?? [], handoffText: json.handoffText },
         overridden: true,
         audit: [],
       };
@@ -1359,6 +1361,7 @@ export async function main(draft, facts, identity, offer, brand, playbook, callR
       question: asked,
       reason: "Nothing our client told us answers: " + asked,
       answers: json.answers ?? [],
+      handoffText: json.handoffText,
     };
     return { json: grounded, overridden: true, audit };
   }
@@ -1648,6 +1651,23 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
         : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent a link. " + proposeTime)
     : "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
 
+  // THE HAND-OVER EMAIL (MB-ANSWER-NOT-ESCALATE-1102, owner 2026-11-02: one
+  // writer handles every case, the hand-over competes inside the dynasty like
+  // every answer). Written on every email thread whose brand names a sales rep,
+  // so a hand-over decided after this draft (ground-draft) sends it too.
+  // instantly-service sends it as written, the rep in Cc.
+  const rep = brand?.brand ?? {};
+  const repName = typeof rep.salesRepFirstName === "string" && rep.salesRepFirstName.trim() ? rep.salesRepFirstName.trim() : null;
+  const writesHandoff = replyChannel === "email" && !!repName && !!rep.salesRepEmail;
+  const handoffBookingUrl = stance === "blind" ? null : (offer?.bookingUrl ?? null);
+  const handoffSection = !writesHandoff ? [] : [
+    "THE HAND-OVER EMAIL",
+    "On every reply, an answer included, also return handoffText: the email we send them if this thread is handed to a person, now or after your draft is checked. It goes in their thread with " + repName + (stance === "blind" ? "" : " (" + client + ")") + " copied on it.",
+    "Plain text, two or three short lines with a blank line between them: greet them by first name, say " + repName + " is copied and will answer them here" + (handoffBookingUrl ? ", give the link to pick a time: " + handoffBookingUrl : "") + ", then end on \\"Best,\\" alone. Never restate what they asked. No name and no signature after it: the mailbox appends its own. Never an em dash or an en dash.",
+    ...(stance === "blind" ? ["This thread never named our client: name " + repName + " by first name only, never a company, a website or a link."] : []),
+    "",
+  ];
+
   const message = [
     "Today is " + (currentDate ?? new Date().toISOString().split("T")[0]) + ".",
     "",
@@ -1688,14 +1708,18 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "2. Then propose the meeting.",
     "Set decision to answer.",
     "",
+    "WHEN THEY ASK TO KNOW MORE",
+    "A message that asks to learn more, what we can do for them, how it works, or for information in general is a reply owed and one you can always answer: in one or two sentences, no more, say from the facts above what is done for someone like them (cite those facts), then propose the meeting as under BOOKING. The meeting is where they hear the rest: never list every fact. The whole reply is two short paragraphs: those one or two sentences, then the two times and the link. Set decision to answer. A request to know more is never a reason to escalate.",
+    "",
     "WHEN YOU CANNOT ANSWER",
-    "Everything you may state is above. If answering what they asked would mean inventing something that is not there (a price, a number of seats, a spec, a reference, a commitment nobody here has made), then you cannot answer it.",
-    "In that case set decision to escalate and write nothing: no reply, no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
+    "Everything you may state is above. If they ask a SPECIFIC question whose answer is a fact that is not there (a price, a number of seats, a spec, a reference, a commitment nobody here has made), then you cannot answer it.",
+    "In that case set decision to escalate and answer nothing yourself: no holding message, and above all no deflection back to the call. A person will take this thread over and answer them properly, and pushing the meeting again instead is exactly what makes us look like a machine.",
     "Escalate only a real question or request you cannot answer. A refusal, a request to stop, or a goodbye is not a question: that is no_reply_owed, never escalate. When they can meet is not one either: that is answer.",
     ...(callAsked ? ["They asked for a call themselves, so none of this applies to a question the facts do not cover: you take it to that call (see THEY ASKED FOR A CALL) and answer. Escalate only when something else forces it, never because the facts are thin."] : []),
     "",
     "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said; when you escalate, exactly the question(s) you could not answer). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
     "",
+    ...handoffSection,
     "BOOKING",
     bookingSection,
     "",
@@ -1716,13 +1740,14 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "You answer what they asked before you ask for anything.",
     "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
-    "When you cannot answer from what is in front of you, you say so and hand over, rather than deflecting back to the meeting, unless they asked for the call themselves: then the call is where they get that answer.",
+    "When they ask to know more or what you can do for them, you answer in a line or two from the facts in front of you and propose the meeting.",
+    "When a specific question needs a fact that is not in front of you (a price, a spec, a commitment), you hand over rather than deflecting back to the meeting, unless they asked for the call themselves: then the call is where they get that answer.",
     "When their last message needs no answer (a refusal, a request to stop, a goodbye), you send nothing and hand nothing over.",
     "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
     "When you are told which game the thread is in, you play that game.",
   ].join(" ");
 
-  return { message, systemPrompt, ladderNextDueAt, timezone, stance, playbook };
+  return { message, systemPrompt, ladderNextDueAt, timezone, stance, playbook, handoffBookingUrl };
 }
 
 SENDER_PERSONA_FN_TEXT
@@ -1906,6 +1931,23 @@ export function needsSettledThreadRefusal(dag: { nodes?: Array<{ id?: string; co
   );
 }
 
+/**
+ * True when a stored DAG still escalates a prospect who only asked to know more
+ * (MB-ANSWER-NOT-ESCALATE-1102: "I would like to learn more about your company
+ * and what you can do for us" got no times and no link). Two prompt texts
+ * licensed it: the identity read called a body speaking for the client under an
+ * agency signature "unclear" (forced escalation), and "WHEN YOU CANNOT ANSWER"
+ * let a general request for information count as an unanswerable question.
+ */
+export function needsGeneralInterestAnswer(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const code = (id: string) => nodes.find((n) => n?.id === id)?.config?.code;
+  const questions = code("compose-questions-prompt");
+  const reply = code("compose-prompt");
+  if (questions === undefined && reply === undefined) return false;
+  return questions !== COMPOSE_QUESTIONS_PROMPT_CODE || reply !== COMPOSE_REPLY_PROMPT_CODE;
+}
+
 /** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
 export const WHATSAPP_TAKEOVER_CODES = ["human_in_conversation"] as const;
 
@@ -2002,8 +2044,9 @@ export const REPLY_RESPONSE_SCHEMA = {
         "close_with_thanks: only when THE GAME this thread is in tells you to thank them and stop. Write one or two " +
         "sentences of thanks asking for nothing; their follow-ups stop after it. " +
         "answer: you can answer what they wrote from the facts in front of you. " +
-        "escalate: they asked a real question you cannot answer without inventing something: a price, " +
+        "escalate: they asked a specific question you cannot answer without inventing something: a price, " +
         "a spec, a reference, a commitment nobody here has made. A person takes the thread over. " +
+        "A request to learn more or to hear what we can do for them is never one: answer it from the facts. " +
         "When they can meet is never a reason to escalate: offer times that fit, the booking link, or a time you propose. " +
         "Nor is a question they asked for a call to hear answered: when their last message asks for the call, take it to that call.",
     },
@@ -2022,6 +2065,13 @@ export const REPLY_RESPONSE_SCHEMA = {
       description:
         "The answer the prospect reads, as HTML. No signature, no subject. " +
         "Only when decision is answer, confirm_booking or close_with_thanks: otherwise omit it, the prospect hears nothing from us.",
+    },
+    handoffText: {
+      type: "string",
+      description:
+        "The hand-over email, plain text, short lines separated by a blank line, ending on the sign-off. " +
+        "Only when you are told to write THE HAND-OVER EMAIL, whatever your decision; it is sent only if the thread is handed to a person. " +
+        "An empty string when you are not told to write one.",
     },
     nextDueAt: {
       type: "string",
@@ -2053,7 +2103,7 @@ export const REPLY_RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ["decision", "question", "reason", "answers"],
+  required: ["decision", "question", "reason", "answers", "handoffText"],
 } as const;
 
 /** The reason stored on the lead's follow-up schedule when no reply is owed. */
@@ -2676,6 +2726,8 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           "body.campaign_id": EMAIL_THREAD_CAMPAIGN_REF,
           "body.email": "$ref:claimed.output.followup.email",
           "body.question": "$ref:ground-draft.output.json.question",
+          "body.handoff_text": "$ref:ground-draft.output.json.handoffText",
+          "body.booking_url": "$ref:compose-prompt.output.handoffBookingUrl",
           skip: "$ref:thread.output.skipEmail",
         },
       },
