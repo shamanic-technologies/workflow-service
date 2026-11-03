@@ -35,6 +35,7 @@
  *
  * No em dash or en dash ever reaches the person: the prompt bans them and `finalize` rewrites any that slip through.
  */
+import { BUSINESS_ROLE_FN, BUSINESS_ROLE_NODE_IDS, businessRoleNodes } from "./business-role.js";
 import { CLAIM_PERSON_CODE } from "./claim-person.js";
 import { withClientCommsVoice } from "./client-comms.js";
 import { withCopilotTurn } from "./copilot-turn-node.js";
@@ -123,6 +124,7 @@ export const FOLLOW_UP_ROW_REASONS = {
   refused: "follow_up_refused",
   noChannel: "follow_up_no_channel",
   notWritable: "instruction_not_writable",
+  escalated: "follow_up_escalated",
 } as const;
 
 export const FOLLOW_UP_PROACTIVE_DESCRIPTION =
@@ -139,7 +141,7 @@ export const FOLLOW_UP_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    decision: { type: "string", enum: ["write", "later", "stop", "cannot_write"] },
+    decision: { type: "string", enum: ["write", "later", "stop", "cannot_write", "escalate"] },
     subject: { type: "string", description: "Email only: the subject line. Empty on WhatsApp and unless decision is write." },
     bodyHtml: { type: "string", description: "Email only: the body as simple HTML paragraphs. Empty on WhatsApp and unless decision is write." },
     message: { type: "string", description: "WhatsApp only: the plain text message, its bubbles in order separated by one empty line. Empty on email and unless decision is write." },
@@ -147,10 +149,14 @@ export const FOLLOW_UP_RESPONSE_SCHEMA = {
     reason: {
       type: "string",
       description:
-        "One sentence: what the message does, why now is not the moment, (stop) the person's own words that end the follow-ups, or (cannot_write) what is missing.",
+        "One sentence: what the message does, why now is not the moment, (stop) the person's own words that end the follow-ups, (cannot_write) what is missing, or (escalate) why it cannot be answered from what we hold.",
+    },
+    question: {
+      type: "string",
+      description: "Escalate only: what they asked that you cannot answer, in their own words. Empty otherwise.",
     },
   },
-  required: ["decision", "subject", "bodyHtml", "message", "nextFollowUpAt", "nextFollowUpWhy", "reason"],
+  required: ["decision", "subject", "bodyHtml", "message", "nextFollowUpAt", "nextFollowUpWhy", "reason", "question"],
 } as const;
 
 /** The digits of an international phone ("+33 6 12..." -> "33612..."), or "" when it is not one. */
@@ -552,7 +558,7 @@ export const LEAD_FOLLOW_UP_GAME: FollowUpGame = {
  */
 export function composeFollowUpCode(GAME: FollowUpGame): string {
   return `
-export async function main(person, channel, offer, brand, facts, history, figures, instruction, occurrence, triggerType, trigger, nowIso, currentDate, who) {
+export async function main(person, channel, offer, brand, facts, history, figures, instruction, occurrence, triggerType, trigger, nowIso, currentDate, who, business) {
   if (channel?.skipModel === true) return { skip: true, systemPrompt: "", message: "" };
   if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
     throw new Error("compose: who this person is to the brand was not read; nothing is written blind");
@@ -596,6 +602,9 @@ ${GAME.intro}${GAME.game}${GAME.read}    wa
       : "THE CHANNEL is email: the email is a reply in the last email thread we have with them, from the same mailbox, so never re-introduce us. Under 120 words. Greet them by first name when you have it. No sign off or signature block: ours is added below your text. bodyHtml is simple HTML, <p> paragraphs only. The subject is short and plain, never \\"Re:\\" or \\"Follow-up\\".",
     // The sending WhatsApp account's own persona (SOPHIE-WA-1016): none = the prompt of before.
     ...(wa && channel.persona ? personaLines(channel.persona, brandName) : []),
+    // The line answers as the writer's own business (MERCHANT-DEMO-LINE-1103): none = the prompt of before.
+    ...businessRoleLines(business),
+    "Write in the language of the person's own last message to us, their very first message included, whatever language the rest of this prompt or the thread is in. Only when they never wrote to us, use the language of the thread, else of where they live.",
     "The channel was chosen for you. Their last message may be on another channel (LinkedIn, Telegram, a call): read it, carry on from it, never say where you are writing from or why.",
     ...(text
       ? ["You also follow the INSTRUCTION from our client below where it does not contradict these rules."]
@@ -604,6 +613,7 @@ ${GAME.intro}${GAME.game}${GAME.read}    wa
     "What they did (opened, clicked, visited, signed up) is for choosing what to say and when, never something to say: never write that you saw them open, click or visit.",
     "You state only what the FACTS, the FIGURES or the INSTRUCTION say. Never invent a figure, a price, a result, a customer, a date or a promise. A number appears only if it is written there, exactly as written.",
     "If the INSTRUCTION asks for something none of those hold (a figure that could not be read), set decision to cannot_write and say in reason what is missing.",
+    "If THEY asked something you cannot answer from what you hold (the FACTS, the FIGURES, the thread" + (business && business.active === true ? ", THEIR BUSINESS" : "") + "), never guess and never stall with a holding message: set decision to escalate, put what they asked in question, in their words, leave subject, bodyHtml and message empty, and set nextFollowUpAt to when to look again if nobody answered them. The team is told at once and answers them itself.",
     who.strategy,
     game,
     localHour,
@@ -643,6 +653,7 @@ ${GAME.occurrenceItem ? '    ...(itemLines(trigger).length ? ["", "WHAT THE EVEN
     "FACTS our client told us:",
     ...(exact.length ? exact.map((f) => f.id + ". " + f.label + ": " + f.value) : ["(none)"]),
     ...(neverGive.length ? ["", "NEVER offer or promise any of these, whole or in part:", ...neverGive.map((x) => "- " + x)] : []),
+    ...businessMessageLines(business),
   ].join("\\n");
 
   return { skip: false, systemPrompt, message };
@@ -653,6 +664,8 @@ ${WHY_NOW_FN}
 ${LOCAL_TIME_FN}
 ${GAME.occurrenceItem ? "\n" + OCCURRENCE_ITEM_FN + "\n" : ""}
 ${SENDER_PERSONA_FN}
+
+${BUSINESS_ROLE_FN}
 `.trim();
 }
 
@@ -675,6 +688,13 @@ export async function main(draft, person, channel, campaignId) {
   if (json.decision === "stop") {
     console.log("[follow-up] the person's own words end the follow-ups: " + JSON.stringify(json.reason ?? null));
     return { decision: "stop", reason: String(json.reason ?? ""), ...none };
+  }
+  if (json.decision === "escalate") {
+    const question = String(json.question ?? "").trim();
+    if (!question) throw new Error("finalize: decision escalate with no question");
+    const later = nextDate(json, "finalize");
+    console.log("[follow-up] they asked what we cannot answer, nothing is sent to them; the team is told. Asked: " + JSON.stringify(question));
+    return { decision: "escalate", question, ...later, reason: String(json.reason ?? ""), ...none };
   }
   if (json.decision === "later") {
     const later = nextDate(json, "finalize");
@@ -726,6 +746,36 @@ ${BUBBLE_SEND_FN}
 `.trim();
 
 /**
+ * A question the writer cannot answer (`escalate`) is handed to the brand's sales rep ON WHATSAPP, the number the brand
+ * states for hand-overs (brand-service `salesRepPhone`), like ai-meeting-booking's: who wrote, what they asked, that the
+ * AI sent nothing (MERCHANT-DEMO-LINE-1103). No rep phone stated = said loudly, nothing sent.
+ */
+export const COMPOSE_FOLLOW_UP_REP_ALERT_CODE = `
+export async function main(final, person, channel, brand, timeline) {
+  if (final?.decision !== "escalate") return { skip: true };
+  const repPhone = typeof brand?.brand?.salesRepPhone === "string" && brand.brand.salesRepPhone.trim() ? brand.brand.salesRepPhone.trim() : null;
+  const theirPhone = channel?.phone ?? person?.phone ?? null;
+  const theirEmail = channel?.email ?? person?.email ?? null;
+  if (!repPhone) {
+    console.error("[follow-up] handed " + String(theirEmail ?? theirPhone ?? "a person") + " to the team, but the brand states no sales rep phone: NOBODY was alerted on WhatsApp");
+    return { skip: true, reason: "no_sales_rep_phone" };
+  }
+  const items = Array.isArray(timeline?.items) ? timeline.items : [];
+  const lastTheirs = [...items].reverse().find((i) => i?.kind === "message" && i.direction === "inbound") ?? null;
+  const where = String(lastTheirs?.channel ?? channel?.channel ?? "a channel");
+  const lead = person?.lead ?? {};
+  const name = [lead.firstName, lead.lastName].filter((v) => typeof v === "string" && v.trim()).join(" ") || timeline?.person?.name || null;
+  const who = (name ?? theirEmail ?? theirPhone ?? "Someone") + (theirPhone ? " (" + theirPhone + ")" : theirEmail && name ? " (" + theirEmail + ")" : "");
+  const text = [
+    "Needs your call: " + who + " wrote on " + where + " and I could not answer.",
+    "They asked: \\"" + final.question + "\\"",
+    "I sent them nothing. Please reply to them yourself.",
+  ].join("\\n\\n");
+  return { skip: false, phone: repPhone, text, idempotencyKey: String(person.sendKey) + ":rep-alert" };
+}
+`.trim();
+
+/**
  * What the run did, read off every step, and what lead-service and the queue row are told. EVERY path that reached a
  * person leaves a next date, except a stop (lead-service's verdict, their own words, a refusal saying they opted out).
  * `endKind` picks the end-run. Never throws on a path: a missing piece already threw where it was read.
@@ -767,6 +817,8 @@ export async function main(person, plan, channel, final, sendWhatsapp, sendEmail
   }
   if (d === "stop") return { endKind: "stopped", ...row(R.stopped), ...stop("Their own words: " + final.reason), delivery: null };
   if (d === "later") return { endKind: "later", ...row(R.later), ...date(final.nextFollowUpAt, final.nextFollowUpWhy), delivery: null };
+  // Nothing sent to them: the team is told (alert-rep) and answers them; the next look waits for that.
+  if (d === "escalate") return { endKind: "escalated", ...row(R.escalated), ...date(final.nextFollowUpAt, "Handed to the team, they asked: " + final.question), delivery: null };
   if (d !== "write") throw new Error("outcome: no decision to act on: " + JSON.stringify(final).slice(0, 200));
   const send = final.channel === "whatsapp" ? sendWhatsapp : sendEmail;
   if (!send || send.notCalled === true) throw new Error("outcome: the " + final.channel + " send did not run");
@@ -805,6 +857,7 @@ export const FOLLOW_UP_END_KINDS = [
   "refused_kept",
   "refused_final",
   "not_writable",
+  "escalated",
 ] as const;
 
 const P = "$ref:resolve-person.output";
@@ -961,6 +1014,13 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
       inputMapping: { "params.id": `${P}.rowId`, "query.brandId": `${P}.brandId`, skip: SKIP_MODEL },
     },
     whoTheyAreNode({ relationshipRead: "$ref:relationship-read.output", timeline: `$ref:${PERSON_THREAD_NODE_ID}.output` }),
+    ...businessRoleNodes({
+      channel: "$ref:channel-plan.output",
+      timeline: `$ref:${PERSON_THREAD_NODE_ID}.output`,
+      relationship: "$ref:relationship-read.output",
+      person: P,
+      brandId: `${P}.brandId`,
+    }),
     {
       id: "compose",
       type: "script",
@@ -981,6 +1041,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
         nowIso: "$ref:now.output.now",
         currentDate: "$ref:flow_input.currentDate",
         who: "$ref:who-they-are.output",
+        business: "$ref:business-role.output",
       },
     },
     {
@@ -1046,6 +1107,28 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
         skip: "$ref:finalize.output.skipEmail",
       },
     },
+    // A question nobody can answer from what we hold: the brand's sales rep is told on WhatsApp (who, what they asked,
+    // that nothing was sent). No campaign id on this send: it is not the campaign speaking to a prospect.
+    {
+      id: "compose-rep-alert",
+      type: "script",
+      config: { code: COMPOSE_FOLLOW_UP_REP_ALERT_CODE },
+      retries: 0,
+      inputMapping: { final: "$ref:finalize.output", person: P, channel: "$ref:channel-plan.output", brand: "$ref:brand-profile.output", timeline: `$ref:${PERSON_THREAD_NODE_ID}.output` },
+    },
+    {
+      id: "alert-rep",
+      type: "http.call",
+      config: { ...CRM_WHATSAPP_SEND, omitHeaders: ["x-campaign-id"] },
+      retries: 0,
+      inputMapping: {
+        "body.phone": "$ref:compose-rep-alert.output.phone",
+        "body.brandId": `${P}.brandId`,
+        "body.text": "$ref:compose-rep-alert.output.text",
+        "body.idempotencyKey": "$ref:compose-rep-alert.output.idempotencyKey",
+        skip: "$ref:compose-rep-alert.output.skip",
+      },
+    },
     {
       id: "outcome",
       type: "script",
@@ -1098,6 +1181,8 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
     endRun("end-run-refused-final", { success: true, stopCampaign: false }, DELIVERY),
     // Failed (named in the log) but FINAL for an occurrence: a redelivery would only re-draft the same refusal.
     endRun("end-run-not-writable", { success: false, stopCampaign: false }, DELIVERY),
+    // Handed to the team (nothing sent to them): a decision, never a failure.
+    endRun("end-run-escalated", { success: true, stopCampaign: false }),
   ];
   const line = [
     "now",
@@ -1119,11 +1204,14 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
     "person-history",
     "relationship-read",
     "who-they-are",
+    ...BUSINESS_ROLE_NODE_IDS,
     "compose",
     "draft",
     "finalize",
     "send-whatsapp",
     "send-email",
+    "compose-rep-alert",
+    "alert-rep",
     "outcome",
     "set-next-date",
     "stop-chain",

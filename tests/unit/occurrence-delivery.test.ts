@@ -68,7 +68,7 @@ describe("follow-up (every pipe)", () => {
       for (const kind of ["later", "queued", "not-yet", "not-owed", "stopped"]) {
         expect(endRunBody(dag, `end-run-${kind}`, {})).toEqual({ success: true, stopCampaign: false });
       }
-      expect(FOLLOW_UP_END_KINDS.length).toBe(10);
+      expect(FOLLOW_UP_END_KINDS.length).toBe(11);
       expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
     });
   }

@@ -66,7 +66,8 @@ describe("the DAGs", () => {
       const setDate = dag.nodes.find((n) => n.id === "set-next-date");
       expect(setDate?.config).toMatchObject({ service: "lead", method: SET_NEXT_DATE.method, path: SET_NEXT_DATE.path });
       const order = dag.edges.map((e) => `${e.from}>${e.to}`);
-      expect(order).toContain("send-email>outcome");
+      expect(order).toContain("send-email>compose-rep-alert");
+      expect(order).toContain("alert-rep>outcome");
       expect(order).toContain("outcome>set-next-date");
     });
   }
