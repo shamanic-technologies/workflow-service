@@ -93,9 +93,6 @@ export const QUEUED_FOLLOW_UP_GAP_DAYS = 3;
 /** No route can write to them (no WhatsApp reach, no email): looked at again this long after, never dropped. */
 export const NO_CHANNEL_RECHECK_DAYS = 30;
 
-/** Another campaign's row made due this close to the occurrence run's own row was made due by the same facts. */
-export const SAME_FACT_WINDOW_MINUTES = 10;
-
 /** The channels the follow-up writes on, each with the one transport that sends it. */
 export const FOLLOW_UP_CHANNELS = ["whatsapp", "email"] as const;
 
@@ -359,24 +356,17 @@ export async function main(person, state, nowIso) {
     console.log("[follow-up] not yet (" + reason + "): nothing written, next look at " + next);
     return { proceed: false, kind, reason, skip: true, nextFollowUpAt: next, nextFollowUpWhy: "Not yet: " + reason };
   }
-  // Queued = a message of ours already waiting for them: a step of their email sequence, or a follow-up another
-  // campaign owes them. This run's own claimed row is not one.
+  // Queued = a message of ours already WAITING to go out to them: a step of their email sequence. Another campaign's
+  // row is not one (ONE-FOLLOWUP-PER-LEAD-1103: a lead has ONE next date, lead-service's, never one per campaign row),
+  // and its date was stated BEFORE this run's fact: reading it as "already owed" deferred a prospect who had just
+  // booked a meeting for tomorrow to a look 3 weeks out (MEETING-REMINDER-1103, Doc Dinners 2026-11-03). The writer
+  // decides the one next date from the whole thread.
   const q = state.queued;
-  // A run answering an occurrence ignores another campaign's row made due within ${SAME_FACT_WINDOW_MINUTES} min of its own:
-  // the same fact (a hot lead, a signup) makes every campaign on it due together, and one of them (a Copilot proposal
-  // to the team) writes nothing to the person. Read as "already queued", it pushed the hot lead's answer 3 days out
-  // (LEAD-EVENT-WHATSAPP-1027, Fanoiki 2026-10-27).
-  const ownDue = person.answersOccurrence === true ? Date.parse(String(person.dueAt ?? "")) : NaN;
-  const sameFact = (f) => Number.isFinite(ownDue) && Math.abs(Date.parse(String(f.dueAt)) - ownDue) <= ${SAME_FACT_WINDOW_MINUTES} * 60000;
-  const others = (Array.isArray(q.followups) ? q.followups : []).filter((f) => f && f.leadCampaignId !== person.rowId && Number.isFinite(Date.parse(String(f.dueAt))) && !sameFact(f));
-  if (q.emailSequence === true || others.length > 0) {
-    const lastDue = others.reduce((m, f) => Math.max(m, Date.parse(String(f.dueAt))), now);
-    const after = lastDue + ${QUEUED_FOLLOW_UP_GAP_DAYS} * 86400000;
-    // The queued message goes out first; the next look comes after it, or at lead-service's own date when later.
+  if (q.emailSequence === true) {
+    const after = now + ${QUEUED_FOLLOW_UP_GAP_DAYS} * 86400000;
+    // The queued step goes out first; the next look comes after it, or at lead-service's own date when later.
     const next = new Date(Number.isFinite(currentNext) && currentNext > after ? currentNext : after).toISOString();
-    const what = q.emailSequence === true
-      ? "a step of their email sequence is still queued"
-      : others.length + " follow-up(s) already owed to them by another campaign, the last due " + new Date(lastDue).toISOString();
+    const what = "a step of their email sequence is still queued";
     console.log("[follow-up] " + what + ": nothing written, next look at " + next);
     return { proceed: false, kind: "queued", reason: what, skip: true, nextFollowUpAt: next, nextFollowUpWhy: "Already queued: " + what };
   }
@@ -517,6 +507,21 @@ export async function main() {
 `.trim();
 
 /**
+ * A NEW FACT decides the next date again (MEETING-REMINDER-1103, owner 2026-11-03: a prospect booked a meeting for the
+ * next day and the Lead event run kept a date stated before the booking, 3 weeks out). A strategy the writer plays,
+ * never a branch on an event type. Dash-free: the model copies the style of its prompt.
+ */
+export const NEW_FACT_STRATEGY =
+  "A NEW FACT DECIDES AGAIN. A next date stated before what just happened (by us, by another campaign, by an earlier " +
+  "look) holds nothing: decide the next date now, from everything the thread, the events and the event below say. " +
+  "When they booked a meeting with us, the goal is that they come to it: the next message is a short, friendly " +
+  "reminder before the meeting starts (the day before or a few hours before, at a sensible hour in their timezone), " +
+  "naming the day and time of the meeting in their timezone, in the thread where they last wrote. Write it now only " +
+  "when now is that moment; otherwise set decision to later with nextFollowUpAt before the meeting starts, never " +
+  "after it. Nothing pushy: no new pitch, nothing they must answer. Say in nextFollowUpWhy that it is the reminder " +
+  "for that meeting.";
+
+/**
  * The writer's GAME: who it writes to and why (owner rule: a strategy, never a canned reply per case). The lead game
  * is the follow-up channel's own; another audience (current clients, `client-check-in-dag.ts`) states its own four
  * prompt lines and keeps everything else of the writer byte for byte. Each value is one line of the generated script
@@ -618,6 +623,7 @@ ${GAME.intro}${GAME.game}${GAME.read}    wa
     game,
     localHour,
     nextDate,
+    ${JSON.stringify(NEW_FACT_STRATEGY)},
 ${GAME.stop}    "Write like a person who knows them: short, plain, warm, one idea per sentence. No filler, no \\"I hope this finds you well\\".",
     "Never use an em dash or an en dash. Use a comma or a period.",
     wa ? "Fill message; leave subject and bodyHtml empty." : "Fill subject and bodyHtml; leave message empty.",

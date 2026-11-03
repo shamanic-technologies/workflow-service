@@ -124,15 +124,12 @@ export async function main(person, state, nowIso) {
     console.log("[client-check-in] lead-service says stop (" + left.join(", ") + "): nothing written, no next date");
     return { proceed: false, kind: "stop", reason: left[0], skip: true };
   }
-  const q = state.queued;
-  const others = (Array.isArray(q.followups) ? q.followups : []).filter((f) => f && f.leadCampaignId !== person.rowId && Number.isFinite(Date.parse(String(f.dueAt))));
-  if (sequence || q.emailSequence === true || others.length > 0) {
-    const lastDue = others.reduce((m, f) => Math.max(m, Date.parse(String(f.dueAt))), now);
-    const after = lastDue + 3 * 86400000;
+  // Only a message of ours waiting to go out holds them (an email sequence step); another campaign's row is not one
+  // (ONE-FOLLOWUP-PER-LEAD-1103, MEETING-REMINDER-1103): the writer decides the one next date from the thread.
+  if (sequence || state.queued.emailSequence === true) {
+    const after = now + 3 * 86400000;
     const next = new Date(Number.isFinite(currentNext) && currentNext > after ? currentNext : after).toISOString();
-    const what = sequence || q.emailSequence === true
-      ? "a step of their email sequence is still queued"
-      : others.length + " follow-up(s) already owed to them by another campaign, the last due " + new Date(lastDue).toISOString();
+    const what = "a step of their email sequence is still queued";
     console.log("[client-check-in] " + what + ": nothing written, next look at " + next);
     return { proceed: false, kind: "queued", reason: what, skip: true, nextFollowUpAt: next, nextFollowUpWhy: "Already queued: " + what };
   }

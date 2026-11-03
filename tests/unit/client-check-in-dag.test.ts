@@ -187,13 +187,12 @@ describe("the client follow-up state", () => {
     expect(await main(person, state({ kind: "stop", reasons: ["something_new"] }), NOW)).toMatchObject({ kind: "stop" });
   });
 
-  it("a queued email step or another campaign's follow-up: nothing written, a later date", async () => {
+  it("a queued email step waits; another campaign's row never holds them (MEETING-REMINDER-1103)", async () => {
     const a = await main(person, state({ kind: "not_yet", reasons: ["customer", "sequence_running"], retryAfter: NOW }), NOW);
     expect(a).toMatchObject({ proceed: false, kind: "queued" });
     const due = new Date(Date.now() + 86400000).toISOString();
     const b = await main(person, state({ kind: "owed", reasons: [] }, { emailSequence: false, followups: [{ leadCampaignId: "other", dueAt: due }] }), NOW);
-    expect(b.kind).toBe("queued");
-    expect(Date.parse(b.nextFollowUpAt)).toBeGreaterThan(Date.parse(due));
+    expect(b).toMatchObject({ proceed: true });
   });
 
   it("no kind fails loud", async () => {

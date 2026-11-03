@@ -3,7 +3,7 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 import { descriptionProblem } from "../../src/lib/plain-description.js";
-import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag, READ_STATE_CODE, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
+import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag, READ_STATE_CODE, COMPOSE_FOLLOW_UP_CODE, LEAD_FOLLOW_UP_GAME, composeFollowUpCode } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag, isClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import {
   FOLLOW_UP_REACTIVE_LEADS_DESCRIPTION,
@@ -50,12 +50,13 @@ describe("the leads-only lead follow-up DAG", () => {
     expect(isClientCheckInDag(dag)).toBe(false);
   });
 
-  it("only the claim, its read and the writer differ from the lead follow-up: same state read, same prompt", () => {
+  it("only the claim, its read and the writer differ from the lead follow-up: same state read, same game", () => {
     expect(node(dag, "read-state")?.config).toEqual({ code: READ_STATE_CODE });
-    expect(node(dag, "compose")?.config ?? null).toEqual(node(plain, "compose")?.config ?? null);
-    expect(COMPOSE_FOLLOW_UP_CODE).toBeTruthy();
+    // The same game, plus what the occurrence carries (a booked meeting's time, MEETING-REMINDER-1103).
+    expect(node(dag, "compose")?.config).toEqual({ code: composeFollowUpCode({ ...LEAD_FOLLOW_UP_GAME, occurrenceItem: true }) });
+    expect(node(plain, "compose")?.config).toEqual({ code: COMPOSE_FOLLOW_UP_CODE });
     const differing = dag.nodes.filter((n) => JSON.stringify(n) !== JSON.stringify(plain.nodes.find((p) => p.id === n.id))).map((n) => n.id);
-    expect(differing.sort()).toEqual(["claim-followup", "copilot-turn-plan", "draft", "end-run-not-admitted", "end-run-pending", "resolve-person"].sort());
+    expect(differing.sort()).toEqual(["claim-followup", "compose", "copilot-turn-plan", "draft", "end-run-not-admitted", "end-run-pending", "resolve-person"].sort());
   });
 
   it("writes through the COPILOT: one AI, its own model and voice, the composed prompt as context (ONE-AI-CONVERSES-1029)", () => {
