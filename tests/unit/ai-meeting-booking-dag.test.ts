@@ -1198,7 +1198,7 @@ describe("a prospect who tells us the meeting is booked", () => {
 
     const booked = dag.edges.find((e) => e.from === "check-sent" && e.to === "stop-followups-booked");
     expect(booked?.condition).toBe(
-      "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'confirm_booking'",
+      "results['classify-send']?.outcome == 'sent' && (results['ground-draft']?.json?.decision == 'confirm_booking' || results['booking-outcome']?.booked == true)",
     );
     const reached = descendants(dag, "stop-followups-booked");
     expect(reached.has("record-followup")).toBe(false);
@@ -1594,7 +1594,9 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("routes the grounded decision, not the raw draft, to the send and the escalation", () => {
     expect(byId.get("escalate-unanswerable")?.inputMapping?.["body.question"]).toBe("$ref:ground-draft.output.json.question");
-    expect(byId.get("send-reply")?.inputMapping?.["body.body_html"]).toBe("$ref:ground-draft.output.json.replyHtml");
+    // The grounded draft, through the booking step (AUTO-BOOK-1103): its answer, or the booked confirmation.
+    expect(byId.get("send-reply")?.inputMapping?.["body.body_html"]).toBe("$ref:booking-outcome.output.replyHtml");
+    expect(byId.get("booking-outcome")?.inputMapping?.draft).toBe("$ref:ground-draft.output");
     expect(byId.get("resolve-next-due")?.inputMapping?.draft).toBe("$ref:ground-draft.output");
     for (const e of dag.edges.filter((x) => x.condition)) {
       expect(e.condition).not.toContain("draft-reply");
