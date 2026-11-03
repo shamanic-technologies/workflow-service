@@ -146,6 +146,7 @@ import { CLAIM_PERSON_CODE } from "./claim-person.js";
 import { LEG_BEST_LLM_MODEL_REF, hasStaleLlmPlan, withLegBestLlm, writesWithLegBestLlm } from "./leg-best-writer.js";
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
+import { BOOKING_OUTCOME_CODE, CRM_BOOKING_CALL, PLAN_BOOKING_CODE } from "./auto-booking.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { TIME_CONTEXT_FN } from "./time-context.js";
 import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
@@ -692,7 +693,9 @@ export async function main(bookingUrl, timezone) {
     }
     return kept.slice(0, want);
   };
-  const ok = (slots) => ({ bookingUrl, timezone: tz, slots: spreadAcrossDays(slots), degraded: false, degradedReason: null });
+  // calendarId: the GoHighLevel calendar the slots were read on (AUTO-BOOK-1103: a booking page on the client's own
+  // domain names none in its URL, so the booking names the one read here). Null for the other providers.
+  const ok = (slots, calendarId = null) => ({ bookingUrl, timezone: tz, slots: spreadAcrossDays(slots), degraded: false, degradedReason: null, calendarId });
 
   const BROWSER_UA = "Mozilla/5.0 (compatible; distribute-ai-meeting-booking/1.0)";
   const GOOGLE_API_KEY = "AIzaSyA7GKm43l8WNxlLTjsldq9z9n80CL6KW4U";
@@ -901,6 +904,7 @@ export async function main(bookingUrl, timezone) {
       "&timezone=" + encodeURIComponent(tz) + "&sendSeatsPerSlot=false";
 
     let payload = null;
+    let readOn = null;
     let lastStatus = null;
     let lastError = null;
     for (const calendarId of candidates) {
@@ -912,6 +916,7 @@ export async function main(bookingUrl, timezone) {
         lastStatus = res.status;
         if (!res.ok) continue;
         payload = await res.json();
+        readOn = calendarId;
         break;
       } catch (err) {
         lastError = errText(err);
@@ -934,7 +939,7 @@ export async function main(bookingUrl, timezone) {
     }
 
     if (slots.length === 0) return degraded("gohighlevel_no_slots_in_range");
-    return ok(slots);
+    return ok(slots, readOn);
   };
 
   if (typeof bookingUrl !== "string" || !bookingUrl.trim()) return degraded("no_booking_url");
@@ -1677,6 +1682,21 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "",
   ];
 
+  // AUTO-BOOK-1103 (owner 2026-11-03: « Can you do Wednesday at 1 PM? » should be booked for them, not answered
+  // with times again). Offered only when there is a listed time to book, an email the invite can go to, and a
+  // thread that may name our client (a booking invite names who runs the calendar, so a blind thread never books).
+  // Whether their message picks one, and which, is the writer's reading; the booking itself is checked by the
+  // calendar's owner, and a refused one sends replyHtml as today.
+  const canBook = stance !== "blind" && !booking?.degraded && (booking?.slots ?? []).length > 0 &&
+    typeof followup?.followup?.email === "string" && followup.followup.email.trim() !== "";
+  const pickSection = !canBook ? [] : [
+    "WHEN THEY PICK ONE OF THE TIMES",
+    "If their last message clearly picks ONE time from the availability below (a time we offered them, or any listed time: the same day and the same hour), we book it for them on our client's calendar under their name and email. Then also return bookSlot, that slot copied exactly as it stands in parentheses in the list, and bookedReplyHtml: one or two sentences saying it is booked for the weekday, date and time in their timezone (name the zone), and that the invite is in their inbox. No question, no pitch, no link in it.",
+    "Still write replyHtml as you would without booking (that time works, with the link to lock it in): it is what they get if the booking cannot be made. Set decision to answer.",
+    "A vague pick (\\"next week\\", \\"Thursday afternoon\\"), a time that is not in the list, or two times they hesitate between is not a pick: omit bookSlot and answer as usual.",
+    "",
+  ];
+
   const message = [
     "NOW",
     ...nowLines(new Date().toISOString(), {
@@ -1718,6 +1738,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "WHEN THEY TELL US THE MEETING IS BOOKED",
     "If their last message says they booked, scheduled or moved the meeting, the conversation is done and they are owed one short confirmation. Set decision to confirm_booking and write one or two sentences: thank them, and confirm the day or time in their words if they gave one. Nothing else: no question, no pitch, no times, no link, no request for anything. Their follow-ups stop after it.",
     "",
+    ...pickSection,
     "WHEN THEY SAY WHEN THEY ARE FREE",
     "A message about WHEN they can meet (\\"I can't till next week\\", \\"after the 15th\\", \\"Thursday afternoon\\", \\"not until November\\") is a reply owed and one you can always answer: set decision to answer and offer times that fit what they said, from the availability below. If nothing there fits, follow BOOKING below (the booking link, or a time you propose inside their window). A timing preference is never a reason to escalate.",
     "",
@@ -1980,6 +2001,17 @@ export function needsTimeContext(dag: { nodes?: Array<{ id?: string; config?: Re
   return reply !== COMPOSE_REPLY_PROMPT_CODE;
 }
 
+/**
+ * True when a stored DAG answers a prospect who picked one of our times with the times again (AUTO-BOOK-1103):
+ * no booking step before the send, or a slot read that does not hand over the calendar it read on.
+ */
+export function needsAutoBooking(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const slots = nodes.find((n) => n?.id === "booking-slots");
+  if (slots === undefined) return false;
+  return !nodes.some((n) => n?.id === "book-slot") || slots.config?.code !== readBookingSlotsCode();
+}
+
 /** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
 export const WHATSAPP_TAKEOVER_CODES = ["human_in_conversation"] as const;
 
@@ -2097,6 +2129,19 @@ export const REPLY_RESPONSE_SCHEMA = {
       description:
         "The answer the prospect reads, as HTML. No signature, no subject. " +
         "Only when decision is answer, confirm_booking or close_with_thanks: otherwise omit it, the prospect hears nothing from us.",
+    },
+    bookSlot: {
+      type: "string",
+      description:
+        "Only when you are told to under WHEN THEY PICK ONE OF THE TIMES and their last message clearly picks one listed time: " +
+        "that slot copied EXACTLY as it stands in parentheses in the availability list. Otherwise omit it.",
+    },
+    bookedReplyHtml: {
+      type: "string",
+      description:
+        "Only with bookSlot: the confirmation they read once that time is booked for them, as HTML. " +
+        "One or two sentences naming the exact weekday, date, time and their timezone, and that the invite is in their inbox. " +
+        "No question, no pitch, no link.",
     },
     handoffText: {
       type: "string",
@@ -2859,13 +2904,49 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           ladderNextDueAt: "$ref:compose-prompt.output.ladderNextDueAt",
         },
       },
+      // AUTO-BOOK-1103: they picked one of the times = book it on the brand's calendar BEFORE the send, so the
+      // reply says booked only when it is. No pick = nothing asked; a named refusal = today's answer.
+      {
+        id: "plan-booking",
+        type: "script",
+        config: { code: PLAN_BOOKING_CODE },
+        retries: 0,
+        inputMapping: {
+          draft: "$ref:ground-draft.output",
+          booking: "$ref:booking-slots.output",
+          followup: "$ref:claimed.output.followup",
+          leadDetail: "$ref:lead-detail.output",
+          trigger: "$ref:flow_input.trigger",
+        },
+      },
+      {
+        id: "book-slot",
+        type: "http.call",
+        config: { ...CRM_BOOKING_CALL },
+        retries: 0,
+        inputMapping: {
+          body: "$ref:plan-booking.output.body",
+          skip: "$ref:plan-booking.output.skip",
+        },
+      },
+      {
+        id: "booking-outcome",
+        type: "script",
+        config: { code: BOOKING_OUTCOME_CODE },
+        retries: 0,
+        inputMapping: {
+          plan: "$ref:plan-booking.output",
+          result: "$ref:book-slot.output",
+          draft: "$ref:ground-draft.output",
+        },
+      },
       {
         id: "finalize-reply",
         type: "script",
         config: { code: FINALIZE_REPLY_CODE },
         retries: 0,
         inputMapping: {
-          draft: "$ref:ground-draft.output",
+          draft: "$ref:booking-outcome.output.draft",
           followup: "$ref:claimed.output.followup",
           trigger: "$ref:flow_input.trigger",
         },
@@ -2895,7 +2976,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         inputMapping: {
           "body.campaign_id": EMAIL_THREAD_CAMPAIGN_REF,
           "body.email": "$ref:claimed.output.followup.email",
-          "body.body_html": "$ref:ground-draft.output.json.replyHtml",
+          "body.body_html": "$ref:booking-outcome.output.replyHtml",
           skip: "$ref:thread.output.skipEmail",
         },
       },
@@ -3251,7 +3332,10 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       { from: "alert-rep", to: "end-run-escalated" },
       { from: "name-no-reply-owed", to: "stop-followups" },
       { from: "stop-followups", to: "end-run-no-reply-owed" },
-      { from: "resolve-next-due", to: "finalize-reply" },
+      { from: "resolve-next-due", to: "plan-booking" },
+      { from: "plan-booking", to: "book-slot" },
+      { from: "book-slot", to: "booking-outcome" },
+      { from: "booking-outcome", to: "finalize-reply" },
       { from: "finalize-reply", to: "send-reply" },
       { from: "send-reply", to: "send-whatsapp-reply" },
       { from: "send-whatsapp-reply", to: "classify-send" },
@@ -3266,13 +3350,13 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         from: "check-sent",
         to: "record-followup",
         condition:
-          "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'answer'",
+          "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'answer' && results['booking-outcome']?.booked != true",
       },
       {
         from: "check-sent",
         to: "stop-followups-booked",
         condition:
-          "results['classify-send']?.outcome == 'sent' && results['ground-draft']?.json?.decision == 'confirm_booking'",
+          "results['classify-send']?.outcome == 'sent' && (results['ground-draft']?.json?.decision == 'confirm_booking' || results['booking-outcome']?.booked == true)",
       },
       {
         from: "check-sent",
