@@ -614,8 +614,7 @@ ${GAME.stop}    "Write like a person who knows them: short, plain, warm, one ide
   ].join("\\n");
 
   const message = [
-    "NOW: " + String(nowIso),
-    "TODAY: " + String(currentDate ?? String(nowIso).slice(0, 10)),
+    "NOW: " + String(nowIso) + " (" + stampAt(nowIso, null) + "; their own local time is under THEIR LOCAL TIME)",
     "CHANNEL: " + channel.channel + ". " + String(channel.why ?? ""),
     "Messages of ours on record: " + String(history?.ourMessages ?? 0) + ". Our last: " + String(history?.lastOursAt ?? "unknown") + ". Their last message: " + String(history?.lastTheirsAt ?? "never") + ".",
     ...(text ? ["", "INSTRUCTION from our client:", text] : []),

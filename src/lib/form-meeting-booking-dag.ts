@@ -58,6 +58,7 @@ import { personThreadNodes, relationshipReadNode, whoTheyAreNode } from "./perso
 import { CRM_WHATSAPP_SEND, WHATSAPP_REFUSAL_CODES } from "./cold-whatsapp-outreach-dag.js";
 import { DELIVERED, OCCURRENCE_SEND_REFUSAL_CODES, refusedDelivery } from "./occurrence-delivery.js";
 import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
+import { TIME_CONTEXT_FN } from "./time-context.js";
 
 export const FORM_MEETING_BOOKING_FEATURE_SLUG = "ai-meeting-booking";
 
@@ -145,7 +146,7 @@ export async function main(claim, trigger, leadDetail) {
  * The strategy is explained to the model, never a script per case (owner rule).
  */
 export const COMPOSE_ANSWER_PROMPT_CODE = `
-export async function main(person, offer, brand, rep, facts, currentDate, who) {
+export async function main(person, offer, brand, rep, facts, currentDate, who, leadDetail) {
   if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
     throw new Error("compose-answer: who this person is to the brand was not read; nothing is written blind");
   }
@@ -157,6 +158,9 @@ export async function main(person, offer, brand, rep, facts, currentDate, who) {
   if (!person?.email) throw new Error("compose-answer: no person to answer");
 
   const present = (v) => typeof v === "string" ? v.trim() !== "" : v !== null && v !== undefined;
+  // Their timezone and every location we hold (MB-TIME-CONTEXT-1103): a time they ask for is read in it.
+  const lead = leadDetail?.leadDetail?.lead ?? {};
+  const place = (o) => [o?.city, o?.state, o?.country].filter((v) => typeof v === "string" && v.trim() !== "").join(", ");
   const bookingUrl = present(offer?.bookingUrl) ? String(offer.bookingUrl).trim() : null;
   const senderName = present(rep?.salesRepFirstName) ? rep.salesRepFirstName.trim() : null;
   const exact = facts?.exact ?? [];
@@ -186,7 +190,15 @@ export async function main(person, offer, brand, rep, facts, currentDate, who) {
   ].join("\\n");
 
   const message = [
-    "TODAY: " + String(currentDate ?? new Date().toISOString().slice(0, 10)),
+    "NOW:",
+    ...nowLines(new Date().toISOString(), {
+      timezone: lead.timezone,
+      places: [
+        { label: "their own location", value: place(lead) },
+        { label: "their company's headquarters", value: place(lead.organization) },
+      ],
+      phone: lead.phone,
+    }),
     "",
     "WHO FILLED THE FORM:",
     "Email: " + person.email,
@@ -214,7 +226,9 @@ export async function main(person, offer, brand, rep, facts, currentDate, who) {
 
   return { systemPrompt, message };
 }
-`.trim();
+
+TIME_CONTEXT_FN_TEXT
+`.trim().replace("TIME_CONTEXT_FN_TEXT", TIME_CONTEXT_FN);
 
 /**
  * Holds the model to its contract before anything is sent: an `answer` with an empty subject, body or WhatsApp
@@ -411,6 +425,7 @@ function formMeetingBookingDagUnvoiced(): DAG {
           facts: "$ref:gather-facts.output",
           who: "$ref:who-they-are.output",
           currentDate: "$ref:flow_input.currentDate",
+          leadDetail: "$ref:lead-detail.output",
         },
       },
       {
