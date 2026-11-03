@@ -1265,11 +1265,11 @@ describe("a prospect who tells us when they are free", () => {
       "2026-09-28",
     );
 
-  it("labels every slot with its weekday so a stated window can be matched", async () => {
+  it("writes every slot out in full (weekday, date, hour, zone) so a stated window can be matched", async () => {
     const out = await compose(["2026-10-05T08:00:00-05:00", "2026-10-08T15:30:00-05:00"]);
     const message = out.message as string;
-    expect(message).toContain("- Monday 2026-10-05 08:00 (2026-10-05T08:00:00-05:00)");
-    expect(message).toContain("- Thursday 2026-10-08 15:30 (2026-10-08T15:30:00-05:00)");
+    expect(message).toContain("- Monday, October 5, 2026, 8:00 AM America/Chicago (UTC-05:00) (2026-10-05T08:00:00-05:00)");
+    expect(message).toContain("- Thursday, October 8, 2026, 3:30 PM America/Chicago (UTC-05:00) (2026-10-08T15:30:00-05:00)");
   });
 
   it("tells the model a timing preference is answered with times inside it, never escalated", async () => {

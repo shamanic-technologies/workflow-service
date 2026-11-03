@@ -656,8 +656,7 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
 
   const last = history.lastMessage;
   const message = [
-    "TODAY: " + String(currentDate ?? new Date().toISOString().slice(0, 10)),
-    "NOW: " + new Date().toISOString(),
+    "NOW: " + nowIso + " (" + stampAt(nowIso, null) + "; their own local time is under THEIR LOCAL TIME)",
     "",
     "INSTRUCTION:",
     text || "(none: follow the strategy)",

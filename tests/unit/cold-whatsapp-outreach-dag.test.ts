@@ -366,7 +366,7 @@ describe("composing the message", () => {
     expect(system).not.toContain("no other message after this one");
     expect(system).not.toMatch(/[–—]/);
     expect(out.message as string).toContain("(none: follow the strategy)");
-    expect(out.message as string).toMatch(/\nNOW: \d{4}-\d{2}-\d{2}T/);
+    expect(out.message as string).toMatch(/^NOW: \d{4}-\d{2}-\d{2}T.*\(\w+day, \w+ \d+, \d{4}, \d{2}:\d{2} UTC;/);
   });
 
   it("a first message writes and states the first follow-up look's date", async () => {

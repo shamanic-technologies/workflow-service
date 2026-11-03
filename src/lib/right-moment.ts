@@ -25,6 +25,7 @@
  * lives (its own follow-up queue row, or the follow-up date trigger) and calls the same text and checks.
  */
 import { REFUSAL_SKIP_CODES } from "./dag-to-openflow.js";
+import { TIME_CONTEXT_FN } from "./time-context.js";
 
 /**
  * Send refusals that are NOT a stop: a step of the brand's sequence to them is still queued (two of our emails would
@@ -117,34 +118,20 @@ export const localTimeStrategy = (m: RightMomentMedium): string =>
   "say so in reason and never assume UTC. Any day or time you put in the " + m.message + " is in their timezone, never UTC.";
 
 /**
- * `localTimeLines(nowIso, clues)`: the person's local time as plain lines. `clues`: `{timezone, city, country, phone}`.
- * A stated IANA timezone gives the exact local time; otherwise the clues are listed for the model and an unknown
- * timezone is said in words (never UTC silently). Script text, appended after `main` (function declarations hoist).
+ * `localTimeLines(nowIso, clues)`: the person's local time as plain lines. `clues`: `{timezone, city, country, phone,
+ * places?}`. A stated IANA timezone gives the full local date and hour with its UTC offset, and UTC beside it
+ * (MB-TIME-CONTEXT-1103); otherwise every location held is listed for the model and an unknown timezone is said in
+ * words (never UTC silently). Carries `TIME_CONTEXT_FN` (time-context.ts): a script never appends both. Script text,
+ * appended after `main` (function declarations hoist).
  */
 export const LOCAL_TIME_FN = `
 function localTimeLines(nowIso, clues) {
   const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
-  const now = new Date(String(nowIso ?? ""));
-  const at = Number.isFinite(now.getTime()) ? now : new Date();
-  const tz = s(clues?.timezone);
-  if (tz) {
-    try {
-      const local = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
-      return ["Their local time now: " + local + " (" + tz + ")."];
-    } catch {
-      // Not an IANA name: read as a clue below.
-    }
-  }
-  const found = [
-    tz ? "timezone as stated: " + tz : null,
-    s(clues?.phone) ? "phone " + s(clues.phone) : null,
-    [s(clues?.city), s(clues?.country)].filter(Boolean).join(", ") || null,
-  ].filter(Boolean);
-  if (found.length) {
-    return ["Their timezone is not stated. Clues: " + found.join("; ") + ". Work out their local time from them (now is " + at.toISOString() + " in UTC)."];
-  }
-  return ["Their timezone is unknown and nothing hints at it (no phone, no city). Judge from the hours they write at in THE THREAD, and never assume UTC."];
+  const city = [s(clues?.city), s(clues?.country)].filter(Boolean).join(", ");
+  const places = [...(city ? [{ label: "their city", value: city }] : []), ...(Array.isArray(clues?.places) ? clues.places : [])];
+  return nowLines(nowIso, { timezone: clues?.timezone, places, phone: clues?.phone });
 }
+${TIME_CONTEXT_FN}
 `.trim();
 
 /** The email writers' game (ai-follow-up-email, both prospect follow-ups). */

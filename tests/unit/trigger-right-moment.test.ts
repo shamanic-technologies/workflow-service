@@ -52,7 +52,7 @@ describe("a trigger-made WhatsApp judges the right moment and their local time (
     expect(system).toContain("If you choose later, nothing is sent, the message stays owed");
     expect(system).not.toContain("Set decision to write and leave nextFollowUpAt");
     // Their local time: no timezone stated, so the clue (a US +1 585 number) is given and UTC is never assumed.
-    expect(message).toContain("THEIR LOCAL TIME:\nTheir timezone is not stated. Clues: phone +15855550123");
+    expect(message).toContain("Their timezone is unknown: nothing we hold states it.\nWhere they may be, from what we hold: phone: +15855550123.");
     // The thread that makes it NOT the right moment is in front of the model: we wrote last, they have not answered.
     expect(message).toContain("THE CONVERSATION STOPPED HERE: OWNER wrote last, 2026-10-16");
     expect(system + message).not.toMatch(/[–—]/);
@@ -123,15 +123,18 @@ describe("the deferred look: a row this campaign never wrote to is still owed", 
 
 describe("their local time", () => {
   it("a stated timezone gives the exact local time", () => {
-    expect(localTimeLines("2026-10-16T12:27:00Z", { timezone: "America/New_York" })).toEqual(["Their local time now: Friday 08:27 (America/New_York)."]);
+    expect(localTimeLines("2026-10-16T12:27:00Z", { timezone: "America/New_York" })).toEqual(["Now, where they are: Friday, October 16, 2026, 8:27 AM America/New_York (UTC-04:00). In UTC: Friday, October 16, 2026, 12:27 UTC."]);
   });
 
   it("no timezone: the clues, or 'unknown', never UTC silently", () => {
-    expect(localTimeLines("2026-10-16T12:27:00Z", { phone: "+15855550123", city: "Rochester", country: "United States" })[0])
-      .toBe("Their timezone is not stated. Clues: phone +15855550123; Rochester, United States. Work out their local time from them (now is 2026-10-16T12:27:00.000Z in UTC).");
-    expect(localTimeLines("2026-10-16T12:27:00Z", { timezone: "GMT+1" })[0]).toContain("timezone as stated: GMT+1");
-    expect(localTimeLines("2026-10-16T12:27:00Z", {})[0]).toContain("Their timezone is unknown");
-    expect(localTimeLines("2026-10-16T12:27:00Z", {})[0]).toContain("never assume UTC");
+    expect(localTimeLines("2026-10-16T12:27:00Z", { phone: "+15855550123", city: "Rochester", country: "United States" })).toEqual([
+      "Now, in UTC: Friday, October 16, 2026, 12:27 UTC.",
+      "Their timezone is unknown: nothing we hold states it.",
+      "Where they may be, from what we hold: their city: Rochester, United States; phone: +15855550123. Work out their likely timezone from these, and write any day or time you give them in it, naming the zone. Never assume UTC.",
+    ]);
+    expect(localTimeLines("2026-10-16T12:27:00Z", { timezone: "GMT+1" }).join("\n")).toContain("timezone as written (not a zone we can read): GMT+1");
+    expect(localTimeLines("2026-10-16T12:27:00Z", {}).join("\n")).toContain("Their timezone is unknown");
+    expect(localTimeLines("2026-10-16T12:27:00Z", {}).join("\n")).toContain("Never assume UTC");
   });
 
   it("the follow-up channel (email and WhatsApp, occurrence runs included) gets the same local time", async () => {
@@ -143,7 +146,7 @@ describe("their local time", () => {
         { answering: false, skipTriggerRead: true }, { notCalled: true }, null, "2026-10-16T12:27:00Z", "2026-10-16", who,
       );
       expect(out.systemPrompt as string).toContain(localTimeStrategy(medium));
-      expect(out.message as string).toContain("THEIR LOCAL TIME:\nTheir local time now: Friday 08:27 (America/New_York).");
+      expect(out.message as string).toContain("THEIR LOCAL TIME:\nNow, where they are: Friday, October 16, 2026, 8:27 AM America/New_York (UTC-04:00). In UTC: Friday, October 16, 2026, 12:27 UTC.");
     }
   });
 });

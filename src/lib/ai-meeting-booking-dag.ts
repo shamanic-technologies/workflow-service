@@ -147,6 +147,7 @@ import { LEG_BEST_LLM_MODEL_REF, hasStaleLlmPlan, withLegBestLlm, writesWithLegB
 import type { DAG } from "./dag-validator.js";
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
+import { TIME_CONTEXT_FN } from "./time-context.js";
 import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
 
@@ -1422,7 +1423,14 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
     throw new Error("[ai-meeting-booking] who this person is to the brand was not read; refusing to draft blind");
   }
-  const timezone = booking?.timezone ?? "UTC";
+  // THEIR TIMEZONE (MB-TIME-CONTEXT-1103): the lead's own, when it is a zone we can read. Unknown is said in
+  // words with every location we hold, never a silent UTC; the availability is then read in UTC and labelled so.
+  // booking-slots read the slots in the lead's zone, "UTC" when the lead had none.
+  const zone = validTimeZone(person.timezone) ?? (booking?.timezone !== "UTC" ? validTimeZone(booking?.timezone) : null);
+  const timezone = zone ?? "UTC";
+  const inTheirZone = zone
+    ? "already converted to the prospect's own timezone (" + zone + ")"
+    : "in UTC, because their timezone is unknown (see NOW): convert each time to the timezone you work out for them before you write it, and name that zone";
 
   // WHO WE SAID WE WERE. The voice of the reply follows the identity our own
   // emails already gave the prospect; the facts are owned the same way in
@@ -1479,7 +1487,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     line("Departments", person.departments),
     line("Functions", person.functions),
     line("Based in", place(person)),
-    line("Timezone", timezone),
+    line("Timezone", zone ?? "unknown (not stated anywhere we hold)"),
     line("Languages", person.businessLanguages),
     line("Earlier roles", pastRoles),
     line("LinkedIn", person.linkedinUrl),
@@ -1548,10 +1556,13 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
 
   const messages = conversation?.conversation?.messages ?? [];
   const replyChannel = conversation?.replyChannel ?? "email";
-  const transcript = messages.map((m) => {
-    const who = m?.direction === "inbound" ? "PROSPECT" : "US";
+  // Every message dated in full, in their timezone: "early next week" is read against the day THEY wrote it.
+  let lastTheirs = -1;
+  messages.forEach((m, i) => { if (m?.direction === "inbound") lastTheirs = i; });
+  const transcript = messages.map((m, i) => {
+    const who = m?.direction === "inbound" ? (i === lastTheirs ? "PROSPECT (their last message)" : "PROSPECT") : "US";
     const on = m?.channel && m.channel !== "email" ? " on " + m.channel : "";
-    const when = m?.at ? " (" + m.at + ")" : "";
+    const when = m?.at ? " (" + (stampAt(m.at, zone) ?? m.at) + ")" : "";
     return who + on + when + ":\\n" + String(m?.text ?? "").trim();
   }).join("\\n\\n---\\n\\n");
   // The reply goes out where they last wrote. Email keeps its thread rules;
@@ -1628,28 +1639,24 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "",
   ];
 
-  // Each slot is labelled with its weekday so the model can match what the
-  // prospect said ("next week", "Thursday afternoon") without doing calendar
-  // arithmetic. The date part is already the prospect's local date.
-  const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const slotLines = (booking?.slots ?? []).map((s) => {
-    const weekday = WEEKDAYS[new Date(String(s).slice(0, 10) + "T12:00:00Z").getUTCDay()];
-    return "- " + (weekday ? weekday + " " : "") + String(s).slice(0, 10) + " " + String(s).slice(11, 16) + " (" + s + ")";
-  }).join("\\n");
+  // Each slot is written out in full (weekday, date, hour, zone) so the model can
+  // match what the prospect said ("next week", "Thursday afternoon") against NOW
+  // and the day they wrote, without doing calendar arithmetic.
+  const slotLines = (booking?.slots ?? []).map((s) => "- " + (stampAt(s, zone) ?? String(s)) + " (" + s + ")").join("\\n");
 
   // No availability and no link to hand them: we still move to the call by
   // proposing one concrete time ourselves, never by giving up or escalating.
-  const proposeTime = "Propose ONE concrete time for the call yourself, written out in plain words with its weekday and date, in their timezone (" + timezone + "): a weekday between 09:00 and 17:00 their time, at least one working day after today, and inside any window they gave (\\"this week\\" means a day left this week, else the first working day after it). Say you will send an invite, and that another time works too if that one does not suit them. Never ask them to suggest times instead of proposing one, and never escalate for lack of a link or a calendar.";
+  const proposeTime = "Propose ONE concrete time for the call yourself, written out in plain words with its weekday and date, in their timezone (" + (zone ?? "the one you work out for them, named") + "): a weekday between 09:00 and 17:00 their time, at least one working day after today, and inside any window they gave (\\"this week\\" means a day left this week, else the first working day after it). Say you will send an invite, and that another time works too if that one does not suit them. Never ask them to suggest times instead of proposing one, and never escalate for lack of a link or a calendar.";
   // A blind thread never gives the link: a booking page names who runs it.
   const bookingSection = stance === "blind"
     ? (!booking?.degraded
-        ? "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words. Do NOT give any link (a booking page would reveal who our client is): if neither works, ask which times suit them and say you will send an invite. If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and ask which times in their window suit them.\\n" + slotLines
+        ? "Availability over the coming weeks, " + inTheirZone + ", a few times per open day. Propose EXACTLY TWO of these, written out in plain words. Do NOT give any link (a booking page would reveal who our client is): if neither works, ask which times suit them and say you will send an invite. If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and ask which times in their window suit them.\\n" + slotLines
         : "The availability could not be read (" + booking?.degradedReason + "). Do NOT give any link (it would reveal who our client is). " + proposeTime)
     : booking?.degraded
     ? (booking?.bookingUrl
         ? "The booking page could not be read (" + booking.degradedReason + "). Do NOT invent times. Give them the booking link and let them pick: " + booking.bookingUrl
         : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent a link. " + proposeTime)
-    : "Availability over the coming weeks, already converted to the prospect's own timezone (" + timezone + "), a few times per open day. Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
+    : "Availability over the coming weeks, " + inTheirZone + ", a few times per open day. Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
 
   // THE HAND-OVER EMAIL (MB-ANSWER-NOT-ESCALATE-1102, owner 2026-11-02: one
   // writer handles every case, the hand-over competes inside the dynasty like
@@ -1671,7 +1678,16 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   ];
 
   const message = [
-    "Today is " + (currentDate ?? new Date().toISOString().split("T")[0]) + ".",
+    "NOW",
+    ...nowLines(new Date().toISOString(), {
+      timezone: person.timezone,
+      places: [
+        { label: "their own location", value: place(person) },
+        { label: "their company's headquarters", value: place(org) },
+      ],
+      phone: person.phone,
+    }),
+    "Read every day they name (\\"next week\\", \\"Thursday\\", \\"after the 15th\\") against the day and hour THEY wrote it, shown on their message below, in their timezone.",
     "",
     "You are answering one prospect who replied to the outreach we sent for our client, " + client + ", and showed interest.",
     "",
@@ -1753,8 +1769,11 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
 }
 
 SENDER_PERSONA_FN_TEXT
+
+TIME_CONTEXT_FN_TEXT
 `.trim()
   .replace("SENDER_PERSONA_FN_TEXT", SENDER_PERSONA_FN)
+  .replace("TIME_CONTEXT_FN_TEXT", TIME_CONTEXT_FN)
   .replace("STANCES_LIST", JSON.stringify(STANCES))
   .replace("PLAYBOOKS_LIST", JSON.stringify(PLAYBOOKS))
   .replace("PLAYBOOK_LINES", JSON.stringify(ACQUISITION_QUESTIONS_PLAYBOOK))
@@ -1948,6 +1967,17 @@ export function needsGeneralInterestAnswer(dag: { nodes?: Array<{ id?: string; c
   const reply = code("compose-prompt");
   if (questions === undefined && reply === undefined) return false;
   return questions !== COMPOSE_QUESTIONS_PROMPT_CODE || reply !== COMPOSE_REPLY_PROMPT_CODE;
+}
+
+/**
+ * True when a stored DAG's writer still reads a bare "Today is <date>" (MB-TIME-CONTEXT-1103: Thomas wrote on a
+ * Monday "suggest a time early next week" and got two times in the same week): no weekday, no hour, no zone, and
+ * messages dated in UTC ISO. The current writer reads NOW in full in the lead's timezone and dates every message.
+ */
+export function needsTimeContext(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const reply = (dag?.nodes ?? []).find((n) => n?.id === "compose-prompt")?.config?.code;
+  if (reply === undefined) return false;
+  return reply !== COMPOSE_REPLY_PROMPT_CODE;
 }
 
 /** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
