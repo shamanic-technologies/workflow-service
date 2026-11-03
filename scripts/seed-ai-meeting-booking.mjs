@@ -52,6 +52,7 @@ import {
   needsThreadCampaignReply,
   needsGeneralInterestAnswer,
   needsTimeContext,
+  needsAutoBooking,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 import { needsMessageWrittenDeclaration } from "../dist/lib/message-written-outcome.js";
@@ -428,7 +429,8 @@ async function main() {
         needsSettledThreadRefusal(w.dag) ||
         needsThreadCampaignReply(w.dag) ||
         needsGeneralInterestAnswer(w.dag) ||
-        needsTimeContext(w.dag))
+        needsTimeContext(w.dag) ||
+        needsAutoBooking(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
