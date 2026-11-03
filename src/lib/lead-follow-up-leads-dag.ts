@@ -18,8 +18,9 @@
  */
 import type { DAG } from "./dag-validator.js";
 import {
-  COMPOSE_FOLLOW_UP_CODE,
   FOLLOW_UP_REACTIVE_DESCRIPTION,
+  LEAD_FOLLOW_UP_GAME,
+  composeFollowUpCode,
   READ_STATE_CODE,
   buildFollowUpReactiveDag,
   type FollowUpAudience,
@@ -38,7 +39,9 @@ export const LEADS_ONLY_AUDIENCE: FollowUpAudience = {
   claimBody: { relationships: LEADS_ONLY_POLICY },
   resolveClaimedCode: RESOLVE_LEAD_CODE,
   readStateCode: READ_STATE_CODE,
-  composeCode: COMPOSE_FOLLOW_UP_CODE,
+  // The writer reads what the occurrence CARRIES (a booked meeting's start time and timezone, a form's words): the
+  // fact it answers, in its own record (MEETING-REMINDER-1103).
+  composeCode: composeFollowUpCode({ ...LEAD_FOLLOW_UP_GAME, occurrenceItem: true }),
   // Not a lead: final, never redelivered. lead-service cannot say yet: idle, redelivered later. Same ends as the client.
   claimEnds: CLIENT_CHECK_IN_AUDIENCE.claimEnds,
   // The Copilot writes (ONE-AI-CONVERSES-1029): the same AI as on the web and Sophie's line, which reads the lead's

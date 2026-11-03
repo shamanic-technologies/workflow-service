@@ -8,7 +8,6 @@ import {
   FOLLOW_UP_END_KINDS,
   NO_CHANNEL_RECHECK_DAYS,
   OUTCOME_CODE,
-  QUEUED_FOLLOW_UP_GAP_DAYS,
   READ_STATE_CODE,
   RESOLVE_CLAIMED_PERSON_CODE,
   RESOLVE_SERVED_PERSON_CODE,
@@ -156,23 +155,14 @@ describe("lead-service's follow-up state", () => {
     expect(out).toMatchObject({ proceed: false, kind: "not_yet" });
     expect(Date.parse(out.nextFollowUpAt)).toBeGreaterThan(Date.now() + 86400000);
   });
-  it("a follow-up queued by another campaign: nothing written, no model, the date moves past it", async () => {
-    const at = inDays(1);
-    const other = { leadCampaignId: "row-other", campaignId: "c2", dueAt: at, claimedAt: null };
-    const out = await main(person(), answer({ kind: "owed" }, { any: true, followups: [other] }), NOW);
-    expect(out).toMatchObject({ proceed: false, kind: "queued" });
-    expect(Date.parse(out.nextFollowUpAt)).toBe(Date.parse(at) + QUEUED_FOLLOW_UP_GAP_DAYS * 86400000);
-  });
-  it("an occurrence run ignores another campaign's row made due by the same facts (a Copilot proposal writes nothing to them)", async () => {
-    const due = "2026-10-27T13:38:31.278Z";
-    const sibling = { leadCampaignId: "row-proposal", campaignId: "c-proposal", dueAt: "2026-10-27T13:38:19.200Z", claimedAt: null };
-    const own = { leadCampaignId: "row-1", campaignId: "c", dueAt: due, claimedAt: due };
-    const answering = person({ dueAt: due, answersOccurrence: true });
-    expect(await main(answering, answer({ kind: "owed" }, { any: true, followups: [sibling, own] }), NOW)).toMatchObject({ proceed: true });
-    // An older queued message still holds, and a scheduled look (no occurrence) keeps the whole rule.
-    const older = { ...sibling, dueAt: "2026-10-27T12:00:00.000Z" };
-    expect(await main(answering, answer({ kind: "owed" }, { any: true, followups: [older, own] }), NOW)).toMatchObject({ proceed: false, kind: "queued" });
-    expect(await main(person({ dueAt: due }), answer({ kind: "owed" }, { any: true, followups: [sibling, own] }), NOW)).toMatchObject({ proceed: false, kind: "queued" });
+  it("another campaign's row never holds them: the writer decides the one next date (MEETING-REMINDER-1103)", async () => {
+    // Thomas (Doc Dinners, 2026-11-03): booked a meeting for the next day; a date stated before it, 3 weeks out, by the
+    // meeting-booking campaign was read as "already owed" and nothing was written.
+    const before = { leadCampaignId: "row-meeting-booking", campaignId: "c-mb", dueAt: inDays(21), claimedAt: null };
+    const answering = person({ dueAt: NOW, answersOccurrence: true });
+    expect(await main(answering, answer({ kind: "owed" }, { any: true, followups: [before] }), NOW)).toMatchObject({ proceed: true });
+    const soon = { ...before, dueAt: inDays(1) };
+    expect(await main(person(), answer({ kind: "owed" }, { any: true, followups: [soon] }), NOW)).toMatchObject({ proceed: true });
   });
   it("a queued email sequence step: nothing written, lead-service's later date kept", async () => {
     const later = inDays(20);
