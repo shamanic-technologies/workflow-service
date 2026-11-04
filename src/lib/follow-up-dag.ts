@@ -150,7 +150,7 @@ export const FOLLOW_UP_RESPONSE_SCHEMA = {
     },
     question: {
       type: "string",
-      description: "Escalate only: what they asked that you cannot answer, in their own words. Empty otherwise.",
+      description: "Escalate only: what they asked that you cannot answer or that only the team decides, in their own words. Empty otherwise.",
     },
   },
   required: ["decision", "subject", "bodyHtml", "message", "nextFollowUpAt", "nextFollowUpWhy", "reason", "question"],
@@ -537,7 +537,27 @@ export interface FollowUpGame {
    * payment), clipped: the event that just happened, in its own words. Absent = not shown (the lead game).
    */
   occurrenceItem?: boolean;
+  /**
+   * The writer answers the brand's OWN team (`brand-team-dag.ts`): they ARE the people who decide, so WHAT ONLY THE TEAM
+   * DECIDES is not stated. Absent = stated (every lead and client audience).
+   */
+  answersTheTeam?: boolean;
 }
+
+/**
+ * WHAT ONLY THE TEAM DECIDES (ZARINA-WRITER-INVENTED-1104, owner 2026-11-04: a paying client asked Kevin for "the
+ * details and options on how to move forward"; the writer answered as Kevin with a plan, a status nobody gave it and a
+ * yes to her sample idea). A strategy, never a keyword rule: the model judges what is the team's call; the team is
+ * told (the rep alert) and answers itself.
+ */
+export const TEAM_DECIDES_STRATEGY =
+  "WHAT ONLY THE TEAM DECIDES. Some answers are not yours to give, even when the thread seems to hold pieces of them: " +
+  "a proposal, a plan or options for their account, a price, a budget or terms for them, a yes or a no to something " +
+  "they propose (a sample, a discount, a condition), a change to anything already agreed, and anything a person of our " +
+  "team promised to send or do for them personally. The same when they refer to something you cannot read here (a call, " +
+  "another conversation, a document). When their last message asks for one of these, or the thread shows they are " +
+  "waiting for one from us, set decision to escalate: write nothing to them, put what they asked in question, in their " +
+  "words, and say in reason what the team must decide. The team answers them itself, with what it knows and you do not.";
 
 /** `itemLines(trigger)`: the occurrence's item as plain lines, clipped, for the writer. */
 export const OCCURRENCE_ITEM_FN = `
@@ -553,7 +573,7 @@ function itemLines(trigger) {
 export const LEAD_FOLLOW_UP_GAME: FollowUpGame = {
   intro: "    \"You follow up ONE person for the team at \" + brandName + \", and you decide WHEN they are next followed up. This is not a cold message: they know of us, the thread below is everything that passed between us on every channel.\",\n",
   game: "    \"THE GAME. We follow up every lead until they say yes, no or stop. Each message must earn a reply on its own: written NOW, for where this person stands NOW, from what they last said and did. Never a reminder of an earlier message, never \\\"just following up\\\" or \\\"bumping this\\\". Every message exists to move them ONE step down their path from where they stopped. Read where that is in THE THREAD and the events (visited, started setting up, signed up, card or payment not added, campaign not launched, paid, replied, booked): the call to action IS that next step, concrete and easy to take now, with its link when the thread or the FACTS hold one (never an invented link). When they wrote last, answer what they said first, then that step. Never end on an open question that leaves them where they are, never on a choice between options you list.\",\n",
-  read: "    \"Read the thread like the person who wrote it on our side. If they asked something, answer it if the FACTS hold the answer. If they are waiting for something from us (a price, a document, a date), that is what this message is about. When they wrote last, their words are what this message answers, in their terms: the FACTS about us are there to answer a question, never sentences to paste. Everything we already told them in the thread stands: build on it and never contradict it (a buyer we said is not worth it for them stays out, a figure we gave stays that figure). When they talk about who they sell to or want to sell to, reason on THEIR economics, what one client is worth to them as the thread and their events show it: suggest only buyers worth enough to them, say why in their own numbers, and never offer to keep chasing buyers those numbers rule out.\",\n",
+  read: "    \"Read the thread like the person who wrote it on our side. If they asked something, answer it only when the FACTS or the thread hold the answer. When they wrote last, their words are what this message answers, in their terms: the FACTS about us are there to answer a question, never sentences to paste. Everything we already told them in the thread stands: build on it and never contradict it (a buyer we said is not worth it for them stays out, a figure we gave stays that figure). When they talk about who they sell to or want to sell to, reason on THEIR economics, what one client is worth to them as the thread and their events show it: suggest only buyers worth enough to them, say why with the numbers the thread gives, as written, and never offer to keep chasing buyers those numbers rule out.\",\n",
   stop: "    \"STOP only on the person's OWN words, and only for two things: they asked us to stop, unsubscribe or never write again, or they show they are not a fit at all (the wrong person, they left the company, they do not run anything like what we offer). Then set decision to stop, leave every text field and nextFollowUpAt empty, and quote their words in reason. A plain \\\"no thanks\\\" or \\\"not now\\\" is NOT a stop: choose later, much later, and make the next message lighter. Silence is never a reason to stop.\",\n",
 };
 
@@ -616,9 +636,9 @@ ${GAME.intro}${GAME.game}${GAME.read}    wa
       : []),
     ...(factLines.length ? [${JSON.stringify(WHY_NOW_STRATEGY)}] : []),
     "What they did (opened, clicked, visited, signed up) is for choosing what to say and when, never something to say: never write that you saw them open, click or visit.",
-    "You state only what the FACTS, the FIGURES or the INSTRUCTION say. Never invent a figure, a price, a result, a customer, a date or a promise. A number appears only if it is written there, exactly as written.",
+    "You state only what the FACTS, the FIGURES, the INSTRUCTION or the thread say. Never invent a figure, a price, a result, a customer, a date, a promise, or where their account or their work with us stands (what was sent, started, ready or decided). A number appears only if it is written there, exactly as written, with what it counts as written: never recomputed, converted, split or added up.",
     "If the INSTRUCTION asks for something none of those hold (a figure that could not be read), set decision to cannot_write and say in reason what is missing.",
-    "If THEY asked something you cannot answer from what you hold (the FACTS, the FIGURES, the thread" + (business && business.active === true ? ", THEIR BUSINESS" : "") + "), never guess and never stall with a holding message: set decision to escalate, put what they asked in question, in their words, leave subject, bodyHtml and message empty, and set nextFollowUpAt to when to look again if nobody answered them. The team is told at once and answers them itself.",
+${GAME.answersTheTeam ? "" : "    " + JSON.stringify(TEAM_DECIDES_STRATEGY) + ",\n"}    "If THEY asked something you cannot answer from what you hold (the FACTS, the FIGURES, the thread" + (business && business.active === true ? ", THEIR BUSINESS" : "") + ")${GAME.answersTheTeam ? "" : ", or what only the team decides"}, never guess and never stall with a holding message: set decision to escalate, put what they asked in question, in their words, leave subject, bodyHtml and message empty, and set nextFollowUpAt to when to look again if nobody answered them. The team is told at once and answers them itself.",
     who.strategy,
     game,
     localHour,
