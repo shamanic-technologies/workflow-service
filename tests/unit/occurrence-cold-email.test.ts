@@ -89,6 +89,7 @@ describe("a cold email run answering an occurrence states what became of the per
     expect(sent(transform(coldEmailDag(), "email_send", "skipOnRefusalCodes"), occurrence)).toEqual([
       "recent_brand_contact",
       "lead_opted_out",
+      "stated_not_to_brand",
       "*",
     ]);
   });
@@ -102,7 +103,7 @@ describe("a cold email run answering an occurrence states what became of the per
       success: true,
       stopCampaign: false,
     });
-    expect(sent(transform(coldEmailDag(), "email_send", "skipOnRefusalCodes"), {})).toEqual(["recent_brand_contact", "lead_opted_out"]);
+    expect(sent(transform(coldEmailDag(), "email_send", "skipOnRefusalCodes"), {})).toEqual(["recent_brand_contact", "lead_opted_out", "stated_not_to_brand"]);
   });
 
   it("a DAG that maps delivery itself keeps its own", () => {
