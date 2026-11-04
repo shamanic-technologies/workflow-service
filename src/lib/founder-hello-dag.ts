@@ -45,6 +45,7 @@ import { CRM_WHATSAPP_SEND } from "./ai-meeting-booking-dag.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { BUBBLE_SEND_FN, HAND_TYPED_FN } from "./whatsapp-bubbles.js";
 import { ASSISTANT_PART_MARKER } from "./founder-hello-template.js";
+import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
 
 export const FOUNDER_HELLO_FEATURE_SLUG = "founder-hello";
 export const FOUNDER_HELLO_LEG_KEY = "start_to_conversation";
@@ -89,6 +90,7 @@ export const FOUNDER_HELLO_REFUSAL_CODES = [
   "person_replied",
   "automation_not_allowed",
   "human_in_conversation",
+  STATED_NOT_TO_BRAND_CODE,
 ] as const;
 
 const DRY = "flow_input.dryRun === true || flow_input.dryRun === 'true'";
@@ -477,6 +479,10 @@ export async function main(person, reach, verdict, final, send, admission, assis
   if (person?.go !== true) return { endKind: person?.end ?? "nobody_due", skipRecord: true, rowId: null, rowReason: null };
   if (person.dryRun === true) return { endKind: "dry_run", skipRecord: true, rowId: null, rowReason: null, text: final?.text ?? null, assistantText: final?.assistantText ?? null, assistantLine: verdict?.assistantLine ?? null, replayTo: final?.replayTo ?? null, replay: final?.replayTo ? { hello: send?.skipped === true ? { state: "refused", code: send.code ?? null } : send && send.notCalled !== true ? { state: "sent" } : { state: "none" }, assistant } : null, wouldNotAdmit: admission?.wouldNotAdmit ?? reach?.notAdmitted ?? null, refused: verdict?.wouldRefuse ?? null };
   if (reach?.notAdmitted) return { endKind: "not_admitted", notAdmitted: reach.notAdmitted, ...row("founder_hello_" + String(reach.code)) };
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): not admitted, a quiet skip,
+  // never a refused delivery (an unsent answer).
+  const notToBrand = verdict?.refused?.code === "${STATED_NOT_TO_BRAND_CODE}" || (send?.skipped === true && send?.notCalled !== true && send?.code === "${STATED_NOT_TO_BRAND_CODE}");
+  if (notToBrand) return { endKind: "not_admitted", notAdmitted: { reason: "${STATED_NOT_TO_BRAND_CODE}" }, ...row("founder_hello_whatsapp_${STATED_NOT_TO_BRAND_CODE}") };
   if (verdict?.refused) return { endKind: "refused", delivery: { state: "refused", code: verdict.refused.code, reason: verdict.refused.reason }, ...row("founder_hello_whatsapp_" + verdict.refused.code) };
   if (send?.skipped === true && send?.notCalled !== true) {
     const code = typeof send.code === "string" && send.code ? send.code : "refused";

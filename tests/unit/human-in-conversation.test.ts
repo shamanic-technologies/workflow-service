@@ -59,7 +59,7 @@ describe("human_in_conversation is a named WhatsApp refusal, never a failed run"
     await expect(loadMain(CLASSIFY_SEND_CODE)({}, { ok: false, skipped: true, code: "not_on_whatsapp" }, "whatsapp")).rejects.toThrow(/no send on record/);
     const dag = buildAiMeetingBookingDag({ provider: "anthropic", model: "opus" } as never);
     const send = dag.nodes.find((n) => n.id === "send-whatsapp-reply");
-    expect((send?.config as { skipOnRefusalCodes: string[] }).skipOnRefusalCodes).toEqual([HUMAN_IN_CONVERSATION_CODE]);
+    expect((send?.config as { skipOnRefusalCodes: string[] }).skipOnRefusalCodes).toEqual([HUMAN_IN_CONVERSATION_CODE, "stated_not_to_brand"]);
     expect(dag.edges.some((e) => e.to === "end-run-human-took-over" && e.condition?.includes("human_took_over"))).toBe(true);
     expect(needsWhatsappTakeover(dag)).toBe(false);
     expect(needsWhatsappTakeover({ nodes: [{ id: "send-whatsapp-reply", config: {} }] })).toBe(true);

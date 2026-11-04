@@ -68,7 +68,10 @@ describe("follow-up (every pipe)", () => {
       for (const kind of ["later", "queued", "not-yet", "not-owed", "stopped"]) {
         expect(endRunBody(dag, `end-run-${kind}`, {})).toEqual({ success: true, stopCampaign: false });
       }
-      expect(FOLLOW_UP_END_KINDS.length).toBe(11);
+      // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): no delivery, not admitted.
+      expect(endRunBody(dag, "end-run-not-to-brand", { outcome: { notAdmitted: { reason: "stated_not_to_brand" } } }))
+        .toEqual({ success: true, stopCampaign: false, personNotAdmitted: { reason: "stated_not_to_brand" } });
+      expect(FOLLOW_UP_END_KINDS.length).toBe(12);
       expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
     });
   }
