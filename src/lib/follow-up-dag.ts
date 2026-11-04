@@ -47,6 +47,7 @@ import { PERSON_THREAD_NODE_ID, PERSON_THREAD_QUERY_NODE_ID, relationshipReadNod
 import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } from "./occurrence-fact.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
+import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
 import {
   EMAIL_MEDIUM,
   FOLLOW_UP_SEND_REFUSAL_CODES,
@@ -105,6 +106,7 @@ export const FOLLOW_UP_WHATSAPP_REFUSAL_CODES = [
   "person_replied",
   "automation_not_allowed",
   "human_in_conversation",
+  STATED_NOT_TO_BRAND_CODE,
 ] as const;
 
 /** Email refusals that mean the person is out for good (opted out, not a prospect): the chain stops. */
@@ -122,6 +124,7 @@ export const FOLLOW_UP_ROW_REASONS = {
   noChannel: "follow_up_no_channel",
   notWritable: "instruction_not_writable",
   escalated: "follow_up_escalated",
+  notToBrand: "follow_up_stated_not_to_brand",
 } as const;
 
 export const FOLLOW_UP_PROACTIVE_DESCRIPTION =
@@ -421,6 +424,12 @@ export async function main(person, plan, reach, timeline) {
       persona: senderPersona(reach),
       why: "The brand's WhatsApp reaches them (" + String(reach.to) + ")" + (lastWhere && lastWhere !== "whatsapp" ? "; their last message came by " + lastWhere : "") + ".",
     };
+  }
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): nothing on ANY channel, never
+  // an email instead.
+  if (reach.code === "${STATED_NOT_TO_BRAND_CODE}") {
+    console.log("[follow-up] the brand stated " + String(person.email ?? person.phone ?? "this person") + " is not someone of theirs: nothing drafted, nothing sent on any channel");
+    return { channel: null, skipModel: true, notToBrand: true, why: "The brand stated this person is not someone of theirs" };
   }
   if (email) {
     return {
@@ -831,6 +840,16 @@ export async function main(person, plan, channel, final, sendWhatsapp, sendEmail
   if (plan?.kind === "stop") return { endKind: "not_owed", ...row(R.notOwed), skipSetDate: true, setDateBody: {}, skipStop: true, stopBody: {}, delivery: null };
   if (plan?.kind === "not_yet") return { endKind: "not_yet", ...row(R.notYet), ...date(plan.nextFollowUpAt, plan.nextFollowUpWhy), delivery: null };
   if (plan?.kind === "queued") return { endKind: "queued", ...row(R.queued), ...date(plan.nextFollowUpAt, plan.nextFollowUpWhy), delivery: null };
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): nothing sent anywhere, no
+  // delivery attempted, looked at again later (the statement can be undone), and a claimed occurrence is not admitted.
+  const notToBrand = () => ({
+    endKind: "not_to_brand",
+    ...row(R.notToBrand),
+    ...date(new Date(now + ${NO_CHANNEL_RECHECK_DAYS} * 86400000).toISOString(), "The brand stated this person is not someone of theirs: nothing is sent while that stands"),
+    delivery: null,
+    ...(person.entry === "claimed" ? { notAdmitted: { reason: "${STATED_NOT_TO_BRAND_CODE}" } } : {}),
+  });
+  if (channel?.notToBrand === true) return notToBrand();
   if (channel?.noChannel === true) {
     const at = new Date(now + ${NO_CHANNEL_RECHECK_DAYS} * 86400000).toISOString();
     return { endKind: "no_channel", ...row(R.noChannel), ...date(at, "No route can write to them now: " + channel.why),
@@ -852,6 +871,7 @@ export async function main(person, plan, channel, final, sendWhatsapp, sendEmail
     return { endKind: "sent", ...row(R.sent), ...date(final.nextFollowUpAt, final.nextFollowUpWhy, final.channel), delivery: { state: "delivered" } };
   }
   const code = String(send.code ?? "refused");
+  if (final.channel === "whatsapp" && code === "${STATED_NOT_TO_BRAND_CODE}") return notToBrand();
   const refused = { state: "refused", code, reason: typeof send.reason === "string" ? send.reason : code };
   // A refusal on WhatsApp is about the channel (reach changed since the check), never about the person: kept.
   // By email, a passing refusal keeps them (a queued step, a live thread); any other says they are out.
@@ -884,6 +904,7 @@ export const FOLLOW_UP_END_KINDS = [
   "refused_final",
   "not_writable",
   "escalated",
+  "not_to_brand",
 ] as const;
 
 const P = "$ref:resolve-person.output";
@@ -1209,6 +1230,8 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
     endRun("end-run-not-writable", { success: false, stopCampaign: false }, DELIVERY),
     // Handed to the team (nothing sent to them): a decision, never a failure.
     endRun("end-run-escalated", { success: true, stopCampaign: false }),
+    // The brand stated this person is not someone of theirs: a quiet skip, never a failure nor an unsent answer.
+    endRun("end-run-not-to-brand", { success: true, stopCampaign: false }, { "body.personNotAdmitted": "$ref:outcome.output.notAdmitted" }),
   ];
   const line = [
     "now",

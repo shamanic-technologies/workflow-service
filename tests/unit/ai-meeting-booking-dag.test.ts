@@ -1313,10 +1313,14 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     const order = [
       "prior-generation", "compose-questions-prompt", "list-questions", "plan-lookups",
       "offer-answers", "offer-user-fields", "brand-user-fields", "gather-facts",
-      "sender-reach-plan", "sender-reach", "compose-prompt", "read-client-comms", "client-comms-voice", "llm-pick", "llm-plan", "draft-reply", "ground-draft", "check-answerable",
+      "compose-prompt", "read-client-comms", "client-comms-voice", "llm-pick", "llm-plan", "draft-reply", "ground-draft", "check-answerable",
     ];
     for (let i = 0; i < order.length - 1; i++) {
       expect(dag.edges.some((e) => e.from === order[i] && e.to === order[i + 1])).toBe(true);
+    }
+    // Who sends on WhatsApp is read before the thread check (DUALIST-WA-SILENCE-1104), so a reach refusal settles them.
+    for (const [from, to] of [["thread", "sender-reach-plan"], ["sender-reach-plan", "sender-reach"], ["sender-reach", "reply-refusal"], ["reply-refusal", "check-thread"], ["gather-facts", "compose-prompt"]]) {
+      expect(dag.edges.some((e) => e.from === from && e.to === to)).toBe(true);
     }
     // No dynamic loop: no for-each, and nothing points back upstream.
     expect(dag.nodes.some((n) => n.type === "for-each")).toBe(false);
@@ -2117,7 +2121,7 @@ describe("one responder for every channel: a WhatsApp answer gets its reply on W
   it("sends on exactly one transport per run: the email reply and the WhatsApp reply are each skipped unless theirs", () => {
     expect(byId.get("send-reply")?.inputMapping?.skip).toBe("$ref:thread.output.skipEmail");
     const send = byId.get("send-whatsapp-reply");
-    expect(send?.config).toEqual({ ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: ["human_in_conversation"] });
+    expect(send?.config).toEqual({ ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: ["human_in_conversation", "stated_not_to_brand"] });
     expect(send?.inputMapping).toEqual({
       body: "$ref:finalize-reply.output.whatsappBody",
       skip: "$ref:thread.output.skipWhatsapp",

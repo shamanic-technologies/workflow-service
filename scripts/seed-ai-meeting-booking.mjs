@@ -46,6 +46,7 @@ import {
   needsPhoneOnlyPerson,
   needsSenderPersona,
   needsWhatsappTakeover,
+  needsStatedNotToBrandSkip,
   needsWhatsappBubbles,
   needsEscalationHandOver,
   needsSettledThreadRefusal,
@@ -420,6 +421,7 @@ async function main() {
         needsPhoneOnlyPerson(w.dag) ||
         needsSenderPersona(w.dag) ||
         needsWhatsappTakeover(w.dag) ||
+        needsStatedNotToBrandSkip(w.dag) ||
         needsWhatsappBubbles(w.dag) ||
         needsClientCommsVoice(w.dag) ||
         needsLlmAliasOnActs(w.dag) ||

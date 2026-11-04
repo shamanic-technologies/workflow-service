@@ -23,6 +23,7 @@ import type { DAG } from "./dag-validator.js";
 import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
 import { CLIENT_CHECK_IN_AUDIENCE, CURRENT_CLIENTS_POLICY } from "./client-check-in-dag.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
+import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
 
 export const CLIENT_SATISFIED_FEATURE_SLUG = "cold-whatsapp-outreach";
 export const CLIENT_SATISFIED_LEG_KEY = "paid_client_to_client_satisfied";
@@ -57,6 +58,11 @@ export async function main(person, plan, reach, timeline) {
       persona: senderPersona(reach),
       why: "The brand's WhatsApp reaches them (" + String(reach.to) + ")" + (lastWhere && lastWhere !== "whatsapp" ? "; their last message came by " + lastWhere : "") + ".",
     };
+  }
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): a quiet skip, never a failure.
+  if (reach.code === "${STATED_NOT_TO_BRAND_CODE}") {
+    console.log("[client-satisfied] the brand stated " + String(person.phone ?? person.email ?? "this client") + " is not someone of theirs: nothing drafted, nothing sent");
+    return { channel: null, skipModel: true, notToBrand: true, why: "The brand stated this person is not someone of theirs" };
   }
   console.error("[client-satisfied] WhatsApp cannot reach " + String(person.phone ?? person.email ?? "this client") + " (" + String(reach.code) + "): nothing drafted");
   return { channel: null, skipModel: true, noChannel: true, why: "WhatsApp " + String(reach.code) };
