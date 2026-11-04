@@ -71,8 +71,8 @@ function transforms(dag: DAG, moduleId: string): Record<string, Transform> {
 
 describe("a cold-email send skips a sender refusal instead of failing the run", () => {
   it("the send feeding only the end-run carries the closed refusal list", () => {
-    expect(evaluated(transforms(coldEmailDag(), "email_send").skipOnRefusalCodes)).toEqual(["recent_brand_contact", "lead_opted_out"]);
-    expect([...REFUSAL_SKIP_CODES]).toEqual(["recent_brand_contact", "lead_opted_out"]);
+    expect(evaluated(transforms(coldEmailDag(), "email_send").skipOnRefusalCodes)).toEqual(["recent_brand_contact", "lead_opted_out", "stated_not_to_brand"]);
+    expect([...REFUSAL_SKIP_CODES]).toEqual(["recent_brand_contact", "lead_opted_out", "stated_not_to_brand"]);
   });
 
   it("the end-run after it still ends the run successfully", () => {

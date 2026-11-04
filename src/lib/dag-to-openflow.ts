@@ -7,6 +7,7 @@ import {
   whoTheyAreNode,
 } from "./person-relationship.js";
 import { getScriptPath, isNativeNode } from "./node-type-registry.js";
+import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
 import { buildInputTransforms, type InputTransform } from "./input-mapping.js";
 
 /** Global timeout applied to every script module (in seconds). 1 hour. */
@@ -961,8 +962,13 @@ function isNoLeadEndRun(
  * run was served the same unsent people again: a paying campaign froze on 7
  * people (Perky, 2026-10-11). The closed list is deliberate: every other
  * refusal code and every 5xx still fails the run loud.
+ *
+ * `stated_not_to_brand` (DUALIST-WA-SILENCE-EMAIL-1104): the brand's user stated this person is not someone of the
+ * brand, so the email senders (email-gateway `/orgs/send`, instantly-service) refuse them like crm-service refuses
+ * the WhatsApp: a quiet, final skip for that person, never a failure or a redelivery (campaign-service reads that
+ * code as an intended silence, `BRAND_SILENCED_CODES`).
  */
-export const REFUSAL_SKIP_CODES = ["recent_brand_contact", "lead_opted_out"] as const;
+export const REFUSAL_SKIP_CODES = ["recent_brand_contact", "lead_opted_out", STATED_NOT_TO_BRAND_CODE] as const;
 
 function isCampaignEndRun(node: DAGNode | undefined): boolean {
   return (

@@ -109,8 +109,13 @@ export const FOLLOW_UP_WHATSAPP_REFUSAL_CODES = [
   STATED_NOT_TO_BRAND_CODE,
 ] as const;
 
-/** Email refusals that mean the person is out for good (opted out, not a prospect): the chain stops. */
-export const FINAL_EMAIL_REFUSAL_CODES = FOLLOW_UP_SEND_REFUSAL_CODES.filter((c) => !(PASSING_REFUSAL_CODES as readonly string[]).includes(c));
+/**
+ * Email refusals that mean the person is out for good (opted out, not a prospect): the chain stops. Not the brand's
+ * statement (`stated_not_to_brand`): it can be undone, so it ends as `not_to_brand` with a recheck date.
+ */
+export const FINAL_EMAIL_REFUSAL_CODES = FOLLOW_UP_SEND_REFUSAL_CODES.filter(
+  (c) => !(PASSING_REFUSAL_CODES as readonly string[]).includes(c) && c !== STATED_NOT_TO_BRAND_CODE,
+);
 
 /** Queue-row reasons on a reactive campaign: the row is closed, the date lives on lead-service. */
 export const FOLLOW_UP_ROW_REASONS = {
@@ -871,7 +876,8 @@ export async function main(person, plan, channel, final, sendWhatsapp, sendEmail
     return { endKind: "sent", ...row(R.sent), ...date(final.nextFollowUpAt, final.nextFollowUpWhy, final.channel), delivery: { state: "delivered" } };
   }
   const code = String(send.code ?? "refused");
-  if (final.channel === "whatsapp" && code === "${STATED_NOT_TO_BRAND_CODE}") return notToBrand();
+  // The brand's statement, refused by crm-service (WhatsApp) or by the email sender (DUALIST-WA-SILENCE-EMAIL-1104).
+  if (code === "${STATED_NOT_TO_BRAND_CODE}") return notToBrand();
   const refused = { state: "refused", code, reason: typeof send.reason === "string" ? send.reason : code };
   // A refusal on WhatsApp is about the channel (reach changed since the check), never about the person: kept.
   // By email, a passing refusal keeps them (a queued step, a live thread); any other says they are out.
