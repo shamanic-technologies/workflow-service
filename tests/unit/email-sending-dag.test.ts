@@ -112,7 +112,7 @@ describe("email sending DAG", () => {
     expect(byId.get("resolve-email")?.inputMapping?.trigger).toBe("$ref:flow_input.trigger");
     const send = byId.get("send-email")!;
     expect(send.config).toMatchObject({ service: "email-gateway", method: "POST", path: "/orgs/send", body: { type: "broadcast" } });
-    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out", "*"]);
+    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out", "stated_not_to_brand", "*"]);
     expect(send.inputMapping).toMatchObject({
       "body.to": "$ref:resolve-email.output.email",
       "body.subject": "$ref:resolve-email.output.subject",

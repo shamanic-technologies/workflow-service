@@ -107,7 +107,7 @@ describe("form -> meeting booked DAG", () => {
     const send = byId.get("send-email")!;
     expect(send.config).toMatchObject({ method: "POST", path: "/orgs/send", body: { type: "broadcast" } });
     // "*": any code the sender names on a 409 is a refusal no retry changes (PUSHED-TRUTH-1015).
-    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out", "*"]);
+    expect(send.config?.skipOnRefusalCodes).toEqual(["recent_brand_contact", "lead_opted_out", "stated_not_to_brand", "*"]);
     expect(send.inputMapping).toMatchObject({
       "body.to": "$ref:resolve-form.output.email",
       "body.idempotencyKey": "$ref:finalize-answer.output.idempotencyKey",

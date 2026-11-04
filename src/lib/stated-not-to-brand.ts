@@ -8,5 +8,10 @@
  * retry, no rep or owner alert, and a run answering their occurrence states `personNotAdmitted` (campaign-service
  * counts it as not owed, never as an unsent answer). It lasts until the brand undoes the statement: crm-service
  * then answers reachable again.
+ *
+ * The email senders refuse the same person with the same code (409, DUALIST-WA-SILENCE-EMAIL-1104): email-gateway
+ * `POST /orgs/send` and instantly-service `POST /orgs/replies` (+ `/escalate`). Every email-sending workflow reads it
+ * as the same quiet, final skip (`REFUSAL_SKIP_CODES`, the follow-up's `not_to_brand` end, ai-meeting-booking's
+ * `end-run-stated-not-to-brand`), never a fallback to another channel.
  */
 export const STATED_NOT_TO_BRAND_CODE = "stated_not_to_brand";

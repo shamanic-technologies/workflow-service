@@ -1912,6 +1912,13 @@ export async function main(send, whatsapp, replyChannel) {
     return { outcome: "human_took_over", status: 409, delivery: { state: "refused", code, reason: sentence } };
   }
 
+  // instantly-service refused the email reply: the brand stated this person is not someone of theirs
+  // (DUALIST-WA-SILENCE-EMAIL-1104). Nothing was sent, the same quiet skip as the WhatsApp one (no delivery stated).
+  if (send?.status === 409 && (code ?? body?.details?.code) === "${STATED_NOT_TO_BRAND_CODE}") {
+    console.log("[ai-meeting-booking] the brand stated this person is not someone of theirs; the email reply was refused and nothing was sent");
+    return { outcome: "${STATED_NOT_TO_BRAND_CODE}", status: 409, channel: "email" };
+  }
+
   throw new Error("[ai-meeting-booking] the reply could not be sent (" + String(send?.status) +
     " " + String(code) + "): " + String(send?.error));
 }
@@ -1928,6 +1935,11 @@ export async function main(send, whatsapp, replyChannel) {
  */
 export const PLAN_HAND_OVER_CODE = `
 export async function main(thread, claimed, escalation) {
+  // The escalation was refused: the brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-EMAIL-1104).
+  // Nobody is asked to answer them, so the row is not handed to a person.
+  if (escalation?.skipped === true && escalation?.notCalled !== true && escalation?.code === "${STATED_NOT_TO_BRAND_CODE}") {
+    return { skip: true, why: "the brand stated this person is not someone of theirs" };
+  }
   if (thread?.replyChannel !== "email") return { skip: false, why: "chat thread: handed here" };
   const stoppedByEscalation = escalation?.escalation?.followupsStopped === true;
   const ownQueue = claimed?.queue === "own";
@@ -2052,9 +2064,13 @@ export function needsStatedNotToBrandSkip(dag: { nodes?: Array<{ id?: string; co
   const send = nodes.find((n) => n?.id === "send-whatsapp-reply");
   if (!send) return false;
   const codes = send.config?.skipOnRefusalCodes;
+  const escalate = nodes.find((n) => n?.id === "escalate-unanswerable");
+  const escalateCodes = escalate?.config?.skipOnRefusalCodes;
   return (
     !Array.isArray(codes) ||
     !codes.includes(STATED_NOT_TO_BRAND_CODE) ||
+    (!!escalate && (!Array.isArray(escalateCodes) || !escalateCodes.includes(STATED_NOT_TO_BRAND_CODE))) ||
+    (!!escalate && nodes.find((n) => n?.id === "plan-hand-over")?.config?.code !== PLAN_HAND_OVER_CODE) ||
     nodes.find((n) => n?.id === "reply-refusal")?.config?.code !== REPLY_REFUSAL_CODE ||
     nodes.find((n) => n?.id === "classify-send")?.config?.code !== CLASSIFY_SEND_CODE
   );
@@ -2850,6 +2866,8 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           method: "POST",
           path: "/orgs/replies/escalate",
           validateResponse: { field: "success", equals: true },
+          // The brand stated this person is not someone of theirs: read (plan-hand-over hands nothing), never thrown.
+          skipOnRefusalCodes: [STATED_NOT_TO_BRAND_CODE],
         },
         retries: 0,
         inputMapping: {
