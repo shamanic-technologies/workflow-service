@@ -151,6 +151,7 @@ import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { TIME_CONTEXT_FN } from "./time-context.js";
 import { BUBBLE_SEND_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
 import { relationshipReadNode, whoTheyAreNode } from "./person-relationship.js";
+import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
 
 /**
  * The instantly-service read of the conversation being answered.
@@ -1879,6 +1880,12 @@ export async function main(send, whatsapp, replyChannel) {
       const reason = typeof whatsapp.refusal === "string" && whatsapp.refusal.trim() !== "" ? whatsapp.refusal : whatsapp.code;
       return { outcome: "human_took_over", status: whatsapp.status ?? 422, channel: replyChannel, delivery: { state: "refused", code: whatsapp.code, reason } };
     }
+    // The brand stated this person is not someone of theirs since the reach check (DUALIST-WA-SILENCE-1104): nothing
+    // was sent, a quiet skip (no delivery stated: never an unsent answer).
+    if (whatsapp?.skipped === true && whatsapp?.notCalled !== true && whatsapp?.code === "${STATED_NOT_TO_BRAND_CODE}") {
+      console.log("[ai-meeting-booking] the brand stated this person is not someone of theirs; nothing was sent");
+      return { outcome: "${STATED_NOT_TO_BRAND_CODE}", status: whatsapp.status ?? 422, channel: replyChannel };
+    }
     if (whatsapp?.status === "sent") {
       return { outcome: "sent", status: 200, channel: replyChannel, duplicate: whatsapp?.duplicate === true };
     }
@@ -2014,6 +2021,44 @@ export function needsAutoBooking(dag: { nodes?: Array<{ id?: string; config?: Re
 
 /** crm-service WhatsApp refusals that ARE the takeover: a human of the brand writes to them by hand. */
 export const WHATSAPP_TAKEOVER_CODES = ["human_in_conversation"] as const;
+
+/** Every crm-service refusal the WhatsApp reply reads instead of failing: the takeover, and the brand's statement. */
+export const WHATSAPP_REPLY_SKIP_CODES = [...WHATSAPP_TAKEOVER_CODES, STATED_NOT_TO_BRAND_CODE] as const;
+
+/**
+ * Whether this responder may answer the person at all, read before any model call: the thread's own refusal
+ * (`thread.refusal`), else crm-service's reach answer saying the brand stated this person is not someone of theirs
+ * (DUALIST-WA-SILENCE-1104). Either settles their turn through `name-thread-refusal`: nothing sent anywhere, no rep
+ * alert, the occurrence not admitted.
+ */
+export const REPLY_REFUSAL_CODE = `
+export async function main(thread, reach) {
+  if (thread?.refusal) return { refusal: thread.refusal };
+  if (reach && reach.notCalled !== true && reach.reachable === false && reach.code === "${STATED_NOT_TO_BRAND_CODE}") {
+    const detail = typeof reach.error === "string" && reach.error.trim() !== "" ? reach.error : "The brand stated this person is not someone of theirs.";
+    return { refusal: { reason: "${STATED_NOT_TO_BRAND_CODE}", detail } };
+  }
+  return { refusal: null };
+}
+`.trim();
+
+/**
+ * True when a stored DAG drafts (or fails) for a person the brand stated is not someone of theirs
+ * (DUALIST-WA-SILENCE-1104). Current = the reach check runs before `check-thread` (`reply-refusal`) and the
+ * WhatsApp reply reads the refusal.
+ */
+export function needsStatedNotToBrandSkip(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const send = nodes.find((n) => n?.id === "send-whatsapp-reply");
+  if (!send) return false;
+  const codes = send.config?.skipOnRefusalCodes;
+  return (
+    !Array.isArray(codes) ||
+    !codes.includes(STATED_NOT_TO_BRAND_CODE) ||
+    nodes.find((n) => n?.id === "reply-refusal")?.config?.code !== REPLY_REFUSAL_CODE ||
+    nodes.find((n) => n?.id === "classify-send")?.config?.code !== CLASSIFY_SEND_CODE
+  );
+}
 
 /** True when a stored DAG fails the run on a WhatsApp reply a human of the brand already took over. */
 export function needsWhatsappTakeover(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
@@ -2577,7 +2622,15 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           timeline: "$ref:person-timeline.output",
         },
       },
-      // Can this responder answer them at all? A thread with nothing to answer settles their turn (see name-thread-refusal).
+      // Can this responder answer them at all? A thread with nothing to answer, or a person the brand stated is not
+      // someone of theirs, settles their turn (see name-thread-refusal).
+      {
+        id: "reply-refusal",
+        type: "script",
+        config: { code: REPLY_REFUSAL_CODE },
+        retries: 0,
+        inputMapping: { thread: "$ref:thread.output", reach: "$ref:sender-reach.output" },
+      },
       { id: "check-thread", type: "condition" },
       // Who this person is to the brand (lead-service tags) beside their thread: the shared step of every writer.
       relationshipReadNode({
@@ -2987,7 +3040,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         id: "send-whatsapp-reply",
         type: "http.call",
         // A human of the brand in the thread is the takeover, read by classify-send.
-        config: { ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: [...WHATSAPP_TAKEOVER_CODES] },
+        config: { ...CRM_WHATSAPP_SEND, skipOnRefusalCodes: [...WHATSAPP_REPLY_SKIP_CODES] },
         retries: 0,
         // The whole body from `finalize-reply`: the person by email, or by phone when that is all we know of them
         // (REPLY-PHONE-ONLY-1015), never a null field.
@@ -3121,6 +3174,18 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           body: { success: true, stopCampaign: false },
         },
       },
+      // The brand stated this person is not someone of theirs between the reach check and the send
+      // (DUALIST-WA-SILENCE-1104): nothing sent, no delivery stated, a normal run.
+      {
+        id: "end-run-stated-not-to-brand",
+        type: "http.call",
+        config: {
+          service: "campaign",
+          method: "POST",
+          path: "/end-run",
+          body: { success: true, stopCampaign: false },
+        },
+      },
       // A person is already answering this thread. We stood down; nothing was
       // sent, nothing is recorded, and the run is not a failure.
       {
@@ -3181,7 +3246,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         config: { code: NAME_THREAD_REFUSAL_CODE },
         retries: 0,
         inputMapping: {
-          thread: "$ref:thread.output",
+          thread: "$ref:reply-refusal.output",
           claimed: "$ref:claimed.output",
           trigger: "$ref:flow_input.trigger",
         },
@@ -3273,19 +3338,23 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       { from: "booking-slots", to: "conversation" },
       { from: "conversation", to: "person-timeline" },
       { from: "person-timeline", to: "thread" },
-      { from: "thread", to: "check-thread" },
+      // Who sends on WhatsApp is asked before the thread check: its answer may settle the person (reply-refusal).
+      { from: "thread", to: "sender-reach-plan" },
+      { from: "sender-reach-plan", to: "sender-reach" },
+      { from: "sender-reach", to: "reply-refusal" },
+      { from: "reply-refusal", to: "check-thread" },
       // Convergence edge, as for `check-answerable`: `claimed` is outside `check-claim`'s branch body, so
       // `check-thread` is a top-level sibling branchone, never a condition silently built inside a branch.
       { from: "claimed", to: "check-thread" },
       {
         from: "check-thread",
         to: "relationship-read",
-        condition: "results['claimed']?.found == true && results['thread']?.refusal == null",
+        condition: "results['claimed']?.found == true && results['reply-refusal']?.refusal == null",
       },
       {
         from: "check-thread",
         to: "name-thread-refusal",
-        condition: "results['claimed']?.found == true && results['thread']?.refusal != null",
+        condition: "results['claimed']?.found == true && results['reply-refusal']?.refusal != null",
       },
       { from: "name-thread-refusal", to: "stop-followups-not-answerable" },
       { from: "stop-followups-not-answerable", to: "end-run-not-answerable" },
@@ -3298,9 +3367,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       { from: "offer-answers", to: "offer-user-fields" },
       { from: "offer-user-fields", to: "brand-user-fields" },
       { from: "brand-user-fields", to: "gather-facts" },
-      { from: "gather-facts", to: "sender-reach-plan" },
-      { from: "sender-reach-plan", to: "sender-reach" },
-      { from: "sender-reach", to: "compose-prompt" },
+      { from: "gather-facts", to: "compose-prompt" },
       { from: "compose-prompt", to: "draft-reply" },
       { from: "draft-reply", to: "ground-draft" },
       { from: "ground-draft", to: "check-answerable" },
@@ -3368,6 +3435,11 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
         from: "check-sent",
         to: "end-run-human-took-over",
         condition: "results['classify-send']?.outcome == 'human_took_over'",
+      },
+      {
+        from: "check-sent",
+        to: "end-run-stated-not-to-brand",
+        condition: `results['classify-send']?.outcome == '${STATED_NOT_TO_BRAND_CODE}'`,
       },
       { from: "record-followup", to: "end-run" },
       { from: "stop-followups-booked", to: "end-run-booking-confirmed" },

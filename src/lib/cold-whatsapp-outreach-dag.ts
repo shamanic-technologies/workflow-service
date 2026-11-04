@@ -80,6 +80,7 @@ import { WHY_NOW_FN, WHY_NOW_STRATEGY, occurrencePlanNode, triggerTypeNode } fro
 import { OCCURRENCE_SEND_KEY_FN } from "./occurrence-send-key.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { BUBBLE_SEND_FN, HAND_TYPED_FN, whatsappBubblesStrategy } from "./whatsapp-bubbles.js";
+import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
 import {
   LOCAL_TIME_FN,
   NEXT_DATE_FN,
@@ -145,6 +146,9 @@ export const BRAND_SIDE_RECHECK_DAYS = 7;
  * (`handed`, permanent), never a recheck that would re-look at them forever.
  */
 export const HUMAN_IN_CONVERSATION_CODE = "human_in_conversation";
+
+/** The brand stated this person is not someone of theirs (`stated-not-to-brand.ts`): a quiet, final skip. */
+export { STATED_NOT_TO_BRAND_CODE };
 
 /** Stored on the queue row once the message answering an occurrence went out: handed, permanent, one message. */
 export const WHATSAPP_OCCURRENCE_SENT_REASON = "whatsapp_occurrence_sent";
@@ -848,7 +852,22 @@ function plan(person, send, currentDate, reach, final) {
   const refused = send?.skipped === true;
   // Not called: reach-plan found no phone before anything was drafted; recorded as crm-service's refusal would be.
   const code = !refused ? null : send.notCalled === true ? String(reach?.code ?? "not_sent") : String(send.code ?? "refused");
-  if (refused) {
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): a quiet, final skip, nothing
+  // anywhere. A first message is never released to another pipe; a person a fact made due is not admitted (their
+  // occurrence ends, never redelivered, never an unsent answer); a follow-up look hands them over.
+  if (refused && code === "${STATED_NOT_TO_BRAND_CODE}") {
+    console.log("[cold-whatsapp-outreach] " + String(person?.email ?? person?.phone ?? "") + ": the brand stated this person is not someone of theirs; nothing is sent to them on any channel");
+    if (person?.kind === "occurrence" || (person?.kind === "followup" && reach?.owed === true)) {
+      return {
+        action: "record",
+        outcome: "not_admitted",
+        decided: true,
+        code,
+        notAdmitted: { reason: code },
+        body: { kind: "stopped", reason: "whatsapp_" + code },
+      };
+    }
+  } else if (refused) {
     console.error("[cold-whatsapp-outreach] " + String(person?.email) + " not written on WhatsApp: " + code +
       " (" + String(send.refusal ?? send.error ?? "") + "). Left to the email path.");
   }
@@ -912,6 +931,7 @@ export const WHATSAPP_REFUSAL_CODES = [
   "person_replied",
   "automation_not_allowed",
   HUMAN_IN_CONVERSATION_CODE,
+  STATED_NOT_TO_BRAND_CODE,
 ] as const;
 
 const PERSON = "results['pick-person']";
