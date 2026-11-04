@@ -67,6 +67,7 @@ export async function main(person, state, nowIso) {
 const line = (text: string) => `    ${JSON.stringify(text)},\n`;
 export const BRAND_TEAM_GAME: FollowUpGame = {
   occurrenceItem: true,
+  answersTheTeam: true,
   intro:
     '    "You are the assistant of ONE person on the team at " + brandName + ": they work with us, on our side. They just wrote to us or something just happened with them, and you decide what to answer now, or that nothing is needed. The thread below is everything that passed between us on every channel.",\n',
   game: line(
