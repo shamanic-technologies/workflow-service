@@ -47,6 +47,15 @@ function coldEmailDag(): DAG {
   } as DAG;
 }
 
+/** The cold-email shape with a step AFTER the send: a record of what was sent, then the end-run. */
+function postSendDag(): DAG {
+  const dag = coldEmailDag();
+  dag.nodes.push({ id: "record-sent", type: "http.call", config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups" } });
+  dag.edges = dag.edges.map((e) => (e.from === "email-send" ? { from: "email-send", to: "record-sent" } : e));
+  dag.edges.push({ from: "record-sent", to: "end-run" });
+  return dag;
+}
+
 function allModules(mods: Module[]): Module[] {
   return mods.flatMap((m) => [
     m,
@@ -88,17 +97,72 @@ describe("a cold-email send skips a sender refusal instead of failing the run", 
     }
   });
 
-  it("a send followed by a record of the send keeps failing loud (would record a send that never happened)", () => {
-    const dag = coldEmailDag();
-    dag.nodes.push({ id: "record-sent", type: "http.call", config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups" } });
-    dag.edges = dag.edges.map((e) => (e.from === "email-send" ? { from: "email-send", to: "record-sent" } : e));
-    dag.edges.push({ from: "record-sent", to: "end-run" });
-    expect(transforms(dag, "email_send").skipOnRefusalCodes).toBeUndefined();
+  it("a send followed by a record of the send keeps failing loud on every code but stated_not_to_brand (would record a send that never happened)", () => {
+    expect(evaluated(transforms(postSendDag(), "email_send").skipOnRefusalCodes)).toEqual(["stated_not_to_brand"]);
   });
 
   it("a DAG that states the list itself keeps its own", () => {
     const dag = coldEmailDag();
     dag.nodes = dag.nodes.map((n) => (n.id === "email-send" ? { ...n, config: { ...n.config, skipOnRefusalCodes: ["lead_opted_out"] } } : n));
     expect(transforms(dag, "email_send").skipOnRefusalCodes).toEqual({ type: "static", value: ["lead_opted_out"] });
+  });
+});
+
+describe("stated_not_to_brand on a send other steps follow is a quiet skip, never a failed step (DUALIST-WA-SILENCE-EMAIL-1104)", () => {
+  const flowOf = (dag: DAG) => allModules(dagToOpenFlow(dag, "stated").value.modules as unknown as Module[]);
+  const skipIfOf = (dag: DAG, id: string) => (flowOf(dag).find((m) => m.id === id) as unknown as { skip_if?: { expr: string } })?.skip_if?.expr;
+  const run = (expr: string, results: Record<string, unknown>) => new Function("results", `return (${expr});`)(results) as boolean;
+  const refusal = { skipped: true, code: "stated_not_to_brand", reason: "stated" };
+
+  it("refused: every step after the send is skipped and the run ends at once (success, the campaign goes on)", () => {
+    const dag = postSendDag();
+    for (const id of ["record_sent", "end_run"]) {
+      const expr = skipIfOf(dag, id)!;
+      expect(run(expr, { email_send: refusal })).toBe(true);
+      expect(run(expr, { email_send: { success: true } })).toBe(false);
+      // Another refusal never reaches here (the send throws), and a skip of another code is not this guard's.
+      expect(run(expr, { email_send: { skipped: true, code: "lead_opted_out" } })).toBe(false);
+    }
+    const end = skipIfOf(dag, "end_run_stated_not_to_brand_email_send")!;
+    expect(run(end, { email_send: refusal })).toBe(false);
+    expect(run(end, { email_send: { success: true } })).toBe(true);
+    expect(evaluated(transforms(dag, "end_run_stated_not_to_brand_email_send").body)).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("a step after the send that already had its own skip_if keeps it, joined", () => {
+    const dag = postSendDag();
+    dag.nodes = dag.nodes.map((n) => (n.id === "record-sent" ? { ...n, config: { ...n.config, skipIf: "results.fetch_lead.found == false" } } : n));
+    const expr = skipIfOf(dag, "record_sent")!;
+    expect(run(expr, { fetch_lead: { found: false }, email_send: { success: true } })).toBe(true);
+    expect(run(expr, { fetch_lead: { found: true }, email_send: refusal })).toBe(true);
+    expect(run(expr, { fetch_lead: { found: true }, email_send: { success: true } })).toBe(false);
+  });
+
+  it("on a run answering an occurrence, the early end-run tells campaign-service the refusal code (an intended silence)", () => {
+    const end = transforms(postSendDag(), "end_run_stated_not_to_brand_email_send");
+    expect(evaluated(end.body, { trigger: { leadId: "lead-1" } }, { email_send: refusal })).toEqual({
+      success: true,
+      stopCampaign: false,
+      delivery: { state: "refused", code: "stated_not_to_brand", reason: "stated" },
+    });
+    // A run no occurrence carries: no delivery key.
+    expect(evaluated(end.body, {}, { email_send: refusal })).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("the cold-email shape (send -> end-run only) is byte-identical: no splice, the closed list", () => {
+    const mods = flowOf(coldEmailDag());
+    expect(mods.some((m) => m.id.startsWith("end_run_stated_not_to_brand"))).toBe(false);
+    expect(evaluated(transforms(coldEmailDag(), "email_send").skipOnRefusalCodes)).toEqual(["recent_brand_contact", "lead_opted_out", "stated_not_to_brand"]);
+  });
+
+  it("a send that states its own list, or a post-send step reached from elsewhere too, is left as is", () => {
+    const own = postSendDag();
+    own.nodes = own.nodes.map((n) => (n.id === "email-send" ? { ...n, config: { ...n.config, skipOnRefusalCodes: ["lead_opted_out"] } } : n));
+    expect(transforms(own, "email_send").skipOnRefusalCodes).toEqual({ type: "static", value: ["lead_opted_out"] });
+    expect(flowOf(own).some((m) => m.id.startsWith("end_run_stated_not_to_brand"))).toBe(false);
+
+    const converging = postSendDag();
+    converging.edges.push({ from: "start-run", to: "record-sent" });
+    expect(transforms(converging, "email_send").skipOnRefusalCodes).toBeUndefined();
   });
 });

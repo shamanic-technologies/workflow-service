@@ -153,7 +153,7 @@ export interface OpenFlow {
 }
 
 export function dagToOpenFlow(storedDag: DAG, name: string): OpenFlow {
-  const dag = withPersonRelationshipStep(storedDag);
+  const dag = withStatedNotToBrandEmailSkip(withPersonRelationshipStep(storedDag));
   const orderedNodes = topologicalSort(dag.nodes, dag.edges);
   // Exclude the onError node from the main module list — it becomes the failure_module
   const mainNodes = dag.onError
@@ -711,6 +711,92 @@ function getServedLeadScope(dag: DAG): ServedLeadScope {
   return scope;
 }
 
+/** The end-run the stated-not-to-brand guard adds after a send (see withStatedNotToBrandEmailSkip). */
+export const STATED_EMAIL_END_RUN_PREFIX = "end-run-stated-not-to-brand-";
+
+/**
+ * DUALIST-WA-SILENCE-EMAIL-1104 (owner 2026-11-04: a refused send for a not-to-brand person ends as a skip, never a
+ * failed step). A stored email send that is NOT refusal-skippable (`isRefusalSkippableSend`: something other than the
+ * campaign end-run follows it, or nothing does) and states no `skipOnRefusalCodes` of its own still threw on every
+ * 409. For `stated_not_to_brand` ONLY (every other code still fails it loud, as before):
+ *  - a send nothing follows reads the refusal as a skipped outcome: nothing after it can mis-record a send;
+ *  - a send followed by other steps (a record of what was sent): every step after it is skipped when the send was
+ *    refused (Windmill `skip_if`, so it holds inside a branch too; a branch nested in a branch is not compiled here),
+ *    and a new end-run right after the send, skipped otherwise, ends the run (success, the campaign goes on, its
+ *    `delivery` names the code on a run answering an occurrence, which campaign-service reads as an intended silence).
+ *    No post-send step ever records a send that never happened. Done only when the DAG is a campaign run (it has an
+ *    end-run), every step after the send is reached through it alone, and none of them is a condition, a loop or the
+ *    error handler; any other shape is left as is (fails loud, as before).
+ * Applied at conversion time, so every stored flow carries it on the next boot sync with no stored DAG rewritten.
+ */
+export function withStatedNotToBrandEmailSkip(dag: DAG): DAG {
+  let out = dag;
+  for (const send of dag.nodes) {
+    if (send.type !== "http.call" || send.config?.service !== "email-gateway" || send.config?.path !== "/orgs/send") continue;
+    if ("skipOnRefusalCodes" in (send.config ?? {}) || (send.inputMapping && "skipOnRefusalCodes" in send.inputMapping)) continue;
+    const { retries: _r, stopAfterIf: _s, skipIf: _sk, retryDelaySeconds: _rd, ...config } = send.config ?? {};
+    if (isRefusalSkippableSend(send, out, config, send.inputMapping)) continue;
+    const skipping = { ...send, config: { ...send.config, skipOnRefusalCodes: [STATED_NOT_TO_BRAND_CODE] } };
+    const after = descendantIds(out, send.id);
+    if (after.size === 0) {
+      out = { ...out, nodes: out.nodes.map((n) => (n.id === send.id ? skipping : n)) };
+      continue;
+    }
+    if (!out.nodes.some((n) => isCampaignEndRun(n))) continue;
+    if (out.onError && after.has(out.onError)) continue;
+    const afterNodes = out.nodes.filter((n) => after.has(n.id));
+    if (afterNodes.some((n) => n.type === "condition" || n.type === "for-each")) continue;
+    const reachedOnlyThroughSend = afterNodes.every((n) =>
+      out.edges.filter((e) => e.to === n.id).every((e) => e.from === send.id || after.has(e.from)),
+    );
+    if (!reachedOnlyThroughSend) continue;
+    const endId = `${STATED_EMAIL_END_RUN_PREFIX}${send.id}`;
+    if (out.nodes.some((n) => n.id === endId)) continue;
+    const moduleId = send.id.replace(/-/g, "_");
+    const refused = `results.${moduleId}?.skipped == true && results.${moduleId}?.code == "${STATED_NOT_TO_BRAND_CODE}"`;
+    out = {
+      ...out,
+      nodes: [
+        ...out.nodes.map((n) => {
+          if (n.id === send.id) return skipping;
+          if (!after.has(n.id)) return n;
+          const own = typeof n.config?.skipIf === "string" ? n.config.skipIf : null;
+          return { ...n, config: { ...n.config, skipIf: own ? `(${own}) || (${refused})` : refused } };
+        }),
+        {
+          id: endId,
+          type: "http.call",
+          config: {
+            service: "campaign",
+            method: "POST",
+            path: "/end-run",
+            body: { success: true, stopCampaign: false },
+            skipIf: `!(${refused})`,
+          },
+        } as DAGNode,
+      ],
+      edges: [...out.edges, { from: send.id, to: endId }],
+    };
+  }
+  return out;
+}
+
+/** Every node id reachable from `startId` (excluded). */
+function descendantIds(dag: DAG, startId: string): Set<string> {
+  const seen = new Set<string>();
+  const queue = [startId];
+  while (queue.length) {
+    const from = queue.shift()!;
+    for (const e of dag.edges) {
+      if (e.from === from && !seen.has(e.to)) {
+        seen.add(e.to);
+        queue.push(e.to);
+      }
+    }
+  }
+  return seen;
+}
+
 /**
  * The content-generation variable WHO THIS PERSON IS TO THE BRAND rides in (RELATIONSHIP-TAGS-1014).
  *
@@ -1263,10 +1349,15 @@ function nodeToModule(
     servedLead.descendants.has(moduleId) &&
     loopBodyIds === null;
   if (inServedLeadScope && isCampaignEndRun(node) && !statesBodyFieldAlready("delivery", scriptConfig, resolvedInputMapping)) {
-    const send = dag.edges
-      .filter((e) => e.to === node.id)
-      .map((e) => dag.nodes.find((n) => n.id === e.from))
-      .find((n) => isRefusalSkippableSendNode(n, dag));
+    const statedSend = node.id.startsWith(STATED_EMAIL_END_RUN_PREFIX)
+      ? dag.nodes.find((n) => n.id === node.id.slice(STATED_EMAIL_END_RUN_PREFIX.length))
+      : undefined;
+    const send =
+      statedSend ??
+      dag.edges
+        .filter((e) => e.to === node.id)
+        .map((e) => dag.nodes.find((n) => n.id === e.from))
+        .find((n) => isRefusalSkippableSendNode(n, dag));
     if (send) {
       extraTransforms["body.delivery"] = { type: "javascript", expr: sendDeliveryExpr(send.id.replace(/-/g, "_")) };
     }
