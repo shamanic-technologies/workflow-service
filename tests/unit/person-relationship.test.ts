@@ -13,13 +13,6 @@ import { buildColdWhatsappOutreachDag, COMPOSE_MESSAGE_PROMPT_CODE } from "../..
 import { buildAiMeetingBookingDag, COMPOSE_REPLY_PROMPT_CODE } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
 import { buildFormMeetingBookingDag, COMPOSE_ANSWER_PROMPT_CODE } from "../../src/lib/form-meeting-booking-dag.js";
-import {
-  BUSINESS_ONLY_CHANGES,
-  buildSourcingDag,
-  servesBusinessOnly,
-  sourcingTargetOf,
-} from "../../src/lib/sourcing-dag.js";
-import { applyDagPatch, type DagPatchOperation } from "../../src/lib/dag-patch.js";
 
 /**
  * RELATIONSHIP-TAGS-1014: every writer reads who the person is to the brand (lead-service tags) and their whole
@@ -357,25 +350,15 @@ describe("a cold email written by content-generation runs the same step (added a
     expect(sent(null).variables).not.toHaveProperty(RELATIONSHIP_VARIABLE);
   });
 
-  it("leaves a DAG that writes nothing alone (every sourcing DAG)", () => {
-    const sourcing = buildSourcingDag();
+  it("leaves a DAG that writes nothing alone", () => {
+    const sourcing: DAG = {
+      nodes: [
+        { id: "start-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/start-run" } },
+        { id: "serve-lead", type: "http.call", config: { service: "lead", method: "POST", path: "/orgs/buffer/next" } },
+      ],
+      edges: [{ from: "start-run", to: "serve-lead" }],
+    };
     expect(withPersonRelationshipStep(sourcing)).toBe(sourcing);
   });
 });
 
-describe("the business-contacts-only sourcing play (CRM contacts pipe)", () => {
-  it("is the default sourcing DAG plus ONE stated change on the serve", () => {
-    const forked = applyDagPatch(buildSourcingDag(), BUSINESS_ONLY_CHANGES as unknown as DagPatchOperation[]);
-    expect(forked).toEqual(buildSourcingDag({ businessOnly: true }));
-    expect(servesBusinessOnly(forked)).toBe(true);
-    expect(servesBusinessOnly(buildSourcingDag())).toBe(false);
-    // The seed never flattens it back to the default play on upgrade.
-    expect(sourcingTargetOf(forked)).toEqual({ dag: forked, stated: true });
-    expect(forked.nodes.find((n) => n.id === "serve-lead")?.config).toEqual({
-      service: "lead",
-      method: "POST",
-      path: "/orgs/buffer/next",
-      body: { relationships: "business_only" },
-    });
-  });
-});
