@@ -1,6 +1,6 @@
 /**
  * MIGRATE-1105 S4: the pushed-email Engine run as ONE stored script, ported from the Email Sending workflow DAG
- * (`email-sending-dag.ts`) step by step: a client pushed an email through the API; it is sent exactly as written
+ * (`email-sending-steps.ts`, the deleted DAG's steps) step by step: a client pushed an email through the API; it is sent exactly as written
  * (no model anywhere), from our inboxes, to the person the push names.
  *
  *   lead-service    claims the pushed person on this campaign's own queue (only a run carrying a push claims);
@@ -20,7 +20,7 @@ import {
   PUSHED_EMAIL_REFUSED_REASON,
   PUSHED_EMAIL_SENT_REASON,
   RESOLVE_EMAIL_CODE,
-} from "../../src/lib/email-sending-dag.js";
+} from "./email-sending-steps.js";
 
 export const EMAIL_SENDING_OUTCOME = "conversation";
 export const EMAIL_SENDING_DYNASTY = "dy_pushed_email";

@@ -11,7 +11,6 @@ import {
   OUTCOME_CODE as FOLLOW_UP_OUTCOME_CODE,
   buildFollowUpReactiveDag,
 } from "../../src/lib/follow-up-dag.js";
-import { buildEmailSendingDag, REFUSED as EMAIL_SENDING_REFUSED } from "../../src/lib/email-sending-dag.js";
 import { buildFormMeetingBookingDag, REFUSED as FORM_REFUSED } from "../../src/lib/form-meeting-booking-dag.js";
 import {
   CLASSIFY_SEND_CODE,
@@ -86,16 +85,7 @@ describe("the cold-email send list (REFUSAL_SKIP_CODES, injected by the converte
   });
 });
 
-describe("pushed email (email-sending) and form responder: every 409 already read, no other channel", () => {
-  it("email-sending: the refused path stops the row and states the code to campaign-service", () => {
-    const dag = buildEmailSendingDag();
-    expect(node(dag, "send-email")?.config?.skipOnRefusalCodes).toContain(CODE);
-    expect(dag.edges).toContainEqual({ from: "check-sent", to: "record-refused", condition: EMAIL_SENDING_REFUSED });
-    expect(dag.edges).toContainEqual({ from: "record-refused", to: "end-run-refused" });
-    expect(node(dag, "end-run-refused")?.inputMapping).toEqual({ "body.delivery": "$ref:send-email.output.delivery" });
-    expect(node(dag, "end-run-refused")?.config?.body).toEqual({ success: true, stopCampaign: false });
-  });
-
+describe("form responder: every 409 already read, no other channel", () => {
   it("form responder: a refused email never goes on to WhatsApp", () => {
     const dag = buildFormMeetingBookingDag();
     expect(node(dag, "send-email")?.config?.skipOnRefusalCodes).toContain(CODE);
