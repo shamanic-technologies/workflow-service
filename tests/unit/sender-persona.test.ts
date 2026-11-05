@@ -39,7 +39,7 @@ const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../fixtures/$
 const SOPHIE = { name: "Sophie", role: "AI assistant", instructions: "Warm and brief. Say you are the AI assistant of the team when asked." };
 const a = fixture("trigger-right-moment-occurrence.json").args as Record<string, any>;
 const composeWhatsapp = (reach: unknown, history: unknown = a.history) =>
-  loadMain(COMPOSE_MESSAGE_PROMPT_CODE)(a.person, a.instruction, a.offer, a.brand, a.rep, a.facts, history, a.currentDate, a.occurrence, a.triggerType, a.who, reach);
+  loadMain(COMPOSE_MESSAGE_PROMPT_CODE)(a.person, a.offer, a.brand, a.rep, a.facts, history, a.currentDate, a.occurrence, a.triggerType, a.who, reach);
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
