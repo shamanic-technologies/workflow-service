@@ -414,7 +414,8 @@ if (args.from === "recorded" || args.source === "recorded") {
 // Run from /app/scripts inside the workflow-service container (it reads the compiled door table from dist):
 //   SQL=$(docker exec distribute-workflow-service-1 node scripts/record-script-cases.mjs --source windmill --flows 'ai_meeting_booking_%' --print-sql)
 //   docker exec distribute-postgres-1 psql -U postgres -At -d windmill -c "$SQL" \
-//     | docker exec -i distribute-workflow-service-1 node scripts/record-script-cases.mjs --source windmill --outcome <o> --dynasty <d> --from-outcome <the step the campaign starts from> [--apply]
+//     | docker exec -i distribute-workflow-service-1 node scripts/record-script-cases.mjs --source windmill --outcome <o> --dynasty <d> --from-outcome <the step the campaign starts from> [--end-as-runner] [--apply]
+//   --end-as-runner: match each old run by the end-run body the Engine runner would state for the script (replay `expect.end`).
 if (args.source === "windmill") {
   const { windmillCasesSql, caseFromFlow } = await import("../dist/lib/scripts/windmill-cases.js");
   if (args["print-sql"]) {
@@ -431,7 +432,7 @@ if (args.source === "windmill") {
       excluded["a run Windmill skipped"] = (excluded["a run Windmill skipped"] ?? 0) + 1;
       continue;
     }
-    const out = caseFromFlow({ id: r.id, createdAt: r.created_at, args: r.args ?? {}, failed: r.status === "failure", error: r.error ?? r.status }, r.steps ?? [], { fromOutcome: typeof args["from-outcome"] === "string" ? args["from-outcome"] : undefined });
+    const out = caseFromFlow({ id: r.id, createdAt: r.created_at, args: r.args ?? {}, failed: r.status === "failure", error: r.error ?? r.status }, r.steps ?? [], { fromOutcome: typeof args["from-outcome"] === "string" ? args["from-outcome"] : undefined, endAsRunner: args["end-as-runner"] === true });
     if (out.case) cases.push(out.case);
     else excluded[out.excluded] = (excluded[out.excluded] ?? 0) + 1;
   }
