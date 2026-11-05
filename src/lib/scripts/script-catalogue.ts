@@ -224,14 +224,21 @@ export interface UpgradeInput {
   tactics?: Record<string, unknown>;
 }
 
-/** The next version of the same idea; the previous active version is deprecated in the same transaction. */
+/**
+ * The next version of the same idea; the previous active version is deprecated in the same transaction.
+ * A RETIRED dynasty (a stored script awaiting the owner's go, MIGRATE-1105 S1b) is upgraded from its highest version and
+ * the new version is stored retired too: it never runs, not even for the seconds a restore-upgrade-retire would open,
+ * and restoring the dynasty brings back that newest version.
+ */
 export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: string, input: UpgradeInput, author: Author): Promise<ScriptRow> {
-  const current = await activeVersion(db, outcome, dynasty);
+  let current = await activeVersion(db, outcome, dynasty);
   if (!current) {
     const any = await dynastyVersions(db, outcome, dynasty);
     if (any.length === 0) throw new ScriptCatalogueError(404, "not_found", `no script ${outcome}/${dynasty}`);
-    throw new ScriptCatalogueError(409, "no_active_version", `${outcome}/${dynasty} has no active version to upgrade`);
+    if (any[0]!.dynastyStatus !== "deprecated") throw new ScriptCatalogueError(409, "no_active_version", `${outcome}/${dynasty} has no active version to upgrade`);
+    current = any[0]!;
   }
+  const retired = current.dynastyStatus === "deprecated";
   if (current.code === input.code && input.tactics === undefined) {
     throw new ScriptCatalogueError(400, "no_change", "the code is the active version's, byte for byte: nothing to upgrade");
   }
@@ -254,6 +261,7 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
         tactics: input.tactics ?? current.tactics,
         description: input.description ?? current.description,
         dynastyStatus: current.dynastyStatus,
+        ...(retired ? { status: "deprecated" as const, deprecationReason: current.deprecationReason ?? "Retired dynasty" } : {}),
         creationType: "upgrade",
         createdFromScript: current.id,
         orgId: author.orgId,
