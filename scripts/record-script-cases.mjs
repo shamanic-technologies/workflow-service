@@ -195,7 +195,7 @@ function decisionCase(d) {
 }
 
 /** A service's recorded decisions feed (`?after=<seq>`), oldest first. */
-async function recordedFeed(service, path, after, maxCases) {
+async function recordedFeed(service, path, after, maxCases, pageSize = 1000) {
   const prefix = service.toUpperCase();
   const base = (process.env[`${prefix}_SERVICE_URL`] ?? "").replace(/\/$/, "");
   const key = process.env[`${prefix}_SERVICE_API_KEY`];
@@ -203,7 +203,7 @@ async function recordedFeed(service, path, after, maxCases) {
   const rows = [];
   let cursor = after;
   for (;;) {
-    const res = await fetch(`${base}${path}?${new URLSearchParams({ after: String(cursor), limit: "1000" })}`, { headers: { "x-api-key": key } });
+    const res = await fetch(`${base}${path}?${new URLSearchParams({ after: String(cursor), limit: String(pageSize) })}`, { headers: { "x-api-key": key } });
     const text = await res.text();
     if (!res.ok) throw new Error(`${service} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     const page = JSON.parse(text);
@@ -289,7 +289,7 @@ if ((args.from === "recorded" || args.source === "recorded") && typeof args.feed
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   if (!args.unit || args.unit === true) throw new Error("--unit is required (the material's unit name)");
   const [service, ...rest] = args.feed.split(":");
-  const rows = await recordedFeed(service, rest.join(":"), Number(args.after ?? 0), Number(args.max ?? 500));
+  const rows = await recordedFeed(service, rest.join(":"), Number(args.after ?? 0), Number(args.max ?? 500), Number(args.page ?? 100));
   const built = rows.map((d) => materialCase(d, args.unit));
   const cases = built.filter((b) => b.case).map((b) => b.case);
   const excluded = {};
