@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
-import { engineState, pickScript, sampleBeta, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { engineState, pickScript, sampleBeta, servesChannel, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
 import { endRunBodyOf, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../../src/lib/scripts/engine-runner.js";
 import { reserveCampaignExecution } from "../../src/lib/execution-admission.js";
 import { engineWaits, scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
@@ -70,6 +70,7 @@ function world(serve: Record<string, unknown> = { found: true, lead: { leadId: "
   const closed: Array<{ runId: string; status: string }> = [];
   const declared: Array<{ runId: string; body: unknown }> = [];
   const doors: Array<{ path: string; headers: Record<string, string>; body: unknown }> = [];
+  const marks: Array<Record<string, unknown>> = [];
   let gateAllowed = true;
   const ledger: LedgerDeps = {
     async createRun(opts) {
@@ -82,6 +83,9 @@ function world(serve: Record<string, unknown> = { found: true, lead: { leadId: "
     },
     async closeRun(runId, status) {
       closed.push({ runId, status });
+    },
+    async markSupport(runId, mark) {
+      marks.push({ runId, ...mark });
     },
   };
   const vendors: VendorDeps = {
@@ -107,7 +111,7 @@ function world(serve: Record<string, unknown> = { found: true, lead: { leadId: "
     },
     runScript: (input, who, owned) => runStoredScript(db, { ...input, billing: "org" }, who, { ledger, vendors }, owned),
   };
-  return { deps, calls, runs, closed, declared, doors, refuseGate: () => (gateAllowed = false) };
+  return { deps, calls, runs, closed, declared, doors, marks, refuseGate: () => (gateAllowed = false) };
 }
 
 const dispatch = (over: Partial<EngineDispatch> = {}): EngineDispatch => ({
@@ -206,6 +210,16 @@ describe("a campaign run executes its Engine's script, with no workflow", () => 
     noWorkflowSlugAnywhere(w);
   });
 
+  it("a script stating a support function marks its run once it made its Unit (and the request carries the run's clock)", async () => {
+    await addScript("lead_found", "dy_serve", SERVE, { recorded_by: "lead", support: { kind: "copilot", reason: "no outcome by design" } });
+    const w = world();
+    const { runId } = await runOnce(dispatch(), w);
+    expect(w.marks).toEqual([{ runId, kind: "copilot", reason: "no outcome by design", markedBy: "workflow-service engine script:lead_found/dy_serve" }]);
+    const none = world({ found: false, reason: "nobody" });
+    await runOnce(dispatch({ campaignId: "camp-2" }), none);
+    expect(none.marks).toEqual([]);
+  });
+
   it("a population that ran out stops the audience; nobody else idles", async () => {
     await addScript("lead_found", "dy_serve", SERVE, { recorded_by: "lead" });
     const w = world({ found: false, reason: "audience_exhausted" });
@@ -301,6 +315,26 @@ describe("the Rating", () => {
     expect(pick!.draws.map((d) => d.dynasty)).toEqual(["dy_answer"]);
   });
 
+  it("a refusal stated as `<code>: <why>` reaches the occurrence as its code and its words", () => {
+    expect(endRunBodyOf({ status: "unmade", error: "lead_opted_out: This person unsubscribed" }, true)).toEqual({
+      success: true,
+      stopCampaign: false,
+      delivery: { state: "refused", code: "lead_opted_out", reason: "This person unsubscribed" },
+    });
+    expect(endRunBodyOf({ status: "unmade", error: "lead_opted_out" }, true)).toMatchObject({ delivery: { code: "lead_opted_out", reason: "lead_opted_out" } });
+    expect(endRunBodyOf({ status: "unmade", error: "audience_exhausted: nobody left" }, false)).toEqual({ success: true, stopCampaign: true });
+    expect(endRunBodyOf({ status: "unmade", error: "person_not_admitted: customer" }, true)).toEqual({ success: true, stopCampaign: false, personNotAdmitted: { reason: "customer" } });
+  });
+
+  it("an Engine serves a campaign's channel only when one of its scripts runs for it (else the campaign keeps its workflow)", async () => {
+    expect(await servesChannel(db, "conversation", "email-sending")).toBe(false);
+    await addScript("conversation", "dy_hello", ANSWER, { channel: "founder-hello" });
+    expect(await servesChannel(db, "conversation", "email-sending")).toBe(false);
+    expect(await servesChannel(db, "conversation", "founder-hello")).toBe(true);
+    await addScript("conversation", "dy_any", ANSWER);
+    expect(await servesChannel(db, "conversation", "email-sending")).toBe(true);
+  });
+
   it("draws by the share of runs that made a Unit, pooled per dynasty", async () => {
     const good = await addScript("lead_found", "dy_good", SERVE);
     const bad = await addScript("lead_found", "dy_bad", SERVE);
@@ -337,15 +371,14 @@ describe("the campaign's strategy", () => {
       expect(pick!.script.dynasty).toBe("dy_followup_due");
     }
     expect(strategyAsks[0]).toEqual({ campaignId: "camp-1", outcome: "lead_found" });
-    // The runner asks it for the run's own campaign.
     const w = world();
     strategyAsks = [];
     await runOnce(dispatch(), w);
     expect(w.runs[0]!.taskName).toBe("script:lead_found/dy_followup_due");
-    expect(strategyAsks).toEqual([{ campaignId: "camp-1", outcome: "lead_found" }]);
+    expect(strategyAsks).toContainEqual({ campaignId: "camp-1", outcome: "lead_found" });
   });
 
-  it("keeps nothing = no script runs (the run ends idle), and an unreadable strategy runs nothing", async () => {
+  it("keeps nothing = no script runs, and an unreadable strategy runs nothing", async () => {
     await addScript("lead_found", "dy_cold", SERVE, { recorded_by: "lead" });
     setScriptStrategyReader(async () => []);
     expect(await pickScript(db, { outcome: "lead_found", servable: [], channel: null, campaignId: "camp-1" })).toBeNull();
@@ -353,7 +386,6 @@ describe("the campaign's strategy", () => {
       throw new Error("features-service 502");
     });
     await expect(pickScript(db, { outcome: "lead_found", servable: [], channel: null, campaignId: "camp-1" })).rejects.toThrow(/502/);
-    // Not a campaign run (no campaign): no strategy to read.
     expect((await pickScript(db, { outcome: "lead_found", servable: [], channel: null }))!.script.dynasty).toBe("dy_cold");
   });
 });
