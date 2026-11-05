@@ -256,7 +256,7 @@ describe("every writer puts who they are to us in front of the model", () => {
   it("cold WhatsApp outreach: a known person with no thread is never introduced as a stranger", async () => {
     const person = { kind: "first", step: 1, email: "y@example.com", brandId: "b-1", lead: { firstName: "Yuliia" } };
     const history = { hasHistory: false, threadLines: [], eventLines: [], lastMessage: null, olderMessagesOmitted: 0, voiceLines: ["to someone else, whatsapp: hey!"] };
-    const text = await prompt(COMPOSE_MESSAGE_PROMPT_CODE, [person, "", offer, brand, {}, facts, history, "2026-10-14", undefined, undefined, known]);
+    const text = await prompt(COMPOSE_MESSAGE_PROMPT_CODE, [person, offer, brand, {}, facts, history, "2026-10-14", undefined, undefined, known]);
     expect(text).toContain("WHO THEY ARE TO US:");
     expect(text).toContain("a personal contact of the owner");
     expect(text).toContain(PERSON_RELATIONSHIP_STRATEGY);

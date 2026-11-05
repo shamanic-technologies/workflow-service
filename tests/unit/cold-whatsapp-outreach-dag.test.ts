@@ -317,22 +317,22 @@ describe("composing the message", () => {
     olderMessagesOmitted: 12,
     voiceLines: ["to this person, whatsapp: T'as dépensé combien ?"],
   };
-  const compose = withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 10);
+  const compose = withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 9);
 
-  it("explains the strategy, follows the instruction verbatim, and writes as the brand's rep", async () => {
-    const out = await compose(first, "Ask what they tried to grow signups.", offer, brand, rep, facts, fresh, "2026-10-12");
+  it("explains the strategy and writes as the brand's rep; the campaign brief is content-generation's (body.brief), never pasted here", async () => {
+    const out = await compose(first, offer, brand, rep, facts, fresh, "2026-10-12");
     const system = promptOf(out);
     expect(system).toContain("Kevin, founder of Distribute.you");
     expect(system).not.toMatch(/[–—]/);
     const message = out.message as string;
-    expect(message).toContain("Ask what they tried to grow signups.");
+    expect(message).not.toContain("INSTRUCTION");
     expect(message).toContain("Name: Ana");
     expect(message).toContain("Company: Acme");
     expect(message).toContain("E1. pricing: The platform is free");
   });
 
   it("a person never written to gets a first message, still in the owner's voice", async () => {
-    const out = await compose(first, null, offer, brand, rep, facts, fresh, "2026-10-12");
+    const out = await compose(first, offer, brand, rep, facts, fresh, "2026-10-12");
     expect(promptOf(out)).toContain("This is a FIRST message");
     expect(promptOf(out)).not.toContain("NOT a first contact");
     expect(out.message as string).toContain("(no message ever exchanged)");
@@ -340,7 +340,7 @@ describe("composing the message", () => {
   });
 
   it("a person with a prior thread gets a continuation from where it stopped, never a re-introduction", async () => {
-    const out = await compose(first, null, offer, brand, rep, facts, talked, "2026-10-12");
+    const out = await compose(first, offer, brand, rep, facts, talked, "2026-10-12");
     const system = promptOf(out);
     expect(system).toContain("This is NOT a first contact: never introduce yourself");
     expect(system).toContain("Pick the conversation back up from where it stopped");
@@ -356,7 +356,7 @@ describe("composing the message", () => {
   });
 
   it("a follow-up look plays the shared right-moment game: no fixed count, no fixed delay, stop only on their words", async () => {
-    const out = await compose({ ...first, kind: "followup", step: 2 }, null, offer, brand, rep, facts, talked, "2026-10-12");
+    const out = await compose({ ...first, kind: "followup", step: 2 }, offer, brand, rep, facts, talked, "2026-10-12");
     const system = promptOf(out);
     expect(system).toContain("THIS IS A FOLLOW-UP LOOK");
     expect(system).toContain(rightMomentStrategy(WHATSAPP_MEDIUM));
@@ -365,22 +365,22 @@ describe("composing the message", () => {
     expect(system).not.toContain("ONE follow-up");
     expect(system).not.toContain("no other message after this one");
     expect(system).not.toMatch(/[–—]/);
-    expect(out.message as string).toContain("(none: follow the strategy)");
+    expect(out.message as string).not.toContain("INSTRUCTION");
     expect(out.message as string).toMatch(/^NOW: \d{4}-\d{2}-\d{2}T.*\(\w+day, \w+ \d+, \d{4}, \d{2}:\d{2} UTC;/);
   });
 
   it("a first message writes and states the first follow-up look's date", async () => {
-    const out = await compose(first, null, offer, brand, rep, facts, fresh, "2026-10-12");
+    const out = await compose(first, offer, brand, rep, facts, fresh, "2026-10-12");
     expect(promptOf(out)).toContain("Set decision to write: this message goes out now.");
     expect(promptOf(out)).toContain("That date is the first follow-up look");
     expect(promptOf(out)).not.toContain("THIS IS A FOLLOW-UP LOOK");
   });
 
   it("never writes without a brand name, an offer name, or the history", async () => {
-    await expect(compose(first, null, {}, brand, rep, facts, fresh, "x")).rejects.toThrow(/offer/);
-    await expect(compose(first, null, offer, {}, rep, facts, fresh, "x")).rejects.toThrow(/brand/);
-    await expect(compose(first, null, offer, brand, rep, facts, undefined, "x")).rejects.toThrow(/blind/);
-    await expect(compose(first, null, offer, brand, rep, facts, { ...fresh, voiceLines: [] }, "x")).rejects.toThrow(/blind/);
+    await expect(compose(first, {}, brand, rep, facts, fresh, "x")).rejects.toThrow(/offer/);
+    await expect(compose(first, offer, {}, rep, facts, fresh, "x")).rejects.toThrow(/brand/);
+    await expect(compose(first, offer, brand, rep, facts, undefined, "x")).rejects.toThrow(/blind/);
+    await expect(compose(first, offer, brand, rep, facts, { ...fresh, voiceLines: [] }, "x")).rejects.toThrow(/blind/);
   });
 });
 
@@ -488,8 +488,8 @@ describe("answering a trigger occurrence (signed up, still not paid 24 hours lat
     const triggerType = { name: "Signup Not Paid", line: "Signed up, still not a paid client 24 hours later.", fromStepName: "Signup", params: { afterStep: "signup", minutes: 1440, unlessStep: "paid_client" } };
     const p = await pick(claim, detail, undefined, await plan(trigger, null));
     const fresh = { hasHistory: false, threadLines: [], eventLines: [], lastMessage: null, olderMessagesOmitted: 0, voiceLines: ["to someone else, whatsapp: yo"] };
-    const out = await withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 10)(
-      p, null, { name: "Revenue made easy" }, { brand: { name: "Distribute.you" } }, { salesRepFirstName: "Kevin" }, { exact: [], neverGive: [] }, fresh, "2026-10-14", await plan(trigger, null), triggerType,
+    const out = await withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 9)(
+      p, { name: "Revenue made easy" }, { brand: { name: "Distribute.you" } }, { salesRepFirstName: "Kevin" }, { exact: [], neverGive: [] }, fresh, "2026-10-14", await plan(trigger, null), triggerType,
     );
     expect(out.message as string).toContain("WHY WE WRITE NOW:\nTrigger: Signup Not Paid");
     expect(out.message as string).toContain("minutes = 1440");
@@ -892,8 +892,8 @@ describe("greeting a person who just gave their WhatsApp number, known only by t
     const p = await pick(claim, detail, undefined, await plan(trigger, null), trigger);
     const triggerType = { name: "WhatsApp number given", line: "A person gave their WhatsApp number.", params: {} };
     const fresh = { hasHistory: false, threadLines: [], eventLines: [], lastMessage: null, olderMessagesOmitted: 0, voiceLines: ["to someone else, whatsapp: yo"] };
-    const composed = await withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 10)(
-      p, "Hi Marie! Kevin here.", { name: "Revenue made easy" }, { brand: { name: "Distribute.you" } }, { salesRepFirstName: "Kevin" }, { exact: [], neverGive: [] }, fresh, "2026-10-15", await plan(trigger, null), triggerType,
+    const composed = await withWho(loadMain(COMPOSE_MESSAGE_PROMPT_CODE), 9)(
+      p, { name: "Revenue made easy" }, { brand: { name: "Distribute.you" } }, { salesRepFirstName: "Kevin" }, { exact: [], neverGive: [] }, fresh, "2026-10-15", await plan(trigger, null), triggerType,
     );
     expect(composed.message as string).toContain("Name: Marie Curie");
     expect(composed.message as string).toContain("First name they gave us: Marie");

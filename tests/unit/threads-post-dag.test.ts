@@ -39,7 +39,7 @@ const ACCOUNTS = [
 const planAt = (iso: string, dryRun = false) => {
   const now = new Date(iso);
   const hour = now.getUTCHours();
-  return { dryRun, campaignId: "camp-1", brandId: "brand-1", offerId: "offer-1", instruction: null, now: now.toISOString(), date: iso.slice(0, 10), inWindow: hour >= PUBLISH_WINDOW_UTC[0] && hour < PUBLISH_WINDOW_UTC[1] };
+  return { dryRun, campaignId: "camp-1", brandId: "brand-1", offerId: "offer-1", now: now.toISOString(), date: iso.slice(0, 10), inWindow: hour >= PUBLISH_WINDOW_UTC[0] && hour < PUBLISH_WINDOW_UTC[1] };
 };
 
 const FACTS = { exact: [{ id: "E1", label: "Positive replies within 24 hours", value: "At least 30% of positive replies arrive within 24 hours" }], neverGive: [] };
@@ -101,8 +101,11 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     await expect(plan(true, null, "b", null, undefined)).rejects.toThrow(/no offer/);
     const dry = await plan(true, null, "b", "o", undefined);
     expect(dry).toMatchObject({ dryRun: true, offerId: "o", accountsQuery: { brandId: "b" } });
-    const live = await plan(false, "c", "b", null, { offerId: "o2", instruction: " Never say agency. " });
-    expect(live).toMatchObject({ dryRun: false, offerId: "o2", instruction: "Never say agency." });
+    const live = await plan(false, "c", "b", null, { offerId: "o2", instruction: " Never say agency. ", brief: "Sell to dentists." });
+    expect(live).toMatchObject({ dryRun: false, offerId: "o2" });
+    // The brief reaches the writer as content-generation's body.brief (ONE-BRIEF-1105): the plan reads neither text.
+    expect(live).not.toHaveProperty("instruction");
+    expect(live).not.toHaveProperty("brief");
   });
 
   // AC1: a day against a mocked meta-service: 2 Pro (AI) accounts, a Personal, a Pro (human) and a dead Pro (AI).
@@ -159,7 +162,7 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     const turn = { account: { username: "sophie_ai" }, shape: "myth vs fact", history: ["2026-10-28: Old subject"] };
     const facts = { ...FACTS, neverGive: ["a discount"] };
     const out = await compose(
-      { date: "2026-10-29", brandId: "brand-1", instruction: "Never call us an agency." },
+      { date: "2026-10-29", brandId: "brand-1" },
       turn,
       { brand: { name: "distribute.you", domain: "distribute.you" } },
       facts,
@@ -175,7 +178,6 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
       "SUGGESTED SHAPE: myth vs fact",
       "OUR FACTS (the only source of numbers besides OUR PUBLISHED FIGURES):",
       "NEVER STATE OR OFFER:",
-      "THE BRAND'S INSTRUCTION FOR THESE THREADS:",
       "OUR PUBLISHED FIGURES (read today on distribute.you, each with its page):",
       "THIS WEEK IN THE INDUSTRY (angles only):",
       "ALREADY POSTED (never repeat a subject):",
@@ -184,10 +186,10 @@ describe("Threads posts DAG (THREADS-CAMPAIGN-1028)", () => {
     expect(at.every((i: number) => i >= 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
     expect(out.context.split("\n").slice(0, 5)).toEqual([...headers.slice(0, 4), ""]);
-    for (const piece of ["[E1]", "- a discount", "Never call us an agency.", "412 positive replies", "Angle A", "2026-10-28: Old subject"]) expect(out.context).toContain(piece);
+    for (const piece of ["[E1]", "- a discount", "412 positive replies", "Angle A", "2026-10-28: Old subject"]) expect(out.context).toContain(piece);
     // No rule and no prompt here: those are the template's.
     expect(out).not.toHaveProperty("systemPrompt");
-    const bare = await compose({ date: "2026-10-29", brandId: "b", instruction: null }, { ...turn, history: [] }, { name: "X", domain: "https://www.x.com/" }, { exact: [], neverGive: [] }, { ok: false, status: 502 }, null);
+    const bare = await compose({ date: "2026-10-29", brandId: "b" }, { ...turn, history: [] }, { name: "X", domain: "https://www.x.com/" }, { exact: [], neverGive: [] }, { ok: false, status: 502 }, null);
     expect(bare.variables.getStartedLine).toBe("Get started: x.com");
     expect(bare.context).not.toContain("NEVER STATE OR OFFER:");
     expect(bare.context).not.toContain("INSTRUCTION");
