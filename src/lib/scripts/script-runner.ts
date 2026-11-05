@@ -335,7 +335,7 @@ async function provide(
     }
     units[k] = v as MaterialUnit | MaterialUnit[];
   }
-  const pick = await pickScript(db, { outcome, servable: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null });
+  const pick = await pickScript(db, { outcome, servable: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null });
   if (!pick) return { stop: `ctx.get(${outcome}): no live script of that Engine can run on ${Object.keys(units).join(", ") || "nothing"}` };
   const headers = { ...parent.headers };
   delete headers["x-workflow-slug"];
