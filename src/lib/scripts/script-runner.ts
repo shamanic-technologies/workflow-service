@@ -56,6 +56,13 @@ export interface RunScriptInput {
   /** Answer every vendor call (args, answer; a completion's exact request + whole answer) for the recording service. */
   trace?: boolean;
   /**
+   * The units were HANDED by an asking script (`ctx.ask`, MIGRATE-1105 S1b): they are the work it ordered, so once this
+   * run makes its Unit or states why not (`unmade`), each one naming a subject is consumed here, read or not (the rep
+   * call consumes the reply or form fill the answering script handed it, as the old workflow declared). Never on a run
+   * that makes nothing, fails or stops.
+   */
+  consumesHanded?: boolean;
+  /**
    * Who pays the vendors: `platform` only through the service-key door `POST /internal/scripts/run` (a service's own
    * sweep with no org request, billed as that service's own code was: chat-service's platform doors, on this run).
    */
@@ -258,6 +265,15 @@ export async function runStoredScript(
   // A Unit recorded by its owning service is declared there (one declaration, never two).
   const produced: OccurrenceInput[] =
     status === "made" && !input.recordedBy && subject ? [{ outcomeKey: row.outcome, subjectService: subject.service, subjectId: subject.id }] : [];
+  if (input.consumesHanded && (status === "made" || status === "unmade")) {
+    for (const [outcome, held] of Object.entries(input.units)) {
+      for (const unit of Array.isArray(held) ? held : [held]) {
+        if (!unit.subject) continue;
+        if (consumed.some((c) => c.outcomeKey === outcome && c.subjectService === unit.subject!.service && c.subjectId === unit.subject!.id)) continue;
+        consumed.push({ outcomeKey: outcome, subjectService: unit.subject.service, subjectId: unit.subject.id });
+      }
+    }
+  }
   if (input.recordedBy) consumed.length = 0;
 
   let declaredOk = true;
@@ -361,6 +377,7 @@ async function provide(
         ...(request.tactics && typeof request.tactics === "object" ? { tactics: request.tactics as Record<string, unknown> } : {}),
         ...(typeof request.recordedBy === "string" ? { recordedBy: request.recordedBy } : {}),
         ...(request.trace === true ? { trace: true } : {}),
+        consumesHanded: true,
       },
       { orgId: parent.orgId, userId: parent.userId, parentRunId: parent.runId, headers },
       deps,

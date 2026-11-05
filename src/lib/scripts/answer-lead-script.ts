@@ -30,6 +30,15 @@ export const ANSWER_LEAD_DYNASTY = "dy_answer_lead";
  * Instant Call campaigns started on (a positive reply, a form fill), read off a Lead event's `sourceTriggerId`.
  */
 export const ANSWER_LEAD_CALL_ON = ["positive_reply_received", "form_submitted"] as const;
+/**
+ * The Unit each of those occurrences IS on the ledger (the step a call consumes, as the old workflow declared it: a
+ * positive reply = `conversation`, a form fill = `form_submitted`): handed to the call with the lead as its subject, so
+ * the call's run consumes it (`consumesHanded`).
+ */
+export const ANSWER_LEAD_CALL_CONSUMES: Record<(typeof ANSWER_LEAD_CALL_ON)[number], string> = {
+  positive_reply_received: "conversation",
+  form_submitted: "form_submitted",
+};
 /** The Engine the call is asked of (its scripts: `scripts/engine-ports/ai-instant-call.ts`), literal in the source. */
 export const ANSWER_LEAD_CALL_OUTCOME = "booking_call";
 
@@ -105,7 +114,7 @@ export function answerLeadScriptSource(): string {
     MEDIUM: mediumLines(),
     SCHEMA: ANSWER_SCHEMA,
     MAX_DAYS: MAX_NEXT_FOLLOW_UP_DAYS,
-    CALL_ON: ANSWER_LEAD_CALL_ON,
+    CALL_CONSUMES: ANSWER_LEAD_CALL_CONSUMES,
   };
   return `${SCRIPT_BODY}\nconst K = ${JSON.stringify(consts)};\n`;
 }
@@ -158,8 +167,12 @@ export default function run(ctx) {
   // The call is the Booking call Engine's Unit, asked as a child run (picked by the Rating among the scripts this
   // campaign's strategy keeps; none = "no_script", no call). The person's row stays this run's: handed as claimed, the
   // call script claims and stops nothing. Whatever it answers, this run goes on to answer the person.
-  if (K.CALL_ON.indexOf(String(trigger.sourceTriggerId || trigger.triggerId || "")) >= 0) {
-    ctx.ask({ units: {}, request: Object.assign({}, req, { claimed: claim }) });
+  const occurrence = K.CALL_CONSUMES[String(trigger.sourceTriggerId || trigger.triggerId || "")];
+  if (occurrence) {
+    const leadId = s(row.leadId) || named.leadId;
+    const handed = {};
+    handed[occurrence] = { content: trigger, ...(leadId ? { subject: { service: "lead-service", id: leadId } } : {}) };
+    ctx.ask({ units: handed, request: Object.assign({}, req, { claimed: claim }) });
     ctx.get("booking_call");
   }
   const email = s(row.email) ? s(row.email).toLowerCase() : named.email;
