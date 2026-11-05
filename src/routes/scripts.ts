@@ -192,12 +192,13 @@ router.post("/scripts/dynasty/:outcome/:dynasty/replay", requireApiKey, async (r
   }
   try {
     const { outcome, dynasty } = req.params;
-    const code = parsed.data.code ?? (await activeVersion(db, outcome, dynasty))?.code;
+    const active = await activeVersion(db, outcome, dynasty);
+    const code = parsed.data.code ?? active?.code;
     if (!code) {
       res.status(404).json({ error: `no active version of ${outcome}/${dynasty}, and no code given` });
       return;
     }
-    const summary = await proveOnCases(db, outcome, dynasty, code);
+    const summary = await proveOnCases(db, outcome, dynasty, code, (active?.tactics as Record<string, unknown>) ?? {});
     if (!summary) {
       res.status(404).json({ error: `${outcome}/${dynasty} carries no recorded case` });
       return;
