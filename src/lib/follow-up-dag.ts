@@ -7,7 +7,7 @@
  * The channel's slug stays `ai-follow-up-email` (features-service): its three live dynasties are UPGRADED to this
  * DAG, never forked (owner rule). It runs on two kinds of legs:
  *  - PROACTIVE (`served`): a daily campaign whose Lead Sourcing pipe states the "Lead follow-up due" population
- *    (`sourcing-dag.ts`): lead-service hands the brand's leads whose next follow-up date has passed, and this pipe's
+ *    (the `lead_found` script `dy_lead_serve_follow_up_due`): lead-service hands the brand's leads whose next follow-up date has passed, and this pipe's
  *    own `POST /orgs/buffer/next` hands them here one per run.
  *  - REACTIVE (`claimed`): a trigger occurrence (⚡ Lead event: any fact about a lead, whatever the channel; or an older
  *    trigger a live campaign still starts on) files the person on this campaign's own lead-service queue; the run

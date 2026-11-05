@@ -5,11 +5,12 @@
  * hands out nobody the brand emailed inside that window (sales-lead-service #926).
  *
  * Who states it: every workflow that serves people to prospect COLD, i.e. the channels in
- * `FRESH_CONTACTS_FEATURE_SLUGS` (cold email, Lead Sourcing, and the origins that find people the brand never met).
+ * `FRESH_CONTACTS_FEATURE_SLUGS` (cold email). The find campaigns (Lead Sourcing and the origins) state it as the
+ * TACTIC of their stored `lead_found` script (`dy_lead_serve*`, MIGRATE-1105 S3), no longer in a workflow.
  * Who never does: a play that re-engages people already emailed (a serve stating a `population`, e.g. the contacted
  * pure prospects; the CRM contacts and follow-up channels are not in the list), and Email Sending (the client names
  * the person). `scripts/upgrade-fresh-contacts.mjs` UPGRADES each live dynasty with this one change (never a fork,
- * owner rule), and `scripts/seed-sourcing-workflows.mjs` builds the sourcing DAGs with it, so a seed never flattens it.
+ * owner rule).
  */
 import type { DAG } from "./dag-validator.js";
 
@@ -22,10 +23,6 @@ export const FRESH_CONTACTS_FEATURE_SLUGS = [
   // Same cold email to buyers, the gift-for-feedback offer: its 9 dynasties were upgraded with the window on 2026-10-16
   // when they were brought back from the pre-guard stale sweep (2026-09-16), so the list now says so.
   "feedback-request-cold-email-outreach",
-  "lead-sourcing",
-  "sourcing-apollo-cold-filters",
-  "sourcing-apollo-buying-signals",
-  "sourcing-linkedin-engagement-signals",
 ] as const;
 
 /** The plain-words marker the description carries: features-service's Jev judges the tactic on DAG + description. */

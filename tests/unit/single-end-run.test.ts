@@ -8,7 +8,6 @@ import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildEmailSendingDag } from "../../src/lib/email-sending-dag.js";
 import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
 import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildSourcingDag } from "../../src/lib/sourcing-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
@@ -36,7 +35,6 @@ const DAGS: Record<string, DAG> = {
   "ai-lead-proposal": buildAiLeadProposalDag(),
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),
-  sourcing: buildSourcingDag(),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),

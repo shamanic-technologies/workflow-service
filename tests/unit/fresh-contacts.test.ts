@@ -7,15 +7,6 @@ import {
   statesFreshContacts,
   withFreshContacts,
 } from "../../src/lib/fresh-contacts.js";
-import {
-  LEAD_FOLLOW_UP_DUE_CHANGES,
-  SOURCING_DESCRIPTION,
-  buildSourcingDag,
-  buildSourcingDagFor,
-  sourcingDescriptionOf,
-  sourcingTargetOf,
-} from "../../src/lib/sourcing-dag.js";
-import { applyDagPatch } from "../../src/lib/dag-patch.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 
 const serveBody = (dag: DAG) =>
@@ -35,12 +26,8 @@ describe("tactic Fresh contacts only (FRESH-CONTACTS-WF-1015)", () => {
     expect([...FRESH_CONTACTS_FEATURE_SLUGS]).toEqual([
       "sales-cold-email-outreach",
       "feedback-request-cold-email-outreach",
-      "lead-sourcing",
-      "sourcing-apollo-cold-filters",
-      "sourcing-apollo-buying-signals",
-      "sourcing-linkedin-engagement-signals",
     ]);
-    for (const excluded of ["sourcing-crm-contacts", "email-sending", "ai-follow-up-email", "cold-whatsapp-outreach", "sales-crm-email-outreach"]) {
+    for (const excluded of ["lead-sourcing", "sourcing-crm-contacts", "email-sending", "ai-follow-up-email", "cold-whatsapp-outreach", "sales-crm-email-outreach"]) {
       expect(FRESH_CONTACTS_FEATURE_SLUGS as readonly string[]).not.toContain(excluded);
     }
   });
@@ -56,7 +43,8 @@ describe("tactic Fresh contacts only (FRESH-CONTACTS-WF-1015)", () => {
   });
 
   it("a serve of people already contacted (a population) is a re-engagement play: never stated", () => {
-    const contacted = applyDagPatch(buildSourcingDag(), LEAD_FOLLOW_UP_DUE_CHANGES as never);
+    const contacted = coldEmail();
+    (contacted.nodes[1].config as { body: Record<string, unknown> }).body = { population: "lead_followup_due" };
     expect(freshContactsApplies(contacted)).toBe(false);
     expect(() => withFreshContacts(contacted)).toThrow(/not a cold serve/);
   });
@@ -74,54 +62,5 @@ describe("tactic Fresh contacts only (FRESH-CONTACTS-WF-1015)", () => {
     expect(d.startsWith("Writes cold emails. " + FRESH_CONTACTS_MARKER)).toBe(true);
     expect(d).toMatch(/emailed in the last 3 months/);
     expect(freshContactsDescription(d)).toBe(d);
-  });
-});
-
-describe("the sourcing seed carries Fresh contacts only on cold channels and never flattens it", () => {
-  it("a cold channel's generic DAG states it; CRM contacts does not", () => {
-    expect(serveBody(buildSourcingDagFor("lead-sourcing"))).toEqual({ excludeEmailedWithin: "3_months" });
-    expect(serveBody(buildSourcingDagFor("sourcing-apollo-cold-filters"))).toEqual({ excludeEmailedWithin: "3_months" });
-    expect(serveBody(buildSourcingDagFor("sourcing-crm-contacts"))).toBeUndefined();
-    expect(sourcingDescriptionOf("lead-sourcing")).toContain(FRESH_CONTACTS_MARKER);
-    expect(sourcingDescriptionOf("sourcing-crm-contacts")).toBe(SOURCING_DESCRIPTION);
-  });
-
-  it("the stored generic row upgraded by the script is current for the seed (generic, nothing to redo)", () => {
-    const current = buildSourcingDagFor("lead-sourcing");
-    const stored = withFreshContacts(buildSourcingDag());
-    expect(stored).toEqual(current);
-    expect(sourcingTargetOf(stored, current)).toEqual({ dag: current, stated: false });
-    expect(sourcingTargetOf(buildSourcingDag(), current)).toEqual({ dag: current, stated: false });
-  });
-
-  it("a catch-all copy on a cold channel keeps its body AND gains the window", () => {
-    const current = buildSourcingDagFor("lead-sourcing");
-    const stored = applyDagPatch(buildSourcingDag(), [{ op: "add", path: "/nodes/serve-lead/config/body", value: { acceptedEmails: "valid_and_catch_all" } }]);
-    const r = sourcingTargetOf(stored, current);
-    expect(r.stated).toBe(true);
-    expect(serveBody(r.dag)).toEqual({ excludeEmailedWithin: "3_months", acceptedEmails: "valid_and_catch_all" });
-  });
-
-  it("the Lead follow-up due copy never gains it", () => {
-    const current = buildSourcingDagFor("lead-sourcing");
-    const forked = applyDagPatch(current, LEAD_FOLLOW_UP_DUE_CHANGES as never);
-    expect(serveBody(forked)).toEqual({ population: "lead_followup_due" });
-    expect(serveBody(sourcingTargetOf(forked, current).dag)).toEqual({ population: "lead_followup_due" });
-    expect(sourcingTargetOf(forked, current).description).toBeUndefined();
-  });
-
-  it("the contacted pure prospects copy is upgraded to Lead follow-up due, with its description (MULTICHANNEL-FOLLOWUP-1016)", () => {
-    const current = buildSourcingDagFor("lead-sourcing");
-    const stored = applyDagPatch(current, [{ op: "add", path: "/nodes/serve-lead/config/body", value: { population: "contacted_pure_prospects" } }]);
-    const r = sourcingTargetOf(stored, current);
-    expect(serveBody(r.dag)).toEqual({ population: "lead_followup_due" });
-    expect(r.description).toMatch(/^Lead follow-up due: /);
-    expect(r.description).toMatch(/Never a paying client, a personal contact/);
-  });
-
-  it("a CRM copy stays exactly what it states", () => {
-    const current = buildSourcingDagFor("sourcing-crm-contacts");
-    const stored = applyDagPatch(buildSourcingDag(), [{ op: "add", path: "/nodes/serve-lead/config/body", value: { reachableBy: ["phone"] } }]);
-    expect(serveBody(sourcingTargetOf(stored, current).dag)).toEqual({ reachableBy: ["phone"] });
   });
 });
