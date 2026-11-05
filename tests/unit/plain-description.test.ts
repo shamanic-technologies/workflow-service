@@ -40,9 +40,7 @@ describe("every description a seed or copy writes reads right", async () => {
   const video = await import("../../src/lib/industry-update-video-dag.js");
   const call = await import("../../src/lib/ai-instant-call-dag.js");
   const push = await import("../../src/lib/email-sending-dag.js");
-  const sourcing = await import("../../src/lib/sourcing-dag.js");
   const doc = await import("../../src/lib/offer-document-reply-dag.js");
-  const { reachableByDescription } = await import("../../src/lib/reachable-by-copy.js");
   const { freshContactsDescription } = await import("../../src/lib/fresh-contacts.js");
   const texts: Record<string, string> = {
     proactiveFollowUp: follow.FOLLOW_UP_PROACTIVE_DESCRIPTION,
@@ -55,12 +53,8 @@ describe("every description a seed or copy writes reads right", async () => {
     call: call.AI_INSTANT_CALL_DESCRIPTION,
     callEmailOnly: call.EMAIL_REPLIES_ONLY_DESCRIPTION,
     push: push.EMAIL_SENDING_DESCRIPTION,
-    sourcing: sourcing.SOURCING_DESCRIPTION,
-    businessOnly: sourcing.BUSINESS_ONLY_SOURCING_DESCRIPTION,
-    followUpDue: sourcing.LEAD_FOLLOW_UP_DUE_SOURCING_DESCRIPTION,
     offerDocument: doc.DESCRIPTION,
-    phoneCopy: reachableByDescription(sourcing.SOURCING_DESCRIPTION, ["phone"]),
-    freshSourcing: freshContactsDescription(sourcing.SOURCING_DESCRIPTION),
+    freshColdEmail: freshContactsDescription("Writes one cold email to each new contact of the campaign's audience."),
   };
   for (const [name, text] of Object.entries(texts)) {
     it(`${name}: plain, no template/model/test/date, no dash, two sentences at most`, () => {
