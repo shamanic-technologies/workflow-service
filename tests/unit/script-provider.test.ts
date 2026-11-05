@@ -266,3 +266,16 @@ describe("a port replays with its own tactics (MIGRATE-1105 S2)", () => {
     expect(row.replay).toEqual({ cases: 1, matches: 1 });
   });
 });
+
+describe("the audience chosen before the run reaches /start-run (MIGRATE-1105 S2, prod 2026-11-05)", () => {
+  it("states the dispatch's audience on the campaign callbacks, so start-run files under the same one", async () => {
+    await addScript("lead_found", "dy_serve", `export default function run(ctx) { return null; }`);
+    const w = world();
+    await runOnce(dispatch({ audienceId: "aud-pre" }), w);
+    const start = w.calls.find((c) => c.path === "/start-run")!;
+    expect(start.headers["x-audience-id"]).toBe("aud-pre");
+    const w2 = world();
+    await runOnce(dispatch({ audienceId: null, campaignId: "camp-2" }), w2);
+    expect(w2.calls.find((c) => c.path === "/start-run")!.headers["x-audience-id"]).toBeUndefined();
+  });
+});
