@@ -31,7 +31,7 @@ export interface RecordedFlow {
 export interface RecordedStep {
   stepId: string;
   /** `f/nodes/http_call` for a call step; a workflow path for a script or branch step. */
-  runnablePath: string;
+  runnablePath: string | null;
   args: Record<string, unknown>;
   status: string | null;
   result: unknown;
@@ -49,6 +49,14 @@ export function doorFor(service: string, method: string, path: string): string |
   }
   return null;
 }
+
+/** A service door (not a run door) a recorded request reached, by its producer, method and path. */
+function plainDoorFor(service: string, method: string, path: string): string | null {
+  for (const [name, d] of Object.entries(SERVICE_DOOR_VENDORS)) if (!d.asRun && d.service === service && d.method === method && d.path === path) return name;
+  return null;
+}
+
+const SCRIPT_RUN_PATH = "/orgs/scripts/run";
 
 function plain(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -68,6 +76,15 @@ function failedAnswer(result: Record<string, unknown>): RecordedCall["answer"] {
   return { ok: false, data: { error: String(body.error ?? `answered ${String(result.status)}`), status: result.status ?? null, code, body } };
 }
 
+/** What a failed run is matched on: its error, else the thrown step's own message (Windmill may record no flow error). */
+function failureText(flowError: string | null | undefined, thrown: string | null): string {
+  const e = String(flowError ?? "").trim();
+  const useful = e && e !== "failure" ? e : thrown ?? e;
+  // The door's refusal is the step's message after its `METHOD service/path failed (status): ` prefix.
+  const m = /failed \(\d+\): (.*)$/s.exec(useful);
+  return (m ? m[1]! : useful).slice(0, 120);
+}
+
 /** The serviceEnvs (keys) are never copied into a case. */
 function withoutSecrets(args: Record<string, unknown>): Record<string, unknown> {
   const { serviceEnvs: _drop, ...rest } = args;
@@ -77,13 +94,16 @@ function withoutSecrets(args: Record<string, unknown>): Record<string, unknown> 
 export type FlowCase = { case: ReplayCase; routes: string[] } | { excluded: string };
 
 /** One recorded run -> one case, or the reason it cannot be one. */
-export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { fromOutcome?: string } = {}): FlowCase {
+export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { fromOutcome?: string; endAsRunner?: boolean } = {}): FlowCase {
   const calls: RecordedCall[] = [];
+  const asks: Record<string, unknown>[] = [];
+  const asked: Record<string, Record<string, unknown>> = {};
   const routes: string[] = [];
   let campaignRun: Record<string, unknown> | null = null;
   let end: Record<string, unknown> | null = null;
+  let thrownMessage: string | null = null;
   for (const step of steps) {
-    if (!step.runnablePath.endsWith("nodes/http_call")) continue;
+    if (!(step.runnablePath ?? "").endsWith("nodes/http_call")) continue; // an inline script step has no path
     if (step.status === null) return { excluded: "a step still running when it was read" };
     const service = String(step.args.service ?? "");
     const method = String(step.args.method ?? "");
@@ -95,12 +115,38 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
       if (path === "/end-run") end = plain(step.args.body) ? step.args.body : {};
       continue;
     }
-    if (step.status !== "success") continue; // a thrown call: the run's failure, stated by `fails`
+    // A thrown call ends the run: it is recorded as the door's refusal (the script turns it into the same failure, stated
+    // by `fails`), and nothing after it ran.
+    const thrown = step.status !== "success";
+    const thrownAnswer = (): RecordedCall["answer"] => {
+      const e = plain(result) && plain(result.error) ? result.error : {};
+      thrownMessage = String(e.message ?? (plain(result) ? result.error : "") ?? "failed").slice(0, 500);
+      return { ok: false, data: { error: thrownMessage } };
+    };
     // Our one voice, read live (`voice.read` answers its content and version, nothing else).
     if (service === "chat" && method === "GET" && path === "/internal/skills/{slug}" && plain(step.args.params) && step.args.params.slug === VOICE_SKILL_SLUG) {
       const r = plain(result) ? result : {};
       routes.push(VOICE_READ);
       calls.push({ name: VOICE_READ, answer: { ok: true, data: { content: r.content ?? null, version: typeof r.version === "number" ? r.version : null } } });
+      continue;
+    }
+    // A stored script the old run called as a step (`POST /orgs/scripts/run`) is another Engine the script ASKS for
+    // its Unit (`ctx.ask(request)` then `ctx.get(<outcome>)`): the Request recorded, the Unit = that run's answer.
+    if (service === "workflow" && method === "POST" && path === SCRIPT_RUN_PATH && plain(step.args.body) && typeof step.args.body.outcome === "string") {
+      if (thrown) return { excluded: "an asked Engine's script failed" };
+      const { outcome, dynasty: _d, version: _v, ...request } = step.args.body;
+      asks.push(request);
+      asked[outcome as string] = plain(result) ? result : {};
+      continue;
+    }
+    const plainDoor = plainDoorFor(service, method, path);
+    if (plainDoor) {
+      // A service door (not a run door): its fields are the request's body (or query), answered with the body.
+      const fields = plain(method === "GET" ? step.args.query : step.args.body) ? ((method === "GET" ? step.args.query : step.args.body) as Record<string, unknown>) : {};
+      const { workflowSlug: _slug, ...args } = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== null));
+      routes.push(plainDoor);
+      calls.push({ name: plainDoor, args, answer: thrown ? thrownAnswer() : { ok: true, data: plain(result) ? result : {} } });
+      if (thrown) break;
       continue;
     }
     const name = doorFor(service, method, path);
@@ -109,6 +155,10 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
     if (name === LLM_COMPLETE) {
       const { workflowSlug: _slug, ...body } = plain(step.args.body) ? step.args.body : {};
       const r = plain(result) ? result : {};
+      if (thrown) {
+        calls.push({ name, args: body, answer: thrownAnswer() });
+        break;
+      }
       calls.push({ name, args: body, answer: { ok: true, data: { content: r.content ?? null, json: r.json ?? null, model: r.model ?? null, tokensInput: r.tokensInput ?? null, tokensOutput: r.tokensOutput ?? null } } });
       continue;
     }
@@ -118,9 +168,25 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
       if (v !== undefined && v !== null && !(plain(v) && Object.keys(v).length === 0 && f !== "body")) args[f] = v;
     }
     if (method === "GET") delete args.body;
-    if (plain(args.body) && "workflowSlug" in args.body) {
-      const { workflowSlug: _slug, ...body } = args.body;
-      args.body = body;
+    for (const f of ["body", "query"] as const) {
+      const v = args[f];
+      if (plain(v) && "workflowSlug" in v) {
+        const { workflowSlug: _slug, ...rest } = v;
+        args[f] = rest;
+      }
+    }
+    // Path parameters in the door's names (the old step may have named them otherwise), by position.
+    if (plain(args.params)) {
+      const doorNames = [...(SERVICE_DOOR_VENDORS[name]!.path.matchAll(/\{(\w+)\}/g))].map((m) => m[1]!);
+      const stepNames = [...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!);
+      const params = args.params;
+      if (doorNames.length === stepNames.length && stepNames.some((n, i) => n !== doorNames[i])) {
+        args.params = Object.fromEntries(stepNames.map((n, i) => [doorNames[i]!, params[n]]));
+      }
+    }
+    if (thrown) {
+      calls.push({ name, args, answer: thrownAnswer() });
+      break;
     }
     const r = plain(result) ? result : {};
     const tolerated = r.ok === false && !("skipped" in r && r.notCalled === true) && typeof r.status === "number";
@@ -129,11 +195,13 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
   if (!flow.failed && end === null) return { excluded: "the run states no end" };
   const input = withoutSecrets(flow.args);
   const trigger = plain(input.trigger) ? input.trigger : null;
-  const units: ReplayCase["units"] = trigger && opts.fromOutcome && opts.fromOutcome !== "start" ? { [opts.fromOutcome]: trigger } : {};
-  const request = { ...(campaignRun ?? {}), trigger, now: new Date(flow.createdAt).toISOString() };
+  const units: ReplayCase["units"] = { ...(trigger && opts.fromOutcome && opts.fromOutcome !== "start" ? { [opts.fromOutcome]: trigger } : {}), ...asked };
+  const request = { ...(typeof input.campaignId === "string" ? { campaignId: input.campaignId } : {}), ...(campaignRun ?? {}), trigger, now: new Date(flow.createdAt).toISOString() };
   const subject = trigger && typeof trigger.leadId === "string" ? trigger.leadId : null;
+  // `endAsRunner`: the run is matched by the END the Engine runner would state for the script's result (replay.ts).
+  const ended = opts.endAsRunner ? { end: end! } : { content: { end: end! } };
   return {
-    case: { id: flow.id, units, ...(subject ? { subject } : {}), request, calls, expect: flow.failed ? { fails: String(flow.error ?? "").slice(0, 120) } : { content: { end: end! } } },
+    case: { id: flow.id, units, ...(subject ? { subject } : {}), request, ...(asks.length ? { asks } : {}), calls, expect: flow.failed ? { fails: failureText(flow.error, thrownMessage) } : ended },
     routes,
   };
 }
