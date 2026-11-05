@@ -4,7 +4,7 @@
  *   - `message_sent/dy_answer_lead`: the one answer a lead is owed (the source built from this repo's strategies);
  *   - `paid_client/dy_answer_lead_pull`: the Lead event campaign's Target script, which asks the first for it.
  * Each is created once, then UPGRADED when its built source or tactics differ from its latest version. Dry run by
- * default; `--apply` stores them PARKED (dynasty deprecated: a runnable dynasty is a live candidate the Rating may pick
+ * default; `--apply` stores them PARKED (a retired dynasty is upgraded into a retired version: never runnable) (dynasty deprecated: a runnable dynasty is a live candidate the Rating may pick
  * for any org whose Engine is switched, so a writer that waits for the owner's go is never runnable). `--live` (only
  * on the owner's go) restores both dynasties. Switching an org's Engine is a separate act.
  *
@@ -27,6 +27,8 @@ const SCRIPTS = [
       // The Lead event campaigns run on this feature: the Rating keeps the script for them only.
       channel: "ai-follow-up-email",
       relationships: "pure_prospect",
+      // A positive reply or a form fill asks the Booking call Engine for the rep call (MIGRATE-1105 S1b).
+      asks: ["booking_call"],
       // The service that sends declares the Message sent (instantly-service, crm-service): never twice.
       recorded_by: "sender",
     },
@@ -55,7 +57,9 @@ for (const s of SCRIPTS) {
   const at = `${base}/scripts/dynasty/${s.outcome}/${s.dynasty}`;
   const read = await fetch(at, { headers });
   const existing = read.ok ? await read.json() : null;
-  const latest = existing?.versions?.at?.(-1) ?? null;
+  // Versions are listed newest first, without their code: the newest one is read whole.
+  const newest = existing?.versions?.[0] ?? null;
+  const latest = newest ? await (await fetch(`${base}/scripts/${newest.id}`, { headers })).json() : null;
   const current = latest && latest.code === s.code && JSON.stringify(latest.tactics ?? {}) === JSON.stringify(s.tactics);
   const what = current ? "keep" : latest ? "upgrade" : "create";
   console.log(`${s.outcome}/${s.dynasty}: would ${what} (${s.code.length} chars), then ${live ? "restore" : "park"} the dynasty${apply ? "" : " (dry run)"}`);

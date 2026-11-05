@@ -199,14 +199,23 @@ describe("a script asks another Engine for a Unit (MIGRATE-1105 S2)", () => {
     expect(w.runs.some((x) => x.taskName.startsWith("script:message_written"))).toBe(false);
   });
 
-  it("stops the asking script, named, when no script of the asked Engine can run (never a fallback)", async () => {
-    await addScript("conversation", "dy_cold", PARENT, { asks: ["message_written"] });
+  it("answers no_script, named, when no script of the asked Engine can run (never a fallback, never a stop)", async () => {
+    const ASKER = `
+export default function run(ctx) {
+  ctx.ask({ units: { brand_context: { content: { name: "Reed" } } } });
+  const written = ctx.get("message_written");
+  return { unmade: "asked: " + written.unmade + " content=" + JSON.stringify(written.content) };
+}`;
+    await addScript("conversation", "dy_cold", ASKER, { asks: ["message_written"] });
     await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("lead_identified"); return null; }`);
     const w = world();
     const { runId } = await runOnce(dispatch({ outcome: "conversation" }), w);
-    const [r] = await db.select().from(scriptRuns).where(eq(scriptRuns.runId, runId));
-    expect(r!.status).toBe("stopped");
-    expect(r!.error).toMatch(/no live script of that Engine can run on brand_context/);
+    const rows = await db.select().from(scriptRuns);
+    expect(rows).toHaveLength(1);
+    const [r] = rows.filter((x) => x.runId === runId);
+    expect(r!.status).toBe("unmade");
+    expect(r!.error).toBe("asked: no_script: no live script of that Engine can run on brand_context content=null");
+    expect(w.runs.some((x) => x.taskName.startsWith("script:message_written"))).toBe(false);
   });
 
   it("hands an unmade child back as an answer the asking script reads (no stop, no redelivery)", async () => {

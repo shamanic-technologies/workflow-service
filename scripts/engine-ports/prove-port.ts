@@ -17,6 +17,17 @@ import { buildThreadsPostSource, THREADS_POST_DYNASTY, THREADS_POST_OUTCOME, THR
 import { buildEmailSendingSource, EMAIL_SENDING_DYNASTY, EMAIL_SENDING_OUTCOME, EMAIL_SENDING_TACTICS } from "./email-sending.js";
 import { AI_LEAD_PROPOSAL_DYNASTY, AI_LEAD_PROPOSAL_OUTCOME, AI_LEAD_PROPOSAL_TACTICS, buildAiLeadProposalSource } from "./ai-lead-proposal.js";
 import { buildFounderHelloSource, FOUNDER_HELLO_DYNASTY, FOUNDER_HELLO_OUTCOME, FOUNDER_HELLO_TACTICS } from "./founder-hello.js";
+import {
+  AI_INSTANT_CALL_DYNASTY,
+  AI_INSTANT_CALL_EMAIL_ONLY_DYNASTY,
+  AI_INSTANT_CALL_EMAIL_ONLY_PORT_DESCRIPTION,
+  AI_INSTANT_CALL_OUTCOME,
+  AI_INSTANT_CALL_PORT_DESCRIPTION,
+  AI_INSTANT_CALL_TACTICS,
+  buildAiInstantCallSource,
+  NO_REP_UNMADE,
+} from "./ai-instant-call.js";
+import { NO_SALES_REP_PHONE_REASON } from "../../src/lib/ai-instant-call-dag.js";
 
 interface Port {
   outcome: string;
@@ -32,6 +43,15 @@ interface Port {
   flows: string;
   build(): string;
   description: string;
+  /**
+   * Steps of the old run whose work the Engine runner does now (the lead it consumed, read off its campaign): dropped
+   * from the case before it is read, named here, never matched by a call the script would not need.
+   */
+  runnerSteps?: string[];
+  /** Only the runs of these old workflow dynasties (`flow_input.workflowSlug` = `<dynasty>[-vN]`); absent = every run of `flows`. */
+  dynasties?: string[];
+  /** A run that ended `success` with no Unit, read as the `unmade` the script states (the stop row's reason). */
+  unmadeWhenStopped?: Record<string, string>;
 }
 
 export const PORTS: Record<string, Port> = {
@@ -74,6 +94,31 @@ export const PORTS: Record<string, Port> = {
     build: buildFounderHelloSource,
     description: "Says hello once on WhatsApp from the founder's line to a person who just set up the product, naming what they set up, then hands them to the assistant line. Ported from the Founder hello workflow.",
   },
+  // MIGRATE-1105 S1b: the default copy serves both legs (a positive reply and a form fill ring the rep the same way).
+  "ai-instant-call": {
+    outcome: AI_INSTANT_CALL_OUTCOME,
+    dynasty: AI_INSTANT_CALL_DYNASTY,
+    tactics: AI_INSTANT_CALL_TACTICS,
+    fromOutcome: "start",
+    flows: "ai_instant_call_%",
+    build: () => buildAiInstantCallSource(),
+    description: AI_INSTANT_CALL_PORT_DESCRIPTION,
+    runnerSteps: ["pipe_of_run"],
+    unmadeWhenStopped: { [NO_SALES_REP_PHONE_REASON]: NO_REP_UNMADE },
+    dynasties: ["ai-instant-call-titawin", "ai-instant-call-belenos"],
+  },
+  "ai-instant-call-email-replies": {
+    outcome: AI_INSTANT_CALL_OUTCOME,
+    dynasty: AI_INSTANT_CALL_EMAIL_ONLY_DYNASTY,
+    tactics: AI_INSTANT_CALL_TACTICS,
+    fromOutcome: "start",
+    flows: "ai_instant_call_%",
+    build: () => buildAiInstantCallSource({ emailRepliesOnly: true }),
+    description: AI_INSTANT_CALL_EMAIL_ONLY_PORT_DESCRIPTION,
+    runnerSteps: ["pipe_of_run"],
+    unmadeWhenStopped: { [NO_SALES_REP_PHONE_REASON]: NO_REP_UNMADE },
+    dynasties: ["ai-instant-call-alsciaukat"],
+  },
 };
 
 /** What a run stated at its end, as the expectation the Engine runner's reading of a script gives back. */
@@ -102,6 +147,8 @@ async function main() {
   const cases: ReplayCase[] = [];
   const excluded = new Map<string, number>();
   for (const r of rows) {
+    const slug = String((r.args as { workflowSlug?: unknown }).workflowSlug ?? "");
+    if (port.dynasties && !port.dynasties.some((d) => slug === d || new RegExp(`^${d}-v\\d+$`).test(slug))) continue;
     // The gate refused the run (Windmill `skipped` after `/gate-check` allowed false): the runner's chassis, not the script.
     if (r.status === "skipped") {
       excluded.set("gate refused the run (chassis)", (excluded.get("gate refused the run (chassis)") ?? 0) + 1);
@@ -109,6 +156,7 @@ async function main() {
     }
     // A branch container step records no runnable path: never a call.
     r.steps = (r.steps ?? []).map((st) => ({ ...st, runnablePath: st.runnablePath ?? "" }));
+    if (port.runnerSteps) r.steps = r.steps.filter((st) => !port.runnerSteps!.includes(st.stepId));
     const flow: RecordedFlow = { id: r.id, createdAt: r.created_at, args: r.args ?? {}, failed: r.status !== "success", error: null };
     if (flow.failed) {
       const failedStep = [...(r.steps ?? [])].reverse().find((s) => s.status === "failure");
@@ -141,7 +189,11 @@ async function main() {
       const clock = (r.steps.find((st) => st.stepId === port.nowFromStep)?.result as { now?: unknown } | null)?.now;
       if (typeof clock === "string") out.case.request = { ...(out.case.request ?? {}), now: clock };
     }
-    cases.push({ ...out.case, expect: expectFromEnd(out.case) });
+    let expect = expectFromEnd(out.case);
+    const stopped = [...out.case.calls].reverse().find((c) => c.name === "lead.followup.record");
+    const stopReason = String(((stopped?.args as { body?: { reason?: unknown } } | undefined)?.body?.reason) ?? "");
+    if (port.unmadeWhenStopped?.[stopReason] && expect.content) expect = { fails: port.unmadeWhenStopped[stopReason]! };
+    cases.push({ ...out.case, expect });
   }
   const source = port.build();
   const summary = await replayAll(source, cases);
