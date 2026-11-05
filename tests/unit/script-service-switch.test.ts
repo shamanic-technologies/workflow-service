@@ -105,6 +105,11 @@ describe("a service switch", () => {
   it("names the reply judge's service path for Monitoring", () => {
     expect(SERVICE_PATHS.lead_interested).toEqual({ serviceName: "instantly-service", taskNames: ["reply-qualification"] });
   });
+
+  it("names the queued steps' and the inbound reader's service paths for Monitoring (MIGRATE-1105 S2)", () => {
+    expect(SERVICE_PATHS.message_queued).toEqual({ serviceName: "instantly-service", taskNames: ["queue-decision"] });
+    expect(SERVICE_PATHS.reply_received).toEqual({ serviceName: "instantly-service", taskNames: ["inbound-decision"] });
+  });
 });
 
 describe("the platform-billed door (a service's own sweep)", () => {
