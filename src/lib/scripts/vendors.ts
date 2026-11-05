@@ -31,6 +31,11 @@ export interface VendorDeps {
    * declarations. `service` names `<SERVICE>_SERVICE_URL` / `_API_KEY`. Answers `{status, body}`: 200 = its answer.
    */
   serviceDoor(service: string, method: "GET" | "POST" | "PUT", path: string, body: Record<string, unknown> | null, headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> }>;
+  /**
+   * The open times of a PUBLIC booking page (GoHighLevel, Calendly, Google: free, no credential), spread across the next
+   * days in the person's timezone: `{bookingUrl, timezone, slots, calendarId?, degraded?, degradedReason?}`.
+   */
+  readBookingSlots?(bookingUrl: string, timezone: string): Promise<Record<string, unknown>>;
   /** Waits between two asks of a run door's bounded poll (a vendor wait, never the script's compute). */
   sleep?(ms: number): Promise<void>;
 }
@@ -70,6 +75,8 @@ export const CHAT_COMPLETE = "chat.complete";
 export const JEV_NOUL = "jev.noul";
 /** Our one voice (chat-service skill `client-comms`), for a writer that builds its own system prompt: `{content, version}`. */
 export const VOICE_READ = "voice.read";
+/** The open times of the offer's public booking page (`{bookingUrl, timezone}` -> `{slots, calendarId?, ...}`). */
+export const BOOKING_SLOTS = "booking.slots";
 /**
  * The service doors a stored script may call (FACTORY-P3 service switches), each the owning service's own code for
  * the work it has in flight: `args` = the call's fields (all required, sent as the body, or the query on a GET);
@@ -119,20 +126,23 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "crm.whatsapp.send": { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", asRun: true },
   "crm.team.membership": { service: "crm", method: "POST", path: "/orgs/people/team-membership", asRun: true },
   "crm.meeting.book": { service: "crm", method: "POST", path: "/orgs/gohighlevel/bookings", asRun: true },
-  "lead.detail": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}", asRun: true },
-  "lead.relationship": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}/relationship", asRun: true },
-  "lead.history": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}/history", asRun: true },
-  "lead.followup_date.read": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}/followup-date", asRun: true },
-  "lead.followup_date.set": { service: "lead", method: "PUT", path: "/orgs/leads/{leadId}/followup-date", asRun: true },
-  "lead.followup.record": { service: "lead", method: "POST", path: "/orgs/leads/{leadId}/followups", asRun: true },
+  "lead.detail": { service: "lead", method: "GET", path: "/orgs/leads/{id}", asRun: true },
+  "lead.relationship": { service: "lead", method: "GET", path: "/orgs/leads/{id}/relationship", asRun: true },
+  "lead.history": { service: "lead", method: "GET", path: "/orgs/leads/{id}/history", asRun: true },
+  "lead.followup_date.read": { service: "lead", method: "GET", path: "/orgs/leads/{id}/followup-date", asRun: true },
+  "lead.followup_date.set": { service: "lead", method: "PUT", path: "/orgs/leads/{id}/followup-date", asRun: true },
+  "lead.followup.record": { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", asRun: true },
   "lead.followup.claim": { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/followups/claim-next", asRun: true },
-  "brand.profile": { service: "brand", method: "GET", path: "/internal/brands/{brandId}", asRun: true },
+  "brand.profile": { service: "brand", method: "GET", path: "/internal/brands/{id}", asRun: true },
   "brand.fields": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields", asRun: true },
   "brand.sales_rep": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/sales-rep", asRun: true },
   "brand.offer.economics": { service: "brand", method: "GET", path: "/internal/offers/{offerId}/economics", asRun: true },
   "brand.offer.answers": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers", asRun: true },
+  "brand.offer.documents": { service: "brand", method: "GET", path: "/internal/offers/{offerId}/documents", asRun: true },
   "brand.offer.fields": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/user-fields", asRun: true },
-  "campaign.detail": { service: "campaign", method: "GET", path: "/campaigns/{campaignId}", asRun: true },
+  "campaign.detail": { service: "campaign", method: "GET", path: "/campaigns/{id}", asRun: true },
+  "campaign.predecessor": { service: "campaign", method: "GET", path: "/internal/campaigns/{campaignId}/predecessor", asRun: true },
+  "features.writer_pick": { service: "features", method: "GET", path: "/internal/writer-pick", asRun: true },
   "features.trigger": { service: "features", method: "GET", path: "/internal/catalogue/triggers/{triggerId}", asRun: true },
   "content.generations.by_lead": { service: "content-generation", method: "GET", path: "/generations/by-lead/{leadId}", asRun: true },
   "scraping.page": { service: "scraping", method: "POST", path: "/scrape", asRun: true },
@@ -140,6 +150,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "instantly.reply.send": { service: "instantly", method: "POST", path: "/orgs/replies", asRun: true },
   "instantly.reply.escalate": { service: "instantly", method: "POST", path: "/orgs/replies/escalate", asRun: true },
   "email.send": { service: "email-gateway", method: "POST", path: "/orgs/send", asRun: true },
+  "chat.judgment": { service: "chat", method: "POST", path: "/orgs/judgments", asRun: true },
   "chat.copilot.lead_turn": { service: "chat", method: "POST", path: "/internal/copilot/lead-turns", asRun: true },
   "apollo.phone.reveal": { service: "apollo", method: "POST", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
   "apollo.phone.read": { service: "apollo", method: "GET", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
@@ -147,7 +158,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
-export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
+export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
 
 /** Response schemas a script may name instead of spelling one (Anthropic needs a strict schema). */
 export const NAMED_RESPONSE_SCHEMAS: Record<string, Record<string, unknown>> = {
@@ -267,6 +278,18 @@ async function voiceRead(deps: VendorDeps): Promise<VendorAnswer> {
   return { ok: true, data: { content, version: typeof skill?.version === "number" ? skill.version : null } };
 }
 
+async function bookingSlots(args: Record<string, unknown>, deps: VendorDeps): Promise<VendorAnswer> {
+  const url = str(args.bookingUrl);
+  const tz = str(args.timezone);
+  if (!url || !tz) return refuse("booking.slots needs bookingUrl and timezone");
+  if (!deps.readBookingSlots) return refuse("booking.slots: no booking page reader on this host");
+  try {
+    return { ok: true, data: await deps.readBookingSlots(url, tz) };
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** One service door call: the run's identity + tracking, and whose in-flight work it is (the caller's run). */
 async function serviceDoor(name: string, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   const door = SERVICE_DOOR_VENDORS[name]!;
@@ -373,6 +396,7 @@ export async function callVendor(name: string, args: Record<string, unknown> | n
   if (name === LLM_COMPLETE || name === CHAT_COMPLETE) return complete(name, args ?? {}, ctx, deps);
   if (name === JEV_NOUL) return jevNoul(args ?? {}, ctx, deps);
   if (name === VOICE_READ) return voiceRead(deps);
+  if (name === BOOKING_SLOTS) return bookingSlots(args ?? {}, deps);
   if (name in SERVICE_DOOR_VENDORS) return serviceDoor(name, args ?? {}, ctx, deps);
   return refuse(`no vendor named ${name} (scripts may call: ${SCRIPT_VENDORS.join(", ")})`);
 }
@@ -452,6 +476,12 @@ export function productionVendorDeps(): VendorDeps {
         parsed = { error: text.slice(0, 300) };
       }
       return { status: res.status, body: parsed };
+    },
+    async readBookingSlots(bookingUrl, timezone) {
+      // The same reader the old answering step ran (a public page, free, no credential), loaded once as a module.
+      const { readBookingSlotsCode } = await import("../ai-meeting-booking-dag.js");
+      const mod = (await import(`data:text/javascript,${encodeURIComponent(readBookingSlotsCode())}`)) as { main: (u: string, t: string) => Promise<Record<string, unknown>> };
+      return mod.main(bookingUrl, timezone);
     },
     async readSkill(slug) {
       need();

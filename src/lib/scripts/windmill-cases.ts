@@ -4,15 +4,18 @@
  * result): each call step's request and answer IS a vendor call, stated in the door vocabulary a script uses
  * (`SERVICE_DOOR_VENDORS` run doors, `llm.complete`). Generic over every workflow: no slug, step id or outcome here.
  *
- * What a case holds (gtm-factory `ReplayCase`): the run's inputs (`lead_event`: what the run was asked to do; the
- * campaign's start answer as `campaign_run`), every call in order with its request and answer, and what the run
- * stated at its end (`expect.content.end` = the end-run body, or `fails` with its error). The campaign chassis
- * (gate, start, end) is the runner's, never a script call. Script steps are the old code itself, not vendor calls.
+ * What a case holds (gtm-factory `ReplayCase`), in the shape the Engine runner hands a script (engine-runner.ts):
+ * `request` = the campaign's start answer + the pushed `trigger` + `now` (the run's start: a script reads its clock
+ * there, never `Date.now()`); `units` = the trigger as a Unit of the run's `fromOutcome` (none on a proactive run);
+ * every call in order with its request and answer; what the run stated at its end (`expect.content.end` = the
+ * end-run body, or `fails` with its error). The campaign chassis (gate, start, end) is the runner's, never a script
+ * call. Script steps are the old code itself, not vendor calls. A converter-injected `workflowSlug` in a recorded
+ * body is dropped: a script holds none.
  *
  * A run is EXCLUDED with its reason, never guessed: a call no door serves (named, so the door can be added), a step
  * the record cut (still running, no result), a run with no end statement.
  */
-import { LLM_COMPLETE, SERVICE_DOOR_VENDORS } from "./vendors.js";
+import { LLM_COMPLETE, SERVICE_DOOR_VENDORS, VOICE_READ, VOICE_SKILL_SLUG } from "./vendors.js";
 import type { RecordedCall, ReplayCase } from "./replay.js";
 
 export interface RecordedFlow {
@@ -74,7 +77,7 @@ function withoutSecrets(args: Record<string, unknown>): Record<string, unknown> 
 export type FlowCase = { case: ReplayCase; routes: string[] } | { excluded: string };
 
 /** One recorded run -> one case, or the reason it cannot be one. */
-export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[]): FlowCase {
+export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { fromOutcome?: string } = {}): FlowCase {
   const calls: RecordedCall[] = [];
   const routes: string[] = [];
   let campaignRun: Record<string, unknown> | null = null;
@@ -93,11 +96,18 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[]): FlowCas
       continue;
     }
     if (step.status !== "success") continue; // a thrown call: the run's failure, stated by `fails`
+    // Our one voice, read live (`voice.read` answers its content and version, nothing else).
+    if (service === "chat" && method === "GET" && path === "/internal/skills/{slug}" && plain(step.args.params) && step.args.params.slug === VOICE_SKILL_SLUG) {
+      const r = plain(result) ? result : {};
+      routes.push(VOICE_READ);
+      calls.push({ name: VOICE_READ, answer: { ok: true, data: { content: r.content ?? null, version: typeof r.version === "number" ? r.version : null } } });
+      continue;
+    }
     const name = doorFor(service, method, path);
     if (!name) return { excluded: `calls ${service} ${method} ${path}, which no door serves` };
     routes.push(name);
     if (name === LLM_COMPLETE) {
-      const body = plain(step.args.body) ? step.args.body : {};
+      const { workflowSlug: _slug, ...body } = plain(step.args.body) ? step.args.body : {};
       const r = plain(result) ? result : {};
       calls.push({ name, args: body, answer: { ok: true, data: { content: r.content ?? null, json: r.json ?? null, model: r.model ?? null, tokensInput: r.tokensInput ?? null, tokensOutput: r.tokensOutput ?? null } } });
       continue;
@@ -108,15 +118,22 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[]): FlowCas
       if (v !== undefined && v !== null && !(plain(v) && Object.keys(v).length === 0 && f !== "body")) args[f] = v;
     }
     if (method === "GET") delete args.body;
+    if (plain(args.body) && "workflowSlug" in args.body) {
+      const { workflowSlug: _slug, ...body } = args.body;
+      args.body = body;
+    }
     const r = plain(result) ? result : {};
     const tolerated = r.ok === false && !("skipped" in r && r.notCalled === true) && typeof r.status === "number";
     calls.push({ name, args, answer: tolerated ? failedAnswer(r) : { ok: true, data: r } });
   }
   if (!flow.failed && end === null) return { excluded: "the run states no end" };
-  const units: ReplayCase["units"] = { lead_event: withoutSecrets(flow.args) };
-  if (campaignRun) units.campaign_run = campaignRun;
+  const input = withoutSecrets(flow.args);
+  const trigger = plain(input.trigger) ? input.trigger : null;
+  const units: ReplayCase["units"] = trigger && opts.fromOutcome && opts.fromOutcome !== "start" ? { [opts.fromOutcome]: trigger } : {};
+  const request = { ...(campaignRun ?? {}), trigger, now: new Date(flow.createdAt).toISOString() };
+  const subject = trigger && typeof trigger.leadId === "string" ? trigger.leadId : null;
   return {
-    case: { id: flow.id, units, calls, expect: flow.failed ? { fails: String(flow.error ?? "").slice(0, 120) } : { content: { end: end! } } },
+    case: { id: flow.id, units, ...(subject ? { subject } : {}), request, calls, expect: flow.failed ? { fails: String(flow.error ?? "").slice(0, 120) } : { content: { end: end! } } },
     routes,
   };
 }
@@ -128,7 +145,7 @@ export function windmillCasesSql(slugLike: string, days: number, max: number): s
   const n = Math.max(1, Math.min(2000, Math.floor(max)));
   return `
 WITH RECURSIVE flows AS (
-  SELECT j.id, j.created_at, j.args, c.status
+  SELECT j.id, j.created_at, j.args, c.status, c.result #>> '{error,message}' AS error
   FROM v2_job j JOIN v2_job_completed c ON c.id = j.id
   WHERE j.kind = 'flow' AND j.runnable_path LIKE 'f/workflows/%/${slugLike}' AND j.created_at > now() - interval '${d} days'
   ORDER BY j.created_at DESC LIMIT ${n}
@@ -138,7 +155,7 @@ WITH RECURSIVE flows AS (
   SELECT t.flow_id, j.id, j.created_at FROM tree t JOIN v2_job j ON j.parent_job = t.id
 )
 SELECT coalesce(json_agg(r ORDER BY r.created_at), '[]') FROM (
-  SELECT f.id, f.created_at, f.args - 'serviceEnvs' AS args, f.status::text AS status,
+  SELECT f.id, f.created_at, f.args - 'serviceEnvs' AS args, f.status::text AS status, f.error,
     (SELECT coalesce(json_agg(json_build_object('stepId', j.flow_step_id, 'runnablePath', j.runnable_path, 'args', j.args - 'serviceEnvs',
        'status', c.status::text, 'result', c.result) ORDER BY t.created_at), '[]')
      FROM tree t JOIN v2_job j ON j.id = t.id LEFT JOIN v2_job_completed c ON c.id = j.id WHERE t.flow_id = f.id) AS steps
