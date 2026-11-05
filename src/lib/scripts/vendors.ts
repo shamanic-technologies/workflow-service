@@ -175,6 +175,8 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
   "crm.people.list": { service: "crm", method: "GET", path: "/orgs/people", asRun: true },
   "chat.copilot.proactive_turn": { service: "chat", method: "POST", path: "/internal/copilot/proactive-turns", asRun: true },
+  // The follow-ups (MIGRATE-1105 S4b): the figures a campaign's brief asks for, read for the person (figure-reader.ts).
+  "workflow.figures.read": { service: "workflow", method: "POST", path: "/orgs/figures/read", asRun: true },
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
