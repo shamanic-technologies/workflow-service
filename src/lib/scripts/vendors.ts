@@ -30,7 +30,9 @@ export interface VendorDeps {
    * flight for the caller's run (`x-caller-run-id`), on the script's run (`x-run-id`), with its own billing, rows and
    * declarations. `service` names `<SERVICE>_SERVICE_URL` / `_API_KEY`. Answers `{status, body}`: 200 = its answer.
    */
-  serviceDoor(service: string, method: "GET" | "POST", path: string, body: Record<string, unknown> | null, headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> }>;
+  serviceDoor(service: string, method: "GET" | "POST" | "PUT", path: string, body: Record<string, unknown> | null, headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> }>;
+  /** Waits between two asks of a run door's bounded poll (a vendor wait, never the script's compute). */
+  sleep?(ms: number): Promise<void>;
 }
 
 export interface VendorCallContext {
@@ -73,7 +75,18 @@ export const VOICE_READ = "voice.read";
  * the work it has in flight: `args` = the call's fields (all required, sent as the body, or the query on a GET);
  * `okFrom` = a GET whose answer is a yes/no (`ok` = that field is true, nothing else answered).
  */
-export const SERVICE_DOOR_VENDORS: Record<string, { service: string; method: "GET" | "POST"; path: string; args: string[]; optional?: string[]; okFrom?: string }> = {
+export type ServiceDoor =
+  | { service: string; method: "GET" | "POST"; path: string; args: string[]; optional?: string[]; okFrom?: string; asRun?: undefined }
+  /**
+   * A RUN door (MIGRATE-1105 S1): one of the owning service's own org routes, called AS the script's run (its org,
+   * user, brand, campaign; `x-run-id` = the script's run), so the producer bills, files and declares exactly as when a
+   * workflow step called it. The call is stated like that step's request: `{params?, query?, body?, omitHeaders?,
+   * pollWhile?}`; the answer is the producer's whole one: ok on 2xx (`data` = its body), else ok false with
+   * `{error, status, code, body}` so a script reads a named refusal (a 409 `human_took_over`) and decides.
+   */
+  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true };
+
+export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // email_found (apollo-service): one verifier call -> {verificationId, verifier, verdict, error}; BounceVerify asked now.
   "apollo.email.verify": { service: "apollo", method: "POST", path: "/internal/email-verifier-calls", args: ["verifier", "email"] },
   "apollo.apify.available": { service: "apollo", method: "GET", path: "/internal/email-verifier-calls/apify", args: ["email"], okFrom: "available" },
@@ -98,6 +111,39 @@ export const SERVICE_DOOR_VENDORS: Record<string, { service: string; method: "GE
     args: [],
     optional: ["acceptedEmails", "reachableBy", "reachableOn", "relationships", "stepFilter", "excludeEmailedWithin", "population", "namedLead"],
   },
+  // Answering a lead (MIGRATE-1105 S1): what the old answering steps called, each the producer's own org route.
+  // The person's whole thread, their state, the brand's facts and booking, then one act: reply, WhatsApp, book, call.
+  "crm.person.thread": { service: "crm", method: "GET", path: "/orgs/people/timeline", asRun: true },
+  "crm.whatsapp.reach": { service: "crm", method: "POST", path: "/orgs/whatsapp/reach", asRun: true },
+  "crm.whatsapp.sent": { service: "crm", method: "GET", path: "/orgs/whatsapp/messages", asRun: true },
+  "crm.whatsapp.send": { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", asRun: true },
+  "crm.team.membership": { service: "crm", method: "POST", path: "/orgs/people/team-membership", asRun: true },
+  "crm.meeting.book": { service: "crm", method: "POST", path: "/orgs/gohighlevel/bookings", asRun: true },
+  "lead.detail": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}", asRun: true },
+  "lead.relationship": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}/relationship", asRun: true },
+  "lead.history": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}/history", asRun: true },
+  "lead.followup_date.read": { service: "lead", method: "GET", path: "/orgs/leads/{leadId}/followup-date", asRun: true },
+  "lead.followup_date.set": { service: "lead", method: "PUT", path: "/orgs/leads/{leadId}/followup-date", asRun: true },
+  "lead.followup.record": { service: "lead", method: "POST", path: "/orgs/leads/{leadId}/followups", asRun: true },
+  "lead.followup.claim": { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/followups/claim-next", asRun: true },
+  "brand.profile": { service: "brand", method: "GET", path: "/internal/brands/{brandId}", asRun: true },
+  "brand.fields": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields", asRun: true },
+  "brand.sales_rep": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/sales-rep", asRun: true },
+  "brand.offer.economics": { service: "brand", method: "GET", path: "/internal/offers/{offerId}/economics", asRun: true },
+  "brand.offer.answers": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers", asRun: true },
+  "brand.offer.fields": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/user-fields", asRun: true },
+  "campaign.detail": { service: "campaign", method: "GET", path: "/campaigns/{campaignId}", asRun: true },
+  "features.trigger": { service: "features", method: "GET", path: "/internal/catalogue/triggers/{triggerId}", asRun: true },
+  "content.generations.by_lead": { service: "content-generation", method: "GET", path: "/generations/by-lead/{leadId}", asRun: true },
+  "scraping.page": { service: "scraping", method: "POST", path: "/scrape", asRun: true },
+  "instantly.conversation": { service: "instantly", method: "GET", path: "/orgs/conversations", asRun: true },
+  "instantly.reply.send": { service: "instantly", method: "POST", path: "/orgs/replies", asRun: true },
+  "instantly.reply.escalate": { service: "instantly", method: "POST", path: "/orgs/replies/escalate", asRun: true },
+  "email.send": { service: "email-gateway", method: "POST", path: "/orgs/send", asRun: true },
+  "chat.copilot.lead_turn": { service: "chat", method: "POST", path: "/internal/copilot/lead-turns", asRun: true },
+  "apollo.phone.reveal": { service: "apollo", method: "POST", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
+  "apollo.phone.read": { service: "apollo", method: "GET", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
+  "twilio.call.place": { service: "twilio", method: "POST", path: "/calls", asRun: true },
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
@@ -224,6 +270,7 @@ async function voiceRead(deps: VendorDeps): Promise<VendorAnswer> {
 /** One service door call: the run's identity + tracking, and whose in-flight work it is (the caller's run). */
 async function serviceDoor(name: string, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   const door = SERVICE_DOOR_VENDORS[name]!;
+  if (door.asRun) return runDoor(name, door, args, ctx, deps);
   // Every field is required: a string (non-blank), a number, or a list/object, passed as stated (a GET sends text).
   const fields: Record<string, unknown> = {};
   for (const f of door.args) {
@@ -242,6 +289,80 @@ async function serviceDoor(name: string, args: Record<string, unknown>, ctx: Ven
     if (out.status !== 200) return refuse(String(out.body.error ?? `${door.service}-service answered ${out.status}`));
     if (door.okFrom) return { ok: out.body[door.okFrom] === true, data: {} };
     return { ok: true, data: out.body };
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Identity headers a run door call may drop (a rep alert is not the campaign speaking): never whose run or org it is. */
+const KEPT_HEADERS = new Set(["x-org-id", "x-run-id", "x-api-key"]);
+/** A run door's bounded poll: at most this long (the run's wall is 10 min). */
+const POLL_MAX_SECONDS = 300;
+
+function plainRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function readDotted(body: Record<string, unknown>, field: string): unknown {
+  let at: unknown = body;
+  for (const part of field.split(".")) at = plainRecord(at) ? at[part] : undefined;
+  return at;
+}
+
+/** One run door call: the step's request, as the script's run; the producer's whole answer, refusals included. */
+async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  if (!ctx.headers["x-run-id"] || !ctx.headers["x-org-id"]) return refuse(`${name} acts only as a run of an org`);
+  const params = args.params ?? {};
+  const query = args.query ?? {};
+  if (!plainRecord(params) || !plainRecord(query)) return refuse(`${name}: params and query are objects`);
+  let path = door.path;
+  for (const [k, v] of Object.entries(params)) {
+    if (typeof v !== "string" && typeof v !== "number") return refuse(`${name}: param ${k} is a string or a number`);
+    if (String(v).trim() === "") return refuse(`${name}: param ${k} is empty`);
+    path = path.replace(`{${k}}`, encodeURIComponent(String(v)));
+  }
+  const unfilled = path.match(/\{(\w+)\}/);
+  if (unfilled) return refuse(`${name} needs params.${unfilled[1]}`);
+  const q = Object.entries(query).filter(([, v]) => v !== undefined && v !== null);
+  if (q.length > 0) path += `?${new URLSearchParams(q.map(([k, v]) => [k, String(v)]))}`;
+  let body: Record<string, unknown> | null = null;
+  if (door.method !== "GET") {
+    if (args.body !== undefined && !plainRecord(args.body)) return refuse(`${name}: body is an object`);
+    body = (args.body as Record<string, unknown> | undefined) ?? {};
+  } else if (args.body !== undefined) return refuse(`${name} is a read: it takes no body`);
+  const headers = { ...ctx.headers };
+  if (args.omitHeaders !== undefined) {
+    if (!Array.isArray(args.omitHeaders) || args.omitHeaders.some((h) => typeof h !== "string")) return refuse(`${name}: omitHeaders is a list of header names`);
+    for (const h of args.omitHeaders as string[]) {
+      if (KEPT_HEADERS.has(h.toLowerCase())) return refuse(`${name}: ${h} is never dropped`);
+      delete headers[h.toLowerCase()];
+    }
+  }
+  const poll = args.pollWhile;
+  if (poll !== undefined && (!plainRecord(poll) || typeof poll.field !== "string")) return refuse(`${name}: pollWhile is {field, equals, intervalSeconds?, timeoutSeconds?, throwWhenTimedOut?}`);
+  const ask = () => deps.serviceDoor(door.service, door.method, path, body, headers);
+  try {
+    let out = await ask();
+    if (poll) {
+      // The old step's bounds, byte for byte (scripts/nodes/http-call.ts): 1-60 s between asks, 0-300 s in all.
+      const interval = Math.max(1, Math.min(60, Number(poll.intervalSeconds ?? 5))) * 1000;
+      const deadline = Date.now() + Math.max(0, Math.min(POLL_MAX_SECONDS, Number(poll.timeoutSeconds ?? 60))) * 1000;
+      const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      let timedOut = false;
+      while (out.status >= 200 && out.status < 300 && readDotted(out.body, poll.field as string) === poll.equals) {
+        if (Date.now() + interval > deadline) {
+          timedOut = true;
+          break;
+        }
+        await sleep(interval);
+        out = await ask();
+      }
+      if (timedOut && poll.throwWhenTimedOut === true) return refuse(`${name}: still ${String(poll.field)} = ${JSON.stringify(poll.equals)} after the wait`);
+      if (timedOut) out = { status: out.status, body: { ...out.body, pollTimedOut: true } };
+    }
+    if (out.status >= 200 && out.status < 300) return { ok: true, data: out.body };
+    const code = typeof out.body.code === "string" ? out.body.code : plainRecord(out.body.details) && typeof out.body.details.code === "string" ? out.body.details.code : null;
+    return { ok: false, data: { error: String(out.body.error ?? `${door.service}-service answered ${out.status}`), status: out.status, code, body: out.body } };
   } catch (e) {
     return refuse(e instanceof Error ? e.message : String(e));
   }
