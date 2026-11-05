@@ -17,7 +17,7 @@ import { zodErrorDetails } from "../lib/zod-error-details.js";
 import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema } from "../schemas.js";
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
-import { engineState, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
+import { engineState, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
 import { ENGINE_EXECUTION_SCOPE, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../lib/scripts/engine-runner.js";
 import { productionLedgerDeps, runStoredScript } from "../lib/scripts/script-runner.js";
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
@@ -88,8 +88,15 @@ router.get("/internal/engines/:outcome", requireApiKey, async (req, res) => {
   const outcome = outcomeOf(req, res);
   if (!outcome) return;
   const orgId = typeof req.query.orgId === "string" && req.query.orgId ? req.query.orgId : null;
+  const featureSlug = typeof req.query.featureSlug === "string" && req.query.featureSlug ? req.query.featureSlug : null;
   try {
-    res.json(await engineState(db, outcome, orgId));
+    const state = await engineState(db, outcome, orgId);
+    // Asked for one campaign's channel: live only when a script of the Engine serves it (servesChannel).
+    if (state.live && featureSlug && !(await servesChannel(db, outcome, featureSlug))) {
+      res.json({ ...state, live: false, servesChannel: false });
+      return;
+    }
+    res.json(state);
   } catch (err) {
     console.error("[workflow-service] engine state:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -170,6 +177,10 @@ router.post("/engines/:outcome/execute", requireApiKey, executeRateLimit, async 
     const state = await engineState(db, outcome, d.orgId);
     if (!state.live) {
       res.status(409).json({ code: "engine_not_live", error: `the ${outcome} Engine does not run this org's campaigns: dispatch its workflow`, state });
+      return;
+    }
+    if (!(await servesChannel(db, outcome, d.featureSlug))) {
+      res.status(409).json({ code: "engine_not_live", error: `no script of the ${outcome} Engine serves this campaign yet: dispatch its workflow`, state: { ...state, live: false } });
       return;
     }
     const conflictPolicy = resolveExecutionConflictPolicy(body.conflictPolicy);
