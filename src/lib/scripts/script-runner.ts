@@ -391,7 +391,7 @@ export function productionLedgerDeps(): LedgerDeps {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, "x-service-name": "workflow" },
         body: JSON.stringify({ ...mark, runIds: [runId] }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(600_000),
       });
       if (!res.ok) throw new Error(`runs-service POST /v1/platform-runs/support-marks/apply -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
     },
