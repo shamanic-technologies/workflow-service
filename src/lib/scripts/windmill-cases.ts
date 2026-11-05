@@ -204,7 +204,14 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
   const input = withoutSecrets(flow.args);
   const trigger = plain(input.trigger) ? input.trigger : null;
   const units: ReplayCase["units"] = { ...(trigger && opts.fromOutcome && opts.fromOutcome !== "start" ? { [opts.fromOutcome]: trigger } : {}), ...asked };
-  const request = { ...(typeof input.campaignId === "string" ? { campaignId: input.campaignId } : {}), ...(campaignRun ?? {}), trigger, now: new Date(flow.createdAt).toISOString() };
+  // `runId`: the run's own id (the old flow's runs-service run), as the Engine runner states the script's run.
+  const request = {
+    ...(typeof input.campaignId === "string" ? { campaignId: input.campaignId } : {}),
+    ...(campaignRun ?? {}),
+    trigger,
+    now: new Date(flow.createdAt).toISOString(),
+    ...(typeof input.runId === "string" ? { runId: input.runId } : {}),
+  };
   const subject = trigger && typeof trigger.leadId === "string" ? trigger.leadId : null;
   // `endAsRunner`: the run is matched by the END the Engine runner would state for the script's result (replay.ts).
   const ended = opts.endAsRunner ? { end: end! } : { content: { end: end! } };
