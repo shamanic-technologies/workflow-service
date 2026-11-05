@@ -174,7 +174,11 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
   const out: ScriptRow[] = [];
   for (const row of rows) {
     if (kept && !kept.has(row.dynasty)) continue;
-    if (!(row.materials ?? []).every((m) => input.servable.includes(m))) continue;
+    // A material the script ASKS another Engine for (tactic `asks`: `ctx.ask(request)` then `ctx.get(<outcome>)`, a
+    // child run of that Engine) is not one the run must hold.
+    const asks = (row.tactics as Record<string, unknown>)?.asks;
+    const provided = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+    if (!(row.materials ?? []).every((m) => input.servable.includes(m) || provided.includes(m))) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
     if (!(await provenness(db, row)).runnable) continue;
