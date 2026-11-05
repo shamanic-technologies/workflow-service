@@ -1,0 +1,207 @@
+/**
+ * MIGRATE-1105 S0 (owner 2026-11-05: « IL FAUT MIGRER »): a campaign's next outcome is made by its ENGINE, with no
+ * workflow. Two things live here, one for every Engine (never a branch on an outcome, a channel or a client):
+ *
+ * 1. WHETHER an Engine runs campaigns. A switch row in `script_switches`, caller `campaign` (the same table, guard and
+ *    Monitoring as every other switch: the roll-back guard marks it `rolled_back` like a service switch), for ONE org
+ *    first (`org_id`) then for every org (`org_id` null): a client is switched only on proof. An org's own row wins
+ *    over the fleet row, so one client can be held back or let in alone. Proof: an org switch needs a runnable script
+ *    of the Engine (a port runs only when it replays 100 % of its recorded cases, as every run already demands); a
+ *    fleet switch needs a PROVEN PORT (recorded cases, 100 %), like every service switch.
+ *
+ * 2. THE RATING: which script runs, among every live dynasty of the Engine (one active version per dynasty, so the pick
+ *    is a dynasty and its head runs). Only a script the run can feed is a candidate: every material its code asks for
+ *    (`ctx.get(...)`, read from the code) is one the run holds, and a tactic `channel` it states is the campaign's.
+ *    Thompson sampling on the share of a dynasty's runs that made a Unit (Beta(1 + made, 1 + not made), its runs of the
+ *    last 30 days pooled across versions, docs/framework.md §8): a dynasty with little data draws wide and gets tried.
+ *    Cost per Unit is not yet in the score (runs-service holds it, per task `script:<outcome>/<dynasty>`): the day it
+ *    is, this function is the one place that changes.
+ */
+import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { scriptRuns, scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
+import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
+import { SwitchError } from "./script-writer-switch.js";
+
+/** The caller a campaign Engine switch is recorded under. */
+export const CAMPAIGN_CALLER = "campaign";
+/** The outcome of a proactive campaign's start: nothing to push, the script finds its own subject. */
+export const START_OUTCOME = "start";
+export const RATING_WINDOW_DAYS = 30;
+
+export interface EngineState {
+  outcome: string;
+  orgId: string | null;
+  live: boolean;
+  /** Which row decides: the org's own, the fleet's, or none. */
+  scope: "org" | "fleet" | null;
+  /** The dynasty the switch was proven on (the Rating picks among every candidate at run time). */
+  provenOn: string | null;
+  switchedAt: string | null;
+  rolledBackAt: string | null;
+  rollbackReason: string | null;
+}
+
+/** Whether `outcome`'s Engine runs the campaigns of `orgId` (its own latest row, else the fleet's latest row). */
+export async function engineState(db: AnyPgDb, outcome: string, orgId: string | null): Promise<EngineState> {
+  const rows = await db
+    .select()
+    .from(scriptSwitches)
+    .where(
+      and(
+        eq(scriptSwitches.outcome, outcome),
+        eq(scriptSwitches.callerService, CAMPAIGN_CALLER),
+        orgId ? or(eq(scriptSwitches.orgId, orgId), isNull(scriptSwitches.orgId)) : isNull(scriptSwitches.orgId),
+      ),
+    )
+    .orderBy(desc(scriptSwitches.switchedAt));
+  const own = orgId ? rows.find((r) => r.orgId === orgId) : undefined;
+  const fleet = rows.find((r) => r.orgId === null);
+  const deciding = own ?? fleet;
+  return {
+    outcome,
+    orgId,
+    live: deciding?.state === "switched",
+    scope: own ? "org" : fleet ? "fleet" : null,
+    provenOn: deciding?.dynasty ?? null,
+    switchedAt: deciding?.switchedAt?.toISOString() ?? null,
+    rolledBackAt: deciding?.rolledBackAt?.toISOString() ?? null,
+    rollbackReason: deciding?.rollbackReason ?? null,
+  };
+}
+
+/** A port runs only when it replays 100 % of its recorded cases; a script with no case is not a port. */
+async function provenness(db: AnyPgDb, row: ScriptRow): Promise<{ runnable: boolean; port: boolean }> {
+  const cases = await caseCount(db, row.outcome, row.dynasty);
+  if (cases === 0) return { runnable: true, port: false };
+  const proven = !!row.replay && row.replay.cases === cases && row.replay.matches === cases;
+  return { runnable: proven, port: proven };
+}
+
+/** Switch an Engine on for campaigns: one org (`orgId`), or every org (a proven port). Idempotent while live. */
+export async function switchEngine(db: AnyPgDb, input: { outcome: string; dynasty: string; orgId?: string | null }) {
+  const orgId = input.orgId ?? null;
+  const row = await activeVersion(db, input.outcome, input.dynasty);
+  if (!row || row.dynastyStatus !== "active") throw new SwitchError(404, `no live version of ${input.outcome}/${input.dynasty}`);
+  const proof = await provenness(db, row);
+  if (!proof.runnable) throw new SwitchError(409, `${input.outcome}/${input.dynasty}/v${row.version} is a port not proven on all its recorded cases: it cannot run`);
+  if (!orgId && !proof.port) {
+    throw new SwitchError(409, `every client is switched only on a proven port (recorded cases replayed 100 %): ${input.outcome}/${input.dynasty} carries none; switch one org first`);
+  }
+  const scope = and(
+    eq(scriptSwitches.outcome, input.outcome),
+    eq(scriptSwitches.callerService, CAMPAIGN_CALLER),
+    orgId ? eq(scriptSwitches.orgId, orgId) : isNull(scriptSwitches.orgId),
+  );
+  const [live] = await db.select().from(scriptSwitches).where(and(scope, eq(scriptSwitches.state, "switched")));
+  if (live) return live;
+  const [created] = await db
+    .insert(scriptSwitches)
+    .values({ outcome: input.outcome, dynasty: input.dynasty, callerService: CAMPAIGN_CALLER, orgId, scriptVersion: row.version, fromVersion: 0, toVersion: row.version })
+    .returning();
+  return created!;
+}
+
+/** Switch an Engine off for campaigns (one org's row, or the fleet row): its campaigns go back to their workflow. */
+export async function switchEngineOff(db: AnyPgDb, input: { outcome: string; orgId?: string | null; reason: string }) {
+  const orgId = input.orgId ?? null;
+  return db
+    .update(scriptSwitches)
+    .set({ state: "rolled_back", rolledBackAt: new Date(), rollbackReason: input.reason })
+    .where(
+      and(
+        eq(scriptSwitches.outcome, input.outcome),
+        eq(scriptSwitches.callerService, CAMPAIGN_CALLER),
+        eq(scriptSwitches.state, "switched"),
+        orgId ? eq(scriptSwitches.orgId, orgId) : isNull(scriptSwitches.orgId),
+      ),
+    )
+    .returning();
+}
+
+export interface PickInput {
+  outcome: string;
+  /** The outcomes the run holds a Unit of (its materials): a candidate asks for none other. */
+  servable: string[];
+  /** The campaign's channel: a script stating a tactic `channel` runs only for it. */
+  channel: string | null;
+}
+
+export interface Pick {
+  script: ScriptRow;
+  /** Every candidate and its draw, for the run's log. */
+  draws: Array<{ dynasty: string; version: number; made: number; runs: number; draw: number }>;
+}
+
+/** The scripts of an Engine this run can run (fed by its materials, its channel, proven when a port). */
+export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<ScriptRow[]> {
+  const rows = await db
+    .select()
+    .from(scripts)
+    .where(and(eq(scripts.outcome, input.outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+  const out: ScriptRow[] = [];
+  for (const row of rows) {
+    if (!(row.materials ?? []).every((m) => input.servable.includes(m))) continue;
+    const channel = (row.tactics as Record<string, unknown>)?.channel;
+    if (typeof channel === "string" && channel !== input.channel) continue;
+    if (!(await provenness(db, row)).runnable) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+/** The Rating's pick for one run (null: no script of this Engine can run on what this run holds). */
+export async function pickScript(db: AnyPgDb, input: PickInput, random: () => number = Math.random): Promise<Pick | null> {
+  const candidates = await candidatesOf(db, input);
+  if (candidates.length === 0) return null;
+  const dynasties = candidates.map((c) => c.dynasty);
+  const since = new Date(Date.now() - RATING_WINDOW_DAYS * 86_400_000);
+  const stats = await db
+    .select({
+      dynasty: scripts.dynasty,
+      made: sql<number>`count(*) filter (where ${scriptRuns.status} = 'made')::int`,
+      runs: sql<number>`count(*) filter (where ${scriptRuns.status} <> 'running')::int`,
+    })
+    .from(scriptRuns)
+    .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
+    .where(and(eq(scripts.outcome, input.outcome), inArray(scripts.dynasty, dynasties), gte(scriptRuns.createdAt, since)))
+    .groupBy(scripts.dynasty);
+  const by = new Map(stats.map((s) => [s.dynasty, { made: Number(s.made), runs: Number(s.runs) }]));
+  const draws = candidates.map((c) => {
+    const s = by.get(c.dynasty) ?? { made: 0, runs: 0 };
+    return { dynasty: c.dynasty, version: c.version, made: s.made, runs: s.runs, draw: sampleBeta(1 + s.made, 1 + Math.max(0, s.runs - s.made), random) };
+  });
+  let best = 0;
+  for (let i = 1; i < draws.length; i++) if (draws[i]!.draw > draws[best]!.draw) best = i;
+  return { script: candidates[best]!, draws };
+}
+
+/** One draw from Beta(a, b), through two Gamma draws (Marsaglia & Tsang 2000). */
+export function sampleBeta(a: number, b: number, random: () => number = Math.random): number {
+  const x = sampleGamma(a, random);
+  const y = sampleGamma(b, random);
+  return x + y === 0 ? 0.5 : x / (x + y);
+}
+
+function sampleGamma(k: number, random: () => number): number {
+  if (k < 1) return sampleGamma(k + 1, random) * Math.pow(random() || Number.MIN_VALUE, 1 / k);
+  const d = k - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    let x: number;
+    let v: number;
+    do {
+      x = normal(random);
+      v = 1 + c * x;
+    } while (v <= 0);
+    v = v * v * v;
+    const u = random() || Number.MIN_VALUE;
+    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+  }
+}
+
+function normal(random: () => number): number {
+  const u = random() || Number.MIN_VALUE;
+  const v = random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}

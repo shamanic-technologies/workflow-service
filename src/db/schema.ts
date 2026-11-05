@@ -281,6 +281,8 @@ export const scriptSwitches = pgTable(
     callerService: text("caller_service"),
     /** The script version a service switch was proven on. */
     scriptVersion: integer("script_version"),
+    /** MIGRATE-1105 S0: an Engine switch (caller `campaign`) for ONE org first; null = every org (migration 0048). */
+    orgId: text("org_id"),
     state: text("state").notNull().default("switched"),
     switchedAt: timestamp("switched_at", { withTimezone: true }).notNull().defaultNow(),
     rolledBackAt: timestamp("rolled_back_at", { withTimezone: true }),
@@ -288,3 +290,25 @@ export const scriptSwitches = pgTable(
   },
   (table) => [uniqueIndex("idx_script_switches_to").on(table.toWorkflowId), index("idx_script_switches_outcome").on(table.outcome, table.state)]
 );
+
+// MIGRATE-1105 S0: a script that waits stops; its campaign's next dispatch resumes it once due (migration 0048).
+export const engineWaits = pgTable(
+  "engine_waits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id").notNull(),
+    campaignId: text("campaign_id").notNull(),
+    outcome: text("outcome").notNull(),
+    scriptId: uuid("script_id").notNull(),
+    subject: jsonb("subject"),
+    units: jsonb("units").notNull().default({}),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    status: text("status").notNull().default("waiting"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    fromRunId: text("from_run_id").notNull(),
+    resumedRunId: text("resumed_run_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_engine_waits_due").on(table.orgId, table.campaignId, table.outcome, table.status, table.dueAt)]
+);
+export type EngineWaitRow = typeof engineWaits.$inferSelect;

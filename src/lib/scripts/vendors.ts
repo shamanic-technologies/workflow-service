@@ -89,6 +89,15 @@ export const SERVICE_DOOR_VENDORS: Record<string, { service: string; method: "GE
   // audience_built (human-service): the split's completion and its icon judgment, human-service's exact chat calls.
   "human.split.complete": { service: "human", method: "POST", path: "/internal/audience-splits/complete", args: ["proposal", "message", "systemPrompt"], optional: ["provider", "model", "responseSchema", "disableThinking"] },
   "human.split.judge": { service: "human", method: "POST", path: "/internal/audience-splits/judge", args: ["proposal", "state", "questions"] },
+  // lead_found (lead-service, MIGRATE-1105 S0): one serve for the campaign the script's run is for (its headers name the
+  // campaign, brand and audience): lead-service finds, files, buys and declares the person, or names why nobody came.
+  "lead.serve": {
+    service: "lead",
+    method: "POST",
+    path: "/orgs/buffer/next",
+    args: [],
+    optional: ["acceptedEmails", "reachableBy", "reachableOn", "relationships", "stepFilter", "excludeEmailedWithin", "population", "namedLead"],
+  },
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
