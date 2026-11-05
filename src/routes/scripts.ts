@@ -287,6 +287,25 @@ internalScriptsRouter.post("/internal/scripts/run", requireApiKey, async (req, r
   }
 });
 
+// MIGRATE-1105 S0-STRATEGY: the runnable scripts WITH their code, for a service's org-less sweep (features-service judges
+// each version's tactics for the campaigns' strategies, as it judges workflow versions). Service key only.
+internalScriptsRouter.get("/internal/scripts", requireApiKey, async (req, res) => {
+  try {
+    const rows = await listScripts(db, { outcome: typeof req.query.outcome === "string" && req.query.outcome ? req.query.outcome : undefined, status: "active" });
+    const counts = new Map<string, number>();
+    const out = [];
+    for (const r of rows) {
+      if (r.dynastyStatus !== "active") continue;
+      const k = `${r.outcome}/${r.dynasty}`;
+      if (!counts.has(k)) counts.set(k, await caseCount(db, r.outcome, r.dynasty));
+      out.push(serveScript(r, counts.get(k)!));
+    }
+    res.json({ scripts: out });
+  } catch (err) {
+    fail(res, err, "list runnable scripts");
+  }
+});
+
 internalScriptsRouter.post("/internal/scripts/switches/service", requireApiKey, async (req, res) => {
   const str = (k: string) => (typeof req.body?.[k] === "string" ? (req.body[k] as string).trim() : "");
   const input = { outcome: str("outcome"), dynasty: str("dynasty"), callerService: str("callerService"), mode: str("mode") === "shadow" ? ("shadow" as const) : ("switched" as const) };
