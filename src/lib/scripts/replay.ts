@@ -44,7 +44,11 @@ export interface ReplayCase {
   asks?: Record<string, unknown>[];
   accounts?: AccountView[];
   calls: RecordedCall[];
-  expect: { content?: Record<string, unknown>; found?: string; nothing?: true; fails?: string };
+  /**
+   * `end`: an old workflow run (windmill-cases.ts `endAsRunner`) is matched by the end-run body the Engine runner would
+   * state for the script's result (`endRunBodyOf`), false/absent flags read alike: the same campaign behaviour.
+   */
+  expect: { content?: Record<string, unknown>; found?: string; nothing?: true; fails?: string; end?: Record<string, unknown> };
 }
 
 export interface ReplayReport {
@@ -169,6 +173,12 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
       if (!unmade.includes(want.fails)) diffs.push(`unmade "${unmade.slice(0, 200)}", want a failure naming "${want.fails}"`);
     } else if (failed === null) diffs.push(`returned a result, the record failed: ${want.fails}`);
     else if (!failed.includes(want.fails)) diffs.push(`failed with "${failed.slice(0, 200)}", want a failure naming "${want.fails}"`);
+  } else if (want.end !== undefined) {
+    const { endRunBodyOf } = await import("./engine-runner.js");
+    const status = failed !== null ? "failed" : unmade !== null ? "unmade" : result?.content ? "made" : "nothing";
+    const occurrence = !!(c.request && typeof c.request === "object" && (c.request as Record<string, unknown>).trigger && typeof ((c.request as Record<string, unknown>).trigger as Record<string, unknown>)?.leadId === "string");
+    const got = endRunBodyOf({ status, error: failed ?? unmade, again: result?.again === true }, occurrence);
+    if (!sameJson(endFlags(got), endFlags(want.end))) diffs.push(firstDiff("end", endFlags(got), endFlags(want.end)) + (failed ? ` (failed: ${failed.slice(0, 200)})` : unmade ? ` (unmade: ${unmade.slice(0, 120)})` : ""));
   } else if (failed !== null) {
     diffs.push(`failed: ${failed.slice(0, 300)}`);
   } else if (want.nothing) {
@@ -185,4 +195,9 @@ export async function replayAll(source: string, cases: readonly ReplayCase[]): P
   const reports: ReplayReport[] = [];
   for (const c of cases) reports.push(await replayCase(source, c));
   return { cases: cases.length, matches: reports.filter((r) => r.match).length, failures: reports.filter((r) => !r.match) };
+}
+
+/** An end-run body with its false / null flags dropped (absent and false say the same to campaign-service). */
+function endFlags(body: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(body).filter(([k, v]) => v !== undefined && v !== null && (v !== false || k === "success")));
 }

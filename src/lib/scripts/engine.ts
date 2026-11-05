@@ -140,13 +140,37 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     .where(and(eq(scripts.outcome, input.outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
   const out: ScriptRow[] = [];
   for (const row of rows) {
-    if (!(row.materials ?? []).every((m) => input.servable.includes(m))) continue;
+    // A material the script ASKS another Engine for (tactic `asks`: `ctx.ask(request)` then `ctx.get(<outcome>)`, a
+    // child run of that Engine) is not one the run must hold.
+    const asks = (row.tactics as Record<string, unknown>)?.asks;
+    const provided = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+    if (!(row.materials ?? []).every((m) => input.servable.includes(m) || provided.includes(m))) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
     if (!(await provenness(db, row)).runnable) continue;
     out.push(row);
   }
   return out;
+}
+
+/**
+ * Whether ANY live script of the Engine can run for a campaign of `channel` (its tactic `channel` is that one, or it
+ * states none), whatever materials a run holds. An Engine switched on for an org takes every campaign of that org
+ * whose leg reaches the outcome; a campaign no script of the Engine serves is not the Engine's yet: it keeps its
+ * workflow (`engine_not_live`) instead of ending idle forever (MIGRATE-1105 S4: one org runs campaigns of several
+ * channels on one outcome, migrated one at a time).
+ */
+export async function servesChannel(db: AnyPgDb, outcome: string, channel: string | null): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(scripts)
+    .where(and(eq(scripts.outcome, outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+  for (const row of rows) {
+    const stated = (row.tactics as Record<string, unknown>)?.channel;
+    if (typeof stated === "string" && stated !== channel) continue;
+    if ((await provenness(db, row)).runnable) return true;
+  }
+  return false;
 }
 
 /** The Rating's pick for one run (null: no script of this Engine can run on what this run holds). */

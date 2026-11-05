@@ -29,7 +29,8 @@ const ACTS = new Set(["instantly.reply.send", "instantly.reply.escalate", "email
 const SENDS = ["instantly.reply.send", "email.send", "crm.whatsapp.send"];
 const orgs = typeof args.orgs === "string" ? new Set(args.orgs.split(",")) : null;
 const max = Number(args.max ?? 10);
-const source = answerLeadScriptSource();
+// `--source <file>`: a candidate version's text (the stored one otherwise).
+const source = typeof args.source === "string" ? readFileSync(args.source, "utf8") : answerLeadScriptSource();
 const { chatServicePlatformComplete } = await import("../dist/lib/chat-service-client.js");
 const booking = productionVendorDeps();
 
@@ -64,18 +65,28 @@ for (const r of rows) {
     }
     if (name === "llm.complete") {
       try {
-        llm = await chatServicePlatformComplete({ ...callArgs, provider: "anthropic", model: "opus" }, { support: { kind: "staff_experiment", reason: "MIGRATE-1105 S1 before/after of the answering script" } });
+        llm = await chatServicePlatformComplete({ provider: "anthropic", model: "opus", ...callArgs }, { support: { kind: "staff_experiment", reason: "MIGRATE-1105 S1 before/after of the answering script" } });
       } catch (e) {
         return { v: { ok: false, data: { error: String(e).slice(0, 300) } } };
       }
       return { v: { ok: true, data: { content: llm.content ?? null, json: llm.json ?? null, model: llm.model ?? null } } };
     }
+    // The open times AS THE OLD RUN READ THEM (today's are not what the person was offered); live when it read none.
+    const pastSlots = (r.steps ?? []).find((st) => st.stepId === "booking_slots" && st.result && Array.isArray(st.result.slots));
+    if (name === "booking.slots" && pastSlots) return { v: { ok: true, data: pastSlots.result } };
     if (name === "booking.slots") {
       try {
         return { v: { ok: true, data: await booking.readBookingSlots(callArgs.bookingUrl, callArgs.timezone) } };
       } catch (e) {
         return { v: { ok: false, data: { error: String(e) } } };
       }
+    }
+    // The AFTER is written with the Lead event writer's model of today (Opus); live, the campaign's pick decides.
+    if (name === "features.writer_pick") return { v: { ok: true, data: { llm: { provider: "anthropic", model: "opus" } } } };
+    // Our one voice, read live when the old run did not (its writer read it itself): no identity, no spend.
+    if (name === "voice.read" && !recorded.some((c) => c.name === name)) {
+      const skill = await booking.readSkill("client-comms");
+      return { v: skill?.content ? { ok: true, data: { content: skill.content, version: skill.version ?? null } } : { ok: false, data: { error: "voice unreadable" } } };
     }
     if (name === "lead.followup_date.read") return { v: { ok: true, data: { owed: { kind: "owed" } } } };
     // The old run may have claimed on two queues (its own, then the previous campaign's): the one that found them.
@@ -85,6 +96,12 @@ for (const r of rows) {
     return { v: hit.answer };
   };
   const request = { ...built.case.request };
+  // A run the old cadence claimed carries no occurrence: on the one Lead event campaign the person who wrote IS one.
+  if (!request.trigger) {
+    const claimed = built.case.calls.find((c) => c.name === "lead.followup.claim" && c.answer.data?.found === true)?.answer.data.followup;
+    if (claimed) request.trigger = { leadId: claimed.leadId ?? null, eventId: null, person: { email: claimed.email ?? null, phone: claimed.phone ?? null }, item: { replay: "rebuilt from the old run's claim" } };
+  }
+  // The harness writes "after" on the Lead event campaign's behalf: the claim answers the person the old run held.
   const out = await runScript(source, { subject: "", brand: "", day: 0, tactics: {}, request }, bridge);
   const after = acts.filter((c) => SENDS.includes(c.name));
   console.log(

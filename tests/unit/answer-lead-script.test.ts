@@ -30,6 +30,7 @@ function world(draft: Record<string, unknown>, over: Answers = {}) {
     "brand.offer.fields": () => ({ ok: true, data: { fields: { urgency: { value: "One clinic per area", provenance: "confirmed" }, neverGive: { value: null, provenance: "suggested" } } } }),
     "voice.read": () => ({ ok: true, data: { content: "OUR VOICE", version: 1 } }),
     "booking.slots": () => ({ ok: true, data: { timezone: "America/Chicago", slots: ["2026-11-05T12:00:00-06:00", SLOT], calendarId: "cal-1" } }),
+    "features.writer_pick": () => ({ ok: true, data: { llm: { provider: "anthropic", model: "opus" } } }),
     "llm.complete": () => ({ ok: true, data: { json: draft } }),
     "crm.meeting.book": () => ({ ok: true, data: { status: "booked" } }),
     "instantly.reply.send": () => ({ ok: true, data: { status: "sent" } }),
@@ -71,6 +72,8 @@ describe("the answering script", () => {
     expect(calls.find((c) => c.name === "lead.followup_date.set")!.args).toMatchObject({ body: { nextFollowupAt: "2026-11-05T15:00:00Z", sent: { channel: "email" } } });
     expect(calls.find((c) => c.name === "lead.followup.record")!.args).toEqual({ params: { id: "row-1" }, body: { kind: "stopped", reason: "booking_confirmed" } });
     const llm = calls.find((c) => c.name === "llm.complete")!.args;
+    expect(llm).toMatchObject({ provider: "anthropic", model: "opus" });
+    expect(calls.find((c) => c.name === "features.writer_pick")!.args).toEqual({ query: { campaignId: "camp-lead-event" } });
     expect(String(llm.systemPrompt)).toMatch(/^OUR VOICE/);
     expect(String(llm.message)).toContain("(not answered by our client yet)");
     expect(String(llm.message)).not.toContain("PLACEHOLDER");
@@ -95,6 +98,12 @@ describe("the answering script", () => {
     expect(esc.calls.some((c) => c.name === "instantly.reply.send")).toBe(false);
   });
 
+  it("no writer picked for the campaign = nothing written, the run fails loud (never a default model)", async () => {
+    const { calls, bridge } = world(BOOK, { "features.writer_pick": () => ({ ok: true, data: { llm: null, llmUnavailableReason: "writer_ranking_not_computed_yet" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("writer_ranking_not_computed_yet") });
+    expect(calls.some((c) => c.name === "llm.complete" || c.name === "instantly.reply.send")).toBe(false);
+  });
+
   it("their own stop ends it; a run with no occurrence or no clock does nothing", async () => {
     const stop = world(BOOK, { "lead.followup_date.read": () => ({ ok: true, data: { owed: { kind: "stop", reason: "opted_out", reasons: ["opted_out"] } } }) });
     expect(await runScript(answerLeadScriptSource(), spec(REQUEST), stop.bridge)).toMatchObject({ kind: "done", result: { unmade: "stopped: opted_out" } });
@@ -102,6 +111,14 @@ describe("the answering script", () => {
     const idle = world(BOOK);
     expect(await runScript(answerLeadScriptSource(), spec({ ...REQUEST, trigger: null }), idle.bridge)).toEqual({ kind: "done", result: { unmade: "no_occurrence" } });
     expect((await runScript(answerLeadScriptSource(), spec({ ...REQUEST, now: undefined }), idle.bridge)).kind).toBe("error");
+  });
+
+  it("a person crm holds no thread for (404) is answered with no thread; any other read failure stops the run", async () => {
+    const none = world(BOOK, { "crm.person.thread": () => ({ ok: false, data: { status: 404, error: "no person" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), none.bridge)).toMatchObject({ kind: "done" });
+    const down = world(BOOK, { "crm.person.thread": () => ({ ok: false, data: { status: 502, error: "down" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), down.bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("crm.person.thread failed") });
+    expect(down.calls.some((c) => c.name === "llm.complete")).toBe(false);
   });
 
   it("answers on WhatsApp when that is where they wrote last, in bubbles", async () => {
