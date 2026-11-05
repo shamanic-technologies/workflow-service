@@ -362,6 +362,12 @@ async function provide(
     if (e instanceof ScriptRunFailed) return { stop: `${e.result.scriptSlug} (asked for ${outcome}) ${e.result.status}: ${e.result.error ?? ""}` };
     return { stop: `ctx.get(${outcome}): ${e instanceof Error ? e.message : String(e)}` };
   }
+  // A child that made no Unit for a reason the world gave (`unmade`, or nothing) is an ANSWER the asking script reads
+  // (`{outcome, unmade, run}`, no content) and decides on, e.g. by returning `{unmade}` itself: a stop would fail the
+  // asking run and the campaign would redeliver its occurrence, re-running the child for the same verdict.
+  if (child.status === "unmade" || child.status === "nothing") {
+    return { v: { id: `${child.runId}:${outcome}`, outcome, subject: "", ageDays: 0, content: null, unmade: child.error ?? "nothing", run: child } };
+  }
   if (child.status !== "made" || !child.unit) return { stop: `${child.scriptSlug} (asked for ${outcome}) made no Unit: ${child.status}${child.error ? ` (${child.error})` : ""}` };
   return { v: { id: `${child.runId}:${outcome}`, outcome, subject: child.unit.subject?.id ?? "", ageDays: 0, content: child.unit.content, run: child } };
 }

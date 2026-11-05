@@ -207,6 +207,30 @@ describe("a script asks another Engine for a Unit (MIGRATE-1105 S2)", () => {
     expect(r!.error).toMatch(/no live script of that Engine can run on brand_context/);
   });
 
+  it("hands an unmade child back as an answer the asking script reads (no stop, no redelivery)", async () => {
+    const ASKER = `
+export default function run(ctx) {
+  ctx.ask({ units: { brand_context: { content: { name: "Reed" } } } });
+  const written = ctx.get("message_written");
+  if (written.unmade) return { unmade: "later: " + written.unmade };
+  return { content: { subject: written.content.subject }, subject: { service: "lead-service", id: "lead-9" } };
+}`;
+    await addScript("conversation", "dy_cold", ASKER, { asks: ["message_written"] });
+    await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); return { unmade: "they asked for January" }; }`);
+    const w = world();
+    const trigger = { eventId: "ev-9", leadId: "lead-9", item: {} };
+    const { runId } = await runOnce(dispatch({ outcome: "conversation", fromOutcome: "start", inputs: { trigger } }), w);
+    const rows = await db.select().from(scriptRuns);
+    const parentRow = rows.find((x) => x.runId === runId)!;
+    const childRow = rows.find((x) => x.runId !== runId)!;
+    expect(childRow.status).toBe("unmade");
+    expect(parentRow.status).toBe("unmade");
+    expect(parentRow.error).toBe("later: they asked for January");
+    // A normal run: the occurrence is settled (refused with the script's words), never redelivered.
+    const end = w.calls.find((c) => c.path === "/end-run")!.body;
+    expect(end.success).toBe(true);
+  });
+
   it("stops the asking script with the child's reason when the child fails or would wait", async () => {
     await addScript("conversation", "dy_cold", PARENT, { asks: ["message_written"] });
     await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); ctx.wait(3); return null; }`);
