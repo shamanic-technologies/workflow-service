@@ -156,10 +156,9 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "apollo.phone.read": { service: "apollo", method: "GET", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
   "twilio.call.place": { service: "twilio", method: "POST", path: "/calls", asRun: true },
   // The cold email (MIGRATE-1105 S2): what the old cold email steps called, each the producer's own route, as the run.
-  // The brand's extracted facts, the best template + LLM features ranks for the campaign, the template's live head,
+  // The brand's extracted facts, the template's live head (the writer pick is `features.writer_pick` above),
   // the writer's materials, then the email stored (content-generation declares message_written) before `email.send`.
   "brand.extract_fields": { service: "brand", method: "POST", path: "/orgs/brands/extract-fields", asRun: true },
-  "features.writer_pick": { service: "features", method: "GET", path: "/internal/writer-pick", asRun: true },
   "content.template_head": { service: "content-generation", method: "GET", path: "/internal/template-dynasties/{slug}/head", asRun: true },
   "content.materials": { service: "content-generation", method: "POST", path: "/generate/materials", asRun: true },
   "content.generate": { service: "content-generation", method: "POST", path: "/generate", asRun: true },
