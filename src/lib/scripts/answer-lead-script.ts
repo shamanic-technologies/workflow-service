@@ -197,7 +197,12 @@ export default function run(ctx) {
     "THE CHANNEL: " + medium + (medium === "email" ? (replied ? " (a reply in the thread they answered)" : " (a follow-up in their last email thread)") : ""),
     "THE THREAD (oldest first):\n" + (threadLines.join("\n") || "(empty)"),
   ].join("\n\n");
-  const draft = must("llm.complete", { systemPrompt: system, message: message, responseFormat: "json", responseSchema: K.SCHEMA });
+  // The writer's LLM is features-service's pick for this campaign (lowest cost per outcome, within its strategy):
+  // never one the script states, never a default (BEST-TPL-LLM-1022, NO-WRITER-FALLBACK-1030).
+  const writer = must("features.writer_pick", { query: { campaignId: campaignId } });
+  const llm = writer.llm || {};
+  if (!s(llm.provider) || !s(llm.model)) throw new Error("no writer LLM picked for this campaign: " + String(writer.llmUnavailableReason || "none"));
+  const draft = must("llm.complete", { provider: llm.provider, model: llm.model, systemPrompt: system, message: message, responseFormat: "json", responseSchema: K.SCHEMA });
   const d = draft.json || {};
   const nextAt = s(d.nextFollowUpAt);
   const nextOk = nextAt && Date.parse(nextAt) > Date.parse(now) && Date.parse(nextAt) <= Date.parse(now) + K.MAX_DAYS * 86400000;
