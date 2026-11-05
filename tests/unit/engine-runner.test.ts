@@ -31,6 +31,14 @@ export default function run(ctx) {
   if (r.data.found !== true) return { unmade: String(r.data.reason || "nobody") };
   return { content: { email: r.data.lead.email, brief: ctx.request.brief }, subject: { service: "lead-service", id: r.data.lead.leadId } };
 }`;
+// The same serve, stating an unfinished look as one to ask again soon.
+const AGAIN_SERVE = `
+export default function run(ctx) {
+  const r = ctx.vendor.call("lead.serve", ctx.tactics.serve || {});
+  if (!r.ok) throw new Error("serve refused: " + String(r.data.error));
+  if (r.data.found !== true) return { unmade: String(r.data.reason || "nobody"), again: r.data.reason === "serve_timed_out" };
+  return { content: { email: r.data.lead.email }, subject: { service: "lead-service", id: r.data.lead.leadId } };
+}`;
 // A reactive answer: reads the Unit a trigger pushed; waits when the person asked for later.
 const ANSWER = `
 export default function run(ctx) {
@@ -197,6 +205,16 @@ describe("a campaign run executes its Engine's script, with no workflow", () => 
     expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: true });
     expect(endRunBodyOf({ status: "unmade", error: "credit_insufficient" }, false)).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
     expect(endRunBodyOf({ status: "failed", error: "x" }, true)).toEqual({ success: false, stopCampaign: false });
+  });
+
+  it("an unfinished look (`again`) is a normal run, never idle; on an occurrence it states nothing about the person", async () => {
+    await addScript("lead_found", "dy_serve", AGAIN_SERVE, { recorded_by: "lead" });
+    const w = world({ found: false, reason: "serve_timed_out" });
+    await runOnce(dispatch(), w);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false });
+    expect(endRunBodyOf({ status: "unmade", error: "serve_timed_out", again: true }, true)).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+    expect(endRunBodyOf({ status: "unmade", error: "audience_exhausted", again: true }, false)).toEqual({ success: true, stopCampaign: true });
+    expect(endRunBodyOf({ status: "unmade", error: "credit_insufficient" }, false)).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
   });
 
   it("a reactive occurrence: the SAME path, the pushed Unit is the script's material, the lead its subject", async () => {
