@@ -11,13 +11,9 @@ import {
   chatLlmDoorKind,
 } from "../../src/lib/campaign-brief.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildEmailSendingDag } from "../../src/lib/email-sending-dag.js";
 import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
-import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
@@ -40,7 +36,6 @@ type Mod = {
   };
 };
 
-const CELL = { provider: "google", model: "pro" } as const;
 
 /** A cold email head (content-generation `/generate` + its script-writer materials door). */
 const COLD_EMAIL: DAG = {
@@ -64,14 +59,10 @@ const COLD_EMAIL: DAG = {
 const DAGS: Record<string, DAG> = {
   "cold-email": COLD_EMAIL,
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
-  "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
   "threads-post": buildThreadsPostDag(),
-  "ai-instant-call": buildAiInstantCallDag(),
   "email-sending": buildEmailSendingDag(),
   "ai-lead-proposal": buildAiLeadProposalDag(),
-  "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
-  "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),

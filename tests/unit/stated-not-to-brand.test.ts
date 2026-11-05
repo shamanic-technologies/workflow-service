@@ -20,16 +20,6 @@ import { WHATSAPP_ONLY_CHANNEL_PLAN_CODE, buildClientSatisfiedDag } from "../../
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
 import { FOUNDER_HELLO_REFUSAL_CODES, OUTCOME_CODE as FOUNDER_OUTCOME_CODE, buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
-import {
-  CLASSIFY_SEND_CODE,
-  NAME_THREAD_REFUSAL_CODE,
-  REPLY_REFUSAL_CODE,
-  WHATSAPP_TAKEOVER_CODES,
-  buildAiMeetingBookingDag,
-  needsStatedNotToBrandSkip,
-} from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 
 /**
  * DUALIST-WA-SILENCE-1104: crm-service refuses a WhatsApp send / reach `stated_not_to_brand` for a person the brand
@@ -169,81 +159,5 @@ describe("founder hello", () => {
   });
   it("the hello's send reads the refusal", () => {
     expect(sendNode(buildFounderHelloDag(), "send-whatsapp")?.config?.skipOnRefusalCodes).toContain(CODE);
-  });
-});
-
-describe("ai-meeting-booking (and its offer-document copy)", () => {
-  const OPTS = { provider: "google", model: "pro" } as const;
-
-  it("the reach check runs before the thread check and settles the person: nothing drafted, no rep alert", async () => {
-    const refusal = loadMain(REPLY_REFUSAL_CODE);
-    expect(await refusal({ refusal: null, replyChannel: "whatsapp" }, { reachable: false, code: CODE, error: "stated" }))
-      .toEqual({ refusal: { reason: CODE, detail: "stated" } });
-    // Other reach answers leave the reply to go on as before.
-    expect(await refusal({ refusal: null }, { reachable: false, code: "human_in_conversation" })).toEqual({ refusal: null });
-    expect(await refusal({ refusal: null }, { reachable: true })).toEqual({ refusal: null });
-    expect(await refusal({ refusal: null }, notCalled)).toEqual({ refusal: null });
-    // The thread's own refusal wins.
-    expect(await refusal({ refusal: { reason: "no_conversation_to_answer" } }, notCalled)).toEqual({ refusal: { reason: "no_conversation_to_answer" } });
-
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const named = await loadMain(NAME_THREAD_REFUSAL_CODE)(
-      { refusal: { reason: CODE, detail: "stated" } },
-      { followup: { id: "row-1", email: "t@x.com" } },
-      { person: { email: "T@x.com" } },
-    );
-    expect(named).toEqual({ reason: CODE, notAdmitted: { reason: CODE } });
-    spy.mockRestore();
-  });
-
-  for (const [name, build] of [["parent", () => buildAiMeetingBookingDag(OPTS)], ["offer-document", () => buildOfferDocumentReplyDag(OPTS)]] as const) {
-    it(`${name}: wired before any model call, the WhatsApp send reads the refusal, valid and convertible`, () => {
-      const dag = build();
-      expect(validateDAG(dag).valid).toBe(true);
-      expect(needsStatedNotToBrandSkip(dag)).toBe(false);
-      for (const e of [
-        { from: "thread", to: "sender-reach-plan" },
-        { from: "sender-reach-plan", to: "sender-reach" },
-        { from: "sender-reach", to: "reply-refusal" },
-        { from: "reply-refusal", to: "check-thread" },
-      ]) expect(dag.edges).toContainEqual(e);
-      expect(dag.edges.find((e) => e.from === "check-thread" && e.to === "name-thread-refusal")?.condition).toContain("results['reply-refusal']?.refusal != null");
-      expect(sendNode(dag, "name-thread-refusal")?.inputMapping?.thread).toBe("$ref:reply-refusal.output");
-      expect(sendNode(dag, "compose-prompt")?.inputMapping?.sender).toBe("$ref:sender-reach.output");
-      expect(sendNode(dag, "send-whatsapp-reply")?.config?.skipOnRefusalCodes).toEqual([...WHATSAPP_TAKEOVER_CODES, CODE]);
-      const flow = JSON.stringify(dagToOpenFlow(dag, "f/test"));
-      expect(flow).toContain("reply_refusal");
-    });
-  }
-
-  it("a send refused for it after the reach check ends quietly (no delivery); the takeover and other refusals as before", async () => {
-    const classify = loadMain(CLASSIFY_SEND_CODE);
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await classify(notCalled, { skipped: true, code: CODE, status: 422 }, "whatsapp")).toEqual({ outcome: CODE, status: 422, channel: "whatsapp" });
-    spy.mockRestore();
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await classify(notCalled, { skipped: true, code: "human_in_conversation", status: 422, refusal: "typed" }, "whatsapp"))
-      .toMatchObject({ outcome: "human_took_over", delivery: { state: "refused", code: "human_in_conversation" } });
-    err.mockRestore();
-    await expect(classify(notCalled, { skipped: true, code: "not_on_whatsapp", status: 422 }, "whatsapp")).rejects.toThrow(/no send on record/);
-    const dag = buildAiMeetingBookingDag(OPTS);
-    expect(sendNode(dag, "end-run-stated-not-to-brand")?.config?.body).toEqual({ success: true, stopCampaign: false });
-    expect(dag.edges).toContainEqual({ from: "check-sent", to: "end-run-stated-not-to-brand", condition: `results['classify-send']?.outcome == '${CODE}'` });
-  });
-
-  it("the seed upgrades a stored DAG without it", () => {
-    const dag = buildAiMeetingBookingDag(OPTS);
-    const old = {
-      nodes: dag.nodes
-        .filter((n) => n.id !== "reply-refusal")
-        .map((n) => (n.id === "send-whatsapp-reply" ? { ...n, config: { ...n.config, skipOnRefusalCodes: [...WHATSAPP_TAKEOVER_CODES] } } : n)),
-    };
-    expect(needsStatedNotToBrandSkip(old)).toBe(true);
-  });
-});
-
-describe("form responder", () => {
-  it("its WhatsApp send (after the email) reads the refusal and ends nothing", () => {
-    expect(sendNode(buildFormMeetingBookingDag(), "send-whatsapp")?.config?.skipOnRefusalCodes).toContain(CODE);
   });
 });

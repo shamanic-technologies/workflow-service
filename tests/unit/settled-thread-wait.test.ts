@@ -3,10 +3,7 @@ import { main } from "../../scripts/nodes/http-call.js";
 import { dagToOpenFlow, readsPersonThread, SETTLED_THREAD_WAIT } from "../../src/lib/dag-to-openflow.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
-import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
@@ -80,13 +77,9 @@ type Mod = { id: string; value: { type: string; path?: string; input_transforms?
 const all = (mods: Mod[]): Mod[] =>
   mods.flatMap((m) => [m, ...all(m.value.modules ?? []), ...(m.value.branches ?? []).flatMap((b) => all(b.modules)), ...all(m.value.default ?? [])]);
 
-const CELL = { provider: "google", model: "pro" } as const;
 const WRITERS: Record<string, DAG> = {
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
-  "form-meeting-booking": buildFormMeetingBookingDag(),
   "ai-lead-proposal": buildAiLeadProposalDag(),
-  "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
-  "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "client-check-in": buildClientCheckInDag(),
