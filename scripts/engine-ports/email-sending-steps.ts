@@ -1,3 +1,5 @@
+// MIGRATE-1105 S4b: the old workflow's step code, kept only as what the stored script conversation/dy_pushed_email was generated from.
+// The DAG and its workflow are gone (retired 2026-11-05, the script live since); fix the script by an UPGRADE of its dynasty.
 /**
  * The DAG of the `email-sending|start_to_conversation` pipe (Start -> Positive reply, REACTIVE on the
  * `email_pushed_via_api` trigger): a client wrote an email themselves and pushed it through the API (their own key,
@@ -35,8 +37,7 @@
  *  - Strictly AFTER the send, the row is marked `stopped` (`pushed_email_sent`): not a tombstone, so the next email
  *    the client pushes to the same person is sent too.
  */
-import type { DAG } from "./dag-validator.js";
-import { DELIVERED, OCCURRENCE_SEND_REFUSAL_CODES, refusedDelivery } from "./occurrence-delivery.js";
+import { DELIVERED, OCCURRENCE_SEND_REFUSAL_CODES, refusedDelivery } from "../../src/lib/occurrence-delivery.js";
 
 export const EMAIL_SENDING_FEATURE_SLUG = "email-sending";
 
@@ -138,107 +139,3 @@ export const UNCLAIMED = "results['claim-followup']?.found != true && results['p
 export const SENT = "results['resolve-email']?.ok == true && results['send-email'] != null && results['send-email']?.skipped != true";
 /** The sender refused the email for this person (any 409 naming a code). */
 export const REFUSED = "results['resolve-email']?.ok == true && results['send-email']?.skipped == true";
-
-export function buildEmailSendingDag(): DAG {
-  return {
-    nodes: [
-      {
-        id: "gate-check",
-        type: "http.call",
-        config: { service: "campaign", method: "POST", path: "/gate-check", stopAfterIf: "result.allowed == false" },
-      },
-      { id: "start-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/start-run" } },
-      { id: "plan-claim", type: "script", config: { code: PLAN_CLAIM_CODE }, retries: 0, inputMapping: { trigger: "$ref:flow_input.trigger" } },
-      // THIS campaign's own queue: campaign-service made the pushed person due on it right before the dispatch.
-      // Not called at all on a run carrying no push.
-      {
-        id: "claim-followup",
-        type: "http.call",
-        config: { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/followups/claim-next" },
-        retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId", skip: "$ref:plan-claim.output.skip" },
-      },
-      { id: "check-claim", type: "condition" },
-      // The person's timezone, so the send lands in their business hours like every cold email.
-      {
-        id: "lead-detail",
-        type: "http.call",
-        config: { service: "lead", method: "GET", path: "/orgs/leads/{id}" },
-        inputMapping: {
-          "params.id": "$ref:claim-followup.output.followup.id",
-          "query.campaignId": "$ref:flow_input.campaignId",
-        },
-      },
-      {
-        id: "resolve-email",
-        type: "script",
-        config: { code: RESOLVE_EMAIL_CODE },
-        retries: 0,
-        inputMapping: { claim: "$ref:claim-followup.output", trigger: "$ref:flow_input.trigger" },
-      },
-      // Converges (edge from claim-followup, outside check-claim's branch) so it is a top-level branchone.
-      { id: "check-email", type: "condition" },
-      // The client's email, verbatim, from our sending infra: lands in the Unibox, the reply is threaded there.
-      {
-        id: "send-email",
-        type: "http.call",
-        config: {
-          service: "email-gateway",
-          method: "POST",
-          path: "/orgs/send",
-          body: { type: "broadcast", tag: "email-sending" },
-          validateResponse: { field: "success", equals: true },
-          // Read, not thrown: ANY refusal the sender names on a 409 is an outcome no retry changes (check-sent).
-          skipOnRefusalCodes: [...OCCURRENCE_SEND_REFUSAL_CODES],
-        },
-        retries: 0,
-        inputMapping: {
-          "body.to": "$ref:resolve-email.output.email",
-          "body.subject": "$ref:resolve-email.output.subject",
-          "body.sequence": "$ref:resolve-email.output.sequence",
-          "body.idempotencyKey": "$ref:resolve-email.output.idempotencyKey",
-          "body.leadId": "$ref:resolve-email.output.leadId",
-          "body.campaignId": "$ref:flow_input.campaignId",
-          "body.workflowSlug": "$ref:start-run.output.workflowSlug",
-          "body.timezone": "$ref:lead-detail.output.leadDetail.lead.timezone",
-        },
-      },
-      // Converges (edge from claim-followup) so it is top level; reads positive evidence of each outcome.
-      { id: "check-sent", type: "condition" },
-      // Strictly AFTER the send. Stopped, not handed: the next email pushed to the same person is sent too.
-      stopRow("record-sent", PUSHED_EMAIL_SENT_REASON),
-      stopRow("record-refused", PUSHED_EMAIL_REFUSED_REASON),
-      stopRow("record-missing", PUSHED_EMAIL_MISSING_REASON),
-      endRun("end-run", { success: true, stopCampaign: false, delivery: DELIVERED }),
-      endRun("end-run-refused", { success: true, stopCampaign: false }, refusedDelivery("send-email")),
-      endRun("end-run-missing", { success: false, stopCampaign: false }),
-      endRun("end-run-other-person", { success: false, stopCampaign: false }),
-      endRun("end-run-unclaimed", { success: false, stopCampaign: false }),
-      endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
-      endRun("end-run-error", { success: false, stopCampaign: false }),
-    ],
-    edges: [
-      { from: "gate-check", to: "start-run" },
-      { from: "start-run", to: "plan-claim" },
-      { from: "plan-claim", to: "claim-followup" },
-      { from: "claim-followup", to: "check-claim" },
-      { from: "check-claim", to: "lead-detail", condition: "results['claim-followup']?.found == true" },
-      { from: "check-claim", to: "end-run-nobody-due", condition: NOBODY_DUE },
-      { from: "check-claim", to: "end-run-unclaimed", condition: UNCLAIMED },
-      { from: "lead-detail", to: "resolve-email" },
-      { from: "resolve-email", to: "check-email" },
-      { from: "claim-followup", to: "check-email" },
-      { from: "check-email", to: "send-email", condition: HAS_EMAIL },
-      { from: "check-email", to: "record-missing", condition: NO_EMAIL },
-      { from: "check-email", to: "end-run-other-person", condition: OTHER_PERSON },
-      { from: "record-missing", to: "end-run-missing" },
-      { from: "send-email", to: "check-sent" },
-      { from: "claim-followup", to: "check-sent" },
-      { from: "check-sent", to: "record-sent", condition: SENT },
-      { from: "check-sent", to: "record-refused", condition: REFUSED },
-      { from: "record-sent", to: "end-run" },
-      { from: "record-refused", to: "end-run-refused" },
-    ],
-    onError: "end-run-error",
-  };
-}

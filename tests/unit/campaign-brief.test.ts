@@ -14,7 +14,6 @@ import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outrea
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
 import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
-import { buildEmailSendingDag } from "../../src/lib/email-sending-dag.js";
 import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
 import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
@@ -23,7 +22,6 @@ import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
 import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
 import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
-import { buildThreadsPostDag } from "../../src/lib/threads-post-dag.js";
 
 /**
  * ONE-BRIEF-1105: every LLM step of a campaign run reads the campaign's brief, verbatim, through ONE conversion-time
@@ -66,9 +64,7 @@ const DAGS: Record<string, DAG> = {
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
   "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
-  "threads-post": buildThreadsPostDag(),
   "ai-instant-call": buildAiInstantCallDag(),
-  "email-sending": buildEmailSendingDag(),
   "ai-lead-proposal": buildAiLeadProposalDag(),
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),
