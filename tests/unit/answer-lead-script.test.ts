@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { runScript, validateSource } from "../../src/lib/scripts/sandbox.js";
-import { answerLeadScriptSource, ANSWER_SCHEMA, ANSWER_LEAD_OUTCOME, ANSWER_LEAD_PULL } from "../../src/lib/scripts/answer-lead-script.js";
+import { answerLeadScriptSource, ANSWER_SCHEMA, ANSWER_LEAD_OUTCOME, ANSWER_LEAD_PULL, ANSWER_LEAD_CALL_OUTCOME } from "../../src/lib/scripts/answer-lead-script.js";
 
 // MIGRATE-1105 S1: ONE script answers a lead. The Doc Dinners case of 2026-11-04 (two confirmations from two people),
 // rebuilt with made-up data: the person picks a time we offered; the script books it and sends ONE confirmation, in
@@ -39,7 +39,18 @@ function world(draft: Record<string, unknown>, over: Answers = {}) {
     "lead.followup.record": () => ({ ok: true, data: {} }),
     ...over,
   };
+  const asked: unknown[] = [];
+  const gotten: string[] = [];
   const bridge = async (op: string, args: unknown[]) => {
+    if (op === "ask") {
+      asked.push(args[0]);
+      return { v: null };
+    }
+    if (op === "get") {
+      gotten.push(String(args[0]));
+      const child = answers[`get:${String(args[0])}`];
+      return child ? { v: child({}).data } : { stop: `no Unit recorded for ${String(args[0])}` };
+    }
     if (op !== "vendor") return { stop: `unexpected ${op}` };
     const name = String(args[0]);
     const a = (args[1] ?? {}) as Record<string, unknown>;
@@ -48,7 +59,7 @@ function world(draft: Record<string, unknown>, over: Answers = {}) {
     if (!f) return { stop: `no answer recorded for ${name}` };
     return { v: f(a) };
   };
-  return { calls, bridge };
+  return { calls, bridge, asked, gotten };
 }
 
 const spec = (request: Record<string, unknown>) => ({ subject: "lead-1", brand: "brand-1", day: 0, tactics: {}, request });
@@ -57,7 +68,7 @@ const BOOK = { decision: "write", message: "<p>Friday works.</p>", subject: "", 
 
 describe("the answering script", () => {
   it("is a valid script: transpiles, evaluates, a strict schema", async () => {
-    await expect(validateSource(answerLeadScriptSource())).resolves.toMatchObject({ materials: [] });
+    await expect(validateSource(answerLeadScriptSource())).resolves.toMatchObject({ materials: [ANSWER_LEAD_CALL_OUTCOME] });
     expect(ANSWER_SCHEMA.required).toEqual(Object.keys(ANSWER_SCHEMA.properties));
   });
 
@@ -129,6 +140,29 @@ describe("the answering script", () => {
     });
     expect(await runScript(answerLeadScriptSource(), spec(REQUEST), bridge)).toMatchObject({ kind: "done", result: { content: { channel: "whatsapp" } } });
     expect(calls.find((c) => c.name === "crm.whatsapp.send")!.args).toMatchObject({ body: { messages: ["Hi Josh", "Friday works"], idempotencyKey: "answer-lead:event:ev-1" } });
+  });
+
+  it("a positive reply or a form fill asks the Booking call Engine for the rep call first, then answers as always", async () => {
+    const CALLED = { "get:booking_call": () => ({ ok: true, data: { outcome: "booking_call", content: { end: { success: true } } } }) };
+    for (const sourceTriggerId of ["positive_reply_received", "form_submitted"]) {
+      const w = world(BOOK, CALLED);
+      const request = { ...REQUEST, trigger: { ...REQUEST.trigger, triggerId: "lead_event", sourceTriggerId } };
+      const out = await runScript(answerLeadScriptSource(), spec(request), w.bridge);
+      expect(out).toMatchObject({ kind: "done", result: { content: { decision: "write", booked: SLOT } } });
+      expect(w.gotten).toEqual(["booking_call"]);
+      // The row this run claimed is handed over: the call script claims and stops nothing.
+      expect(w.asked).toEqual([{ units: {}, request: { ...request, claimed: { found: true, followup: { id: "row-1", email: "dr@clinic.test", phone: null, leadId: "lead-1", dueAt: NOW } } } }]);
+      expect(w.calls.filter((c) => c.name === "lead.followup.claim")).toHaveLength(1);
+    }
+    // A campaign whose strategy keeps no call script: the answer goes out all the same.
+    const none = world(BOOK, { "get:booking_call": () => ({ ok: true, data: { outcome: "booking_call", content: null, unmade: "no_script: no live script of that Engine can run on nothing" } }) });
+    const request = { ...REQUEST, trigger: { ...REQUEST.trigger, triggerId: "lead_event", sourceTriggerId: "positive_reply_received" } };
+    expect(await runScript(answerLeadScriptSource(), spec(request), none.bridge)).toMatchObject({ kind: "done", result: { content: { decision: "write" } } });
+    // Any other fact (a visit, a plain reply, a signup) rings nobody.
+    const quiet = world(BOOK);
+    await runScript(answerLeadScriptSource(), spec({ ...REQUEST, trigger: { ...REQUEST.trigger, triggerId: "lead_event", sourceTriggerId: "message_received" } }), quiet.bridge);
+    expect(quiet.asked).toEqual([]);
+    expect(quiet.gotten).toEqual([]);
   });
 
   it("the Lead event Target script asks the Message sent Engine for the answer, with the run's own Request", async () => {

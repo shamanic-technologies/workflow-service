@@ -313,11 +313,14 @@ export async function runStoredScript(
  *
  * The Request: `units` (the child's materials, `{<outcome>: {content, subject?}}`), optional `request` (its
  * `ctx.request`), `tactics`, `subject`, `recordedBy`, `trace` (as `POST /orgs/scripts/run` takes them).
- * No candidate = the asking script stops (named), never a fallback script. A child that does not make a Unit (fails,
- * stops, makes nothing, unmade) stops the asking script with the child's reason; a child cannot wait (no nested waits
+ * No candidate = an answer `unmade: "no_script: ..."` the asking script reads (never a fallback script). A child that
+ * fails or stops stops the asking script with the child's reason (unmade / nothing = an answer); a child cannot wait (no nested waits
  * yet: its `ctx.wait` is refused like a step's). The Unit read back carries `run` = the child's whole result (the
  * `POST /orgs/scripts/run` answer), so a recording service can store and declare it on the child's run.
  */
+/** The code an asked Engine answers when no script of it may run for this campaign. */
+export const NO_SCRIPT = "no_script";
+
 async function provide(
   db: AnyPgDb,
   outcome: string,
@@ -336,7 +339,11 @@ async function provide(
     units[k] = v as MaterialUnit | MaterialUnit[];
   }
   const pick = await pickScript(db, { outcome, servable: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null });
-  if (!pick) return { stop: `ctx.get(${outcome}): no live script of that Engine can run on ${Object.keys(units).join(", ") || "nothing"}` };
+  // No script of that Engine this campaign may run (none live, or its strategy keeps none): an ANSWER the asking script
+  // reads (`unmade: "no_script: ..."`, no content, no child run), never a fallback script and never a stop: the asker
+  // decides (MIGRATE-1105 S1b: the answering script asks for a rep call, and a campaign whose strategy keeps no call
+  // script still gets its answer).
+  if (!pick) return { v: { id: `${parent.runId}:${outcome}:no_script`, outcome, subject: "", ageDays: 0, content: null, unmade: `${NO_SCRIPT}: no live script of that Engine can run on ${Object.keys(units).join(", ") || "nothing"}`, run: null } };
   const headers = { ...parent.headers };
   delete headers["x-workflow-slug"];
   const subject = subjectOf(request.subject);

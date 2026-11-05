@@ -175,6 +175,12 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
         args[f] = rest;
       }
     }
+    // The run the producer files under, stated in the body by the old step: the door fills it with the script's run.
+    const runField = (SERVICE_DOOR_VENDORS[name] as { runIdInBody?: string }).runIdInBody;
+    if (runField && plain(args.body) && runField in args.body) {
+      const { [runField]: _run, ...rest } = args.body;
+      args.body = rest;
+    }
     // Path parameters in the door's names (the old step may have named them otherwise), by position.
     if (plain(args.params)) {
       const doorNames = [...(SERVICE_DOOR_VENDORS[name]!.path.matchAll(/\{(\w+)\}/g))].map((m) => m[1]!);

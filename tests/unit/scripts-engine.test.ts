@@ -114,6 +114,15 @@ describe("script catalogue (dynasties)", () => {
     expect(restored.map((v) => [v.version, v.status, v.dynastyStatus])).toEqual([[2, "active", "active"], [1, "deprecated", "active"]]);
   });
 
+  it("upgrades a RETIRED dynasty into a retired version (never runnable, not even for a moment); restoring brings it back", async () => {
+    await createScript(db, { outcome: "message_written", dynasty: "dy_writer", code: WRITER_V1, description: "x" }, author, deps);
+    await setDynastyStatus(db, "message_written", "dy_writer", "deprecated", "Parked: awaiting the owner's go");
+    const v2 = await upgradeScript(db, "message_written", "dy_writer", { code: WRITER_DIFFERENT }, author);
+    expect([v2.version, v2.status, v2.dynastyStatus, v2.deprecationReason]).toEqual([2, "deprecated", "deprecated", "Parked: awaiting the owner's go"]);
+    const restored = await setDynastyStatus(db, "message_written", "dy_writer", "active", "the go");
+    expect(restored.map((v) => [v.version, v.status, v.dynastyStatus])).toEqual([[2, "active", "active"], [1, "deprecated", "active"]]);
+  });
+
   it("fresh cases re-prove the ACTIVE version; a miss is stored and the runner refuses it until a 100 % version", async () => {
     await putCases(db, "message_written", "dy_port", [CASE], "fictional");
     await createScript(db, { outcome: "message_written", dynasty: "dy_port", code: WRITER_V1, description: "Port" }, author, deps);

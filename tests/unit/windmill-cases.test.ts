@@ -47,6 +47,16 @@ describe("caseFromFlow", () => {
     expect(caseFromFlow({ ...flow, failed: true, error: "boom" }, [])).toMatchObject({ case: { expect: { fails: "boom" } } });
   });
 
+  it("drops the run a recorded body named for its producer: the door fills it with the script's run (S1b)", () => {
+    const steps: RecordedStep[] = [
+      call("ring_rep", "twilio", "POST", "/calls", { body: { to: "+1", parentRunId: "old-flow-run", idempotencyKey: "k" } }, { callId: "c" }),
+      call("end_run", "campaign", "POST", "/end-run", { body: { success: true } }, { status: "completed" }),
+    ];
+    const out = caseFromFlow(flow, steps);
+    if (!("case" in out)) throw new Error(out.excluded);
+    expect(out.case.calls).toEqual([{ name: "twilio.call.place", args: { body: { to: "+1", idempotencyKey: "k" } }, answer: { ok: true, data: { callId: "c" } } }]);
+  });
+
   it("names doors by producer, method and path template; the SQL refuses an unsafe pattern", () => {
     expect(doorFor("lead", "PUT", "/orgs/leads/{id}/followup-date")).toBe("lead.followup_date.set");
     expect(doorFor("lead", "GET", "/orgs/leads/{id}/followup-date")).toBe("lead.followup_date.read");

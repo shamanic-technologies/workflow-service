@@ -25,6 +25,14 @@ import { EMAIL_MEDIUM, WHATSAPP_MEDIUM, localTimeStrategy, nextDateStrategy, rig
 export const ANSWER_LEAD_OUTCOME = "message_sent";
 export const ANSWER_LEAD_DYNASTY = "dy_answer_lead";
 
+/**
+ * The occurrences that ring the brand's sales rep before the answer (MIGRATE-1105 S1b): exactly the triggers the AI
+ * Instant Call campaigns started on (a positive reply, a form fill), read off a Lead event's `sourceTriggerId`.
+ */
+export const ANSWER_LEAD_CALL_ON = ["positive_reply_received", "form_submitted"] as const;
+/** The Engine the call is asked of (its scripts: `scripts/engine-ports/ai-instant-call.ts`), literal in the source. */
+export const ANSWER_LEAD_CALL_OUTCOME = "booking_call";
+
 /** What the writer answers, strict (Anthropic needs every property required, no extra one). */
 export const ANSWER_SCHEMA = {
   type: "object",
@@ -97,6 +105,7 @@ export function answerLeadScriptSource(): string {
     MEDIUM: mediumLines(),
     SCHEMA: ANSWER_SCHEMA,
     MAX_DAYS: MAX_NEXT_FOLLOW_UP_DAYS,
+    CALL_ON: ANSWER_LEAD_CALL_ON,
   };
   return `${SCRIPT_BODY}\nconst K = ${JSON.stringify(consts)};\n`;
 }
@@ -143,6 +152,16 @@ export default function run(ctx) {
     return { unmade: refused ? "person_not_admitted: " + String(refused.reason || refused.code || "refused") : "nobody_due: " + String(claim.reason || "") };
   }
   const row = claim.followup;
+
+  // 1b. THE REP CALL (ported from the AI Instant Call workflow, MIGRATE-1105 S1b): a positive reply or a form fill rings
+  // the brand's sales rep the moment it lands, as the Reply Callback / Form Callback campaigns did, before any answer.
+  // The call is the Booking call Engine's Unit, asked as a child run (picked by the Rating among the scripts this
+  // campaign's strategy keeps; none = "no_script", no call). The person's row stays this run's: handed as claimed, the
+  // call script claims and stops nothing. Whatever it answers, this run goes on to answer the person.
+  if (K.CALL_ON.indexOf(String(trigger.sourceTriggerId || trigger.triggerId || "")) >= 0) {
+    ctx.ask({ units: {}, request: Object.assign({}, req, { claimed: claim }) });
+    ctx.get("booking_call");
+  }
   const email = s(row.email) ? s(row.email).toLowerCase() : named.email;
   const phone = s(row.phone) || named.phone;
   const sendKey = s(trigger.eventId) ? "answer-lead:event:" + trigger.eventId : "answer-lead:" + row.id + ":" + String(row.dueAt);

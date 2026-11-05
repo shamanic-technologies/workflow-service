@@ -90,8 +90,11 @@ export type ServiceDoor =
    * workflow step called it. The call is stated like that step's request: `{params?, query?, body?, omitHeaders?,
    * pollWhile?}`; the answer is the producer's whole one: ok on 2xx (`data` = its body), else ok false with
    * `{error, status, code, body}` so a script reads a named refusal (a 409 `human_took_over`) and decides.
+   * `runIdInBody`: the producer reads the run it files under from a BODY field (twilio's `parentRunId`), not from the
+   * header: the door fills that field with the script's run (a script never knows its run id), and a recorded request
+   * is compared without it (windmill-cases.ts).
    */
-  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true };
+  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true; runIdInBody?: string };
 
 export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // email_found (apollo-service): one verifier call -> {verificationId, verifier, verdict, error}; BounceVerify asked now.
@@ -154,7 +157,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "chat.copilot.lead_turn": { service: "chat", method: "POST", path: "/internal/copilot/lead-turns", asRun: true },
   "apollo.phone.reveal": { service: "apollo", method: "POST", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
   "apollo.phone.read": { service: "apollo", method: "GET", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
-  "twilio.call.place": { service: "twilio", method: "POST", path: "/calls", asRun: true },
+  "twilio.call.place": { service: "twilio", method: "POST", path: "/calls", asRun: true, runIdInBody: "parentRunId" },
   // The cold email (MIGRATE-1105 S2): what the old cold email steps called, each the producer's own route, as the run.
   // The brand's extracted facts, the template's live head (the writer pick is `features.writer_pick` above),
   // the writer's materials, then the email stored (content-generation declares message_written) before `email.send`.
@@ -370,6 +373,10 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
     if (args.body !== undefined && !plainRecord(args.body)) return refuse(`${name}: body is an object`);
     body = (args.body as Record<string, unknown> | undefined) ?? {};
   } else if (args.body !== undefined) return refuse(`${name} is a read: it takes no body`);
+  if (door.runIdInBody && body) {
+    if (door.runIdInBody in body) return refuse(`${name}: ${door.runIdInBody} is the script's run, filled by the door`);
+    body = { ...body, [door.runIdInBody]: ctx.headers["x-run-id"] };
+  }
   const headers = { ...ctx.headers };
   if (args.omitHeaders !== undefined) {
     if (!Array.isArray(args.omitHeaders) || args.omitHeaders.some((h) => typeof h !== "string")) return refuse(`${name}: omitHeaders is a list of header names`);
