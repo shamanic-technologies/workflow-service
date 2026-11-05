@@ -17,8 +17,12 @@ import { WHY_NOW_STRATEGY } from "../occurrence-fact.js";
 import { PERSON_RELATIONSHIP_STRATEGY } from "../person-relationship.js";
 import { EMAIL_MEDIUM, WHATSAPP_MEDIUM, localTimeStrategy, nextDateStrategy, rightMomentStrategy, MAX_NEXT_FOLLOW_UP_DAYS } from "../right-moment.js";
 
-/** The Engine the Lead event campaigns reach (leg Start -> Paid client) and the dynasty of this script. */
-export const ANSWER_LEAD_OUTCOME = "paid_client";
+/**
+ * The Unit this script makes: a message we sent one person (each follow-up one more; a booking is its own
+ * `meeting_booked` Unit, declared by the door that books). Reached from a Lead event campaign's Target (Paid client)
+ * through the Plan, never by moving the campaign's leg (owner's call).
+ */
+export const ANSWER_LEAD_OUTCOME = "message_sent";
 export const ANSWER_LEAD_DYNASTY = "dy_answer_lead";
 
 /** What the writer answers, strict (Anthropic needs every property required, no extra one). */
@@ -63,6 +67,28 @@ export function mediumLines(): { email: string[]; whatsapp: string[] } {
     whatsapp: [rightMomentStrategy(WHATSAPP_MEDIUM), nextDateStrategy(WHATSAPP_MEDIUM), localTimeStrategy(WHATSAPP_MEDIUM)],
   };
 }
+
+/**
+ * The Lead event campaign's TARGET script (`paid_client`): it makes no paid client itself, it asks the Message sent
+ * Engine for the one answer this occurrence is owed (S2's Provider: `ctx.ask` then `ctx.get`, run as a child, picked
+ * by the same Rating) and records nothing (`recorded_by`: the payment is lead-service's fact). Its Request is the
+ * run's own (the occurrence, the clock, the campaign), so the child reads exactly what this run was handed.
+ */
+export const ANSWER_LEAD_PULL = {
+  outcome: "paid_client",
+  dynasty: "dy_answer_lead_pull",
+  tactics: { asks: [ANSWER_LEAD_OUTCOME], channel: "ai-follow-up-email", recorded_by: "lead" },
+  description: "Gets the lead who just did something their one answer: asks the Message sent Engine for it and records nothing itself (the payment is the lead's own fact).",
+  source: String.raw`
+export default function run(ctx) {
+  if (!ctx.request || !ctx.request.trigger) return { unmade: "no_occurrence" };
+  ctx.ask({ units: {}, request: ctx.request, recordedBy: "sender" });
+  const answer = ctx.get("message_sent");
+  if (answer && typeof answer.unmade === "string") return { unmade: answer.unmade };
+  return { content: { answered: answer.content } };
+}
+`,
+} as const;
 
 /** The stored script's source. Plain JavaScript (sync vendor calls); every constant is injected as JSON. */
 export function answerLeadScriptSource(): string {

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
-import { engineState, pickScript, sampleBeta, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { engineState, pickScript, sampleBeta, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
 import { endRunBodyOf, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../../src/lib/scripts/engine-runner.js";
 import { reserveCampaignExecution } from "../../src/lib/execution-admission.js";
 import { engineWaits, scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
@@ -45,6 +45,8 @@ const ORG = "org-1";
 let db: AnyPgDb;
 beforeEach(async () => {
   db = await freshDb();
+  // The campaign's strategy keeps every script of the Engine (features-service's answer with no strategy).
+  setScriptStrategyReader(async (_campaignId, outcome) => (await db.select().from(scripts).where(eq(scripts.outcome, outcome))).map((r) => r.dynasty));
 }, 60_000);
 
 function world(serve: Record<string, unknown> = { found: true, lead: { leadId: "lead-9", email: "a@staff.test" } }) {
