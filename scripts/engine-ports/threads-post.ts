@@ -30,7 +30,7 @@ import {
   PLAN_RUN_CODE,
   THREADS_ANGLES_LLM,
   THREADS_POST_FEATURE_SLUG,
-} from "../../src/lib/threads-post-dag.js";
+} from "./threads-post-steps.js";
 import { GATHER_CLIENT_FACTS_CODE } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { THREAD_WRITER_PLAN_CODE } from "../../src/lib/whatsapp-template-writer.js";
 import { BRIEF_HEADER } from "../../src/lib/campaign-brief.js";
