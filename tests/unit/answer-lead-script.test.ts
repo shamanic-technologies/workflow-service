@@ -113,6 +113,14 @@ describe("the answering script", () => {
     expect((await runScript(answerLeadScriptSource(), spec({ ...REQUEST, now: undefined }), idle.bridge)).kind).toBe("error");
   });
 
+  it("a person crm holds no thread for (404) is answered with no thread; any other read failure stops the run", async () => {
+    const none = world(BOOK, { "crm.person.thread": () => ({ ok: false, data: { status: 404, error: "no person" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), none.bridge)).toMatchObject({ kind: "done" });
+    const down = world(BOOK, { "crm.person.thread": () => ({ ok: false, data: { status: 502, error: "down" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), down.bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("crm.person.thread failed") });
+    expect(down.calls.some((c) => c.name === "llm.complete")).toBe(false);
+  });
+
   it("answers on WhatsApp when that is where they wrote last, in bubbles", async () => {
     const { calls, bridge } = world({ ...BOOK, bookSlot: "", bookedMessage: "", message: "Hi Josh\n\nFriday works" }, {
       "crm.person.thread": () => ({ ok: true, data: { items: [{ at: "2026-11-04T13:54:00Z", kind: "message", direction: "inbound", channel: "whatsapp", text: "ok" }] } }),

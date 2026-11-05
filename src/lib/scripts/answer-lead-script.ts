@@ -137,8 +137,10 @@ export default function run(ctx) {
   // 3. READ everything the writer needs.
   const lead = (must("lead.detail", { params: { id: row.id }, query: { campaignId: campaignId } }).leadDetail || {}).lead || {};
   const personKey = email ? "email:" + email : "phone:+" + String(phone || "").replace(/\D/g, "");
-  const thread = must("crm.person.thread", { query: { brandId: brandId, personKey: personKey }, pollWhile: { field: "factFeed.settled", equals: false, intervalSeconds: 10, timeoutSeconds: 180, throwWhenTimedOut: true } });
-  const items = Array.isArray(thread.items) ? thread.items : [];
+  // A person crm-service holds no thread for (404) has none yet; any other failure stops the run (never written blind).
+  const threadRead = door("crm.person.thread", { query: { brandId: brandId, personKey: personKey }, pollWhile: { field: "factFeed.settled", equals: false, intervalSeconds: 10, timeoutSeconds: 180, throwWhenTimedOut: true } });
+  if (!threadRead.ok && threadRead.data.status !== 404) throw new Error("crm.person.thread failed: " + String(threadRead.data.error));
+  const items = threadRead.ok && Array.isArray(threadRead.data.items) ? threadRead.data.items : [];
   const conversation = email ? door("instantly.conversation", { query: { email: email } }) : { ok: false, data: {} };
   const threads = conversation.ok && conversation.data.conversation && Array.isArray(conversation.data.conversation.threads) ? conversation.data.conversation.threads : [];
   const brand = (must("brand.profile", { params: { id: brandId } }).brand) || {};
