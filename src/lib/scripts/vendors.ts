@@ -162,6 +162,16 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "content.template_head": { service: "content-generation", method: "GET", path: "/internal/template-dynasties/{slug}/head", asRun: true },
   "content.materials": { service: "content-generation", method: "POST", path: "/generate/materials", asRun: true },
   "content.generate": { service: "content-generation", method: "POST", path: "/generate", asRun: true },
+  // Threads posts, the founder hello, pushed emails and the hot-lead proposal (MIGRATE-1105 S4): what their old
+  // steps called, each the producer's own org route.
+  "meta.threads.accounts": { service: "meta", method: "GET", path: "/orgs/threads/accounts", asRun: true },
+  "meta.threads.publications": { service: "meta", method: "GET", path: "/orgs/threads/publications", asRun: true },
+  "meta.threads.publish": { service: "meta", method: "POST", path: "/orgs/threads/accounts/{id}/posts", asRun: true },
+  "scraping.site.map": { service: "scraping", method: "POST", path: "/map", asRun: true },
+  "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
+  "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
+  "crm.people.list": { service: "crm", method: "GET", path: "/orgs/people", asRun: true },
+  "chat.copilot.proactive_turn": { service: "chat", method: "POST", path: "/internal/copilot/proactive-turns", asRun: true },
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";

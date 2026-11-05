@@ -15,7 +15,6 @@ const { answerLeadScriptSource, ANSWER_LEAD_OUTCOME, ANSWER_LEAD_DYNASTY } = awa
 const STAFF_ORG = "06ffd332-b05d-4468-bc33-fe2789caad95"; // STAFF TEST - Email Sending E2E
 const STAFF_USER = "cfe148ed-e3d8-40a2-8920-f8c040a81934";
 const TACTICS = {
-  llm: { provider: "anthropic", model: "opus" },
   // The Lead event campaigns run on this feature: the Rating keeps the script for them only.
   channel: "ai-follow-up-email",
   relationships: "pure_prospect",

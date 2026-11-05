@@ -200,8 +200,9 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
             }
           : { outcome: plan.script.outcome, dynasty: plan.script.dynasty, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units };
       const recordedBy = (plan.script.tactics as Record<string, unknown>)?.recorded_by;
-      // `now`: the run's clock, stated once (a script never reads Date.now(), so a replay of the run is the run).
-      input.request = { ...start, trigger: trigger ?? null, now: new Date().toISOString() };
+      // `now`: the run's clock, stated once (a script never reads Date.now(), so a replay of the run is the run); the
+      // campaign the run is for rides the Request too (a script's door call names it: the writer pick, the send).
+      input.request = { campaignId: d.campaignId, ...start, trigger: trigger ?? null, now: new Date().toISOString() };
       if (typeof recordedBy === "string" && recordedBy) input.recordedBy = recordedBy;
       const vendorHeaders: Record<string, string> = { ...headers, ...(audienceId ? { "x-audience-id": audienceId } : {}) };
       delete vendorHeaders["x-engine-outcome"];
