@@ -75,6 +75,12 @@ export interface LedgerDeps {
   createRun(opts: { parentRunId: string; orgId: string; userId: string; taskName: string; headers: Record<string, string> }): Promise<string>;
   declareOutcomes(runId: string, orgId: string, body: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] }): Promise<Record<string, unknown>>;
   closeRun(runId: string, status: "completed" | "failed", orgId: string): Promise<void>;
+  /**
+   * LEDGER-HISTORY-1024: a run that by design produces no outcome states which support function it served (runs-service
+   * owner door), so its spend reads support instead of undeclared. Optional: only an Engine run whose script states
+   * tactic `support` asks it.
+   */
+  markSupport?(runId: string, mark: { kind: string; reason: string; markedBy: string }): Promise<void>;
 }
 
 export interface OccurrenceInput {
@@ -457,6 +463,16 @@ export function productionLedgerDeps(): LedgerDeps {
         signal: AbortSignal.timeout(600_000),
       });
       if (!res.ok) throw new Error(`runs-service PATCH /v1/runs/${runId} -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    },
+    async markSupport(runId, mark) {
+      need();
+      const res = await fetch(`${base}/v1/platform-runs/support-marks/apply`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, "x-service-name": "workflow" },
+        body: JSON.stringify({ ...mark, runIds: [runId] }),
+        signal: AbortSignal.timeout(600_000),
+      });
+      if (!res.ok) throw new Error(`runs-service POST /v1/platform-runs/support-marks/apply -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
     },
   };
 }

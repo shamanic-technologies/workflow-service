@@ -153,6 +153,26 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
   return out;
 }
 
+/**
+ * Whether ANY live script of the Engine can run for a campaign of `channel` (its tactic `channel` is that one, or it
+ * states none), whatever materials a run holds. An Engine switched on for an org takes every campaign of that org
+ * whose leg reaches the outcome; a campaign no script of the Engine serves is not the Engine's yet: it keeps its
+ * workflow (`engine_not_live`) instead of ending idle forever (MIGRATE-1105 S4: one org runs campaigns of several
+ * channels on one outcome, migrated one at a time).
+ */
+export async function servesChannel(db: AnyPgDb, outcome: string, channel: string | null): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(scripts)
+    .where(and(eq(scripts.outcome, outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+  for (const row of rows) {
+    const stated = (row.tactics as Record<string, unknown>)?.channel;
+    if (typeof stated === "string" && stated !== channel) continue;
+    if ((await provenness(db, row)).runnable) return true;
+  }
+  return false;
+}
+
 /** The Rating's pick for one run (null: no script of this Engine can run on what this run holds). */
 export async function pickScript(db: AnyPgDb, input: PickInput, random: () => number = Math.random): Promise<Pick | null> {
   const candidates = await candidatesOf(db, input);
