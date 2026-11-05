@@ -162,7 +162,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const skipWrite = composed.skip === true;
   const pick = skipWrite ? NOT_CALLED : must(ctx, "features.writer_pick", { query: { campaignId } });
   const writer = writerPlan(pick, skipWrite);
-  const head = skipWrite ? NOT_CALLED : must(ctx, "content.template.head", { params: { slug: writer.templateDynastySlug } });
+  const head = skipWrite ? NOT_CALLED : must(ctx, "content.template_head", { params: { slug: writer.templateDynastySlug } });
   const draft = skipWrite
     ? NOT_CALLED
     : must(ctx, "content.whatsapp.generate", {

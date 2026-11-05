@@ -30,6 +30,7 @@ function world(draft: Record<string, unknown>, over: Answers = {}) {
     "brand.offer.fields": () => ({ ok: true, data: { fields: { urgency: { value: "One clinic per area", provenance: "confirmed" }, neverGive: { value: null, provenance: "suggested" } } } }),
     "voice.read": () => ({ ok: true, data: { content: "OUR VOICE", version: 1 } }),
     "booking.slots": () => ({ ok: true, data: { timezone: "America/Chicago", slots: ["2026-11-05T12:00:00-06:00", SLOT], calendarId: "cal-1" } }),
+    "features.writer_pick": () => ({ ok: true, data: { llm: { provider: "anthropic", model: "opus" } } }),
     "llm.complete": () => ({ ok: true, data: { json: draft } }),
     "crm.meeting.book": () => ({ ok: true, data: { status: "booked" } }),
     "instantly.reply.send": () => ({ ok: true, data: { status: "sent" } }),
@@ -71,6 +72,8 @@ describe("the answering script", () => {
     expect(calls.find((c) => c.name === "lead.followup_date.set")!.args).toMatchObject({ body: { nextFollowupAt: "2026-11-05T15:00:00Z", sent: { channel: "email" } } });
     expect(calls.find((c) => c.name === "lead.followup.record")!.args).toEqual({ params: { id: "row-1" }, body: { kind: "stopped", reason: "booking_confirmed" } });
     const llm = calls.find((c) => c.name === "llm.complete")!.args;
+    expect(llm).toMatchObject({ provider: "anthropic", model: "opus" });
+    expect(calls.find((c) => c.name === "features.writer_pick")!.args).toEqual({ query: { campaignId: "camp-lead-event" } });
     expect(String(llm.systemPrompt)).toMatch(/^OUR VOICE/);
     expect(String(llm.message)).toContain("(not answered by our client yet)");
     expect(String(llm.message)).not.toContain("PLACEHOLDER");
@@ -93,6 +96,12 @@ describe("the answering script", () => {
     expect(alert).toHaveLength(1);
     expect(alert[0]!.args).toMatchObject({ body: { phone: "+15550001111" }, omitHeaders: ["x-campaign-id"] });
     expect(esc.calls.some((c) => c.name === "instantly.reply.send")).toBe(false);
+  });
+
+  it("no writer picked for the campaign = nothing written, the run fails loud (never a default model)", async () => {
+    const { calls, bridge } = world(BOOK, { "features.writer_pick": () => ({ ok: true, data: { llm: null, llmUnavailableReason: "writer_ranking_not_computed_yet" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("writer_ranking_not_computed_yet") });
+    expect(calls.some((c) => c.name === "llm.complete" || c.name === "instantly.reply.send")).toBe(false);
   });
 
   it("their own stop ends it; a run with no occurrence or no clock does nothing", async () => {

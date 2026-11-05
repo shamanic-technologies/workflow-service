@@ -64,7 +64,7 @@ for (const r of rows) {
     }
     if (name === "llm.complete") {
       try {
-        llm = await chatServicePlatformComplete({ ...callArgs, provider: "anthropic", model: "opus" }, { support: { kind: "staff_experiment", reason: "MIGRATE-1105 S1 before/after of the answering script" } });
+        llm = await chatServicePlatformComplete(callArgs, { support: { kind: "staff_experiment", reason: "MIGRATE-1105 S1 before/after of the answering script" } });
       } catch (e) {
         return { v: { ok: false, data: { error: String(e).slice(0, 300) } } };
       }

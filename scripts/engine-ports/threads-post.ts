@@ -108,7 +108,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const write = composeWrite(p, turn, brand, facts, angles, ownFigures);
   const writerPick = must(ctx, "features.writer_pick", { query: { campaignId } });
   const writer = writerPlan(writerPick, undefined);
-  const head = must(ctx, "content.template.head", { params: { slug: writer.templateDynastySlug } });
+  const head = must(ctx, "content.template_head", { params: { slug: writer.templateDynastySlug } });
   const draft = must(ctx, "content.thread.generate", {
     body: {
       featureSlug: FEATURE,

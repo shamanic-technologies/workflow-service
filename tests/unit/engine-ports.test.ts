@@ -54,7 +54,7 @@ describe("the Threads post port", () => {
         { name: "llm.complete", answer: ok({ content: "angle" }) },
         { name: "scraping.site.map", answer: { ok: false, data: { error: "down", status: 502 } } },
         { name: "features.writer_pick", args: { query: { campaignId: "camp-1" } }, answer: ok({ legKey: "start_to_post_published", template: { templateDynastySlug: "tpl" }, llm: { model: "sonnet", provider: "anthropic" } }) },
-        { name: "content.template.head", args: { params: { slug: "tpl" } }, answer: ok({ template: { type: "threads-v3" } }) },
+        { name: "content.template_head", args: { params: { slug: "tpl" } }, answer: ok({ template: { type: "threads-v3" } }) },
         { name: "content.thread.generate", answer: ok({ subject: "s", post: "Main — post", replies: ["one", "two"] }) },
         { name: "meta.threads.publish", args: { params: { id: "acc-1" }, body: { text: "Main, post", idempotencyKey: `threads-post:camp-1:${now}:main` } }, answer: ok({ postId: "p0" }) },
         { name: "meta.threads.publish", args: { params: { id: "acc-1" }, body: { text: "one", replyToPostId: "p0", idempotencyKey: `threads-post:camp-1:${now}:reply-1` } }, answer: ok({ postId: "p1" }) },
@@ -214,7 +214,7 @@ describe("the founder hello port", () => {
         },
         { name: "crm.team.membership", args: { body: { brandId: "replay", email: "bob@client.test" } }, answer: ok({ staff: false, ownTeam: false }) },
         { name: "features.writer_pick", args: { query: { campaignId: "camp-1" } }, answer: ok({ legKey: "start_to_conversation", template: { templateDynastySlug: "founder-hello-whatsapp" }, llm: { model: "glm", provider: "zai" } }) },
-        { name: "content.template.head", args: { params: { slug: "founder-hello-whatsapp" } }, answer: ok({ template: { type: "founder-hello-whatsapp-v6" } }) },
+        { name: "content.template_head", args: { params: { slug: "founder-hello-whatsapp" } }, answer: ok({ template: { type: "founder-hello-whatsapp-v6" } }) },
         { name: "content.whatsapp.generate", answer: ok({ json: { decision: "write", message: "Hi Ana — Kevin from Acme\n\nSaw your campaign to founders\n[[ASSISTANT]]\nHi Ana, Sophie here" } }) },
         {
           name: "crm.whatsapp.send",
