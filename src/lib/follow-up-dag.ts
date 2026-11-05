@@ -1066,7 +1066,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
             config: { service: "workflow", method: "POST", path: "/orgs/figures/read" },
             retries: 2,
             inputMapping: {
-              "body.question": "$ref:start-run.output.instruction",
+              "body.question": "$ref:start-run.output.brief",
               "body.recipientEmail": "$ref:channel-plan.output.email",
               skip: "$ref:figures-plan.output.skip",
             },
@@ -1106,7 +1106,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
         facts: "$ref:gather-facts.output",
         history: "$ref:person-history.output",
         ...(opts.readFigures ? { figures: "$ref:read-figures.output" } : {}),
-        instruction: "$ref:start-run.output.instruction",
+        instruction: "$ref:start-run.output.brief",
         ...(opts.reactive
           ? { occurrence: "$ref:occurrence.output", triggerType: "$ref:trigger-type.output", trigger: "$ref:flow_input.trigger" }
           : {}),

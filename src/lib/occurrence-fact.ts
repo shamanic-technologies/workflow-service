@@ -52,7 +52,7 @@ export const occurrencePlanNode = (): DAGNode => ({
   retries: 0,
   inputMapping: {
     trigger: "$ref:flow_input.trigger",
-    instruction: "$ref:start-run.output.instruction",
+    instruction: "$ref:start-run.output.brief",
     reactive: "$ref:start-run.output.reactive",
   },
 });
