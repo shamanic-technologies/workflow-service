@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { runScript, validateSource } from "../../src/lib/scripts/sandbox.js";
-import { answerLeadScriptSource, ANSWER_SCHEMA } from "../../src/lib/scripts/answer-lead-script.js";
+import { answerLeadScriptSource, ANSWER_SCHEMA, ANSWER_LEAD_OUTCOME, ANSWER_LEAD_PULL } from "../../src/lib/scripts/answer-lead-script.js";
 
 // MIGRATE-1105 S1: ONE script answers a lead. The Doc Dinners case of 2026-11-04 (two confirmations from two people),
 // rebuilt with made-up data: the person picks a time we offered; the script books it and sends ONE confirmation, in
@@ -129,5 +129,23 @@ describe("the answering script", () => {
     });
     expect(await runScript(answerLeadScriptSource(), spec(REQUEST), bridge)).toMatchObject({ kind: "done", result: { content: { channel: "whatsapp" } } });
     expect(calls.find((c) => c.name === "crm.whatsapp.send")!.args).toMatchObject({ body: { messages: ["Hi Josh", "Friday works"], idempotencyKey: "answer-lead:event:ev-1" } });
+  });
+
+  it("the Lead event Target script asks the Message sent Engine for the answer, with the run's own Request", async () => {
+    expect(ANSWER_LEAD_OUTCOME).toBe("message_sent");
+    await expect(validateSource(ANSWER_LEAD_PULL.source)).resolves.toMatchObject({ materials: ["message_sent"] });
+    expect(ANSWER_LEAD_PULL.tactics.asks).toEqual(["message_sent"]);
+    const seen: Array<[string, unknown]> = [];
+    const bridge = (child: unknown) => async (op: string, args: unknown[]) => {
+      seen.push([op, args[0]]);
+      if (op === "ask") return { v: null };
+      if (op === "get") return { v: child };
+      return { stop: op };
+    };
+    const made = await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ content: { decision: "write" } }));
+    expect(made).toEqual({ kind: "done", result: { content: { answered: { decision: "write" } } } });
+    expect(seen[0]).toEqual(["ask", { units: {}, request: REQUEST, recordedBy: "sender" }]);
+    expect(await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ unmade: "later: tomorrow" }))).toEqual({ kind: "done", result: { unmade: "later: tomorrow" } });
+    expect(await runScript(ANSWER_LEAD_PULL.source, spec({ ...REQUEST, trigger: null }), bridge({}))).toEqual({ kind: "done", result: { unmade: "no_occurrence" } });
   });
 });
