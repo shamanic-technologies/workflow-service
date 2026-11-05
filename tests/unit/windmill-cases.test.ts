@@ -44,6 +44,7 @@ describe("caseFromFlow", () => {
     expect(caseFromFlow(flow, [call("x", "billing", "POST", "/charge", {}, {})])).toEqual({ excluded: "calls billing POST /charge, which no door serves" });
     expect(caseFromFlow(flow, [call("x", "lead", "GET", "/orgs/leads/{id}", {}, null, null as unknown as string)])).toEqual({ excluded: "a step still running when it was read" });
     expect(caseFromFlow(flow, [])).toEqual({ excluded: "the run states no end" });
+    expect(caseFromFlow(flow, [call("x", "content-generation", "POST", "/generate/materials", { body: { instruction: "old" } }, {})])).toEqual({ excluded: "recorded under the retired campaign `instruction` (ONE-BRIEF-1105)" });
     expect(caseFromFlow({ ...flow, failed: true, error: "boom" }, [])).toMatchObject({ case: { expect: { fails: "boom" } } });
   });
 

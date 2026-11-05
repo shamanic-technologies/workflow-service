@@ -194,6 +194,8 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
       calls.push({ name, args, answer: thrownAnswer() });
       break;
     }
+    // A run recorded before ONE-BRIEF-1105 named the campaign's text `instruction`: its request is not today's.
+    if (plain(args.body) && "instruction" in args.body) return { excluded: "recorded under the retired campaign `instruction` (ONE-BRIEF-1105)" };
     const r = plain(result) ? result : {};
     const tolerated = r.ok === false && !("skipped" in r && r.notCalled === true) && typeof r.status === "number";
     calls.push({ name, args, answer: tolerated ? failedAnswer(r) : { ok: true, data: r } });
