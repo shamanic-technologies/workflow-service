@@ -151,7 +151,9 @@ describe("the answering script", () => {
       expect(out).toMatchObject({ kind: "done", result: { content: { decision: "write", booked: SLOT } } });
       expect(w.gotten).toEqual(["booking_call"]);
       // The row this run claimed is handed over: the call script claims and stops nothing.
-      expect(w.asked).toEqual([{ units: {}, request: { ...request, claimed: { found: true, followup: { id: "row-1", email: "dr@clinic.test", phone: null, leadId: "lead-1", dueAt: NOW } } } }]);
+      // The occurrence is handed as the Unit the call consumes (a reply = conversation, a form = form_submitted).
+      const consumes = sourceTriggerId === "form_submitted" ? "form_submitted" : "conversation";
+      expect(w.asked).toEqual([{ units: { [consumes]: { content: request.trigger, subject: { service: "lead-service", id: "lead-1" } } }, request: { ...request, claimed: { found: true, followup: { id: "row-1", email: "dr@clinic.test", phone: null, leadId: "lead-1", dueAt: NOW } } } }]);
       expect(w.calls.filter((c) => c.name === "lead.followup.claim")).toHaveLength(1);
     }
     // A campaign whose strategy keeps no call script: the answer goes out all the same.

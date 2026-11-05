@@ -1,3 +1,4 @@
+import { buildAiInstantCallSource } from "../../scripts/engine-ports/ai-instant-call.js";
 import { describe, it, expect, beforeEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -158,6 +159,45 @@ export default function run(ctx) {
   const b = ctx.get("brand_context");
   return { content: { subject: "Hello from " + b.content.name } };
 }`;
+
+// MIGRATE-1105 S1b: the rep call, asked by the answering script, consumes the occurrence it was handed (as the old
+// AI Instant Call workflow declared it: produced booking_call, consumed the positive reply / form fill, on the lead).
+const CALL_ASKER = `
+export default function run(ctx) {
+  const t = ctx.request.trigger;
+  ctx.ask({ units: { conversation: { content: t, subject: { service: "lead-service", id: t.leadId } } }, request: Object.assign({}, ctx.request, { campaignId: "camp-1", claimed: { found: true, followup: { id: "row-9", email: "a@staff.test", leadId: t.leadId, brandId: "brand-1" } } }) });
+  const call = ctx.get("booking_call");
+  return { unmade: "answered after the call: " + String(call.unmade || "rung") };
+}`;
+
+describe("an asked run consumes what the asking script handed it (MIGRATE-1105 S1b)", () => {
+  const trigger = { eventId: "ev-9", leadId: "lead-9", person: { email: "a@staff.test" }, item: { channel: "email", replyText: "Yes" } };
+  const serve = (rep: string | null) => ({ leadDetail: { lead: { firstName: "Ana" } }, brand: { name: "Reed" }, salesRepPhone: rep, callId: "call-1" });
+
+  it("the rep call declares produced booking_call AND consumed the handed reply, on the lead (the old run's two rows)", async () => {
+    await addScript("conversation", "dy_answer", CALL_ASKER, { asks: ["booking_call"] });
+    await addScript("booking_call", "dy_ring_rep", buildAiInstantCallSource());
+    const w = world(serve("+15550001111"));
+    await runOnce(dispatch({ outcome: "conversation", inputs: { trigger } }), w);
+    const child = (await db.select().from(scriptRuns)).find((r) => r.status === "made")!;
+    expect(w.doors.map((d) => d.path)).toContain("/calls");
+    expect(w.declared.find((d) => d.runId === child.runId)!.body).toEqual({
+      produced: [{ outcomeKey: "booking_call", subjectService: "lead-service", subjectId: "lead-9" }],
+      consumed: [{ outcomeKey: "conversation", subjectService: "lead-service", subjectId: "lead-9" }],
+    });
+  });
+
+  it("a call refused (no rep phone) still consumed the reply it acted on; nothing produced", async () => {
+    await addScript("conversation", "dy_answer", CALL_ASKER, { asks: ["booking_call"] });
+    await addScript("booking_call", "dy_ring_rep", buildAiInstantCallSource());
+    const w = world(serve(null));
+    await runOnce(dispatch({ outcome: "conversation", inputs: { trigger } }), w);
+    const child = (await db.select().from(scriptRuns)).find((r) => r.error?.startsWith("no_sales_rep_phone"))!;
+    expect(child.status).toBe("unmade");
+    expect(w.doors.map((d) => d.path)).not.toContain("/calls");
+    expect(w.declared.find((d) => d.runId === child.runId)!.body).toEqual({ produced: [], consumed: [{ outcomeKey: "conversation", subjectService: "lead-service", subjectId: "lead-9" }] });
+  });
+});
 
 describe("a script asks another Engine for a Unit (MIGRATE-1105 S2)", () => {
   it("runs the asked Engine's pick as a child run of the asking run and hands its Unit back", async () => {
