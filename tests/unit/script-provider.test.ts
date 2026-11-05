@@ -221,3 +221,13 @@ describe("a script asks another Engine for a Unit (MIGRATE-1105 S2)", () => {
     expect(w.closed.find((c) => c.runId === childRow.runId)?.status).toBe("failed");
   });
 });
+
+describe("a port replays with its own tactics (MIGRATE-1105 S2)", () => {
+  it("merges the version's tactics under each case's, as a live run does", async () => {
+    const code = `export default function run(ctx) { const r = ctx.vendor.call("lead.serve", ctx.tactics.serve); return { content: { found: r.data.found } }; }`;
+    await putCases(db, "lead_found", "dy_t", [{ id: "c1", units: {}, calls: [{ name: "lead.serve", args: { relationships: "business_only" }, answer: { ok: true, data: { found: true } } }], expect: { content: { found: true } } }], "test");
+    await expect(createScript(db, { outcome: "lead_found", dynasty: "dy_t", code, description: "x" }, author, known)).rejects.toThrow(/replay|matches 0/);
+    const row = await createScript(db, { outcome: "lead_found", dynasty: "dy_t", code, description: "x", tactics: { serve: { relationships: "business_only" } } }, author, known);
+    expect(row.replay).toEqual({ cases: 1, matches: 1 });
+  });
+});

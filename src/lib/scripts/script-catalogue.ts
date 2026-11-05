@@ -111,11 +111,14 @@ export async function caseCount(db: AnyPgDb, outcome: string, dynasty: string): 
   return Number(row?.n ?? 0);
 }
 
-/** Replay a code on its dynasty's cases; null when the dynasty carries none (a new idea). */
-export async function proveOnCases(db: AnyPgDb, outcome: string, dynasty: string, code: string): Promise<ReplaySummary | null> {
+/**
+ * Replay a code on its dynasty's cases; null when the dynasty carries none (a new idea). `tactics` = the version's own,
+ * under each case's (a live run reads `{...script tactics, ...the run's}`, so the replay does too).
+ */
+export async function proveOnCases(db: AnyPgDb, outcome: string, dynasty: string, code: string, tactics: Record<string, unknown> = {}): Promise<ReplaySummary | null> {
   const cases = await loadCases(db, outcome, dynasty);
   if (cases.length === 0) return null;
-  return replayAll(code, cases);
+  return replayAll(code, Object.keys(tactics).length === 0 ? cases : cases.map((c) => ({ ...c, tactics: { ...tactics, ...(c.tactics ?? {}) } })));
 }
 
 /** A failure report trimmed for a response: case ids and the first differences, never a case body. */
@@ -127,8 +130,8 @@ function failureDetails(summary: ReplaySummary) {
   };
 }
 
-async function requireProven(db: AnyPgDb, outcome: string, dynasty: string, code: string): Promise<{ cases: number; matches: number } | null> {
-  const summary = await proveOnCases(db, outcome, dynasty, code);
+async function requireProven(db: AnyPgDb, outcome: string, dynasty: string, code: string, tactics: Record<string, unknown> = {}): Promise<{ cases: number; matches: number } | null> {
+  const summary = await proveOnCases(db, outcome, dynasty, code, tactics);
   if (summary === null) return null;
   if (summary.matches !== summary.cases) {
     throw new ScriptCatalogueError(
@@ -194,7 +197,7 @@ export async function createScript(db: AnyPgDb, input: CreateInput, author: Auth
     .limit(1);
   if (taken) throw new ScriptCatalogueError(409, "dynasty_exists", `${input.outcome}/${input.dynasty} exists: upgrade it, or fork it under a new dynasty name`);
   const read = await readSource(input.code);
-  const replay = await requireProven(db, input.outcome, input.dynasty, input.code);
+  const replay = await requireProven(db, input.outcome, input.dynasty, input.code, input.tactics ?? {});
   const [row] = await db
     .insert(scripts)
     .values({
@@ -233,7 +236,7 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
     throw new ScriptCatalogueError(400, "no_change", "the code is the active version's, byte for byte: nothing to upgrade");
   }
   const read = await readSource(input.code);
-  const replay = await requireProven(db, outcome, dynasty, input.code);
+  const replay = await requireProven(db, outcome, dynasty, input.code, input.tactics ?? (current.tactics as Record<string, unknown>) ?? {});
   return db.transaction(async (tx) => {
     await tx
       .update(scripts)
@@ -297,7 +300,7 @@ export async function forkScript(db: AnyPgDb, outcome: string, sourceDynasty: st
       createdFromScript: source.id,
       orgId: author.orgId,
       createdBy: author.createdBy,
-      replay: await requireProven(db, outcome, input.dynasty, code),
+      replay: await requireProven(db, outcome, input.dynasty, code, input.tactics ?? (source.tactics as Record<string, unknown>) ?? {}),
     })
     .returning();
   return row!;
@@ -350,7 +353,7 @@ export async function putCases(db: AnyPgDb, outcome: string, dynasty: string, ca
 export async function reproveActive(db: AnyPgDb, outcome: string, dynasty: string): Promise<{ scriptSlug: string; cases: number; matches: number } | null> {
   const active = await activeVersion(db, outcome, dynasty);
   if (!active) return null;
-  const summary = await proveOnCases(db, outcome, dynasty, active.code);
+  const summary = await proveOnCases(db, outcome, dynasty, active.code, (active.tactics as Record<string, unknown>) ?? {});
   if (!summary) return null;
   await db.update(scripts).set({ replay: { cases: summary.cases, matches: summary.matches }, updatedAt: new Date() }).where(eq(scripts.id, active.id));
   return { scriptSlug: `${outcome}/${dynasty}/v${active.version}`, cases: summary.cases, matches: summary.matches };
