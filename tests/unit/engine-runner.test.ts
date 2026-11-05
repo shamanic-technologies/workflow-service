@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
-import { engineState, pickScript, sampleBeta, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { engineState, pickScript, sampleBeta, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
 import { endRunBodyOf, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../../src/lib/scripts/engine-runner.js";
 import { reserveCampaignExecution } from "../../src/lib/execution-admission.js";
 import { engineWaits, scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
@@ -52,8 +52,16 @@ const known = { isKnownOutcome: async () => true };
 const ORG = "org-1";
 
 let db: AnyPgDb;
+let strategyAsks: Array<{ campaignId: string; outcome: string }> = [];
 beforeEach(async () => {
   db = await freshDb();
+  strategyAsks = [];
+  // No strategy: the campaign keeps every script of the Engine (features-service's answer for a default play).
+  setScriptStrategyReader(async (campaignId, outcome) => {
+    strategyAsks.push({ campaignId, outcome });
+    const rows = await db.select().from(scripts).where(eq(scripts.outcome, outcome));
+    return rows.map((r) => r.dynasty);
+  });
 }, 60_000);
 
 function world(serve: Record<string, unknown> = { found: true, lead: { leadId: "lead-9", email: "a@staff.test" } }) {
@@ -313,6 +321,40 @@ describe("the Rating", () => {
     }
     expect(sum / 4000).toBeGreaterThan(0.27);
     expect(sum / 4000).toBeLessThan(0.33);
+  });
+});
+
+describe("the campaign's strategy", () => {
+  it("keeps only the scripts features-service says it keeps, for this campaign and Engine", async () => {
+    await addScript("lead_found", "dy_cold", SERVE, { recorded_by: "lead" });
+    await addScript("lead_found", "dy_followup_due", SERVE, { recorded_by: "lead" });
+    setScriptStrategyReader(async (campaignId, outcome) => {
+      strategyAsks.push({ campaignId, outcome });
+      return ["dy_followup_due"];
+    });
+    for (let i = 0; i < 20; i++) {
+      const pick = await pickScript(db, { outcome: "lead_found", servable: [], channel: null, campaignId: "camp-1" });
+      expect(pick!.script.dynasty).toBe("dy_followup_due");
+    }
+    expect(strategyAsks[0]).toEqual({ campaignId: "camp-1", outcome: "lead_found" });
+    // The runner asks it for the run's own campaign.
+    const w = world();
+    strategyAsks = [];
+    await runOnce(dispatch(), w);
+    expect(w.runs[0]!.taskName).toBe("script:lead_found/dy_followup_due");
+    expect(strategyAsks).toEqual([{ campaignId: "camp-1", outcome: "lead_found" }]);
+  });
+
+  it("keeps nothing = no script runs (the run ends idle), and an unreadable strategy runs nothing", async () => {
+    await addScript("lead_found", "dy_cold", SERVE, { recorded_by: "lead" });
+    setScriptStrategyReader(async () => []);
+    expect(await pickScript(db, { outcome: "lead_found", servable: [], channel: null, campaignId: "camp-1" })).toBeNull();
+    setScriptStrategyReader(async () => {
+      throw new Error("features-service 502");
+    });
+    await expect(pickScript(db, { outcome: "lead_found", servable: [], channel: null, campaignId: "camp-1" })).rejects.toThrow(/502/);
+    // Not a campaign run (no campaign): no strategy to read.
+    expect((await pickScript(db, { outcome: "lead_found", servable: [], channel: null }))!.script.dynasty).toBe("dy_cold");
   });
 });
 

@@ -11,7 +11,8 @@
  *
  * 2. THE RATING: which script runs, among every live dynasty of the Engine (one active version per dynasty, so the pick
  *    is a dynasty and its head runs). Only a script the run can feed is a candidate: every material its code asks for
- *    (`ctx.get(...)`, read from the code) is one the run holds, and a tactic `channel` it states is the campaign's.
+ *    (`ctx.get(...)`, read from the code) is one the run holds, a tactic `channel` it states is the campaign's, and the
+ *    campaign's STRATEGY keeps it (features-service judges each script's tactics, `GET /internal/script-strategy`).
  *    Thompson sampling on the share of a dynasty's runs that made a Unit (Beta(1 + made, 1 + not made), its runs of the
  *    last 30 days pooled across versions, docs/framework.md §8): a dynasty with little data draws wide and gets tried.
  *    Cost per Unit is not yet in the score (runs-service holds it, per task `script:<outcome>/<dynasty>`): the day it
@@ -124,6 +125,36 @@ export interface PickInput {
   servable: string[];
   /** The campaign's channel: a script stating a tactic `channel` runs only for it. */
   channel: string | null;
+  /**
+   * The campaign the run is for: its STRATEGY keeps only some of the Engine's scripts (features-service, the one place
+   * that holds strategies and judges each script's tactics, S0-STRATEGY). Absent/null = not a campaign run: no strategy.
+   */
+  campaignId?: string | null;
+}
+
+/** The script dynasties a campaign's strategy keeps for one Engine. Throws when it cannot be read (fail closed). */
+export type ScriptStrategyReader = (campaignId: string, outcome: string) => Promise<string[]>;
+
+/** features-service `GET /internal/script-strategy`: unreadable = throws, the run runs nothing and is retried. */
+export const productionScriptStrategy: ScriptStrategyReader = async (campaignId, outcome) => {
+  const base = (process.env.FEATURES_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.FEATURES_SERVICE_API_KEY ?? "";
+  if (!base || !key) throw new Error("FEATURES_SERVICE_URL and FEATURES_SERVICE_API_KEY must be set to read a campaign's strategy");
+  const res = await fetch(`${base}/internal/script-strategy?campaignId=${encodeURIComponent(campaignId)}&outcome=${encodeURIComponent(outcome)}`, {
+    headers: { "x-api-key": key },
+    signal: AbortSignal.timeout(600_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`the scripts campaign ${campaignId}'s strategy keeps for ${outcome} could not be read (features-service ${res.status}): ${text.slice(0, 300)}`);
+  const kept = (JSON.parse(text) as { keptDynasties?: unknown }).keptDynasties;
+  if (!Array.isArray(kept)) throw new Error(`features-service answered no keptDynasties for campaign ${campaignId} x ${outcome}`);
+  return kept.map(String);
+};
+
+let scriptStrategy: ScriptStrategyReader = productionScriptStrategy;
+/** Tests swap the reader. */
+export function setScriptStrategyReader(r: ScriptStrategyReader | null): void {
+  scriptStrategy = r ?? productionScriptStrategy;
 }
 
 export interface Pick {
@@ -138,8 +169,11 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     .select()
     .from(scripts)
     .where(and(eq(scripts.outcome, input.outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+  // Read only when there is something to narrow; unreadable throws (never "any script").
+  const kept = input.campaignId && rows.length > 0 ? new Set(await scriptStrategy(input.campaignId, input.outcome)) : null;
   const out: ScriptRow[] = [];
   for (const row of rows) {
+    if (kept && !kept.has(row.dynasty)) continue;
     if (!(row.materials ?? []).every((m) => input.servable.includes(m))) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
