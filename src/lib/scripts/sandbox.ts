@@ -47,6 +47,11 @@ export type ScriptResult = {
   content?: Record<string, unknown>;
   found?: string;
   unmade?: string;
+  /**
+   * With `unmade`: the look did not FINISH (a budget ran out mid-look), so it is worth asking again soon. Neither idle
+   * nor exhausted: the campaign re-runs on its short cadence (MIGRATE-1105 S3, lead-service's `serve_timed_out`).
+   */
+  again?: boolean;
   /** Who the Unit is about, when the run was handed no subject (an Engine run that found its own: MIGRATE-1105 S0). */
   subject?: { service: string; id: string };
 } | null;
