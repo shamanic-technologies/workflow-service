@@ -36,8 +36,11 @@ export interface RunScriptInput {
   dynasty: string;
   /** Pin one version (default: the dynasty's active one). */
   version?: number;
-  /** Who or what the Unit it makes is about: the subject its produced outcome is declared on. */
-  subject: SubjectRef;
+  /**
+   * Who or what the Unit it makes is about: the subject its produced outcome is declared on. Absent (an Engine run that
+   * finds its own subject, e.g. a proactive campaign's find): the Unit the script makes names it (`result.subject`).
+   */
+  subject?: SubjectRef;
   /** The materials, by outcome; a list when the script may ask the same outcome again. */
   units: Record<string, MaterialUnit | MaterialUnit[]>;
   /** The run's tactics, on top of the script's own. */
@@ -85,8 +88,8 @@ export interface ScriptRunResult {
   version: number;
   runId: string;
   /** `unmade` = no Unit for a reason the world gave (the script's `unmade`), never an error. */
-  status: "made" | "nothing" | "unmade" | "stopped" | "failed";
-  unit: { outcome: string; subject: SubjectRef; content: Record<string, unknown>; found?: string } | null;
+  status: "made" | "nothing" | "unmade" | "waiting" | "stopped" | "failed";
+  unit: { outcome: string; subject: SubjectRef | null; content: Record<string, unknown>; found?: string } | null;
   error: string | null;
   vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number }>;
   declared: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] };
@@ -104,6 +107,18 @@ export class ScriptRunFailed extends Error {
 }
 
 export const scriptTaskName = (outcome: string, dynasty: string) => `script:${outcome}/${dynasty}`;
+
+/**
+ * MIGRATE-1105 S0, an Engine run (engine-runner.ts): the caller opened the run itself (named by the script) and closes
+ * it after the campaign's `/end-run`; a script that asks to wait (`ctx.wait(days)`) stops, its wait recorded by the
+ * caller (`onWait`), and its run ends `waiting` (resumed later), never failed.
+ */
+export interface OwnedRun {
+  runId: string;
+  onWait(days: number): Promise<void>;
+}
+
+const WAIT_STOP = "__wait__:";
 
 async function resolveVersion(db: AnyPgDb, input: RunScriptInput): Promise<ScriptRow> {
   let row: ScriptRow | null;
@@ -140,19 +155,22 @@ export async function runStoredScript(
   input: RunScriptInput,
   who: RunIdentity,
   deps: { ledger: LedgerDeps; vendors: VendorDeps },
+  owned?: OwnedRun,
 ): Promise<ScriptRunResult> {
   const row = await resolveVersion(db, input);
   const scriptSlug = `${row.outcome}/${row.dynasty}/v${row.version}`;
-  const runId = await deps.ledger.createRun({
-    parentRunId: who.parentRunId,
-    orgId: who.orgId,
-    userId: who.userId,
-    taskName: scriptTaskName(row.outcome, row.dynasty),
-    headers: who.headers,
-  });
+  const runId =
+    owned?.runId ??
+    (await deps.ledger.createRun({
+      parentRunId: who.parentRunId,
+      orgId: who.orgId,
+      userId: who.userId,
+      taskName: scriptTaskName(row.outcome, row.dynasty),
+      headers: who.headers,
+    }));
   const [record] = await db
     .insert(scriptRuns)
-    .values({ scriptId: row.id, orgId: who.orgId, runId, parentRunId: who.parentRunId, subject: input.subject, status: "running" })
+    .values({ scriptId: row.id, orgId: who.orgId, runId, parentRunId: who.parentRunId, subject: input.subject ?? null, status: "running" })
     .returning({ id: scriptRuns.id });
 
   const tactics = { ...row.tactics, ...(input.tactics ?? {}) };
@@ -194,18 +212,31 @@ export async function runStoredScript(
     }
     if (op === "ask") return { stop: "ctx.ask: no Provider serves a run-subject piece to a stored script yet" };
     if (op === "accounts") return { stop: "ctx.accounts: connected accounts are not served to stored scripts yet" };
-    if (op === "wait") return { stop: `the script asked to wait ${String(args[0])} days: a stored script step does not wait` };
+    if (op === "wait") {
+      const days = Number(args[0]);
+      if (!owned) return { stop: `the script asked to wait ${String(args[0])} days: a stored script step does not wait` };
+      if (!Number.isFinite(days) || days < 0 || days > 365) return { stop: `ctx.wait takes 0 to 365 days, not ${String(args[0])}` };
+      await owned.onWait(days);
+      return { stop: `${WAIT_STOP}${days}` };
+    }
     return { stop: `${String(op)} is not a script context call` };
   };
 
-  const out = await runScript(row.code, { subject: input.subject.id, brand: who.headers["x-brand-id"] ?? "", day: Math.floor(Date.now() / 86_400_000), tactics, request: input.request ?? null }, bridge);
+  const out = await runScript(row.code, { subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day: Math.floor(Date.now() / 86_400_000), tactics, request: input.request ?? null }, bridge);
   const made = out.kind === "done" && out.result !== null && typeof out.result === "object" ? (out.result as NonNullable<ScriptResult>) : null;
-  const status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
+  const waited = out.kind === "stopped" && out.reason.startsWith(WAIT_STOP);
+  let status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : waited ? "waiting" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
+  // The subject a Unit is about: the run's, else the one the Unit names (an Engine run that found its own subject).
+  const subject: SubjectRef | null = input.subject ?? subjectOf(made?.subject);
+  let error: string | null = out.kind === "error" ? out.message : waited ? `waits ${out.reason.slice(WAIT_STOP.length)} days` : out.kind === "stopped" ? out.reason : status === "unmade" ? made!.unmade! : null;
+  if (status === "made" && !input.recordedBy && !subject) {
+    status = "failed";
+    error = "the script made a Unit without naming who it is about (`subject: {service, id}` in its result): nothing can be declared on the ledger";
+  }
   // A Unit recorded by its owning service is declared there (one declaration, never two).
   const produced: OccurrenceInput[] =
-    status === "made" && !input.recordedBy ? [{ outcomeKey: row.outcome, subjectService: input.subject.service, subjectId: input.subject.id }] : [];
+    status === "made" && !input.recordedBy && subject ? [{ outcomeKey: row.outcome, subjectService: subject.service, subjectId: subject.id }] : [];
   if (input.recordedBy) consumed.length = 0;
-  let error: string | null = out.kind === "error" ? out.message : out.kind === "stopped" ? out.reason : status === "unmade" ? made!.unmade! : null;
 
   let declaredOk = true;
   if (produced.length > 0 || consumed.length > 0) {
@@ -223,14 +254,18 @@ export async function runStoredScript(
     version: row.version,
     runId,
     status: finalStatus,
-    unit: finalStatus === "made" && made?.content ? { outcome: row.outcome, subject: input.subject, content: made.content, ...(made.found ? { found: made.found } : {}) } : null,
+    unit:
+      finalStatus === "made" && made?.content
+        ? { outcome: row.outcome, subject, content: made.content, ...(made.found ? { found: made.found } : {}) }
+        : null,
     error,
     vendorCalls,
     declared: { produced: declaredOk ? produced : [], consumed: declaredOk ? consumed : [] },
     ...(input.recordedBy ? { recordedBy: input.recordedBy } : {}),
     ...(input.trace ? { trace } : {}),
   };
-  await deps.ledger.closeRun(runId, finalStatus === "failed" || finalStatus === "stopped" ? "failed" : "completed", who.orgId);
+  // A run the caller opened is closed by the caller (after the campaign's `/end-run`).
+  if (!owned) await deps.ledger.closeRun(runId, finalStatus === "failed" || finalStatus === "stopped" ? "failed" : "completed", who.orgId);
   await db
     .update(scriptRuns)
     .set({
@@ -244,6 +279,12 @@ export async function runStoredScript(
     .where(eq(scriptRuns.id, record!.id));
   if (finalStatus === "failed" || finalStatus === "stopped") throw new ScriptRunFailed(result);
   return result;
+}
+
+function subjectOf(v: unknown): SubjectRef | null {
+  if (!v || typeof v !== "object") return null;
+  const { service, id } = v as { service?: unknown; id?: unknown };
+  return typeof service === "string" && service.trim() && typeof id === "string" && id.trim() ? { service: service.trim(), id: id.trim() } : null;
 }
 
 /** An Engine's storage, scoped to (org, outcome): a script never reads another org's or another Engine's notes. */

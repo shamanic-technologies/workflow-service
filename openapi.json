@@ -3820,6 +3820,128 @@
           "rollbackReason"
         ]
       },
+      "EngineState": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "live": {
+            "type": "boolean",
+            "description": "true: dispatch this org's campaigns whose next outcome is this one to `POST /engines/{outcome}/execute`; false: their workflow, as before."
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "org",
+              "fleet",
+              null
+            ],
+            "description": "Which switch decides: the org's own (one client switched alone, or held back), the fleet's, or none."
+          },
+          "provenOn": {
+            "type": "string",
+            "nullable": true,
+            "description": "The dynasty the switch was proven on; the Rating picks among every runnable dynasty at run time."
+          },
+          "switchedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "rolledBackAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "rollbackReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "outcome",
+          "orgId",
+          "live",
+          "scope",
+          "provenOn",
+          "switchedAt",
+          "rolledBackAt",
+          "rollbackReason"
+        ]
+      },
+      "EngineExecuteRequest": {
+        "type": "object",
+        "properties": {
+          "fromOutcome": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,62}$",
+            "description": "The campaign's outcome before this Engine's: `start` for a proactive campaign (the script finds its own subject), else the outcome whose Unit a trigger pushed (the occurrence in `inputs.trigger` is handed to the script as a Unit of it)."
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "What campaign-service hands a workflow on `/execute`: campaignId, brandId, featureSlug, audienceId, `trigger` (the occurrence this dispatch answers)..."
+          },
+          "conflictPolicy": {
+            "type": "string",
+            "enum": [
+              "use_existing",
+              "reject"
+            ],
+            "description": "Same admission as a workflow execution, keyed on the campaign (and `executionSubject`)."
+          },
+          "executionSubject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "fromOutcome"
+        ]
+      },
+      "EngineSwitchRequest": {
+        "type": "object",
+        "properties": {
+          "dynasty": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,62}$",
+            "description": "The dynasty this switch is proven on: one org = a runnable script (a port must replay 100 % of its cases); every org = a proven port."
+          },
+          "orgId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "description": "One org (a client switched alone, on proof); absent = every org."
+          }
+        },
+        "required": [
+          "dynasty"
+        ]
+      },
+      "EngineOffRequest": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 5
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
       "ScriptMonitoringResponse": {
         "type": "object",
         "properties": {
@@ -10203,6 +10325,267 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}": {
+      "get": {
+        "summary": "Whether an Engine runs an org's campaigns (service key only)",
+        "description": "MIGRATE-1105 S0. campaign-service reads it before a dispatch: live = dispatch the Engine (`POST /engines/{outcome}/execute`), else the workflow as before. The org's own switch wins over the fleet's.",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "orgId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/engines/{outcome}/execute": {
+      "post": {
+        "summary": "Run a campaign's Engine: its stored script, with no workflow (service key)",
+        "description": "MIGRATE-1105 S0. Same identity, admission and answer as `POST /workflows/by-slug/{slug}/execute` (headers x-org-id, x-user-id, x-run-id = the caller's run, x-brand-id, x-campaign-id, x-feature-slug, x-audience-id; never x-workflow-slug). The run is opened in runs-service named by the script the Rating picks (`script:<outcome>/<dynasty>`), answered at once (`runId` = the run `/end-run` names), then executed: campaign-service `/gate-check`, `/start-run` (its answer = the script's Request), the script (a pushed occurrence = a Unit of `fromOutcome` about the lead it names), `/end-run` read off the script's status, every callback with `x-engine-outcome`. A due wait of the campaign's Engine (`ctx.wait`) is resumed first. 409 `engine_not_live`: dispatch the workflow.",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An execution of this campaign (and subject) is already active (conflictPolicy use_existing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Run opened and executing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing header or invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`engine_not_live`, or an active execution under `reject`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The run could not be opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}/switch": {
+      "post": {
+        "summary": "Switch an Engine on for one org's campaigns, or every org's (service key only)",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Live (or already live)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live version of the dynasty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not runnable, or a fleet switch on a script that is not a proven port",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}/off": {
+      "post": {
+        "summary": "Switch an Engine off for one org's campaigns, or every org's (service key only)",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineOffRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Switched off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "switchedOff": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/EngineState"
+                    }
+                  },
+                  "required": [
+                    "switchedOff",
+                    "state"
+                  ]
                 }
               }
             }

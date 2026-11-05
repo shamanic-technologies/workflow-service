@@ -30,6 +30,8 @@ import publicWorkflowsRoutes from "./routes/public-workflows.js";
 import internalRoutes from "./routes/internal.js";
 import figuresRoutes from "./routes/figures.js";
 import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
+import enginesRoutes, { productionEngineRunDeps } from "./routes/engines.js";
+import { closeOrphanEngineRuns } from "./lib/scripts/engine-runner.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
 import { setGuardContext } from "./lib/scripts/script-guard.js";
 import { productionRollbackDeps } from "./lib/scripts/script-guard-deps.js";
@@ -61,6 +63,8 @@ app.use(publicWorkflowsRoutes);
 // Internal routes (x-api-key only, no identity headers)
 app.use(internalRoutes);
 app.use(internalScriptsRouter);
+// MIGRATE-1105 S0: a campaign's Engine run (checks its own headers; never needs a workflow slug).
+app.use(enginesRoutes);
 
 // Identity-gated routes
 app.use(requireIdentity);
@@ -97,6 +101,11 @@ async function boot(): Promise<void> {
     console.error("FATAL: database migrations failed — refusing to serve traffic:", err);
     process.exit(1);
   }
+
+  // MIGRATE-1105 S0: an Engine run the previous process left open is closed failed and its campaign told (background).
+  void closeOrphanEngineRuns(db, productionEngineRunDeps())
+    .then((n) => n > 0 && console.warn(`[workflow-service] closed ${n} Engine run(s) left open by the previous process`))
+    .catch((err) => console.error("[workflow-service] closing orphan Engine runs failed:", err));
 
   // Verify API Registry is reachable — fail fast if not
   if (process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY) {
