@@ -410,6 +410,36 @@ if (args.from === "recorded" || args.source === "recorded") {
   if (args.apply) await storeCases(cases, `content-generation-service recorded generations ${new Date().toISOString().slice(0, 10)}`);
   process.exit(0);
 }
+// MIGRATE-1105: an old workflow's runs, as Windmill recorded them (7 days), become cases of the script taking over.
+// Run from /app/scripts inside the workflow-service container (it reads the compiled door table from dist):
+//   SQL=$(docker exec distribute-workflow-service-1 node scripts/record-script-cases.mjs --source windmill --flows 'ai_meeting_booking_%' --print-sql)
+//   docker exec distribute-postgres-1 psql -U postgres -At -d windmill -c "$SQL" \
+//     | docker exec -i distribute-workflow-service-1 node scripts/record-script-cases.mjs --source windmill --outcome <o> --dynasty <d> --from-outcome <the step the campaign starts from> [--apply]
+if (args.source === "windmill") {
+  const { windmillCasesSql, caseFromFlow } = await import("../dist/lib/scripts/windmill-cases.js");
+  if (args["print-sql"]) {
+    if (!args.flows || args.flows === true) throw new Error("--flows '<workflow path pattern, e.g. ai_meeting_booking_%>' is required");
+    process.stdout.write(windmillCasesSql(args.flows, Number(args.days ?? 7), Number(args.max ?? 300)).trim().replace(/\s+/g, " "));
+    process.exit(0);
+  }
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  const rows = JSON.parse(readFileSync(0, "utf8"));
+  const cases = [];
+  const excluded = {};
+  for (const r of rows) {
+    if (r.status === "skipped") {
+      excluded["a run Windmill skipped"] = (excluded["a run Windmill skipped"] ?? 0) + 1;
+      continue;
+    }
+    const out = caseFromFlow({ id: r.id, createdAt: r.created_at, args: r.args ?? {}, failed: r.status === "failure", error: r.error ?? r.status }, r.steps ?? [], { fromOutcome: typeof args["from-outcome"] === "string" ? args["from-outcome"] : undefined });
+    if (out.case) cases.push(out.case);
+    else excluded[out.excluded] = (excluded[out.excluded] ?? 0) + 1;
+  }
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} old runs, ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply && cases.length > 0) await storeCases(cases, `windmill recorded runs ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 const recorder = RECORDERS[outcome];
 if (!recorder) throw new Error(`--outcome must be one of: ${Object.keys(RECORDERS).join(", ")}`);
 if (args["print-sql"]) {
