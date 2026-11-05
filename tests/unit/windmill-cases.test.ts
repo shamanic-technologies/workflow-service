@@ -18,17 +18,20 @@ describe("caseFromFlow", () => {
       call("start_run", "campaign", "POST", "/start-run", {}, { runId: "r", brief: "b" }),
       { stepId: "plan", runnablePath: "f/workflows/o/x/plan", args: {}, status: "success", result: { a: 1 } },
       call("thread", "crm", "GET", "/orgs/people/timeline", { query: { personKey: "email:a@b.co" }, params: {} }, { messages: [] }),
-      call("draft", "chat", "POST", "/complete", { body: { message: "m", systemPrompt: "s", provider: "anthropic", model: "opus" } }, { content: "hi", json: { decision: "answer" }, model: "opus", tokensInput: 3, tokensOutput: 4 }),
+      call("draft", "chat", "POST", "/complete", { body: { message: "m", systemPrompt: "s", provider: "anthropic", model: "opus", workflowSlug: "x-v2" } }, { content: "hi", json: { decision: "answer" }, model: "opus", tokensInput: 3, tokensOutput: 4 }),
       call("send", "instantly", "POST", "/orgs/replies", { body: { email: "a@b.co" }, tolerateFailure: true }, { ok: false, status: 409, error: JSON.stringify({ error: "a human answered", code: "human_took_over" }) }),
       call("skipped", "crm", "POST", "/orgs/whatsapp/messages", { skip: true, body: {} }, { ok: false, skipped: true, notCalled: true }),
       call("lead", "lead", "GET", "/orgs/leads/{id}", { params: { id: "l1" } }, { lead: {} }),
       call("end_run", "campaign", "POST", "/end-run", { body: { success: true } }, { status: "completed" }),
     ];
-    const out = caseFromFlow(flow, steps);
+    const out = caseFromFlow(flow, steps, { fromOutcome: "lead_event" });
     if (!("case" in out)) throw new Error(out.excluded);
-    expect(out.case.units).toEqual({ lead_event: { trigger: { person: { email: "a@b.co" } } }, campaign_run: { runId: "r", brief: "b" } });
+    expect(out.case.units).toEqual({ lead_event: { person: { email: "a@b.co" } } });
+    expect(out.case.request).toEqual({ runId: "r", brief: "b", trigger: { person: { email: "a@b.co" } }, now: "2026-11-04T13:54:38.000Z" });
+    expect((caseFromFlow(flow, steps) as { case: { units: unknown } }).case.units).toEqual({});
     expect(out.case.calls.map((c) => c.name)).toEqual(["crm.person.thread", "llm.complete", "instantly.reply.send", "lead.detail"]);
     expect(out.case.calls[0]!.args).toEqual({ query: { personKey: "email:a@b.co" } });
+    expect(out.case.calls[1]!.args).toEqual({ message: "m", systemPrompt: "s", provider: "anthropic", model: "opus" });
     expect(out.case.calls[1]!.answer.data).toEqual({ content: "hi", json: { decision: "answer" }, model: "opus", tokensInput: 3, tokensOutput: 4 });
     expect(out.case.calls[2]!.answer).toEqual({ ok: false, data: { error: "a human answered", status: 409, code: "human_took_over", body: { error: "a human answered", code: "human_took_over" } } });
     expect(out.case.calls[3]!.args).toEqual({ params: { id: "l1" } });
