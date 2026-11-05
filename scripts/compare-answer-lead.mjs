@@ -30,8 +30,7 @@ const SENDS = ["instantly.reply.send", "email.send", "crm.whatsapp.send"];
 const orgs = typeof args.orgs === "string" ? new Set(args.orgs.split(",")) : null;
 const max = Number(args.max ?? 10);
 const source = answerLeadScriptSource();
-const chatBase = (process.env.CHAT_SERVICE_URL ?? "").replace(/\/$/, "");
-const chatKey = process.env.CHAT_SERVICE_API_KEY ?? "";
+const { chatServicePlatformComplete } = await import("../dist/lib/chat-service-client.js");
 const booking = productionVendorDeps();
 
 function sentText(call) {
@@ -64,14 +63,11 @@ for (const r of rows) {
       return { v: name === "crm.meeting.book" ? { ok: true, data: { status: "booked" } } : { ok: true, data: { status: "sent" } } };
     }
     if (name === "llm.complete") {
-      const res = await fetch(`${chatBase}/internal/platform-complete`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": chatKey },
-        body: JSON.stringify({ ...callArgs, provider: "anthropic", model: "opus", support: { kind: "staff_experiment", reason: "MIGRATE-1105 S1 before/after of the answering script" } }),
-      });
-      const text = await res.text();
-      if (!res.ok) return { v: { ok: false, data: { error: `chat ${res.status}: ${text.slice(0, 200)}` } } };
-      llm = JSON.parse(text);
+      try {
+        llm = await chatServicePlatformComplete({ ...callArgs, provider: "anthropic", model: "opus" }, { support: { kind: "staff_experiment", reason: "MIGRATE-1105 S1 before/after of the answering script" } });
+      } catch (e) {
+        return { v: { ok: false, data: { error: String(e).slice(0, 300) } } };
+      }
       return { v: { ok: true, data: { content: llm.content ?? null, json: llm.json ?? null, model: llm.model ?? null } } };
     }
     if (name === "booking.slots") {
