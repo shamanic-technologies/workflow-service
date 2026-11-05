@@ -573,6 +573,25 @@ export const TEAM_DECIDES_STRATEGY =
   "waiting for one from us, set decision to escalate: write nothing to them, put what they asked in question, in their " +
   "words, and say in reason what the team must decide. The team answers them itself, with what it knows and you do not.";
 
+/**
+ * WHEN THEY ALREADY USE SOMEONE ELSE (COMPETITOR-FIRST-1105, owner 2026-11-05: a lead wrote he is testing another
+ * vendor "and getting good success"; « faudrait comprendre son $/meeting booked chez Explee, ou lui demander ce qui
+ * lui manque chez eux, pour savoir si on peut faire quelque chose »). A strategy, never a rule keyed on a vendor name:
+ * the model judges whether they named someone else; when they did not, nothing here applies. Dash-free.
+ */
+export const COMPETITOR_FIRST_STRATEGY =
+  "WHEN THEY ALREADY USE SOMEONE ELSE. When they say they already use, test or work with another company, tool or " +
+  "team for what we offer, a pitch is wasted: someone fully happy there has no reason to switch, and only what is " +
+  "missing there makes us worth their time. So learn before you sell. Ask ONE short, friendly question that finds out " +
+  "whether it fully works for them: what one result costs them there, in the unit of what we offer (per meeting " +
+  "booked, per client, per lead), or what they miss with it. That question is the next step of their path and the one " +
+  "question the message ends on: no comparison yet, no list of what we do better, no call or link to push. Once they " +
+  "answer, compare their result with what the FACTS say we can do for that result, and propose the step that fits only " +
+  "if we do better. When they also asked us to stop, it is a stop like any other. When they say our product or offer " +
+  "was hard to understand or to start, own it in one plain sentence, never defend it and never make it their fault, " +
+  "and offer the easiest way in that the FACTS or the thread hold (we set it up for them, when the FACTS say we do). " +
+  "When they name no one else, none of this applies: never ask who they use.";
+
 /** `itemLines(trigger)`: the occurrence's item as plain lines, clipped, for the writer. */
 export const OCCURRENCE_ITEM_FN = `
 function itemLines(trigger) {
@@ -652,7 +671,7 @@ ${GAME.intro}${GAME.game}${GAME.read}    wa
     "What they did (opened, clicked, visited, signed up) is for choosing what to say and when, never something to say: never write that you saw them open, click or visit.",
     "You state only what the FACTS, the FIGURES, the INSTRUCTION or the thread say. Never invent a figure, a price, a result, a customer, a date, a promise, or where their account or their work with us stands (what was sent, started, ready or decided). A number appears only if it is written there, exactly as written, with what it counts as written: never recomputed, converted, split or added up.",
     "If the INSTRUCTION asks for something none of those hold (a figure that could not be read), set decision to cannot_write and say in reason what is missing.",
-${GAME.answersTheTeam ? "" : "    " + JSON.stringify(TEAM_DECIDES_STRATEGY) + ",\n"}    "If THEY asked something you cannot answer from what you hold (the FACTS, the FIGURES, the thread" + (business && business.active === true ? ", THEIR BUSINESS" : "") + ")${GAME.answersTheTeam ? "" : ", or what only the team decides"}, never guess and never stall with a holding message: set decision to escalate, put what they asked in question, in their words, leave subject, bodyHtml and message empty, and set nextFollowUpAt to when to look again if nobody answered them. The team is told at once and answers them itself.",
+${GAME.answersTheTeam ? "" : "    " + JSON.stringify(TEAM_DECIDES_STRATEGY) + ",\n    " + JSON.stringify(COMPETITOR_FIRST_STRATEGY) + ",\n"}    "If THEY asked something you cannot answer from what you hold (the FACTS, the FIGURES, the thread" + (business && business.active === true ? ", THEIR BUSINESS" : "") + ")${GAME.answersTheTeam ? "" : ", or what only the team decides"}, never guess and never stall with a holding message: set decision to escalate, put what they asked in question, in their words, leave subject, bodyHtml and message empty, and set nextFollowUpAt to when to look again if nobody answered them. The team is told at once and answers them itself.",
     who.strategy,
     game,
     localHour,
