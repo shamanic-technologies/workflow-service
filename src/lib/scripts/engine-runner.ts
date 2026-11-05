@@ -167,6 +167,10 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
     "x-brand-id": d.brandIdHeader,
     "x-engine-outcome": d.outcome,
     ...(d.featureSlug ? { "x-feature-slug": d.featureSlug } : {}),
+    // The audience campaign-service already chose for this run (the run is opened carrying it): `/start-run` must state
+    // the same one, or its own child run conflicts with this run's (runs-service 409, start-run 500), as the workflow's
+    // start-run step read `flow_input.audienceId`.
+    ...(d.audienceId ? { "x-audience-id": d.audienceId } : {}),
   };
   const releaseWait = async () => {
     if (plan.kind === "resume") await db.update(engineWaits).set({ status: "waiting", claimedAt: null }).where(eq(engineWaits.id, plan.wait.id));
