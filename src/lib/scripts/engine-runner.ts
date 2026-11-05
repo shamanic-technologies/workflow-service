@@ -135,13 +135,18 @@ export function endRunBodyOf(result: (Pick<ScriptRunResult, "status" | "error"> 
     case "waiting":
       return { success: true, stopCampaign: false, noWorkAvailable: true };
     case "unmade": {
-      const reason = (result.error ?? "unmade").slice(0, 200);
+      // A script states its reason as a code, or `<code>: <why>` (the producer's refusal code and its words verbatim).
+      const stated = result.error ?? "unmade";
+      const split = /^([a-z][a-z0-9_]*): ([\s\S]+)$/.exec(stated);
+      const reason = (split ? split[1]! : stated).slice(0, 200);
       // `stopCampaign` = this run's audience had nobody (campaign-service's own vocabulary, decided by equality).
       if (reason === "audience_exhausted") return { success: true, stopCampaign: true };
       // An unfinished look (`again`): a NORMAL run, so the campaign asks again on its short cadence; on an occurrence,
       // nothing is stated about the person (it is redelivered), never a refusal.
       if (result.again === true) return answersOccurrence ? { success: true, stopCampaign: false, noWorkAvailable: true } : { success: true, stopCampaign: false };
-      if (answersOccurrence) return { success: true, stopCampaign: false, delivery: { state: "refused", code: reason, reason: (result.error ?? reason).slice(0, 2000) } };
+      // The occurrence's person is not someone this campaign acts for (a refusal about WHO, final, never redelivered).
+      if (reason === "person_not_admitted" && answersOccurrence) return { success: true, stopCampaign: false, personNotAdmitted: { reason: (split ? split[2]! : reason).slice(0, 200) } };
+      if (answersOccurrence) return { success: true, stopCampaign: false, delivery: { state: "refused", code: reason, reason: (split ? split[2]! : stated).slice(0, 2000) } };
       return { success: true, stopCampaign: false, noWorkAvailable: true };
     }
     default:
@@ -195,7 +200,8 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
             }
           : { outcome: plan.script.outcome, dynasty: plan.script.dynasty, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units };
       const recordedBy = (plan.script.tactics as Record<string, unknown>)?.recorded_by;
-      input.request = { ...start, trigger: trigger ?? null };
+      // `now`: the run's clock, stated once (a script never reads Date.now(), so a replay of the run is the run).
+      input.request = { ...start, trigger: trigger ?? null, now: new Date().toISOString() };
       if (typeof recordedBy === "string" && recordedBy) input.recordedBy = recordedBy;
       const vendorHeaders: Record<string, string> = { ...headers, ...(audienceId ? { "x-audience-id": audienceId } : {}) };
       delete vendorHeaders["x-engine-outcome"];
@@ -220,6 +226,14 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
         result = e.result;
       }
       deps.noteScriptRun?.(d.outcome);
+      // A script whose work produces no outcome by design states its support function (tactic `support: {kind,
+      // reason}`); the run is marked once it made its Unit. Never fails the run: a refusal is logged loudly.
+      const support = (plan.script.tactics as Record<string, unknown>)?.support as { kind?: unknown; reason?: unknown } | undefined;
+      if (result?.status === "made" && support && typeof support.kind === "string" && typeof support.reason === "string" && deps.ledger.markSupport) {
+        await deps.ledger
+          .markSupport(runId, { kind: support.kind, reason: support.reason, markedBy: `workflow-service engine ${scriptTaskName(plan.script.outcome, plan.script.dynasty)}` })
+          .catch((e) => console.error(`[workflow-service] engine run ${runId}: SUPPORT MARK FAILED:`, e instanceof Error ? e.message : e));
+      }
       if (plan.kind === "resume") await db.update(engineWaits).set({ status: "resumed", resumedRunId: runId }).where(eq(engineWaits.id, plan.wait.id));
     }
     const endBody = endRunBodyOf(result, answersOccurrence);
