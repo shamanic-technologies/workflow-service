@@ -2813,6 +2813,93 @@ registry.registerPath({
   },
 });
 
+// MIGRATE-1105 S0: a campaign run executes its Engine's stored script, with no workflow (src/routes/engines.ts).
+export const EngineExecuteRequestSchema = z
+  .object({
+    fromOutcome: ScriptSlugSchema.describe("The campaign's outcome before this Engine's: `start` for a proactive campaign (the script finds its own subject), else the outcome whose Unit a trigger pushed (the occurrence in `inputs.trigger` is handed to the script as a Unit of it)."),
+    inputs: z.record(z.string(), z.unknown()).optional().describe("What campaign-service hands a workflow on `/execute`: campaignId, brandId, featureSlug, audienceId, `trigger` (the occurrence this dispatch answers)..."),
+    conflictPolicy: z.enum(["use_existing", "reject"]).optional().describe("Same admission as a workflow execution, keyed on the campaign (and `executionSubject`)."),
+    executionSubject: z.string().min(1).max(512).optional(),
+  })
+  .openapi("EngineExecuteRequest");
+
+export const EngineStateSchema = z
+  .object({
+    outcome: z.string(),
+    orgId: z.string().nullable(),
+    live: z.boolean().describe("true: dispatch this org's campaigns whose next outcome is this one to `POST /engines/{outcome}/execute`; false: their workflow, as before."),
+    scope: z.enum(["org", "fleet"]).nullable().describe("Which switch decides: the org's own (one client switched alone, or held back), the fleet's, or none."),
+    provenOn: z.string().nullable().describe("The dynasty the switch was proven on; the Rating picks among every runnable dynasty at run time."),
+    switchedAt: z.string().nullable(),
+    rolledBackAt: z.string().nullable(),
+    rollbackReason: z.string().nullable(),
+  })
+  .openapi("EngineState");
+
+export const EngineSwitchRequestSchema = z
+  .object({
+    dynasty: ScriptSlugSchema.describe("The dynasty this switch is proven on: one org = a runnable script (a port must replay 100 % of its cases); every org = a proven port."),
+    orgId: z.string().min(1).nullable().optional().describe("One org (a client switched alone, on proof); absent = every org."),
+  })
+  .openapi("EngineSwitchRequest");
+
+export const EngineOffRequestSchema = z
+  .object({ orgId: z.string().min(1).nullable().optional(), reason: z.string().min(5) })
+  .openapi("EngineOffRequest");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/engines/{outcome}",
+  summary: "Whether an Engine runs an org's campaigns (service key only)",
+  description: "MIGRATE-1105 S0. campaign-service reads it before a dispatch: live = dispatch the Engine (`POST /engines/{outcome}/execute`), else the workflow as before. The org's own switch wins over the fleet's.",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), query: z.object({ orgId: z.string().optional() }) },
+  responses: { 200: { description: "The state", content: { "application/json": { schema: EngineStateSchema } } } },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/engines/{outcome}/execute",
+  summary: "Run a campaign's Engine: its stored script, with no workflow (service key)",
+  description:
+    "MIGRATE-1105 S0. Same identity, admission and answer as `POST /workflows/by-slug/{slug}/execute` (headers x-org-id, x-user-id, x-run-id = the caller's run, x-brand-id, x-campaign-id, x-feature-slug, x-audience-id; never x-workflow-slug). The run is opened in runs-service named by the script the Rating picks (`script:<outcome>/<dynasty>`), answered at once (`runId` = the run `/end-run` names), then executed: campaign-service `/gate-check`, `/start-run` (its answer = the script's Request), the script (a pushed occurrence = a Unit of `fromOutcome` about the lead it names), `/end-run` read off the script's status, every callback with `x-engine-outcome`. A due wait of the campaign's Engine (`ctx.wait`) is resumed first. 409 `engine_not_live`: dispatch the workflow.",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EngineExecuteRequestSchema } } } },
+  responses: {
+    201: { description: "Run opened and executing", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+    200: { description: "An execution of this campaign (and subject) is already active (conflictPolicy use_existing)", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+    400: { description: "Missing header or invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "`engine_not_live`, or an active execution under `reject`", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+    502: { description: "The run could not be opened", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/engines/{outcome}/switch",
+  summary: "Switch an Engine on for one org's campaigns, or every org's (service key only)",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EngineSwitchRequestSchema } } } },
+  responses: {
+    201: { description: "Live (or already live)", content: { "application/json": { schema: EngineStateSchema } } },
+    404: { description: "No live version of the dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Not runnable, or a fleet switch on a script that is not a proven port", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/engines/{outcome}/off",
+  summary: "Switch an Engine off for one org's campaigns, or every org's (service key only)",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EngineOffRequestSchema } } } },
+  responses: { 200: { description: "Switched off", content: { "application/json": { schema: z.object({ switchedOff: z.number().int(), state: EngineStateSchema }) } } } },
+});
+
 registry.registerPath({
   method: "get",
   path: "/internal/scripts/monitoring",

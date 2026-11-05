@@ -43,7 +43,13 @@ export interface ScriptSpec {
  * this address), never a bug: the run closes completed, counted apart from errors by the roll-back guard, and a replay
  * case expecting that failure (`expect.fails`) matches it.
  */
-export type ScriptResult = { content?: Record<string, unknown>; found?: string; unmade?: string } | null;
+export type ScriptResult = {
+  content?: Record<string, unknown>;
+  found?: string;
+  unmade?: string;
+  /** Who the Unit is about, when the run was handed no subject (an Engine run that found its own: MIGRATE-1105 S0). */
+  subject?: { service: string; id: string };
+} | null;
 
 export type RunOutcome =
   | { kind: "done"; result: ScriptResult }

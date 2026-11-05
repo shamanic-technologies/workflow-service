@@ -39,7 +39,8 @@ export function resolveExecutionConflictPolicy(
 
 export interface ReserveCampaignExecutionInput {
   database: Database;
-  workflow: Workflow;
+  /** null = an Engine execution (MIGRATE-1105 S0): no workflow, same admission keys as a workflow one. */
+  workflow: Workflow | null;
   orgId: string;
   userId: string;
   campaignId: string;
@@ -50,6 +51,8 @@ export interface ReserveCampaignExecutionInput {
   conflictPolicy: ExecutionConflictPolicy;
   /** Who this execution is about; absent = campaign-wide admission. */
   executionSubject?: string;
+  /** The row's scope label (default `campaign`); the admission KEY is the campaign's either way. */
+  executionScope?: string;
 }
 
 export type ReserveCampaignExecutionResult =
@@ -100,18 +103,18 @@ export async function reserveCampaignExecution(
     const [run] = await tx
       .insert(workflowRuns)
       .values({
-        workflowId: input.workflow.id,
+        workflowId: input.workflow?.id ?? null,
         orgId: input.orgId,
         userId: input.userId,
         campaignId: input.campaignId,
         brandIds: input.brandIds.length > 0 ? input.brandIds : null,
         featureSlug: input.featureSlug,
-        workflowSlug: input.workflow.workflowSlug,
-        subrequestId: (input.inputs?.subrequestId as string | undefined) ?? input.workflow.subrequestId,
-        windmillWorkspace: input.workflow.windmillWorkspace,
+        workflowSlug: input.workflow?.workflowSlug ?? null,
+        subrequestId: (input.inputs?.subrequestId as string | undefined) ?? input.workflow?.subrequestId ?? null,
+        ...(input.workflow ? { windmillWorkspace: input.workflow.windmillWorkspace } : {}),
         status: "dispatching",
         inputs: input.inputs,
-        executionScope: EXECUTION_SCOPE_CAMPAIGN,
+        executionScope: input.executionScope ?? EXECUTION_SCOPE_CAMPAIGN,
         executionKey,
         conflictPolicy: input.conflictPolicy,
         attributionContext: input.attributionContext,

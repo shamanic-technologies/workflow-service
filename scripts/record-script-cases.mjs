@@ -265,12 +265,42 @@ function splitCase(d) {
  * A send selection's case (FACTORY-P3 next outcomes, message_sent): instantly-service records each selection it asked
  * the script, with the exact material and its OWN selection (the truth the script must equal, shadow or switched).
  */
+/** A decision recorded with its material and the service's own answer (the generic `--feed` reader). */
+function materialCase(d, unit) {
+  if (!d || d.material === undefined || d.material === null) return { excluded: "the material is not recorded" };
+  if (d.ours === undefined || d.ours === null) return { excluded: "the service's own answer is not recorded" };
+  return { case: { id: String(d.id), units: { [unit]: d.material }, calls: [], expect: { content: d.ours } } };
+}
+
 function selectionCase(d) {
   if (!d.material || !d.ours) return { excluded: "the material or our selection is not recorded" };
   return { case: { id: d.id, units: { message_queued: d.material }, calls: [], expect: { content: d.ours } } };
 }
 
 const outcome = args.outcome;
+/**
+ * ANY service decision recorded with its exact material and the service's own answer (MIGRATE-1105 S2): one generic
+ * reader for every Engine a service asks a PURE stored script (no vendor call), never one branch per outcome.
+ *   --from recorded --feed <service>:<path> --unit <material unit name> --dynasty <d> [--after N] [--max N] [--apply]
+ * The feed is the dispatch-selections family (`decisions[]`, `nextAfter`, `hasMore`); a decision is `{id, material,
+ * ours}`. The case: the material as that unit, no call, the service's own answer as the expected content.
+ */
+if ((args.from === "recorded" || args.source === "recorded") && typeof args.feed === "string") {
+  if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
+  if (!args.unit || args.unit === true) throw new Error("--unit is required (the material's unit name)");
+  const [service, ...rest] = args.feed.split(":");
+  const rows = await recordedFeed(service, rest.join(":"), Number(args.after ?? 0), Number(args.max ?? 500));
+  const built = rows.map((d) => materialCase(d, args.unit));
+  const cases = built.filter((b) => b.case).map((b) => b.case);
+  const excluded = {};
+  for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+  const same = rows.filter((r) => r.same === true).length;
+  const asked = rows.filter((r) => typeof r.same === "boolean").length;
+  console.log(`${outcome}/${args.dynasty}: ${rows.length} recorded decisions (${same}/${asked} asked of the script were the same), ${cases.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (dry run)"}`);
+  if (args.out && args.out !== true) (await import("node:fs")).writeFileSync(args.out, JSON.stringify(cases));
+  if (args.apply && cases.length > 0) await storeCases(cases, `${service}-service recorded ${rest.join(":")} ${new Date().toISOString().slice(0, 10)}`);
+  process.exit(0);
+}
 if ((args.from === "recorded" || args.source === "recorded") && outcome === "message_sent") {
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const base = (process.env.INSTANTLY_SERVICE_URL ?? "").replace(/\/$/, "");
