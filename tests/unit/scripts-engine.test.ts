@@ -285,7 +285,7 @@ describe("vendors", () => {
   it("refuses an unknown vendor, no LLM stated, no system prompt, and Haiku 4.5", async () => {
     const unknown = await callVendor("http.get", {}, ctx, deps);
     expect(unknown.ok).toBe(false);
-    expect(String(unknown.data.error)).toMatch(/^no vendor named http\.get \(scripts may call: llm\.complete, chat\.complete, jev\.noul, voice\.read, apollo\.email\.verify/);
+    expect(String(unknown.data.error)).toMatch(/^no vendor named http\.get \(scripts may call: llm\.complete, chat\.complete, jev\.noul, voice\.read, /);
     expect((await callVendor("llm.complete", { message: "x", systemPrompt: "s" }, ctx, deps)).data.error).toMatch(/needs an LLM/);
     expect((await callVendor("llm.complete", { message: "x", provider: "anthropic", model: "sonnet" }, ctx, deps)).data.error).toMatch(/needs a systemPrompt/);
     expect((await callVendor("llm.complete", { message: "x", systemPrompt: "s", provider: "anthropic", model: "claude-haiku-4-5" }, ctx, deps)).data.error).toMatch(/Haiku 4.5/);

@@ -29,7 +29,7 @@ describe("run doors (answering a lead)", () => {
     const out = await callVendor("crm.person.thread", { query: { personKey: "email:jy@w.com" } }, ctx, deps);
     expect(out).toEqual({ ok: true, data: { messages: [{ text: "Friday 3:30?" }] } });
     const d = door([{ status: 200, body: { nextFollowupAt: null } }]);
-    await callVendor("lead.followup_date.set", { params: { leadId: "lead 1" }, query: { brandId: "b" }, body: { stop: { reason: "booked" } } }, ctx, d.deps);
+    await callVendor("lead.followup_date.set", { params: { id: "lead 1" }, query: { brandId: "b" }, body: { stop: { reason: "booked" } } }, ctx, d.deps);
     expect(seen[0]!.slice(0, 4)).toEqual(["crm", "GET", "/orgs/people/timeline?personKey=email%3Ajy%40w.com", null]);
     expect(d.seen[0]!.slice(0, 4)).toEqual(["lead", "PUT", "/orgs/leads/lead%201/followup-date?brandId=b", { stop: { reason: "booked" } }]);
   });
@@ -53,10 +53,10 @@ describe("run doors (answering a lead)", () => {
 
   it("refuses a missing param, a body on a read, an org-less run, and dropping whose run it is", async () => {
     const { seen, deps } = door([{ status: 200, body: {} }]);
-    expect((await callVendor("lead.detail", {}, ctx, deps)).data.error).toBe("lead.detail needs params.leadId");
-    expect((await callVendor("lead.detail", { params: { leadId: "" } }, ctx, deps)).ok).toBe(false);
-    expect((await callVendor("lead.detail", { params: { leadId: "l" }, body: {} }, ctx, deps)).ok).toBe(false);
-    expect((await callVendor("lead.detail", { params: { leadId: "l" } }, { headers: { "x-run-id": "r" }, tactics: {} }, deps)).ok).toBe(false);
+    expect((await callVendor("lead.detail", {}, ctx, deps)).data.error).toBe("lead.detail needs params.id");
+    expect((await callVendor("lead.detail", { params: { id: "" } }, ctx, deps)).ok).toBe(false);
+    expect((await callVendor("lead.detail", { params: { id: "l" }, body: {} }, ctx, deps)).ok).toBe(false);
+    expect((await callVendor("lead.detail", { params: { id: "l" } }, { headers: { "x-run-id": "r" }, tactics: {} }, deps)).ok).toBe(false);
     expect((await callVendor("crm.whatsapp.send", { body: {}, omitHeaders: ["x-run-id"] }, ctx, deps)).ok).toBe(false);
     expect(seen).toEqual([]);
   });
@@ -86,7 +86,7 @@ describe("run doors (answering a lead)", () => {
       expect(name).toMatch(/^[a-z-]+\.[a-z_.]+$/);
       expect(d.path.startsWith("/")).toBe(true);
     }
-    const read = await readScriptSource(`export default function run(ctx) { ctx.vendor.call("lead.followup_date.read", { params: { leadId: "l" } }); return null; }`);
+    const read = await readScriptSource(`export default function run(ctx) { ctx.vendor.call("lead.followup_date.read", { params: { id: "l" } }); return null; }`);
     expect(read.vendors).toEqual(["lead.followup_date.read"]);
   });
 });
