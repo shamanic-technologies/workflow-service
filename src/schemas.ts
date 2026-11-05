@@ -2849,6 +2849,17 @@ export const EngineOffRequestSchema = z
 
 registry.registerPath({
   method: "get",
+  path: "/internal/scripts",
+  summary: "The runnable scripts with their code, for a service's org-less sweep (service key only)",
+  description: "MIGRATE-1105 S0-STRATEGY: every active version of a live dynasty (optionally of one outcome), same fields as `GET /scripts/{id}` (code, tactics, description, runnable), so features-service can judge each version's tactics for the campaigns' strategies.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { query: z.object({ outcome: z.string().optional() }) },
+  responses: { 200: { description: "The scripts", content: { "application/json": { schema: z.object({ scripts: z.array(z.record(z.string(), z.unknown())) }) } } } },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/internal/engines/{outcome}",
   summary: "Whether an Engine runs an org's campaigns (service key only)",
   description: "MIGRATE-1105 S0. campaign-service reads it before a dispatch: live = dispatch the Engine (`POST /engines/{outcome}/execute`), else the workflow as before. The org's own switch wins over the fleet's.",
