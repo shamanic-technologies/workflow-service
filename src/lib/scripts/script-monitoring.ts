@@ -39,6 +39,10 @@ export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: str
   // The send selection (a SERVICE switch, shadow first): instantly opens one `dispatch-selection` platform run per
   // selection it asks the script (shadow or switched).
   message_sent: { serviceName: "instantly-service", taskNames: ["dispatch-selection"] },
+  // MIGRATE-1105 S2 (SERVICE switches, shadow first, instantly `service-script.ts`): one `queue-decision` platform run
+  // per enrolled sequence, one `inbound-decision` platform run per poll batch of a mailbox.
+  message_queued: { serviceName: "instantly-service", taskNames: ["queue-decision"] },
+  reply_received: { serviceName: "instantly-service", taskNames: ["inbound-decision"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";
