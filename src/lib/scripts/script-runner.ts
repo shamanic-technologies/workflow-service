@@ -97,6 +97,8 @@ export interface ScriptRunResult {
   status: "made" | "nothing" | "unmade" | "waiting" | "stopped" | "failed";
   unit: { outcome: string; subject: SubjectRef | null; content: Record<string, unknown>; found?: string } | null;
   error: string | null;
+  /** On `unmade`: the script said the look did not finish (ask again soon, never idle). */
+  again?: boolean;
   vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number }>;
   declared: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] };
   /** Who declares this run's occurrences when not the run itself. */
@@ -265,6 +267,7 @@ export async function runStoredScript(
         ? { outcome: row.outcome, subject, content: made.content, ...(made.found ? { found: made.found } : {}) }
         : null,
     error,
+    ...(finalStatus === "unmade" && made?.again === true ? { again: true } : {}),
     vendorCalls,
     declared: { produced: declaredOk ? produced : [], consumed: declaredOk ? consumed : [] },
     ...(input.recordedBy ? { recordedBy: input.recordedBy } : {}),

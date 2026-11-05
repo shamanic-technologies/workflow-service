@@ -126,7 +126,7 @@ export const planTaskName = (d: EngineDispatch, plan: EnginePlan) =>
   plan.kind === "none" ? engineTaskName(d.outcome) : scriptTaskName(plan.script.outcome, plan.script.dynasty);
 
 /** The `/end-run` body a script's status states, the same for every Engine (campaign-service's contract). */
-export function endRunBodyOf(result: Pick<ScriptRunResult, "status" | "error"> | null, answersOccurrence: boolean): Record<string, unknown> {
+export function endRunBodyOf(result: (Pick<ScriptRunResult, "status" | "error"> & { again?: boolean }) | null, answersOccurrence: boolean): Record<string, unknown> {
   if (!result) return { success: true, stopCampaign: false, noWorkAvailable: true };
   switch (result.status) {
     case "made":
@@ -141,6 +141,9 @@ export function endRunBodyOf(result: Pick<ScriptRunResult, "status" | "error"> |
       const reason = (split ? split[1]! : stated).slice(0, 200);
       // `stopCampaign` = this run's audience had nobody (campaign-service's own vocabulary, decided by equality).
       if (reason === "audience_exhausted") return { success: true, stopCampaign: true };
+      // An unfinished look (`again`): a NORMAL run, so the campaign asks again on its short cadence; on an occurrence,
+      // nothing is stated about the person (it is redelivered), never a refusal.
+      if (result.again === true) return answersOccurrence ? { success: true, stopCampaign: false, noWorkAvailable: true } : { success: true, stopCampaign: false };
       // The occurrence's person is not someone this campaign acts for (a refusal about WHO, final, never redelivered).
       if (reason === "person_not_admitted" && answersOccurrence) return { success: true, stopCampaign: false, personNotAdmitted: { reason: (split ? split[2]! : reason).slice(0, 200) } };
       if (answersOccurrence) return { success: true, stopCampaign: false, delivery: { state: "refused", code: reason, reason: (split ? split[2]! : stated).slice(0, 2000) } };
