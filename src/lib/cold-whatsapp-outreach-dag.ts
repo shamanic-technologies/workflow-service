@@ -29,7 +29,7 @@
  *    whose leg is unknown (`null`, or a campaign-service that does not say), ends idle (`noWorkAvailable`) with
  *    nobody due, never cold-messaging a stranger (owner rule, la-paz 2026-10-14).
  *  - The message is written by the model through chat-service `/complete` (which owns the model, the key and the
- *    cost declaration), from the campaign's own `instruction` (read off `/start-run` at THIS run, so an edit is
+ *    cost declaration), from the campaign's `brief` (content-generation reads it off the body the converter adds, read off `/start-run` at THIS run, so an edit is
  *    what the next run writes from), what the CLIENT told us about the offer (`GATHER_FACTS_CODE`, never the
  *    website), the person as we know them, and a STRATEGY: start a real conversation, get to know them. Never a
  *    canned reply.
@@ -112,7 +112,7 @@ export const COLD_WHATSAPP_OUTREACH_LEG_KEYS = [
 export const coldWhatsappPipeIdOf = (legKey: string): string => `${COLD_WHATSAPP_OUTREACH_FEATURE_SLUG}|${legKey}`;
 
 export const COLD_WHATSAPP_OUTREACH_DESCRIPTION =
-  "Starts a real WhatsApp conversation with one person per run from the brand's own number, written from the campaign's instruction, then follows up in the same conversation at moments it judges right until they answer, when the brand's team takes over. On a trigger (a number given, a signup not paid) it sends one message only, and only to a new contact: someone with a visit to the brand's website who never wrote to the brand on any channel and is neither our staff nor the brand's own team.";
+  "Starts a real WhatsApp conversation with one person per run from the brand's own number, written from the campaign's brief, then follows up in the same conversation at moments it judges right until they answer, when the brand's team takes over. On a trigger (a number given, a signup not paid) it sends one message only, and only to a new contact: someone with a visit to the brand's website who never wrote to the brand on any channel and is neither our staff nor the brand's own team.";
 
 /** The model the message is written with, through chat-service. Always-thinking: no temperature. */
 export const COLD_WHATSAPP_LLM = { provider: "anthropic", model: "opus" } as const;
@@ -564,7 +564,7 @@ ${SENDER_PERSONA_FN}
  * The strategy is explained to the model, never a script per case (owner rule).
  */
 export const COMPOSE_MESSAGE_PROMPT_CODE = `
-export async function main(person, instruction, offer, brand, rep, facts, history, currentDate, occurrence, triggerType, who, reach) {
+export async function main(person, offer, brand, rep, facts, history, currentDate, occurrence, triggerType, who, reach) {
   const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
   if (!offerName) throw new Error("compose-message: the campaign's offer read carries no name");
   const b = brand?.brand ?? {};
@@ -599,7 +599,6 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const owner = senderName ?? "the founder";
   const exact = facts?.exact ?? [];
   const neverGive = facts?.neverGive ?? [];
-  const text = typeof instruction === "string" ? instruction.trim() : "";
   const followup = person.kind === "followup";
   // A row nothing of this campaign was ever sent to: the message an occurrence made due, deferred by an earlier look.
   const owed = followup && reach?.owed === true;
@@ -661,9 +660,6 @@ export async function main(person, instruction, offer, brand, rep, facts, histor
   const last = history.lastMessage;
   const message = [
     "NOW: " + nowIso + " (" + stampAt(nowIso, null) + "; their own local time is under THEIR LOCAL TIME)",
-    "",
-    "INSTRUCTION:",
-    text || "(none: follow the strategy)",
     "",
     ...(whyNow.length ? ["WHY WE WRITE NOW:", ...whyNow, ""] : []),
     "THEIR LOCAL TIME:",
@@ -1198,7 +1194,6 @@ function coldWhatsappOutreachDagUnvoiced(): DAG {
         retries: 0,
         inputMapping: {
           person: "$ref:pick-person.output",
-          instruction: "$ref:start-run.output.instruction",
           offer: "$ref:offer-economics.output",
           brand: "$ref:brand-profile.output",
           rep: "$ref:sales-rep.output",

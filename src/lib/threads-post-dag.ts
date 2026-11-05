@@ -18,7 +18,7 @@
  *    spaces the day's threads about an hour apart. The account is the candidate whose last thread is the oldest (never
  *    used first), so a newly connected Pro (AI) account joins the rotation with no change.
  *  - The brand's own facts (offer answers + the fields the client CONFIRMED, `GATHER_CLIENT_FACTS_CODE`: never the
- *    site's prefill), its profile, and the campaign's instruction (`/start-run`).
+ *    site's prefill), its profile, and the campaign's brief (`/start-run`, handed by the converter as `body.brief`).
  *  - Two tolerated reads (a run without them still writes, logged): chat-service with live web search finds this
  *    week's fresh angles in the brand's industry (angles only, never a figure); and what the brand ITSELF publishes
  *    on its own domain, generic for every brand: scraping-service maps the site (`map-own-site`), the reading model
@@ -32,7 +32,7 @@
  *    features-service (`withLegBestTemplate`: writer-pick, writer-plan, template-head; a pick missing either = the
  *    run fails, nothing published), so the dynasties of this pipe are A/B tested like every writer's. `compose-write`
  *    hands it `variables` (`brandName`, `getStartedLine`) and one `context` whose section headers the templates read
- *    by name (BRAND, PUBLISHED ON, TODAY, SUGGESTED SHAPE, OUR FACTS, NEVER STATE OR OFFER, THE BRAND'S INSTRUCTION,
+ *    by name (BRAND, PUBLISHED ON, TODAY, SUGGESTED SHAPE, OUR FACTS, NEVER STATE OR OFFER,
  *    OUR PUBLISHED FIGURES, THIS WEEK IN THE INDUSTRY, ALREADY POSTED). The writer is TRUSTED (owner 2026-10-16):
  *    its thread is published as written, never validated, retried or refused; `final-thread` only rewrites dashes,
  *    keeps at most 3 replies and places the GET STARTED line on the last part.
@@ -119,7 +119,6 @@ export async function main(dryRun, campaignId, brandId, offerId, startRun) {
     campaignId: campaign,
     brandId: brand,
     offerId: offer,
-    instruction: typeof startRun?.instruction === "string" && startRun.instruction.trim() ? startRun.instruction.trim() : null,
     now: now.toISOString(),
     date: now.toISOString().slice(0, 10),
     inWindow: hour >= ${PUBLISH_WINDOW_UTC[0]} && hour < ${PUBLISH_WINDOW_UTC[1]},
@@ -296,7 +295,6 @@ export async function main(plan, turn, brand, facts, angles, ownFigures) {
     "OUR FACTS (the only source of numbers besides OUR PUBLISHED FIGURES):",
     ...(exact.length ? exact : ["(none)"]),
     ...(never.length ? ["", "NEVER STATE OR OFFER:", ...never] : []),
-    ...(plan.instruction ? ["", "THE BRAND'S INSTRUCTION FOR THESE THREADS:", plan.instruction] : []),
     "",
     "OUR PUBLISHED FIGURES (read today on " + domain + ", each with its page):",
     own ?? "(none)",

@@ -36,7 +36,7 @@ const fixture = JSON.parse(readFileSync(new URL("../fixtures/trigger-right-momen
 const a = fixture.args as Record<string, any>;
 const compose = () =>
   loadMain(COMPOSE_MESSAGE_PROMPT_CODE)(
-    a.person, a.instruction, a.offer, a.brand, a.rep, a.facts, a.history, a.currentDate, a.occurrence, a.triggerType, a.who, { skip: false, owed: false },
+    a.person, a.offer, a.brand, a.rep, a.facts, a.history, a.currentDate, a.occurrence, a.triggerType, a.who, { skip: false, owed: false },
   );
 const inDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString();
 
@@ -105,7 +105,7 @@ describe("the deferred look: a row this campaign never wrote to is still owed", 
 
   it("the prompt says it was deferred, and a written one is the occurrence's one message", async () => {
     const out = await loadMain(COMPOSE_MESSAGE_PROMPT_CODE)(
-      { ...a.person, ...person, lead: a.person.lead }, a.instruction, a.offer, a.brand, a.rep, a.facts, a.history, a.currentDate,
+      { ...a.person, ...person, lead: a.person.lead }, a.offer, a.brand, a.rep, a.facts, a.history, a.currentDate,
       { answering: false, skipTriggerRead: true }, { notCalled: true }, a.who, { skip: false, owed: true },
     );
     expect(Object.values(out.variables as Record<string, string>).join("\n")).toContain("this is the ONE message this fact gets");
