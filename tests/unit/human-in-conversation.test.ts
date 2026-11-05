@@ -13,11 +13,6 @@ import {
   buildColdWhatsappOutreachDag,
 } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { FOLLOW_UP_WHATSAPP_REFUSAL_CODES } from "../../src/lib/follow-up-dag.js";
-import {
-  CLASSIFY_SEND_CODE,
-  buildAiMeetingBookingDag,
-  needsWhatsappTakeover,
-} from "../../src/lib/ai-meeting-booking-dag.js";
 
 type Fn = (...args: unknown[]) => Promise<Record<string, any>>;
 const loadMain = (code: string): Fn =>
@@ -49,19 +44,5 @@ describe("human_in_conversation is a named WhatsApp refusal, never a failed run"
 
     const occ = await record({ kind: "occurrence", rowId: "r", email: "x@y.com" }, refused, "2026-10-16", { skip: false }, { decision: "write" });
     expect(occ).toMatchObject({ body: { kind: "stopped", reason: "whatsapp_human_in_conversation" } });
-  });
-
-  it("ai-meeting-booking: the WhatsApp reply refused this way is the takeover, a clean end stating the refusal", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const out = await loadMain(CLASSIFY_SEND_CODE)({ ok: false, skipped: true, notCalled: true }, refused, "whatsapp");
-    expect(out).toMatchObject({ outcome: "human_took_over", delivery: { state: "refused", code: HUMAN_IN_CONVERSATION_CODE, reason: refused.refusal } });
-    // Any other refusal still fails loud.
-    await expect(loadMain(CLASSIFY_SEND_CODE)({}, { ok: false, skipped: true, code: "not_on_whatsapp" }, "whatsapp")).rejects.toThrow(/no send on record/);
-    const dag = buildAiMeetingBookingDag({ provider: "anthropic", model: "opus" } as never);
-    const send = dag.nodes.find((n) => n.id === "send-whatsapp-reply");
-    expect((send?.config as { skipOnRefusalCodes: string[] }).skipOnRefusalCodes).toEqual([HUMAN_IN_CONVERSATION_CODE, "stated_not_to_brand"]);
-    expect(dag.edges.some((e) => e.to === "end-run-human-took-over" && e.condition?.includes("human_took_over"))).toBe(true);
-    expect(needsWhatsappTakeover(dag)).toBe(false);
-    expect(needsWhatsappTakeover({ nodes: [{ id: "send-whatsapp-reply", config: {} }] })).toBe(true);
   });
 });

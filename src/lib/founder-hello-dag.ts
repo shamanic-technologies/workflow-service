@@ -41,7 +41,7 @@
 import type { DAG, DAGNode } from "./dag-validator.js";
 import { GENERATE_WHATSAPP_PATH, withLegBestTemplate } from "./whatsapp-template-writer.js";
 import { CLAIM_PERSON_CODE } from "./claim-person.js";
-import { CRM_WHATSAPP_SEND } from "./ai-meeting-booking-dag.js";
+import { CRM_WHATSAPP_SEND } from "./answering-steps.js";
 import { SENDER_PERSONA_FN } from "./sender-persona.js";
 import { BUBBLE_SEND_FN, HAND_TYPED_FN } from "./whatsapp-bubbles.js";
 import { ASSISTANT_PART_MARKER } from "./founder-hello-template.js";

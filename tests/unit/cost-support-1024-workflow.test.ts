@@ -1,17 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
-import { validateDAG } from "../../src/lib/dag-validator.js";
-import {
-  buildAiMeetingBookingDag,
-  needsEscalationHandOver,
-  PLAN_HAND_OVER_CODE,
-} from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
-import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import {
   DECLARE_BOOKING_CALL_CODE,
-  DECLARE_BOOKING_CALL_NODE_ID,
-  needsBookingCallDeclaration,
 } from "../../src/lib/booking-call-outcome.js";
 
 /**
@@ -27,76 +16,7 @@ function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, 
   return new Function(body)() as (...args: unknown[]) => Promise<Record<string, any>>;
 }
 
-describe("ai-meeting-booking: an escalated row is never left due (ESCALATION-HANDOVER-1024)", () => {
-  const plan = loadMain(PLAN_HAND_OVER_CODE);
-  const email = { replyChannel: "email" };
-
-  it("hands over a row on this campaign's own queue even when the escalation stopped a row", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await plan(email, { queue: "own", followup: { id: "r1" } }, { escalation: { followupsStopped: true } })).toMatchObject({ skip: false });
-  });
-
-  it("hands over when the escalation stopped nothing (already_escalated: the hourly loop of 2026-10-23)", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const already = { success: true, escalation: { handoff: "already_escalated", followupsStopped: false } };
-    expect(await plan(email, { queue: "own", followup: { id: "215bcdc9" } }, already)).toMatchObject({ skip: false });
-    expect(await plan(email, { queue: "predecessor", followup: { id: "r2" } }, already)).toMatchObject({ skip: false });
-  });
-
-  it("leaves a predecessor row the escalation handed over itself (unchanged behaviour)", async () => {
-    expect(await plan(email, { queue: "predecessor", followup: { id: "r3" } }, { escalation: { followupsStopped: true } })).toMatchObject({ skip: true });
-  });
-
-  it("any chat thread is handed here, as before", async () => {
-    expect(await plan({ replyChannel: "whatsapp" }, { queue: "own" }, { ok: false, skipped: true, notCalled: true })).toMatchObject({ skip: false });
-  });
-
-  for (const [name, dag] of [
-    ["parent", buildAiMeetingBookingDag({ provider: "google", model: "pro" })],
-    ["offer-document copy", buildOfferDocumentReplyDag({ provider: "google", model: "pro" })],
-  ] as const) {
-    it(`${name}: escalate -> plan-hand-over -> hand-over, hand-over skips on the plan`, () => {
-      expect(validateDAG(dag).errors).toEqual([]);
-      expect(() => dagToOpenFlow(dag, `esc-${name.replace(/ /g, "-")}`)).not.toThrow();
-      expect(dag.edges).toContainEqual({ from: "escalate-unanswerable", to: "plan-hand-over" });
-      expect(dag.edges).toContainEqual({ from: "plan-hand-over", to: "hand-over" });
-      expect(dag.edges.some((e) => e.from === "escalate-unanswerable" && e.to === "hand-over")).toBe(false);
-      const hand = dag.nodes.find((n) => n.id === "hand-over")!;
-      expect(hand.inputMapping?.skip).toBe("$ref:plan-hand-over.output.skip");
-      expect(needsEscalationHandOver(dag)).toBe(false);
-    });
-  }
-
-  it("the seed predicate flags a stored DAG without the step", () => {
-    const dag = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
-    expect(needsEscalationHandOver({ nodes: dag.nodes.filter((n) => n.id !== "plan-hand-over") })).toBe(true);
-    expect(needsEscalationHandOver({ nodes: [{ id: "draft" }] })).toBe(false);
-  });
-});
-
-describe("ai-instant-call declares booking_call once the call is placed", () => {
-  for (const [name, dag] of [
-    ["default", buildAiInstantCallDag()],
-    ["email-only copy", buildAiInstantCallDag({ emailRepliesOnly: true })],
-  ] as const) {
-    it(`${name}: one declaration after the call is recorded, before the end-run`, () => {
-      expect(validateDAG(dag).errors).toEqual([]);
-      expect(() => dagToOpenFlow(dag, `bc-${name.replace(/ /g, "-")}`)).not.toThrow();
-      const nodes = dag.nodes.filter((n) => n.id === DECLARE_BOOKING_CALL_NODE_ID);
-      expect(nodes).toHaveLength(1);
-      expect(dag.edges).toContainEqual({ from: "ring-rep", to: "record-called" });
-      expect(dag.edges).toContainEqual({ from: "record-called", to: DECLARE_BOOKING_CALL_NODE_ID });
-      expect(dag.edges).toContainEqual({ from: DECLARE_BOOKING_CALL_NODE_ID, to: "end-run" });
-      expect(nodes[0].inputMapping).toMatchObject({
-        placed: "$ref:resolve-call.output.ok",
-        occasion: "$ref:resolve-call.output.occasion",
-        leadId: "$ref:claim-followup.output.followup.leadId",
-        runId: "$ref:flow_input.runId",
-      });
-      expect(needsBookingCallDeclaration(dag)).toBe(false);
-    });
-  }
-
+describe("the booking_call declaration script (ai-instant-call, now its stored script's runner declares)", () => {
   describe("the declaration script", () => {
     const main = loadMain(DECLARE_BOOKING_CALL_CODE);
     const envs = { RUNS_SERVICE_URL: "http://runs/", RUNS_SERVICE_API_KEY: "k" };

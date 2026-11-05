@@ -1,6 +1,6 @@
 /**
  * MIGRATE-1105 S1b: the rep call as ONE stored script, ported from the AI Instant Call workflow DAG
- * (`ai-instant-call-dag.ts`) step by step. A lead replied with interest or filled in a form: the brand's sales rep is
+ * (its steps kept verbatim in `ai-instant-call-steps.ts`, the DAG deleted) step by step. A lead replied with interest or filled in a form: the brand's sales rep is
  * rung about them (who they are, what they wrote) and bridged to them on a keypress when their number is known.
  *
  *   lead-service    claims the occurrence's person on this campaign's queue;
@@ -31,7 +31,7 @@ import {
   PLAN_CLAIM_CODE,
   REPLY_CHANNEL_CODE,
   RESOLVE_CALL_CODE,
-} from "../../src/lib/ai-instant-call-dag.js";
+} from "./ai-instant-call-steps.js";
 import { LEAD_SUBJECT_SERVICE } from "../../src/lib/message-written-outcome.js";
 
 export const AI_INSTANT_CALL_OUTCOME = "booking_call";
