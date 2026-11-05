@@ -387,6 +387,11 @@ describe("the campaign's strategy", () => {
     });
     await expect(pickScript(db, { outcome: "lead_found", servable: [], channel: null, campaignId: "camp-1" })).rejects.toThrow(/502/);
     expect((await pickScript(db, { outcome: "lead_found", servable: [], channel: null }))!.script.dynasty).toBe("dy_cold");
+    // A campaign whose strategy keeps no script keeps its workflow (the execute answers engine_not_live).
+    setScriptStrategyReader(async () => []);
+    expect(await servesChannel(db, "lead_found", null, "camp-1")).toBe(false);
+    setScriptStrategyReader(async () => ["dy_cold"]);
+    expect(await servesChannel(db, "lead_found", null, "camp-1")).toBe(true);
   });
 });
 

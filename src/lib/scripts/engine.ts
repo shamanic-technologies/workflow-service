@@ -194,12 +194,15 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
  * workflow (`engine_not_live`) instead of ending idle forever (MIGRATE-1105 S4: one org runs campaigns of several
  * channels on one outcome, migrated one at a time).
  */
-export async function servesChannel(db: AnyPgDb, outcome: string, channel: string | null): Promise<boolean> {
+export async function servesChannel(db: AnyPgDb, outcome: string, channel: string | null, campaignId?: string | null): Promise<boolean> {
   const rows = await db
     .select()
     .from(scripts)
     .where(and(eq(scripts.outcome, outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+  // A campaign whose STRATEGY keeps none of them keeps its workflow too, never an idle Engine (unreadable throws).
+  const kept = campaignId && rows.length > 0 ? new Set(await scriptStrategy(campaignId, outcome)) : null;
   for (const row of rows) {
+    if (kept && !kept.has(row.dynasty)) continue;
     const stated = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof stated === "string" && stated !== channel) continue;
     if ((await provenness(db, row)).runnable) return true;
