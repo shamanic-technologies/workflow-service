@@ -19,6 +19,7 @@ import { scriptRuns, scriptStorage, scripts, type ScriptRow } from "../../db/sch
 import { runScript, type Bridge, type ScriptResult } from "./sandbox.js";
 import { callVendor, type VendorDeps } from "./vendors.js";
 import { ScriptCatalogueError, activeVersion, caseCount, dynastyVersions, type AnyPgDb } from "./script-catalogue.js";
+import { pickScript } from "./engine.js";
 
 export interface SubjectRef {
   service: string;
@@ -188,10 +189,18 @@ export async function runStoredScript(
   const vendorCalls: ScriptRunResult["vendorCalls"] = [];
   const trace: NonNullable<ScriptRunResult["trace"]> = [];
 
+  // The Request this run hands the next piece it orders (`ctx.ask`), consumed by that `ctx.get`.
+  let asked: Record<string, unknown> | null = null;
+
   const bridge: Bridge = async (op, args) => {
     if (op === "get") {
       const outcome = String(args[0]);
       const held = input.units[outcome];
+      if (held === undefined && asked) {
+        const request = asked;
+        asked = null;
+        return provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, headers: who.headers }, deps);
+      }
       if (held === undefined) return { stop: `the script asked for ${outcome}, which this step was not handed (materials: ${Object.keys(input.units).join(", ") || "none"})` };
       const n = gotten.get(outcome) ?? 0;
       const list = Array.isArray(held) ? held : [held];
@@ -218,7 +227,12 @@ export async function runStoredScript(
     if (op === "storage.get" || op === "storage.set" || op === "storage.delete" || op === "storage.count") {
       return { v: await storageOp(db, who.orgId, row.outcome, op, args) };
     }
-    if (op === "ask") return { stop: "ctx.ask: no Provider serves a run-subject piece to a stored script yet" };
+    if (op === "ask") {
+      const request = args[0];
+      if (!request || typeof request !== "object" || Array.isArray(request)) return { stop: "ctx.ask takes one Request object" };
+      asked = request as Record<string, unknown>;
+      return { v: null };
+    }
     if (op === "accounts") return { stop: "ctx.accounts: connected accounts are not served to stored scripts yet" };
     if (op === "wait") {
       const days = Number(args[0]);
@@ -288,6 +302,68 @@ export async function runStoredScript(
     .where(eq(scriptRuns.id, record!.id));
   if (finalStatus === "failed" || finalStatus === "stopped") throw new ScriptRunFailed(result);
   return result;
+}
+
+/**
+ * MIGRATE-1105 S2, a Provider piece: `ctx.ask(request)` then `ctx.get(<outcome>)` on an outcome the run does not hold
+ * runs THAT Engine's script as a CHILD run of the asking script's run, and hands back its Unit. ONE mechanism for every
+ * Engine: the child is picked by the same Rating as an Engine run (`pickScript`: fed by the Request's units, the
+ * campaign's channel), runs with its own runs-service run (`script:<outcome>/<dynasty>`, same identity and campaign
+ * headers, no workflow slug), its own `script_runs` row, so its Engine keeps its runs, Monitoring, guard and Rating.
+ *
+ * The Request: `units` (the child's materials, `{<outcome>: {content, subject?}}`), optional `request` (its
+ * `ctx.request`), `tactics`, `subject`, `recordedBy`, `trace` (as `POST /orgs/scripts/run` takes them).
+ * No candidate = the asking script stops (named), never a fallback script. A child that does not make a Unit (fails,
+ * stops, makes nothing, unmade) stops the asking script with the child's reason; a child cannot wait (no nested waits
+ * yet: its `ctx.wait` is refused like a step's). The Unit read back carries `run` = the child's whole result (the
+ * `POST /orgs/scripts/run` answer), so a recording service can store and declare it on the child's run.
+ */
+async function provide(
+  db: AnyPgDb,
+  outcome: string,
+  request: Record<string, unknown>,
+  parent: { orgId: string; userId: string; runId: string; headers: Record<string, string> },
+  deps: { ledger: LedgerDeps; vendors: VendorDeps },
+): Promise<{ v: unknown } | { stop: string }> {
+  const rawUnits = request.units;
+  if (!rawUnits || typeof rawUnits !== "object" || Array.isArray(rawUnits)) return { stop: `ctx.ask for ${outcome}: the Request names no units (the materials its script reads)` };
+  const units: Record<string, MaterialUnit | MaterialUnit[]> = {};
+  for (const [k, v] of Object.entries(rawUnits as Record<string, unknown>)) {
+    const list = Array.isArray(v) ? v : [v];
+    if (!list.every((u) => u && typeof u === "object" && (u as MaterialUnit).content && typeof (u as MaterialUnit).content === "object")) {
+      return { stop: `ctx.ask for ${outcome}: unit ${k} is not {content, subject?}` };
+    }
+    units[k] = v as MaterialUnit | MaterialUnit[];
+  }
+  const pick = await pickScript(db, { outcome, servable: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null });
+  if (!pick) return { stop: `ctx.get(${outcome}): no live script of that Engine can run on ${Object.keys(units).join(", ") || "nothing"}` };
+  const headers = { ...parent.headers };
+  delete headers["x-workflow-slug"];
+  const subject = subjectOf(request.subject);
+  let child: ScriptRunResult;
+  try {
+    child = await runStoredScript(
+      db,
+      {
+        outcome,
+        dynasty: pick.script.dynasty,
+        version: pick.script.version,
+        units,
+        ...(subject ? { subject } : {}),
+        ...(request.request && typeof request.request === "object" ? { request: request.request as Record<string, unknown> } : {}),
+        ...(request.tactics && typeof request.tactics === "object" ? { tactics: request.tactics as Record<string, unknown> } : {}),
+        ...(typeof request.recordedBy === "string" ? { recordedBy: request.recordedBy } : {}),
+        ...(request.trace === true ? { trace: true } : {}),
+      },
+      { orgId: parent.orgId, userId: parent.userId, parentRunId: parent.runId, headers },
+      deps,
+    );
+  } catch (e) {
+    if (e instanceof ScriptRunFailed) return { stop: `${e.result.scriptSlug} (asked for ${outcome}) ${e.result.status}: ${e.result.error ?? ""}` };
+    return { stop: `ctx.get(${outcome}): ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (child.status !== "made" || !child.unit) return { stop: `${child.scriptSlug} (asked for ${outcome}) made no Unit: ${child.status}${child.error ? ` (${child.error})` : ""}` };
+  return { v: { id: `${child.runId}:${outcome}`, outcome, subject: child.unit.subject?.id ?? "", ageDays: 0, content: child.unit.content, run: child } };
 }
 
 function subjectOf(v: unknown): SubjectRef | null {
