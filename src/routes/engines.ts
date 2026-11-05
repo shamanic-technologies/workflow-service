@@ -179,8 +179,8 @@ router.post("/engines/:outcome/execute", requireApiKey, executeRateLimit, async 
       res.status(409).json({ code: "engine_not_live", error: `the ${outcome} Engine does not run this org's campaigns: dispatch its workflow`, state });
       return;
     }
-    if (!(await servesChannel(db, outcome, d.featureSlug))) {
-      res.status(409).json({ code: "engine_not_live", error: `no script of the ${outcome} Engine serves this campaign yet: dispatch its workflow`, state: { ...state, live: false } });
+    if (!(await servesChannel(db, outcome, d.featureSlug, d.campaignId))) {
+      res.status(409).json({ code: "engine_not_live", error: `no script of the ${outcome} Engine serves this campaign yet (its channel or its strategy keeps none): dispatch its workflow`, state: { ...state, live: false } });
       return;
     }
     const conflictPolicy = resolveExecutionConflictPolicy(body.conflictPolicy);
