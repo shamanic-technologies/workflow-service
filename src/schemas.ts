@@ -2721,7 +2721,7 @@ export const ScriptGuardSchema = z
   .object({
     state: z.enum(["off", "watching", "rolled_back"]).describe("`off`: no workflow switched to a script for this outcome; `watching`: switched, checked after script runs; `rolled_back`: the guard (or staff) re-activated the previous versions."),
     windowMinutes: z.number().int(),
-    lastHour: z.object({ runs: z.number().int(), failed: z.number().int(), errorRate: z.number().nullable(), unmade: z.number().int().optional() }).describe("Finished script runs of this outcome over the window (failed = failed + stopped; `unmade` = no Unit for a reason the world gave, counted apart, never an error)."),
+    lastHour: z.object({ runs: z.number().int(), failed: z.number().int(), errorRate: z.number().nullable(), unmade: z.number().int().optional(), shared: z.number().int().optional() }).describe("Finished script runs of this outcome over the window (failed = failed + stopped; `unmade` = no Unit for a reason the world gave, counted apart, never an error; `shared` = failures at an upstream call the old path's workflow runs also failed at over the last 7 days, counted apart, never an error)."),
     baselineErrorRate: z.number().describe("The service path's error rate the script is held to: its latest stored Monitoring day (`baselineSource` measured), else 0.5 % (default)."),
     baselineSource: z.enum(["measured", "default"]),
     thresholdErrorRate: z.number().describe("Roll back above this rate (the larger of 2 % and 4x the baseline), with at least `minRuns` runs and a one-sided binomial test vs the baseline below 0.001."),

@@ -3683,6 +3683,9 @@
               },
               "unmade": {
                 "type": "integer"
+              },
+              "shared": {
+                "type": "integer"
               }
             },
             "required": [
@@ -3690,7 +3693,7 @@
               "failed",
               "errorRate"
             ],
-            "description": "Finished script runs of this outcome over the window (failed = failed + stopped; `unmade` = no Unit for a reason the world gave, counted apart, never an error)."
+            "description": "Finished script runs of this outcome over the window (failed = failed + stopped; `unmade` = no Unit for a reason the world gave, counted apart, never an error; `shared` = failures at an upstream call the old path's workflow runs also failed at over the last 7 days, counted apart, never an error)."
           },
           "baselineErrorRate": {
             "type": "number",

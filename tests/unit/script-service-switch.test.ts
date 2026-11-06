@@ -7,9 +7,9 @@ import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/scri
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { serviceSwitchState, switchService } from "../../src/lib/scripts/script-service-switch.js";
-import { checkGuard, guardView, rollBackSwitches } from "../../src/lib/scripts/script-guard.js";
+import { checkGuard, guardView, rollBackSwitches, scriptFailureKind, workflowFailureKind } from "../../src/lib/scripts/script-guard.js";
 import { readMonitoring, SERVICE_PATHS } from "../../src/lib/scripts/script-monitoring.js";
-import { scriptRuns, scripts } from "../../src/db/schema.js";
+import { scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
 import type { ReplayCase } from "../../src/lib/scripts/replay.js";
 
 // FACTORY-P3 next outcomes: a SERVICE switch (an outcome a service makes in its own code, no workflow step calls it:
@@ -85,6 +85,34 @@ describe("a service switch", () => {
     // Switched again after the roll-back: a new row, the service reads the latest.
     await switchService(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", callerService: "instantly" });
     expect((await serviceSwitchState(db, "lead_interested", "instantly")).switched).toBe(true);
+  });
+
+  it("a failure the old path shares (an upstream timeout) never rolls a script back on its own (INCIDENT 2026-11-06)", async () => {
+    const script = await provenJudge();
+    await switchService(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", callerService: "instantly" });
+    const now = new Date();
+    expect(scriptFailureKind("lead.serve: Lead serve setup failed")).toBe("POST lead/orgs/buffer/next");
+    expect(scriptFailureKind("lead.serve: fetch failed")).toBe("POST lead/orgs/buffer/next");
+    expect(scriptFailureKind("llm.complete failed: 500")).toBeNull();
+    expect(scriptFailureKind("TypeError: x is undefined")).toBeNull();
+    expect(workflowFailureKind('POST lead/orgs/buffer/next failed (500): {"error":"Lead serve setup failed"}')).toBe("POST lead/orgs/buffer/next");
+    expect(workflowFailureKind("GET lead/orgs/leads/{id}/history failed (502): x")).toBe("GET lead/orgs/leads/{id}/history");
+    // The hour of 2026-11-06 16:52: 47 runs, 4 serve timeouts.
+    await db.insert(scriptRuns).values(Array.from({ length: 47 }, (_, i) => ({ scriptId: script.id, orgId: "o", runId: `r${i}`, parentRunId: "p", status: i < 4 ? "failed" : "made", error: i < 4 ? "lead.serve: Lead serve setup failed" : null, createdAt: now })));
+    // The old path never failed that call: the script's failures are its own, it rolls back.
+    expect((await guardView(db, "lead_interested", now)).lastHour).toMatchObject({ runs: 47, failed: 4, shared: 0 });
+    // The old path's workflows failed the same serve 3 days ago (a fresh read: the memo is per process, 30 min).
+    await db.insert(workflowRuns).values({ orgId: "o2", status: "failed", failedStep: "fetch_lead", failedReason: 'POST lead/orgs/buffer/next failed (500): {"error":"Lead serve setup failed","detail":"The operation was aborted due to timeout"}', createdAt: new Date(now.getTime() - 3 * 86_400_000) });
+    const { resetGuardMemo } = await import("../../src/lib/scripts/script-guard.js");
+    resetGuardMemo();
+    const out = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
+    expect(out).toMatchObject({ checked: true, rollBack: false, result: null, window: { runs: 47, failed: 0, shared: 4 } });
+    expect((await serviceSwitchState(db, "lead_interested", "instantly")).switched).toBe(true);
+    // A failure only the script has still counts: 4 throws in its own code roll it back.
+    await db.insert(scriptRuns).values(Array.from({ length: 4 }, (_, i) => ({ scriptId: script.id, orgId: "o", runId: `t${i}`, parentRunId: "p", status: "failed", error: "TypeError: reply.content is undefined", createdAt: now })));
+    const bad = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
+    expect(bad.result?.rolledBack).toHaveLength(1);
+    expect((await serviceSwitchState(db, "lead_interested", "instantly")).rollbackReason).toMatch(/\(4 of 51 runs; 4 more failed at a call the old path also fails, not counted\)/);
   });
 
   it("the guard rolls a service switch back on a bad hour and Monitoring goes red", async () => {
