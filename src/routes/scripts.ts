@@ -8,6 +8,7 @@ import { zodErrorDetails } from "../lib/zod-error-details.js";
 import {
   CreateScriptRequestSchema,
   ForkScriptRequestSchema,
+  RehomeScriptRequestSchema,
   PutScriptCasesRequestSchema,
   ReplayScriptRequestSchema,
   RunScriptRequestSchema,
@@ -36,6 +37,7 @@ import { ScriptRunFailed, productionLedgerDeps, runStoredScript } from "../lib/s
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
 import type { ReplayCase } from "../lib/scripts/replay.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, readMonitoring } from "../lib/scripts/script-monitoring.js";
+import { rehomeScript } from "../lib/scripts/script-rehome.js";
 import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, readEngineMonitoring } from "../lib/scripts/engine-monitoring.js";
 import { noteScriptRunForGuard, rollBackSwitches, guardView } from "../lib/scripts/script-guard.js";
 import { SwitchError, recordSwitch } from "../lib/scripts/script-writer-switch.js";
@@ -152,6 +154,24 @@ router.post("/scripts/dynasty/:outcome/:dynasty/upgrade", requireApiKey, async (
     res.status(201).json(serveScript(row, await caseCount(db, row.outcome, row.dynasty)));
   } catch (err) {
     fail(res, err, "upgrade script");
+  }
+});
+
+router.post("/scripts/dynasty/:outcome/:dynasty/rehome", requireApiKey, async (req, res) => {
+  const parsed = RehomeScriptRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const out = await rehomeScript(db, req.params.outcome, req.params.dynasty, parsed.data, author(res, req), productionCatalogueDeps());
+    console.log(
+      `[workflow-service] script re-homed ${out.from.outcome}/${out.from.dynasty}/v${out.from.version} -> ${out.script.outcome}/${out.script.dynasty}/v${out.script.version} by ${out.script.createdBy}: ` +
+        `${out.casesCopied} cases, ${out.storageRowsCopied} stored rows, switches ${JSON.stringify(out.switchesCopied)}, ${out.waitsMoved} waits`,
+    );
+    res.status(201).json({ ...out, script: serveScript(out.script, await caseCount(db, out.script.outcome, out.script.dynasty)) });
+  } catch (err) {
+    fail(res, err, "re-home script");
   }
 });
 

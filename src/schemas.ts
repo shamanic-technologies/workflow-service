@@ -2441,6 +2441,15 @@ export const UpgradeScriptRequestSchema = z
   })
   .openapi("UpgradeScriptRequest");
 
+export const RehomeScriptRequestSchema = z
+  .object({
+    toOutcome: ScriptSlugSchema.describe("The FINE outcome the dynasty makes from now on (a catalogue step, e.g. threads_post_published)."),
+    code: z.string().min(1).max(500_000).optional().describe("Absent: the active version's code."),
+    description: z.string().min(1).max(2000).optional(),
+    tactics: z.record(z.string(), z.unknown()).optional().describe("Absent: the active version's tactics without `channel` (the outcome says it now)."),
+  })
+  .openapi("RehomeScriptRequest");
+
 export const ForkScriptRequestSchema = z
   .object({
     dynasty: ScriptSlugSchema.describe("The new dynasty's name."),
@@ -2589,6 +2598,24 @@ registry.registerPath({
     201: { description: "New version", content: { "application/json": { schema: ScriptWithCodeSchema } } },
     400: { description: "Invalid code or no change", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: { description: "Unknown dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
+    422: { description: "Replay failed", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/rehome",
+  summary: "Re-home a script onto its fine outcome (MIGRATE-1105 S5): the next version of the same dynasty under the finer WHAT",
+  description:
+    "Owner rule 2026-11-06: the outcome is the WHAT, as fine as possible; the channel is no longer a tactic. Stores the next version of the dynasty (`created_from_script` = the active one) under `toOutcome`, replayed 100 % on the dynasty's recorded cases (copied with it), and copies every campaign switch scope of the family Engine in its SAME state, the script's stored state, and moves its open waits. The family version stays active until the pipe names the fine outcome; retire it then (`PUT .../status`).",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: RehomeScriptRequestSchema } } } },
+  responses: {
+    201: { description: "The re-homed version and what moved with it", content: { "application/json": { schema: z.object({ script: ScriptWithCodeSchema, from: z.object({ outcome: z.string(), dynasty: z.string(), version: z.number().int() }), casesCopied: z.number().int(), storageRowsCopied: z.number().int(), switchesCopied: z.array(z.object({ orgId: z.string().nullable(), state: z.string() })), waitsMoved: z.number().int() }) } } },
+    400: { description: "Unknown outcome, invalid code or same outcome", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "No live version", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Already re-homed", content: { "application/json": { schema: ErrorResponseSchema } } },
     422: { description: "Replay failed", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
