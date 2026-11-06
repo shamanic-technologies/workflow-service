@@ -310,14 +310,14 @@ internalScriptsRouter.get("/internal/scripts", requireApiKey, async (req, res) =
 
 internalScriptsRouter.post("/internal/scripts/switches/service", requireApiKey, async (req, res) => {
   const str = (k: string) => (typeof req.body?.[k] === "string" ? (req.body[k] as string).trim() : "");
-  const input = { outcome: str("outcome"), dynasty: str("dynasty"), callerService: str("callerService"), mode: str("mode") === "shadow" ? ("shadow" as const) : ("switched" as const) };
+  const input = { outcome: str("outcome"), dynasty: str("dynasty"), callerService: str("callerService"), callerTask: str("callerTask") || null, mode: str("mode") === "shadow" ? ("shadow" as const) : ("switched" as const) };
   if (!input.outcome || !input.dynasty || !input.callerService) {
     res.status(400).json({ error: "outcome, dynasty and callerService are required" });
     return;
   }
   try {
     const row = await switchService(db, input);
-    console.log(`[workflow-service] service switch ${input.outcome} (${input.callerService}) -> ${row.dynasty}/v${row.scriptVersion}`);
+    console.log(`[workflow-service] service switch ${input.outcome} (${input.callerService}${input.callerTask ? ` ${input.callerTask}` : ""}) ${row.state} -> ${row.dynasty}/v${row.scriptVersion}`);
     res.status(201).json(row);
   } catch (err) {
     if (err instanceof SwitchError) {
@@ -336,7 +336,8 @@ internalScriptsRouter.get("/internal/scripts/switches/service", requireApiKey, a
     return;
   }
   try {
-    res.json(await serviceSwitchState(db, outcome, callerService));
+    const callerTask = typeof req.query.callerTask === "string" && req.query.callerTask ? req.query.callerTask : null;
+    res.json(await serviceSwitchState(db, outcome, callerService, callerTask));
   } catch (err) {
     fail(res, err, "read a service switch");
   }

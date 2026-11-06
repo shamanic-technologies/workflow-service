@@ -203,7 +203,8 @@ async function recordedFeed(service, path, after, maxCases, pageSize = 1000) {
   const rows = [];
   let cursor = after;
   for (;;) {
-    const res = await fetch(`${base}${path}?${new URLSearchParams({ after: String(cursor), limit: String(pageSize) })}`, { headers: { "x-api-key": key } });
+    // A path may carry its own query (`?task=orphan-judgment`): the cursor is appended to it.
+    const res = await fetch(`${base}${path}${path.includes("?") ? "&" : "?"}${new URLSearchParams({ after: String(cursor), limit: String(pageSize) })}`, { headers: { "x-api-key": key } });
     const text = await res.text();
     if (!res.ok) throw new Error(`${service} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     const page = JSON.parse(text);
@@ -269,7 +270,9 @@ function splitCase(d) {
 function materialCase(d, unit) {
   if (!d || d.material === undefined || d.material === null) return { excluded: "the material is not recorded" };
   if (d.ours === undefined || d.ours === null) return { excluded: "the service's own answer is not recorded" };
-  return { case: { id: String(d.id), units: { [unit]: d.material }, calls: [], expect: { content: d.ours } } };
+  // A decision that calls a vendor (the orphan-reply judgment's Jev) records each call in the script's words.
+  if (d.calls !== undefined && d.calls !== null && !Array.isArray(d.calls)) return { excluded: "the calls are not a list" };
+  return { case: { id: String(d.id), units: { [unit]: d.material }, calls: Array.isArray(d.calls) ? d.calls : [], expect: { content: d.ours } } };
 }
 
 function selectionCase(d) {

@@ -2706,6 +2706,7 @@ export const ServiceSwitchStateSchema = z
   .object({
     outcome: z.string(),
     callerService: z.string(),
+    callerTask: z.string().nullable().describe("The decision asked about (null = the outcome's rows whatever their task)."),
     switched: z.boolean().describe("true: call `POST /internal/scripts/run` with `dynasty` in place of the service's own code; false: the service's own code (never switched, or rolled back)."),
     shadow: z.boolean().describe("Not switched: keep your own answer and ask `dynasty` the same question beside it, comparing both (the live proof before a switch)."),
     dynasty: z.string().nullable(),
@@ -2812,7 +2813,7 @@ registry.registerPath({
   description: "FACTORY-P3 service switch: no workflow step calls it, so there is no dynasty to upgrade; the caller service reads the state before each call. Refused (409) unless the dynasty's active version replays 100 % of its recorded cases. Idempotent while switched.",
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
-  request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), dynasty: z.string(), callerService: z.string(), mode: z.enum(["switched", "shadow"]).optional().describe("`shadow`: the caller keeps its own answer and asks the script beside it (no proof needed: nothing it answers is used); default `switched` (a proven port; ends the shadow).") }) } } } },
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ outcome: z.string(), dynasty: z.string(), callerService: z.string(), callerTask: z.string().optional().describe("The caller's task, when it makes this outcome through more than one decision (its Monitoring service path, e.g. `orphan-judgment`)."), mode: z.enum(["switched", "shadow"]).optional().describe("`shadow`: the caller keeps its own answer and asks the script beside it (no proof needed: nothing it answers is used); default `switched` (a proven port; ends the shadow).") }) } } } },
   responses: {
     201: { description: "Switched (or already switched)", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
     400: { description: "Unknown caller service or missing field", content: { "application/json": { schema: ErrorResponseSchema } } },
@@ -2827,7 +2828,7 @@ registry.registerPath({
   summary: "Whether a service runs the stored script or its own code for one outcome (service key only)",
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
-  request: { query: z.object({ outcome: z.string(), callerService: z.string() }) },
+  request: { query: z.object({ outcome: z.string(), callerService: z.string(), callerTask: z.string().optional().describe("The caller's decision task; omitted = the outcome's latest row whatever its task.") }) },
   responses: { 200: { description: "The state", content: { "application/json": { schema: ServiceSwitchStateSchema } } } },
 });
 

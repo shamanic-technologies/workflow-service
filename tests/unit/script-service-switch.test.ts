@@ -108,7 +108,7 @@ describe("a service switch", () => {
 
   it("names the queued steps' and the inbound reader's service paths for Monitoring (MIGRATE-1105 S2)", () => {
     expect(SERVICE_PATHS.message_queued).toEqual({ serviceName: "instantly-service", taskNames: ["queue-decision"] });
-    expect(SERVICE_PATHS.reply_received).toEqual({ serviceName: "instantly-service", taskNames: ["inbound-decision"] });
+    expect(SERVICE_PATHS.reply_received).toEqual({ serviceName: "instantly-service", taskNames: ["inbound-decision", "orphan-judgment"] });
   });
 });
 

@@ -73,6 +73,12 @@ export const LLM_COMPLETE = "llm.complete";
 export const CHAT_COMPLETE = "chat.complete";
 /** Jev yes/no judgments: `{state, questions: {<key>: {instructions, whenTrue?, whenFalse?}}}` -> `{probabilities: {<key>: P(yes)}, model}`. */
 export const JEV_NOUL = "jev.noul";
+/**
+ * Jev choice judgments (MIGRATE-1105 S2b, the orphan-reply judgment): `{state?, questions: {<key>: {type: "choice",
+ * instructions, criteria: {<option>: string | {what, examples?}}}}}` sent to chat-service exactly as stated (the body the
+ * service's own code sent) -> `{answers: {<key>: {choice, confidence, probabilities}}, model, usage}` as chat answered.
+ */
+export const JEV_CHOICE = "jev.choice";
 /** Our one voice (chat-service skill `client-comms`), for a writer that builds its own system prompt: `{content, version}`. */
 export const VOICE_READ = "voice.read";
 /** The open times of the offer's public booking page (`{bookingUrl, timezone}` -> `{slots, calendarId?, ...}`). */
@@ -180,7 +186,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
-export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
+export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, JEV_CHOICE, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
 
 /** Response schemas a script may name instead of spelling one (Anthropic needs a strict schema). */
 export const NAMED_RESPONSE_SCHEMAS: Record<string, Record<string, unknown>> = {
@@ -291,6 +297,30 @@ async function jevNoul(args: Record<string, unknown>, ctx: VendorCallContext, de
     probabilities[k] = p;
   }
   return { ok: true, data: { probabilities, model: out.model ?? null } };
+}
+
+async function jevChoice(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  const questions = args.questions as Record<string, { type?: unknown; instructions?: unknown; criteria?: unknown }> | undefined;
+  if (!questions || typeof questions !== "object" || Object.keys(questions).length === 0) return refuse("jev.choice needs questions");
+  for (const [k, q] of Object.entries(questions)) {
+    if (q?.type !== "choice") return refuse(`jev.choice question ${k} must be type choice`);
+    if (!str(q.instructions)) return refuse(`jev.choice question ${k} needs instructions`);
+    if (!q.criteria || typeof q.criteria !== "object" || Array.isArray(q.criteria) || Object.keys(q.criteria).length < 2) return refuse(`jev.choice question ${k} needs at least two criteria`);
+  }
+  let out: Record<string, unknown>;
+  try {
+    // Passed as stated: the request is byte for byte the one the service's own code sent (a replay compares it).
+    const body = { ...(args.state !== undefined ? { state: args.state } : {}), questions };
+    out = ctx.billing === "platform" ? await deps.platformJudge(body, platformHeaders(ctx.headers)) : await deps.judge(body, ctx.headers);
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+  const answers = (out.answers ?? {}) as Record<string, Record<string, unknown>>;
+  for (const k of Object.keys(questions)) {
+    const a = answers[k];
+    if (!a || typeof a.choice !== "string" || !a.probabilities || typeof a.probabilities !== "object") return refuse(`jev.choice: judgment ${k} answered without a choice`);
+  }
+  return { ok: true, data: { answers, model: out.model ?? null, usage: out.usage ?? null } };
 }
 
 async function voiceRead(deps: VendorDeps): Promise<VendorAnswer> {
@@ -421,6 +451,7 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
 export async function callVendor(name: string, args: Record<string, unknown> | null, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   if (name === LLM_COMPLETE || name === CHAT_COMPLETE) return complete(name, args ?? {}, ctx, deps);
   if (name === JEV_NOUL) return jevNoul(args ?? {}, ctx, deps);
+  if (name === JEV_CHOICE) return jevChoice(args ?? {}, ctx, deps);
   if (name === VOICE_READ) return voiceRead(deps);
   if (name === BOOKING_SLOTS) return bookingSlots(args ?? {}, deps);
   if (name in SERVICE_DOOR_VENDORS) return serviceDoor(name, args ?? {}, ctx, deps);
