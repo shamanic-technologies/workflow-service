@@ -80,6 +80,16 @@ describe("run doors (answering a lead)", () => {
     expect(late.ok).toBe(false);
   });
 
+  // MIGRATE-1105 S5: the producer declares the Unit under the outcome of the script's Engine (a re-homed script's fine one).
+  it("fills the outcome a producer declares with the script's Engine outcome; a script never names it", async () => {
+    const { seen, deps } = door([{ status: 201, body: { postId: "p1" } }]);
+    await callVendor("meta.threads.publish", { params: { id: "acc" }, body: { text: "hi" } }, { ...ctx, outcome: "threads_post_published" }, deps);
+    expect(seen[0]![3]).toEqual({ text: "hi", outcomeKey: "threads_post_published" });
+    await callVendor("meta.threads.publish", { params: { id: "acc" }, body: { text: "hi" } }, ctx, deps);
+    expect(seen[1]![3]).toEqual({ text: "hi" });
+    expect((await callVendor("meta.threads.publish", { params: { id: "acc" }, body: { text: "hi", outcomeKey: "x" } }, { ...ctx, outcome: "post_published" }, deps)).ok).toBe(false);
+  });
+
   it("every run door names an org route of its producer by a literal path, and a script can name it", async () => {
     for (const [name, d] of Object.entries(SERVICE_DOOR_VENDORS)) {
       if (!d.asRun) continue;
