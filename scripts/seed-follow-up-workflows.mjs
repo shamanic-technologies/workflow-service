@@ -110,7 +110,12 @@ if (new Set(sigs).size !== sigs.length) throw new Error(`two dynasties would sha
 
 for (const t of targets) {
   const w = rows.find((r) => r.workflowDynastySlug === t.dynasty);
-  if (!w) throw new Error(`${t.dynasty} is assigned to ${t.legs.join(", ")} but has no active version here`);
+  // A dynasty ported to a stored script (MIGRATE-1105 S4b) is deprecated here while still assigned: the script's own
+  // upgrade carries the change (`seed-script-port.mjs`), nothing to upgrade on this side.
+  if (!w) {
+    console.log(`${t.dynasty} (${t.legs.join(", ")}): no active version here (ported to a script, deprecated): skipped`);
+    continue;
+  }
   if (computeDAGSignature(w.dag) === computeDAGSignature(t.dag)) {
     console.log(`${t.dynasty} (${t.legs.join(", ")}): ${w.workflowSlug} is current (skipped)`);
   } else if (!APPLY) {
