@@ -218,6 +218,21 @@ describe("finalize holds the model to its contract before the send", () => {
     expect(out).toMatchObject({ decision: "write", channel: "whatsapp", skipWhatsapp: false, skipEmail: true });
     expect(out.whatsappBody).toEqual({ brandId: "brand-1", text: "Hi Sam, the price is 10-20 a seat.", idempotencyKey: "follow-up:event:ev-1", phone: "+33612345678", fromAccount: "+331" });
   });
+  it("WhatsApp: the Copilot's quoted message goes out as a WhatsApp Reply (SOPHIE-WA-HUMAN-1106)", async () => {
+    const out = await main(draft({ decision: "write", message: "Yes, Tuesday works.", replyToEventId: " $ev-quoted " }), person({ email: null, phone: "+33612345678" }), wa);
+    expect(out.whatsappBody).toEqual({ brandId: "brand-1", text: "Yes, Tuesday works.", idempotencyKey: "follow-up:event:ev-1", phone: "+33612345678", fromAccount: "+331", replyToEventId: "$ev-quoted" });
+  });
+  it("WhatsApp: no quoted message (absent, null, empty) = the body unchanged", async () => {
+    const base = { brandId: "brand-1", text: "Yes, Tuesday works.", idempotencyKey: "follow-up:event:ev-1", phone: "+33612345678", fromAccount: "+331" };
+    for (const replyToEventId of [undefined, null, "", "  "]) {
+      const out = await main(draft({ decision: "write", message: "Yes, Tuesday works.", replyToEventId }), person({ email: null, phone: "+33612345678" }), wa);
+      expect(out.whatsappBody).toEqual(base);
+    }
+  });
+  it("email: a quoted message id never reaches the email send", async () => {
+    const out = await main(draft({ decision: "write", subject: "Your price", bodyHtml: "<p>Here it is.</p>", replyToEventId: "$ev-quoted" }), person(), em);
+    expect(JSON.stringify(out)).not.toContain("ev-quoted");
+  });
   it("email: subject + body, WhatsApp skipped", async () => {
     const out = await main(draft({ decision: "write", subject: "Your price", bodyHtml: "<p>Here it is.</p>" }), person(), em);
     expect(out).toMatchObject({ decision: "write", channel: "email", to: "sam@example.com", skipEmail: false, skipWhatsapp: true, idempotencyKey: "follow-up:event:ev-1" });
