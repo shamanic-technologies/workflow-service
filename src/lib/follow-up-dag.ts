@@ -776,6 +776,9 @@ export async function main(draft, person, channel, campaignId) {
     if (channel.email) whatsappBody.email = channel.email;
     if (channel.phone) whatsappBody.phone = channel.phone;
     if (channel.fromAccount) whatsappBody.fromAccount = channel.fromAccount;
+    // The message the Copilot's answer quotes goes out as a WhatsApp « Reply » (SOPHIE-WA-HUMAN-1106); none = as before.
+    const quoted = typeof json.replyToEventId === "string" ? json.replyToEventId.trim() : "";
+    if (quoted) whatsappBody.replyToEventId = quoted;
     return { decision: "write", channel: "whatsapp", ...next, skipWhatsapp: false, skipEmail: true, whatsappBody };
   }
   if (channel.channel !== "email") throw new Error("finalize: no transport for channel " + JSON.stringify(channel.channel));
