@@ -77,7 +77,10 @@ describe("the leads-only lead follow-up DAG", () => {
       "body.assistant": "$ref:copilot-turn-plan.output.assistant",
       "body.messageField": "$ref:copilot-turn-plan.output.messageField",
       "body.idempotencyKey": "$ref:copilot-turn-plan.output.idempotencyKey",
+      "body.occurrenceItem": "$ref:copilot-turn-plan.output.occurrenceItem",
     });
+    // The plan reads the run's trigger: the occurrence's own crm record reaches the Copilot (SOPHIE-WA-HUMAN-1106).
+    expect(node(dag, "copilot-turn-plan")?.inputMapping).toMatchObject({ trigger: "$ref:flow_input.trigger" });
     // No second brain left on the call: no leg LLM pick, no spliced voice (the Copilot reads the skill itself).
     for (const id of ["llm-pick", "llm-plan", "read-client-comms", "client-comms-voice"]) expect(node(dag, id)).toBeUndefined();
     expect(dag.edges).toEqual(expect.arrayContaining([{ from: "compose", to: "copilot-turn-plan" }, { from: "copilot-turn-plan", to: "draft" }]));
@@ -95,11 +98,23 @@ describe("the leads-only lead follow-up DAG", () => {
       assistant: { name: "Sophie", role: "AI assistant", instructions: null },
       messageField: "message",
       idempotencyKey: "copilot-lead-turn:follow-up:event:ev1",
+      occurrenceItem: null,
     });
     const em = await plan(person, { channel: "email", email: "kevin+t@x.io", phone: null });
     expect(em).toMatchObject({ medium: "email", messageField: "bodyHtml", assistant: null, recipient: { phone: "+33600000000" } });
     expect(await plan(person, { channel: null, skipModel: true })).toEqual({ skip: true });
     await expect(plan({ ...person, sendKey: null }, { channel: "email" })).rejects.toThrow(/send key/);
+  });
+
+  it("hands the Copilot the occurrence's own crm record, exactly as crm stated it, else null (SOPHIE-WA-HUMAN-1106)", async () => {
+    const plan = loadMain(COPILOT_TURN_PLAN_CODE);
+    const person = { email: null, phone: "+33600000000", brandId: "b", sendKey: "follow-up:event:ev1", lead: {} };
+    const ch = { channel: "whatsapp", phone: "+33600000000" };
+    const item = { kind: "message", thread: [{ eventId: "$a", text: "hi" }], messages: [{ eventId: "$b", quote: { eventId: "$a", direction: "outbound", at: null, text: "hi" }, photo: null }] };
+    expect((await plan(person, ch, { type: "lead_event", item })).occurrenceItem).toEqual(item);
+    for (const trigger of [undefined, null, {}, { item: null }, { item: "text" }, { item: [1] }]) {
+      expect((await plan(person, ch, trigger)).occurrenceItem).toBeNull();
+    }
   });
 
   it("is its own signature, never a twin of the lead follow-up or the client check-in", () => {
