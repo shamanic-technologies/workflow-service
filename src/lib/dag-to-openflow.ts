@@ -1,3 +1,4 @@
+import { assertFlowTransformsReturnValues } from "./windmill-expr.js";
 import { BRIEF_FIELD, aliasRetiredInstructionRef, bodyWithBriefExpr, callsContentWriterDoor, chatLlmDoorKind } from "./campaign-brief.js";
 import type { DAG, DAGNode, DAGEdge } from "./dag-validator.js";
 import {
@@ -212,6 +213,9 @@ export function dagToOpenFlow(storedDag: DAG, name: string): OpenFlow {
       }
     }
   }
+
+  // A transform Windmill would evaluate to null is refused here, at conversion, never shipped (windmill-expr.ts).
+  assertFlowTransformsReturnValues(flow.value, name);
 
   return flow;
 }

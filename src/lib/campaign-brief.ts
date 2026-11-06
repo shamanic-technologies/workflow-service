@@ -50,24 +50,28 @@ export function chatLlmDoorKind(node: DAGNode): "systemPrompt" | "state" | null 
 /**
  * The JS expression of the request body with the brief appended (see the module doc). `bodyExpr` is the node's
  * already-collapsed body expression; `briefRef` reads the run's brief. Evaluated by Windmill at dispatch.
+ *
+ * ONE expression with no `;`: Windmill prepends `return` only to an expression free of `;` outside strings and runs
+ * anything else as a function body, so a block-bodied arrow here evaluated to undefined and every LLM door received
+ * `body: null` (2026-11-05, `windmill-expr.ts`). Arrows with expression bodies and ternaries only.
  */
 export function bodyWithBriefExpr(bodyExpr: string, briefRef: string, kind: "systemPrompt" | "state"): string {
   const header = JSON.stringify(BRIEF_HEADER);
+  const briefOf = `(typeof r === "string" ? r.trim() : "")`;
   const fn =
     kind === "systemPrompt"
-      ? `(b, r) => { const brief = typeof r === "string" ? r.trim() : ""; ` +
-        `if (!brief || !b || typeof b !== "object") return b; ` +
-        `const sys = typeof b.systemPrompt === "string" ? b.systemPrompt : ""; ` +
-        `const msg = typeof b.message === "string" ? b.message : ""; ` +
-        `if (sys.includes(brief) || msg.includes(brief)) return b; ` +
-        `return { ...b, systemPrompt: (sys ? sys + "\\n\\n" : "") + ${header} + "\\n" + brief }; }`
-      : `(b, r) => { const brief = typeof r === "string" ? r.trim() : ""; ` +
-        `if (!brief || !b || typeof b !== "object") return b; const s = b.state; ` +
-        `if (typeof s === "string") return s.includes(brief) ? b : { ...b, state: s + "\\n\\n" + ${header} + "\\n" + brief }; ` +
-        `if (Array.isArray(s)) return { ...b, state: { items: s, campaignBrief: brief } }; ` +
-        `if (s && typeof s === "object") return { ...b, state: { ...s, campaignBrief: brief } }; ` +
-        `return b; }`;
-  return `(${fn})(${bodyExpr}, ${briefRef})`;
+      ? `(b, r, h) => ((brief, sys, msg) => ` +
+        `(!brief || !b || typeof b !== "object" || sys.includes(brief) || msg.includes(brief)) ? b ` +
+        `: { ...b, systemPrompt: (sys ? sys + "\\n\\n" : "") + h + "\\n" + brief })` +
+        `(${briefOf}, (b && typeof b.systemPrompt === "string") ? b.systemPrompt : "", ` +
+        `(b && typeof b.message === "string") ? b.message : "")`
+      : `(b, r, h) => ((brief, s) => ` +
+        `(!brief || !b || typeof b !== "object") ? b ` +
+        `: typeof s === "string" ? (s.includes(brief) ? b : { ...b, state: s + "\\n\\n" + h + "\\n" + brief }) ` +
+        `: Array.isArray(s) ? { ...b, state: { items: s, campaignBrief: brief } } ` +
+        `: (s && typeof s === "object") ? { ...b, state: { ...s, campaignBrief: brief } } ` +
+        `: b)(${briefOf}, (b && typeof b === "object") ? b.state : undefined)`;
+  return `(${fn})(${bodyExpr}, ${briefRef}, ${header})`;
 }
 
 /** `$ref:<startRun>.output.instruction` (the retired field) read as the brief; any other mapping unchanged. */

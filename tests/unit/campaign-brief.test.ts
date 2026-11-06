@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
+import { evalAsWindmill, windmillAddsReturn } from "../../src/lib/windmill-expr.js";
 import type { DAG, DAGNode } from "../../src/lib/dag-validator.js";
 import {
   BRIEF_HEADER,
@@ -122,9 +123,8 @@ describe("every LLM step of every workflow reads the campaign's brief (ONE-BRIEF
   });
 });
 
-const run = (expr: string, brief: unknown) =>
-  // eslint-disable-next-line no-new-func
-  new Function("results", `return ${expr};`)({ start_run: { brief } });
+/** Evaluated the way Windmill does: an expression holding a ";" gets no implicit return and yields null. */
+const run = (expr: string, brief: unknown) => evalAsWindmill(expr, { results: { start_run: { brief } } }) as Record<string, any>;
 
 describe("bodyWithBriefExpr", () => {
   const BODY = JSON.stringify({ systemPrompt: "You write.", message: "Hi", provider: "anthropic" });
@@ -144,6 +144,24 @@ describe("bodyWithBriefExpr", () => {
   it("a writer that already carries the brief word for word is not handed it twice", () => {
     const body = JSON.stringify({ systemPrompt: "S", message: "INSTRUCTION from our client:\nSell to dentists only." });
     expect(JSON.stringify(run(bodyWithBriefExpr(body, "results.start_run?.brief", "systemPrompt"), "Sell to dentists only."))).toBe(body);
+  });
+
+  it("Windmill adds its implicit return to both forms: one expression, no \";\" outside strings (2026-11-05 body: null)", () => {
+    for (const kind of ["systemPrompt", "state"] as const) {
+      expect(windmillAddsReturn(bodyWithBriefExpr(BODY, "results.start_run?.brief", kind)), kind).toBe(true);
+    }
+  });
+
+  it("the compiled list_questions / draft bodies are objects under Windmill's evaluation, brief or not", () => {
+    const mods = allModules(dagToOpenFlow(buildAiMeetingBookingDag(CELL), "amb").value.modules as Mod[]);
+    const fu = allModules(dagToOpenFlow(buildFollowUpReactiveDag({ readFigures: false }), "fu").value.modules as Mod[]);
+    for (const [m, id] of [[mods, "list_questions"], [mods, "draft_reply"], [fu, "draft"]] as const) {
+      const expr = m.find((x) => x.id === id)!.value.input_transforms!.body.expr!;
+      for (const brief of ["Sell to dentists only.", null]) {
+        const out = evalAsWindmill(expr, { results: { start_run: { brief } }, flow_input: {} });
+        expect(out && typeof out === "object", `${id} brief=${brief}`).toBe(true);
+      }
+    }
   });
 
   it("a judged state gets the brief: text under the header, object as campaignBrief, list wrapped", () => {
