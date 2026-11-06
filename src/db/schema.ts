@@ -302,6 +302,8 @@ export const scriptSwitches = pgTable(
     scriptVersion: integer("script_version"),
     /** MIGRATE-1105 S0: an Engine switch (caller `campaign`) for ONE org first; null = every org (migration 0048). */
     orgId: text("org_id"),
+    /** MIGRATE-1105 S2b: the caller's task when it makes one outcome through two decisions (migration 0050). */
+    callerTask: text("caller_task"),
     state: text("state").notNull().default("switched"),
     switchedAt: timestamp("switched_at", { withTimezone: true }).notNull().defaultNow(),
     rolledBackAt: timestamp("rolled_back_at", { withTimezone: true }),

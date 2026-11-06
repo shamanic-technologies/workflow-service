@@ -42,7 +42,9 @@ export const SERVICE_PATHS: Record<string, { serviceName: string; taskNames: str
   // MIGRATE-1105 S2 (SERVICE switches, shadow first, instantly `service-script.ts`): one `queue-decision` platform run
   // per enrolled sequence, one `inbound-decision` platform run per poll batch of a mailbox.
   message_queued: { serviceName: "instantly-service", taskNames: ["queue-decision"] },
-  reply_received: { serviceName: "instantly-service", taskNames: ["inbound-decision"] },
+  // MIGRATE-1105 S2b: the orphan-reply judgment (which lead a stranger's message answers) is a second reply_received
+  // decision of instantly, one `orphan-judgment` platform run per judged message (its own switch task).
+  reply_received: { serviceName: "instantly-service", taskNames: ["inbound-decision", "orphan-judgment"] },
 };
 
 export const SCRIPT_SERVICE_NAME = "workflow";
