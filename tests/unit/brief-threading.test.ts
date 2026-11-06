@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { evalAsWindmill } from "../../src/lib/windmill-expr.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { DAG_WITH_CAMPAIGN_FOREACH } from "../helpers/fixtures.js";
@@ -30,9 +31,9 @@ function scriptTransforms(result: ReturnType<typeof dagToOpenFlow>, id: string):
   return mod.value.input_transforms as Transforms;
 }
 
+/** Evaluated the way Windmill does (an expression holding a ";" gets no implicit return). */
 function evalBody(expr: string, results: Record<string, unknown>): Record<string, unknown> {
-  // eslint-disable-next-line no-new-func
-  return new Function("results", `return ${expr};`)(results) as Record<string, unknown>;
+  return evalAsWindmill(expr, { results }) as Record<string, unknown>;
 }
 
 /** The production cold-email shape (sales-cold-email-outreach "azha"), trimmed to what matters. */
