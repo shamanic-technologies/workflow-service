@@ -1307,7 +1307,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
   );
   // The Copilot brings its own voice (the client-comms skill) and its own model: neither is spliced on its call.
   if (opts.audience?.copilotWriter) {
-    return withCopilotTurn(declared, "draft", { person: P, channel: "$ref:channel-plan.output", brandId: `${P}.brandId` });
+    return withCopilotTurn(declared, "draft", { person: P, channel: "$ref:channel-plan.output", brandId: `${P}.brandId`, trigger: "$ref:flow_input.trigger" });
   }
   return withLegBestLlm(withClientCommsVoice(declared, "draft"), "draft");
 }
