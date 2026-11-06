@@ -26,6 +26,7 @@ import type { DAG } from "../dag-validator.js";
 import { CLEAR_DEPRECATION, recordDeprecation } from "../deprecation.js";
 import { STILL_EXECUTABLE, stopExecutable } from "../executable-until.js";
 import { serviceSwitchLabel } from "./script-service-switch.js";
+import { SERVICE_DOOR_VENDORS } from "./vendors.js";
 
 export const WINDOW_MINUTES = 60;
 export const MIN_RUNS = 20;
@@ -85,6 +86,11 @@ export interface WindowStats {
   errorRate: number | null;
   /** Runs that made no Unit for a reason the world gave (a verifier with no verdict), counted apart. */
   unmade?: number;
+  /**
+   * Failures of a kind the old path ALSO suffers (the same upstream call failing in the workflows' own runs over the
+   * last SHARED_FAILURE_DAYS): counted apart, never a script error (see `sharedFailureKinds`).
+   */
+  shared?: number;
 }
 
 export function shouldRollBack(w: WindowStats, baseline: number = BASELINE_ERROR_RATE): { rollBack: boolean; pValue: number | null } {
@@ -106,6 +112,44 @@ export const billingRefused = (col: AnyColumn) => sql`coalesce(${col} ~* ${BILLI
 /** The same rule on a stored reason (tests and readers). */
 export const isBillingRefused = (reason: string | null | undefined) => !!reason && new RegExp(BILLING_REFUSED_PATTERN, "i").test(reason);
 
+/**
+ * A failure's KIND = the upstream call that failed, named the way the old path names it (`POST lead/orgs/buffer/next`):
+ * a script's error starts with the door it called (`lead.serve: Lead serve setup failed`), a workflow run's
+ * `failed_reason` with the call (`POST lead/orgs/buffer/next failed (500): ...`).
+ * INCIDENT 2026-11-06 16:52 UTC: 4 lead-service serve timeouts (human-service held every serve of one org behind a stuck
+ * re-decision) rolled the cold-email Engine back for every org, while the old workflows failed the SAME serve the same
+ * way (153 times in 7 days). A failure both paths share says nothing about the script: it is counted apart, like a
+ * billing refusal. A failure only the script has (a call the old path never failed, a throw in its own code) stays an
+ * error.
+ */
+export function scriptFailureKind(error: string | null | undefined): string | null {
+  const door = /^([a-z0-9_]+(?:\.[a-z0-9_]+)+):/i.exec(error ?? "")?.[1];
+  const d = door ? SERVICE_DOOR_VENDORS[door] : undefined;
+  return d ? `${d.method} ${d.service}${d.path}` : null;
+}
+
+export const workflowFailureKind = (reason: string | null | undefined): string | null =>
+  /^((?:GET|POST|PUT|PATCH|DELETE) \S+) failed\b/.exec(reason ?? "")?.[1] ?? null;
+
+/** How far back the old path's own failures are read, and how long that read is kept (it scans the failed runs). */
+export const SHARED_FAILURE_DAYS = 7;
+const SHARED_KINDS_TTL_MS = 30 * 60_000;
+let sharedKindsMemo = new WeakMap<object, { at: number; kinds: Set<string> }>();
+
+/** The upstream calls the old path's workflow runs failed at over the last SHARED_FAILURE_DAYS (read at most every 30 min). */
+export async function sharedFailureKinds(db: AnyPgDb, now = new Date()): Promise<Set<string>> {
+  const memo = sharedKindsMemo.get(db as object);
+  if (memo && now.getTime() - memo.at < SHARED_KINDS_TTL_MS) return memo.kinds;
+  const since = new Date(now.getTime() - SHARED_FAILURE_DAYS * 86_400_000);
+  const rows = await db
+    .selectDistinct({ kind: sql<string | null>`substring(${workflowRuns.failedReason} from '^(?:GET|POST|PUT|PATCH|DELETE) [^ ]+')` })
+    .from(workflowRuns)
+    .where(and(eq(workflowRuns.status, "failed"), gte(workflowRuns.createdAt, since)));
+  const kinds = new Set(rows.map((r: { kind: string | null }) => r.kind).filter((k: string | null): k is string => !!k));
+  sharedKindsMemo.set(db as object, { at: now.getTime(), kinds });
+  return kinds;
+}
+
 export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): Promise<WindowStats> {
   const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);
   const [row] = await db
@@ -118,8 +162,22 @@ export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): 
     .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
     .where(and(eq(scripts.outcome, outcome), gte(scriptRuns.createdAt, since)));
   const runs = Number(row?.runs ?? 0);
-  const failed = Number(row?.failed ?? 0);
-  return { runs, failed, errorRate: runs > 0 ? failed / runs : null, unmade: Number(row?.unmade ?? 0) };
+  let failed = Number(row?.failed ?? 0);
+  let shared = 0;
+  if (failed > 0) {
+    const errors = await db
+      .select({ error: scriptRuns.error })
+      .from(scriptRuns)
+      .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
+      .where(and(eq(scripts.outcome, outcome), gte(scriptRuns.createdAt, since), sql`${scriptRuns.status} in ('failed', 'stopped')`, sql`not ${billingRefused(scriptRuns.error)}`));
+    const kinds = errors.map((e: { error: string | null }) => scriptFailureKind(e.error));
+    if (kinds.some((k: string | null) => k !== null)) {
+      const old = await sharedFailureKinds(db, now);
+      shared = kinds.filter((k: string | null) => k !== null && old.has(k)).length;
+      failed -= shared;
+    }
+  }
+  return { runs, failed, errorRate: runs > 0 ? failed / runs : null, unmade: Number(row?.unmade ?? 0), shared };
 }
 
 export interface RollbackDeps {
@@ -273,7 +331,7 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
   }
   const reason =
     `the stored script's error rate on ${outcome} was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
-    `(${w.failed} of ${w.runs} runs), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
+    `(${w.failed} of ${w.runs} runs${w.shared ? `; ${w.shared} more failed at a call the old path also fails, not counted` : ""}), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
     `${baseline.source} baseline beyond chance (p = ${verdict.pValue!.toExponential(1)})`;
   const result = await rollBackSwitches(db, deps, outcome, reason, "workflow-service script guard");
   return { checked: true as const, window: w, ...verdict, result };
@@ -318,6 +376,7 @@ export function noteWorkflowRunForGuard(now = Date.now()): void {
 /** Test hook. */
 export function resetGuardMemo(): void {
   lastCheck = new Map();
+  sharedKindsMemo = new WeakMap();
   inFlight.clear();
 }
 
