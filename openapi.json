@@ -3779,6 +3779,11 @@
           "callerService": {
             "type": "string"
           },
+          "callerTask": {
+            "type": "string",
+            "nullable": true,
+            "description": "The decision asked about (null = the outcome's rows whatever their task)."
+          },
           "switched": {
             "type": "boolean",
             "description": "true: call `POST /internal/scripts/run` with `dynasty` in place of the service's own code; false: the service's own code (never switched, or rolled back)."
@@ -3811,6 +3816,7 @@
         "required": [
           "outcome",
           "callerService",
+          "callerTask",
           "switched",
           "shadow",
           "dynasty",
@@ -10478,6 +10484,10 @@
                   "callerService": {
                     "type": "string"
                   },
+                  "callerTask": {
+                    "type": "string",
+                    "description": "The caller's task, when it makes this outcome through more than one decision (its Monitoring service path, e.g. `orphan-judgment`)."
+                  },
                   "mode": {
                     "type": "string",
                     "enum": [
@@ -10567,6 +10577,16 @@
             },
             "required": true,
             "name": "callerService",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The caller's decision task; omitted = the outcome's latest row whatever its task."
+            },
+            "required": false,
+            "description": "The caller's decision task; omitted = the outcome's latest row whatever its task.",
+            "name": "callerTask",
             "in": "query"
           }
         ],

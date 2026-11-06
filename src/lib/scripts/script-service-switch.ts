@@ -10,7 +10,7 @@
  * A switch is refused unless the dynasty's active version is a proven port (it replays 100 % of its recorded cases):
  * the same bar the runner holds a live run to.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, type SQL } from "drizzle-orm";
 import { scriptSwitches } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
@@ -27,13 +27,28 @@ export const serviceSwitchLabel = (callerService: string) => `service:${callerSe
  * both: no proof needed (nothing it answers is used), one shadow row per (outcome, caller). A switch (the default)
  * needs the proven port; it ends the shadow.
  */
-export async function switchService(db: AnyPgDb, input: { outcome: string; dynasty: string; callerService: string; mode?: "switched" | "shadow" }) {
+/**
+ * MIGRATE-1105 S2b: the rows of one caller's decision. A caller that makes one outcome through two decisions names the
+ * decision by its task (`callerTask`, its Monitoring service path); no task = the outcome's rows whatever their task (a
+ * caller with one decision, as before).
+ */
+function taskScope(callerTask: string | null | undefined): SQL | undefined {
+  return callerTask ? eq(scriptSwitches.callerTask, callerTask) : undefined;
+}
+
+export async function switchService(db: AnyPgDb, input: { outcome: string; dynasty: string; callerService: string; callerTask?: string | null; mode?: "switched" | "shadow" }) {
   if (!(SERVICE_CALLERS as readonly string[]).includes(input.callerService)) {
     throw new SwitchError(400, `${input.callerService} is not a service that calls a stored script (known: ${SERVICE_CALLERS.join(", ")})`);
   }
   const row = await activeVersion(db, input.outcome, input.dynasty);
   if (!row) throw new SwitchError(404, `no active version of ${input.outcome}/${input.dynasty}`);
-  const scope = and(eq(scriptSwitches.outcome, input.outcome), eq(scriptSwitches.callerService, input.callerService));
+  // A switch row is keyed by its task (null = the outcome's only decision): writes never read across tasks.
+  const scope = and(
+    eq(scriptSwitches.outcome, input.outcome),
+    eq(scriptSwitches.callerService, input.callerService),
+    input.callerTask ? eq(scriptSwitches.callerTask, input.callerTask) : isNull(scriptSwitches.callerTask),
+  );
+  const callerTask = input.callerTask || null;
   if (input.mode === "shadow") {
     const [switchedNow] = await db.select().from(scriptSwitches).where(and(scope, eq(scriptSwitches.state, "switched")));
     if (switchedNow) throw new SwitchError(409, `${input.outcome} is switched for ${input.callerService}: a shadow is for before a switch`);
@@ -41,7 +56,7 @@ export async function switchService(db: AnyPgDb, input: { outcome: string; dynas
     if (shadow) return shadow;
     const [created] = await db
       .insert(scriptSwitches)
-      .values({ outcome: input.outcome, dynasty: input.dynasty, callerService: input.callerService, scriptVersion: row.version, fromVersion: 0, toVersion: row.version, state: "shadow" })
+      .values({ outcome: input.outcome, dynasty: input.dynasty, callerService: input.callerService, callerTask, scriptVersion: row.version, fromVersion: 0, toVersion: row.version, state: "shadow" })
       .returning();
     return created!;
   }
@@ -49,10 +64,7 @@ export async function switchService(db: AnyPgDb, input: { outcome: string; dynas
   if (cases === 0 || !row.replay || row.replay.cases !== cases || row.replay.matches !== cases) {
     throw new SwitchError(409, `${input.outcome}/${input.dynasty}/v${row.version} is not a proven port (${row.replay?.matches ?? 0}/${cases} recorded cases): a switch needs 100 %`);
   }
-  const [live] = await db
-    .select()
-    .from(scriptSwitches)
-    .where(and(eq(scriptSwitches.outcome, input.outcome), eq(scriptSwitches.callerService, input.callerService), eq(scriptSwitches.state, "switched")));
+  const [live] = await db.select().from(scriptSwitches).where(and(scope, eq(scriptSwitches.state, "switched")));
   if (live) {
     if (live.dynasty !== input.dynasty) throw new SwitchError(409, `${input.outcome} is already switched to ${live.dynasty} for ${input.callerService}`);
     return live;
@@ -69,17 +81,17 @@ export async function switchService(db: AnyPgDb, input: { outcome: string; dynas
   }
   const [created] = await db
     .insert(scriptSwitches)
-    .values({ outcome: input.outcome, dynasty: input.dynasty, callerService: input.callerService, scriptVersion: row.version, fromVersion: 0, toVersion: row.version })
+    .values({ outcome: input.outcome, dynasty: input.dynasty, callerService: input.callerService, callerTask, scriptVersion: row.version, fromVersion: 0, toVersion: row.version })
     .returning();
   return created!;
 }
 
 /** What a caller service reads before each call: run the stored script, or its own code. */
-export async function serviceSwitchState(db: AnyPgDb, outcome: string, callerService: string) {
+export async function serviceSwitchState(db: AnyPgDb, outcome: string, callerService: string, callerTask?: string | null) {
   const [latest] = await db
     .select()
     .from(scriptSwitches)
-    .where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.callerService, callerService)))
+    .where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.callerService, callerService), taskScope(callerTask)))
     .orderBy(desc(scriptSwitches.switchedAt))
     .limit(1);
   const switched = latest?.state === "switched";
@@ -87,6 +99,7 @@ export async function serviceSwitchState(db: AnyPgDb, outcome: string, callerSer
   return {
     outcome,
     callerService,
+    callerTask: callerTask || null,
     switched,
     /** Not switched: the caller asks the script beside its own answer and compares (the live proof before a switch). */
     shadow,
