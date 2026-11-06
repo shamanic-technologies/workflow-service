@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { callVendor, SERVICE_DOOR_VENDORS, type VendorDeps } from "../../src/lib/scripts/vendors.js";
+import { BOOT_WAIT_MAX_MS, callVendor, SERVICE_DOOR_VENDORS, type VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { validateSource as readScriptSource } from "../../src/lib/scripts/sandbox.js";
 
 // MIGRATE-1105 S1: a script that answers a lead acts through the producers' own org routes, AS its run.
@@ -98,5 +98,57 @@ describe("run doors (answering a lead)", () => {
     }
     const read = await readScriptSource(`export default function run(ctx) { ctx.vendor.call("lead.followup_date.read", { params: { id: "l" } }); return null; }`);
     expect(read.vendors).toEqual(["lead.followup_date.read"]);
+  });
+});
+
+describe("a door whose service is booting (a deploy, INCIDENT 2026-11-06 18:05 UTC)", () => {
+  const STARTING = { status: 503, body: { error: "Service starting: database migrations in progress" } };
+  it("asks again inside the run until the service answers, on a service door and on a run door", async () => {
+    const d = door([STARTING, STARTING, { status: 200, body: { found: false, reason: "source_stock_empty" } }]);
+    const serve = await callVendor("lead.serve", {}, { ...ctx, callerRunId: "caller" }, d.deps);
+    expect(serve).toEqual({ ok: true, data: { found: false, reason: "source_stock_empty" } });
+    expect(d.seen).toHaveLength(3);
+    expect(d.slept).toEqual([5000, 5000]);
+    const r = door([STARTING, { status: 200, body: { messages: [] } }]);
+    expect(await callVendor("crm.person.thread", { query: { personKey: "email:a@b.co" } }, ctx, r.deps)).toEqual({ ok: true, data: { messages: [] } });
+    expect(r.seen).toHaveLength(2);
+  });
+
+  it("a refused connection (the new container not listening yet) is asked again; any other throw is not", async () => {
+    let n = 0;
+    const slept: number[] = [];
+    const deps = {
+      async serviceDoor() {
+        n += 1;
+        if (n === 1) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+        return { status: 200, body: { ok: 1 } };
+      },
+      async sleep(ms: number) {
+        slept.push(ms);
+      },
+    } as unknown as VendorDeps;
+    expect((await callVendor("lead.serve", {}, { ...ctx, callerRunId: "caller" }, deps)).ok).toBe(true);
+    expect(n).toBe(2);
+    let m = 0;
+    const other = {
+      async serviceDoor() {
+        m += 1;
+        throw new Error("The operation was aborted due to timeout");
+      },
+      async sleep() {},
+    } as unknown as VendorDeps;
+    expect(await callVendor("lead.serve", {}, { ...ctx, callerRunId: "caller" }, other)).toMatchObject({ ok: false });
+    expect(m).toBe(1);
+  });
+
+  it("is bounded: a service that never comes up answers its 503 to the script", async () => {
+    const d = door([STARTING]);
+    const out = await callVendor("lead.serve", {}, { ...ctx, callerRunId: "caller" }, d.deps);
+    expect(out.ok).toBe(false);
+    expect(d.slept.reduce((a, b) => a + b, 0)).toBe(BOOT_WAIT_MAX_MS);
+    // A 503 that is not a boot (a real outage) is answered at once.
+    const down = door([{ status: 503, body: { error: "Service unavailable: database migrations failed" } }]);
+    expect((await callVendor("lead.serve", {}, { ...ctx, callerRunId: "caller" }, down.deps)).ok).toBe(false);
+    expect(down.seen).toHaveLength(1);
   });
 });

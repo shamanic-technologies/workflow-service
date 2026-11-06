@@ -7,9 +7,10 @@ import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/scri
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { serviceSwitchState, switchService } from "../../src/lib/scripts/script-service-switch.js";
-import { checkGuard, guardView, rollBackSwitches, scriptFailureKind, workflowFailureKind } from "../../src/lib/scripts/script-guard.js";
+import { campaignsWithoutOldPath, checkGuard, guardView, rollBackSwitches, scriptFailureKind, workflowFailureKind } from "../../src/lib/scripts/script-guard.js";
 import { readMonitoring, SERVICE_PATHS } from "../../src/lib/scripts/script-monitoring.js";
-import { scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
+import { scriptRuns, scriptSwitches, scripts, workflowRuns, workflows } from "../../src/db/schema.js";
+import { switchEngine, engineState } from "../../src/lib/scripts/engine.js";
 import type { ReplayCase } from "../../src/lib/scripts/replay.js";
 
 // FACTORY-P3 next outcomes: a SERVICE switch (an outcome a service makes in its own code, no workflow step calls it:
@@ -113,6 +114,38 @@ describe("a service switch", () => {
     const bad = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
     expect(bad.result?.rolledBack).toHaveLength(1);
     expect((await serviceSwitchState(db, "lead_interested", "instantly")).rollbackReason).toMatch(/\(4 of 51 runs; 4 more failed at a call the old path also fails, not counted\)/);
+  });
+
+  it("never rolls a campaign Engine back onto an old path that cannot run: held switched, red on Monitoring (INCIDENT 2026-11-06 18:05)", async () => {
+    const script = await provenJudge();
+    await switchEngine(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", orgId: "org-a" });
+    const now = new Date();
+    // Campaign c1 ran on the Engine; its last workflow's dynasty is deprecated (its code deleted): nothing to go back to.
+    const dag = { nodes: [], edges: [] };
+    const base = { orgId: "org-a", workflowName: "w", workflowDynastyName: "w", featureSlug: "f", signature: "s", workflowDynastySignatureName: "s", dag };
+    const [dead] = await db.insert(workflows).values({ ...base, workflowSlug: "sourcing-x-v3", workflowDynastySlug: "sourcing-x", version: 3, status: "deprecated", workflowDynastyStatus: "deprecated" } as typeof workflows.$inferInsert).returning();
+    await db.insert(workflowRuns).values([
+      { workflowId: dead!.id, orgId: "org-a", campaignId: "c1", status: "completed", createdAt: new Date(now.getTime() - 2 * 86_400_000) },
+      { orgId: "org-a", campaignId: "c1", status: "completed", executionScope: "engine", inputs: { engineOutcome: "lead_interested" }, createdAt: now },
+    ]);
+    expect(await campaignsWithoutOldPath(db, "lead_interested", "org-a", now)).toEqual(["c1"]);
+    // A bad hour (4 errors of the script's own) would roll it back.
+    await db.insert(scriptRuns).values(Array.from({ length: 25 }, (_, i) => ({ scriptId: script.id, orgId: "org-a", runId: `r${i}`, parentRunId: "p", status: i < 4 ? "failed" : "made", error: i < 4 ? "TypeError: x" : null, createdAt: now })));
+    const out = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
+    expect(out.result?.rolledBack).toEqual([]);
+    expect(out.result?.skipped[0]!.reason).toMatch(/held switched: the old path cannot run for 1 campaign\(s\) \(c1\)/);
+    expect((await engineState(db, "lead_interested", "org-a")).live).toBe(true);
+    const li = (await readMonitoring(db, 30, now)).outcomes.find((o) => o.outcome === "lead_interested")!;
+    expect(li.red).toBe(true);
+    // Its dynasty gets an active version again: the old path can run, the guard rolls back as before.
+    await db.insert(workflows).values({ ...base, workflowSlug: "sourcing-x-v4", workflowDynastySlug: "sourcing-x", version: 4, status: "active", workflowDynastyStatus: "active" } as typeof workflows.$inferInsert);
+    expect(await campaignsWithoutOldPath(db, "lead_interested", "org-a", now)).toEqual([]);
+    const { resetGuardMemo } = await import("../../src/lib/scripts/script-guard.js");
+    resetGuardMemo();
+    const back = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
+    expect(back.result?.rolledBack).toHaveLength(1);
+    expect((await engineState(db, "lead_interested", "org-a")).live).toBe(false);
+    expect((await db.select().from(scriptSwitches)).every((r) => r.state === "rolled_back")).toBe(true);
   });
 
   it("the guard rolls a service switch back on a bad hour and Monitoring goes red", async () => {

@@ -348,6 +348,42 @@ async function bookingSlots(args: Record<string, unknown>, deps: VendorDeps): Pr
   }
 }
 
+/**
+ * A door whose service is BOOTING (a deploy swapping its container) is asked again inside the run, never failed:
+ * a 503 « Service starting: database migrations in progress » (the services' readiness gate) or a refused connection
+ * (the new container not listening yet: the request never reached it, so asking again is write-safe). INCIDENT
+ * 2026-11-06 18:05 UTC: 4 lead.serve « Service starting » answers during a lead-service deploy were counted as the
+ * script's errors and rolled lead_found back for every org. Bounded: BOOT_WAIT_MAX_MS in all, then the last answer
+ * stands (a service that never comes up fails the run loudly as before).
+ */
+export const BOOT_WAIT_MAX_MS = 120_000;
+const BOOT_WAIT_STEP_MS = 5_000;
+export const isBooting = (out: { status: number; body: Record<string, unknown> }) =>
+  out.status === 503 && /service starting|migrations in progress/i.test(String(out.body.error ?? ""));
+function connectionRefused(e: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let cur: unknown = e; cur && typeof cur === "object" && !seen.has(cur); cur = (cur as { cause?: unknown }).cause) {
+    seen.add(cur);
+    if ((cur as { code?: unknown }).code === "ECONNREFUSED") return true;
+  }
+  return false;
+}
+async function askThroughBoot(
+  ask: () => Promise<{ status: number; body: Record<string, unknown> }>,
+  deps: VendorDeps,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let waited = 0; ; waited += BOOT_WAIT_STEP_MS) {
+    try {
+      const out = await ask();
+      if (!isBooting(out) || waited >= BOOT_WAIT_MAX_MS) return out;
+    } catch (e) {
+      if (!connectionRefused(e) || waited >= BOOT_WAIT_MAX_MS) throw e;
+    }
+    await sleep(BOOT_WAIT_STEP_MS);
+  }
+}
+
 /** One service door call: the run's identity + tracking, and whose in-flight work it is (the caller's run). */
 async function serviceDoor(name: string, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   const door = SERVICE_DOOR_VENDORS[name]!;
@@ -366,7 +402,7 @@ async function serviceDoor(name: string, args: Record<string, unknown>, ctx: Ven
   const headers = { ...ctx.headers, "x-caller-run-id": ctx.callerRunId };
   try {
     const path = door.method === "GET" ? `${door.path}?${new URLSearchParams(Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, String(v)])))}` : door.path;
-    const out = await deps.serviceDoor(door.service, door.method, path, door.method === "GET" ? null : fields, headers);
+    const out = await askThroughBoot(() => deps.serviceDoor(door.service, door.method, path, door.method === "GET" ? null : fields, headers), deps);
     if (out.status !== 200) return refuse(String(out.body.error ?? `${door.service}-service answered ${out.status}`));
     if (door.okFrom) return { ok: out.body[door.okFrom] === true, data: {} };
     return { ok: true, data: out.body };
@@ -429,7 +465,7 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
   }
   const poll = args.pollWhile;
   if (poll !== undefined && (!plainRecord(poll) || typeof poll.field !== "string")) return refuse(`${name}: pollWhile is {field, equals, intervalSeconds?, timeoutSeconds?, throwWhenTimedOut?}`);
-  const ask = () => deps.serviceDoor(door.service, door.method, path, body, headers);
+  const ask = () => askThroughBoot(() => deps.serviceDoor(door.service, door.method, path, body, headers), deps);
   try {
     let out = await ask();
     if (poll) {

@@ -27,6 +27,7 @@ import { CLEAR_DEPRECATION, recordDeprecation } from "../deprecation.js";
 import { STILL_EXECUTABLE, stopExecutable } from "../executable-until.js";
 import { serviceSwitchLabel } from "./script-service-switch.js";
 import { SERVICE_DOOR_VENDORS } from "./vendors.js";
+import { CAMPAIGN_CALLER } from "./engine.js";
 
 export const WINDOW_MINUTES = 60;
 export const MIN_RUNS = 20;
@@ -193,6 +194,40 @@ export interface RollbackResult {
 /** A switch row named the way Monitoring and a roll-back by name read it: its dynasty, or `service:<caller>`. */
 const switchLabel = (r: typeof scriptSwitches.$inferSelect) => (r.callerService ? serviceSwitchLabel(r.callerService) : r.workflowDynastySlug!);
 
+/** The scope of a campaign Engine run in `workflow_runs` (engine-runner.ts ENGINE_EXECUTION_SCOPE). */
+const ENGINE_SCOPE = "engine";
+
+/**
+ * The campaigns a campaign Engine switch would STRAND if rolled back: those its Engine ran for over the last
+ * SHARED_FAILURE_DAYS whose old path cannot run (no workflow run of theirs ever, or the dynasty of their last workflow
+ * has no active version left). INCIDENT 2026-11-06 18:05 UTC: the guard rolled lead_found back for every org onto
+ * sourcing workflows deprecated (their code deleted) on 11-05: sourcing ran 0 times fleet-wide for 3 hours. A roll-back
+ * onto nothing is no safety net: the switch stays, the failure is red on Monitoring (the guard verdict stays red while
+ * the switch is watched), never an idle campaign.
+ */
+export async function campaignsWithoutOldPath(db: AnyPgDb, outcome: string, orgId: string | null, now = new Date()): Promise<string[]> {
+  const since = new Date(now.getTime() - SHARED_FAILURE_DAYS * 86_400_000);
+  const rows = await db.execute(sql`
+    with engine_campaigns as (
+      select distinct campaign_id from workflow_runs
+      where execution_scope = ${ENGINE_SCOPE} and inputs->>'engineOutcome' = ${outcome} and campaign_id is not null
+        and created_at >= ${since.toISOString()}::timestamptz ${orgId ? sql`and org_id = ${orgId}` : sql``}
+    ),
+    last_workflow as (
+      select distinct on (r.campaign_id) r.campaign_id, w.workflow_dynasty_slug
+      from workflow_runs r join workflows w on w.id = r.workflow_id
+      where r.campaign_id in (select campaign_id from engine_campaigns)
+      order by r.campaign_id, r.created_at desc
+    )
+    select e.campaign_id from engine_campaigns e left join last_workflow l on l.campaign_id = e.campaign_id
+    where l.workflow_dynasty_slug is null or not exists (
+      select 1 from workflows a where a.workflow_dynasty_slug = l.workflow_dynasty_slug and a.status = 'active' and a.workflow_dynasty_status = 'active'
+    )
+    order by 1`);
+  const list = (Array.isArray(rows) ? rows : (rows as { rows: unknown[] }).rows) as Array<{ campaign_id: string }>;
+  return list.map((r) => r.campaign_id);
+}
+
 /**
  * Re-activate the previous version of every switched dynasty of `outcome` and deprecate the script version, one
  * transaction per dynasty (the active version is flipped BEFORE the previous one goes live: one active per dynasty).
@@ -206,11 +241,22 @@ export async function rollBackSwitches(
   decidedBy: string,
   /** Only these dynasties (a drill, a manual roll-back); default every switched one. */
   onlyDynasties?: string[],
+  /** The automatic guard: a campaign Engine switch whose old path cannot run for one of its campaigns stays switched. */
+  opts: { holdStranded?: boolean } = {},
 ): Promise<RollbackResult> {
   const all = await db.select().from(scriptSwitches).where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
   const rows = onlyDynasties ? all.filter((r) => onlyDynasties.includes(switchLabel(r))) : all;
   const out: RollbackResult = { rolledBack: [], skipped: [] };
   for (const sw of rows) {
+    if (sw.callerService === CAMPAIGN_CALLER && opts.holdStranded) {
+      const stranded = await campaignsWithoutOldPath(db, outcome, sw.orgId ?? null);
+      if (stranded.length > 0) {
+        const why = `held switched: the old path cannot run for ${stranded.length} campaign(s) (${stranded.slice(0, 3).join(", ")}${stranded.length > 3 ? ", ..." : ""}); red on Monitoring`;
+        console.error(`[workflow-service] script guard: ${outcome} ${switchLabel(sw)} org=${sw.orgId ?? "every org"} would roll back (${reason}) but ${why}`);
+        out.skipped.push({ workflowDynastySlug: switchLabel(sw), reason: why });
+        continue;
+      }
+    }
     if (sw.callerService) {
       await db
         .update(scriptSwitches)
@@ -326,14 +372,14 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
       `the switched workflows failed ${(100 * flows.window.errorRate!).toFixed(1)} % of their runs at the switched steps over the last ${WINDOW_MINUTES} minutes ` +
       `(${flows.window.failed} of ${flows.window.runs}, at ${flows.steps.join("/")}), above ${(100 * thresholdFor(flows.baseline.errorRate)).toFixed(1)} % and above their previous versions' ` +
       `${(100 * flows.baseline.errorRate).toFixed(1)} % ${flows.baseline.source} rate beyond chance (p = ${flowVerdict.pValue!.toExponential(1)})`;
-    const result = await rollBackSwitches(db, deps, outcome, flowReason, "workflow-service script guard");
+    const result = await rollBackSwitches(db, deps, outcome, flowReason, "workflow-service script guard", undefined, { holdStranded: true });
     return { checked: true as const, window: w, ...flowVerdict, workflows: flows.window, result };
   }
   const reason =
     `the stored script's error rate on ${outcome} was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
     `(${w.failed} of ${w.runs} runs${w.shared ? `; ${w.shared} more failed at a call the old path also fails, not counted` : ""}), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
     `${baseline.source} baseline beyond chance (p = ${verdict.pValue!.toExponential(1)})`;
-  const result = await rollBackSwitches(db, deps, outcome, reason, "workflow-service script guard");
+  const result = await rollBackSwitches(db, deps, outcome, reason, "workflow-service script guard", undefined, { holdStranded: true });
   return { checked: true as const, window: w, ...verdict, result };
 }
 
