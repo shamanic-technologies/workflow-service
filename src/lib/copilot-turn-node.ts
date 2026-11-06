@@ -24,12 +24,15 @@ export const COPILOT_TURN_CALL = { service: "chat", method: "POST", path: "/inte
 const NOT_COPILOT_KEYS = new Set(["provider", "model", "responseFormat", "temperature", "maxTokens"]);
 
 /**
- * `main(person, channel)`: the turn's identity block. `person` = the resolved person (`resolve-person`), `channel` =
- * the channel plan (`whatsapp` | `email`, the persona of the sending line when WhatsApp). The text field per medium is
- * the writer schema's own (`message` on WhatsApp, `bodyHtml` on email).
+ * `main(person, channel, trigger)`: the turn's identity block. `person` = the resolved person (`resolve-person`),
+ * `channel` = the channel plan (`whatsapp` | `email`, the persona of the sending line when WhatsApp), `trigger` = the
+ * run's trigger (absent on a run with none). The text field per medium is the writer schema's own (`message` on
+ * WhatsApp, `bodyHtml` on email). `occurrenceItem` = the occurrence's own crm record (`trigger.item`), as crm stated
+ * it: on WhatsApp its `thread[]` / `messages[]` carry each message's event id, quote and photo, which the Copilot
+ * quotes back and looks at (SOPHIE-WA-HUMAN-1106); null when the run answers no occurrence.
  */
 export const COPILOT_TURN_PLAN_CODE = `
-export async function main(person, channel) {
+export async function main(person, channel, trigger) {
   const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
   const medium = channel?.channel === "whatsapp" ? "whatsapp" : channel?.channel === "email" ? "email" : null;
   if (!medium) return { skip: true };
@@ -46,6 +49,7 @@ export async function main(person, channel) {
     assistant: p && s(p.name) ? { name: s(p.name), role: s(p.role), instructions: s(p.instructions) } : null,
     messageField: medium === "whatsapp" ? "message" : "bodyHtml",
     idempotencyKey: "copilot-lead-turn:" + key,
+    occurrenceItem: trigger && typeof trigger === "object" && trigger.item && typeof trigger.item === "object" && !Array.isArray(trigger.item) ? trigger.item : null,
   };
 }
 `.trim();
@@ -54,9 +58,9 @@ export const COPILOT_TURN_PLAN_NODE_ID = "copilot-turn-plan";
 
 /**
  * Turns `nodeId` (a chat `/complete` writer) into a Copilot lead turn. `refs`: the resolved person, the channel plan,
- * the brand id. The plan node runs right before the writer, on the edge that runs into it.
+ * the brand id, the run's trigger. The plan node runs right before the writer, on the edge that runs into it.
  */
-export function withCopilotTurn(dag: DAG, nodeId: string, refs: { person: string; channel: string; brandId: string }): DAG {
+export function withCopilotTurn(dag: DAG, nodeId: string, refs: { person: string; channel: string; brandId: string; trigger: string }): DAG {
   const node = dag.nodes.find((n) => n.id === nodeId);
   if (!node || node.type !== "http.call" || node.config?.service !== "chat" || node.config?.path !== "/complete") {
     throw new Error(`withCopilotTurn: "${nodeId}" is not a chat-service /complete call`);
@@ -71,7 +75,7 @@ export function withCopilotTurn(dag: DAG, nodeId: string, refs: { person: string
     type: "script",
     config: { code: COPILOT_TURN_PLAN_CODE },
     retries: 0,
-    inputMapping: { person: refs.person, channel: refs.channel },
+    inputMapping: { person: refs.person, channel: refs.channel, trigger: refs.trigger },
   };
   const P = `$ref:${COPILOT_TURN_PLAN_NODE_ID}.output`;
   return {
@@ -90,6 +94,7 @@ export function withCopilotTurn(dag: DAG, nodeId: string, refs: { person: string
                 "body.assistant": `${P}.assistant`,
                 "body.messageField": `${P}.messageField`,
                 "body.idempotencyKey": `${P}.idempotencyKey`,
+                "body.occurrenceItem": `${P}.occurrenceItem`,
               },
             }
           : n,
