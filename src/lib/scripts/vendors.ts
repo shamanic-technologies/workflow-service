@@ -57,6 +57,8 @@ export interface VendorCallContext {
   billing?: "org" | "platform";
   /** The run that asked for the script (its parent): a service's door serves only the work it has in flight for it. */
   callerRunId?: string;
+  /** The outcome of the script's Engine (a door with `outcomeInBody` declares the Unit under it). */
+  outcome?: string;
 }
 
 /** The headers of a platform call: only whose work it is (the script's run), as chat-service's platform doors read. */
@@ -99,8 +101,12 @@ export type ServiceDoor =
    * `runIdInBody`: the producer reads the run it files under from a BODY field (twilio's `parentRunId`), not from the
    * header: the door fills that field with the script's run (a script never knows its run id), and a recorded request
    * is compared without it (windmill-cases.ts).
+   * `outcomeInBody` (MIGRATE-1105 S5): the producer declares the Unit on the script's behalf and reads WHICH outcome
+   * from a BODY field (meta-service's `outcomeKey`): the door fills it with the outcome of the script's Engine, so a
+   * script re-homed onto its fine outcome (Threads post published) has its Units declared under it, and a script never
+   * names its own outcome.
    */
-  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true; runIdInBody?: string };
+  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true; runIdInBody?: string; outcomeInBody?: string };
 
 export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // email_found (apollo-service): one verifier call -> {verificationId, verifier, verdict, error}; BounceVerify asked now.
@@ -175,7 +181,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // steps called, each the producer's own org route.
   "meta.threads.accounts": { service: "meta", method: "GET", path: "/orgs/threads/accounts", asRun: true },
   "meta.threads.publications": { service: "meta", method: "GET", path: "/orgs/threads/publications", asRun: true },
-  "meta.threads.publish": { service: "meta", method: "POST", path: "/orgs/threads/accounts/{id}/posts", asRun: true },
+  "meta.threads.publish": { service: "meta", method: "POST", path: "/orgs/threads/accounts/{id}/posts", asRun: true, outcomeInBody: "outcomeKey" },
   "scraping.site.map": { service: "scraping", method: "POST", path: "/map", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
@@ -408,6 +414,10 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
   if (door.runIdInBody && body) {
     if (door.runIdInBody in body) return refuse(`${name}: ${door.runIdInBody} is the script's run, filled by the door`);
     body = { ...body, [door.runIdInBody]: ctx.headers["x-run-id"] };
+  }
+  if (door.outcomeInBody && body && ctx.outcome) {
+    if (door.outcomeInBody in body) return refuse(`${name}: ${door.outcomeInBody} is the script's Engine outcome, filled by the door`);
+    body = { ...body, [door.outcomeInBody]: ctx.outcome };
   }
   const headers = { ...ctx.headers };
   if (args.omitHeaders !== undefined) {

@@ -181,6 +181,12 @@ export function caseFromFlow(flow: RecordedFlow, steps: RecordedStep[], opts: { 
       const { [runField]: _run, ...rest } = args.body;
       args.body = rest;
     }
+    // The outcome the producer declares, stated in the body: the door fills it with the script's Engine outcome.
+    const outcomeField = (SERVICE_DOOR_VENDORS[name] as { outcomeInBody?: string }).outcomeInBody;
+    if (outcomeField && plain(args.body) && outcomeField in args.body) {
+      const { [outcomeField]: _outcome, ...rest } = args.body;
+      args.body = rest;
+    }
     // Path parameters in the door's names (the old step may have named them otherwise), by position.
     if (plain(args.params)) {
       const doorNames = [...(SERVICE_DOOR_VENDORS[name]!.path.matchAll(/\{(\w+)\}/g))].map((m) => m[1]!);

@@ -3175,6 +3175,37 @@
           "code"
         ]
       },
+      "RehomeScriptRequest": {
+        "type": "object",
+        "properties": {
+          "toOutcome": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,62}$",
+            "description": "The FINE outcome the dynasty makes from now on (a catalogue step, e.g. threads_post_published)."
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500000,
+            "description": "Absent: the active version's code."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "tactics": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "Absent: the active version's tactics without `channel` (the outcome says it now)."
+          }
+        },
+        "required": [
+          "toOutcome"
+        ]
+      },
       "ForkScriptRequest": {
         "type": "object",
         "properties": {
@@ -9535,6 +9566,232 @@
           },
           "404": {
             "description": "Unknown dynasty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Replay failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scripts/dynasty/{outcome}/{dynasty}/rehome": {
+      "post": {
+        "summary": "Re-home a script onto its fine outcome (MIGRATE-1105 S5): the next version of the same dynasty under the finer WHAT",
+        "description": "Owner rule 2026-11-06: the outcome is the WHAT, as fine as possible; the channel is no longer a tactic. Stores the next version of the dynasty (`created_from_script` = the active one) under `toOutcome`, replayed 100 % on the dynasty's recorded cases (copied with it), and copies every campaign switch scope of the family Engine in its SAME state, the script's stored state, and moves its open waits. The family version stays active until the pipe names the fine outcome; retire it then (`PUT .../status`).",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "dynasty",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RehomeScriptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The re-homed version and what moved with it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "script": {
+                      "$ref": "#/components/schemas/ScriptWithCode"
+                    },
+                    "from": {
+                      "type": "object",
+                      "properties": {
+                        "outcome": {
+                          "type": "string"
+                        },
+                        "dynasty": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "dynasty",
+                        "version"
+                      ]
+                    },
+                    "casesCopied": {
+                      "type": "integer"
+                    },
+                    "storageRowsCopied": {
+                      "type": "integer"
+                    },
+                    "switchesCopied": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "orgId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "state": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "orgId",
+                          "state"
+                        ]
+                      }
+                    },
+                    "waitsMoved": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "script",
+                    "from",
+                    "casesCopied",
+                    "storageRowsCopied",
+                    "switchesCopied",
+                    "waitsMoved"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown outcome, invalid code or same outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already re-homed",
             "content": {
               "application/json": {
                 "schema": {

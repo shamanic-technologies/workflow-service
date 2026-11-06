@@ -216,6 +216,9 @@ export async function pickScript(db: AnyPgDb, input: PickInput, random: () => nu
   if (candidates.length === 0) return null;
   const dynasties = candidates.map((c) => c.dynasty);
   const since = new Date(Date.now() - RATING_WINDOW_DAYS * 86_400_000);
+  // A dynasty's runs pooled across its versions, those it made under the outcome it was re-homed from included
+  // (MIGRATE-1105 S5: an upgrade onto the fine outcome keeps its record).
+  const outcomes = [...new Set([input.outcome, ...(await upgradedFromOutcomes(db, candidates))])];
   const stats = await db
     .select({
       dynasty: scripts.dynasty,
@@ -224,7 +227,7 @@ export async function pickScript(db: AnyPgDb, input: PickInput, random: () => nu
     })
     .from(scriptRuns)
     .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
-    .where(and(eq(scripts.outcome, input.outcome), inArray(scripts.dynasty, dynasties), gte(scriptRuns.createdAt, since)))
+    .where(and(inArray(scripts.outcome, outcomes), inArray(scripts.dynasty, dynasties), gte(scriptRuns.createdAt, since)))
     .groupBy(scripts.dynasty);
   const by = new Map(stats.map((s) => [s.dynasty, { made: Number(s.made), runs: Number(s.runs) }]));
   const draws = candidates.map((c) => {
@@ -234,6 +237,24 @@ export async function pickScript(db: AnyPgDb, input: PickInput, random: () => nu
   let best = 0;
   for (let i = 1; i < draws.length; i++) if (draws[i]!.draw > draws[best]!.draw) best = i;
   return { script: candidates[best]!, draws };
+}
+
+/** The outcomes the candidates' dynasties were upgraded from (their upgrade chain, never across a fork). */
+async function upgradedFromOutcomes(db: AnyPgDb, candidates: ScriptRow[]): Promise<string[]> {
+  const out = new Set<string>();
+  for (const c of candidates) {
+    let row: { creationType: string; createdFromScript: string | null; dynasty: string } = c;
+    for (let hops = 0; hops < 50 && row.creationType === "upgrade" && row.createdFromScript; hops++) {
+      const [parent] = await db
+        .select({ outcome: scripts.outcome, dynasty: scripts.dynasty, creationType: scripts.creationType, createdFromScript: scripts.createdFromScript })
+        .from(scripts)
+        .where(eq(scripts.id, row.createdFromScript));
+      if (!parent || parent.dynasty !== c.dynasty) break;
+      out.add(parent.outcome);
+      row = parent;
+    }
+  }
+  return [...out];
 }
 
 /** One draw from Beta(a, b), through two Gamma draws (Marsaglia & Tsang 2000). */
