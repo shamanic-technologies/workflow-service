@@ -4135,11 +4135,374 @@
                 "days"
               ]
             }
+          },
+          "engines": {
+            "type": "object",
+            "properties": {
+              "since": {
+                "type": "string"
+              },
+              "minRunsForRed": {
+                "type": "integer"
+              },
+              "outcomes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "description": "The Engine: the step the campaign's leg reaches (`unassigned` = a workflow dynasty with no leg on record)."
+                    },
+                    "red": {
+                      "type": "boolean",
+                      "description": "Broken: the script path's failure rate over today + yesterday (at least minRunsForRed finished runs) is above the workflow path's over the window (+1 point), or above 2 % with no workflow run in the window. Never red for still running on a workflow."
+                    },
+                    "verdict": {
+                      "type": "object",
+                      "properties": {
+                        "scriptErrorRate": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "scriptFinishedRuns": {
+                          "type": "integer"
+                        },
+                        "workflowErrorRate": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "thresholdErrorRate": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "scriptErrorRate",
+                        "scriptFinishedRuns",
+                        "workflowErrorRate",
+                        "thresholdErrorRate"
+                      ]
+                    },
+                    "onWorkflow": {
+                      "type": "boolean",
+                      "description": "Some campaign ran this outcome on a workflow today."
+                    },
+                    "lastWorkflowDay": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "script": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "runs": {
+                              "type": "integer"
+                            },
+                            "completed": {
+                              "type": "integer"
+                            },
+                            "failed": {
+                              "type": "integer"
+                            },
+                            "errorRate": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "spendCents": {
+                              "type": "number",
+                              "nullable": true,
+                              "description": "Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."
+                            },
+                            "costPerRunCents": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "sampledRuns": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "runs",
+                            "completed",
+                            "failed",
+                            "errorRate",
+                            "spendCents",
+                            "costPerRunCents",
+                            "sampledRuns"
+                          ]
+                        },
+                        "workflow": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "runs": {
+                              "type": "integer"
+                            },
+                            "completed": {
+                              "type": "integer"
+                            },
+                            "failed": {
+                              "type": "integer"
+                            },
+                            "errorRate": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "spendCents": {
+                              "type": "number",
+                              "nullable": true,
+                              "description": "Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."
+                            },
+                            "costPerRunCents": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "sampledRuns": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "runs",
+                            "completed",
+                            "failed",
+                            "errorRate",
+                            "spendCents",
+                            "costPerRunCents",
+                            "sampledRuns"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "script",
+                        "workflow"
+                      ]
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "script": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "runs": {
+                                "type": "integer"
+                              },
+                              "completed": {
+                                "type": "integer"
+                              },
+                              "failed": {
+                                "type": "integer"
+                              },
+                              "errorRate": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "spendCents": {
+                                "type": "number",
+                                "nullable": true,
+                                "description": "Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."
+                              },
+                              "costPerRunCents": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "sampledRuns": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "runs",
+                              "completed",
+                              "failed",
+                              "errorRate",
+                              "spendCents",
+                              "costPerRunCents",
+                              "sampledRuns"
+                            ]
+                          },
+                          "workflow": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "runs": {
+                                "type": "integer"
+                              },
+                              "completed": {
+                                "type": "integer"
+                              },
+                              "failed": {
+                                "type": "integer"
+                              },
+                              "errorRate": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "spendCents": {
+                                "type": "number",
+                                "nullable": true,
+                                "description": "Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."
+                              },
+                              "costPerRunCents": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "sampledRuns": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "runs",
+                              "completed",
+                              "failed",
+                              "errorRate",
+                              "spendCents",
+                              "costPerRunCents",
+                              "sampledRuns"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "script",
+                          "workflow"
+                        ]
+                      }
+                    },
+                    "orgs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "orgId": {
+                            "type": "string"
+                          },
+                          "script": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "runs": {
+                                "type": "integer"
+                              },
+                              "completed": {
+                                "type": "integer"
+                              },
+                              "failed": {
+                                "type": "integer"
+                              },
+                              "errorRate": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "spendCents": {
+                                "type": "number",
+                                "nullable": true,
+                                "description": "Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."
+                              },
+                              "costPerRunCents": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "sampledRuns": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "runs",
+                              "completed",
+                              "failed",
+                              "errorRate",
+                              "spendCents",
+                              "costPerRunCents",
+                              "sampledRuns"
+                            ]
+                          },
+                          "workflow": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "runs": {
+                                "type": "integer"
+                              },
+                              "completed": {
+                                "type": "integer"
+                              },
+                              "failed": {
+                                "type": "integer"
+                              },
+                              "errorRate": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "spendCents": {
+                                "type": "number",
+                                "nullable": true,
+                                "description": "Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."
+                              },
+                              "costPerRunCents": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "sampledRuns": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "runs",
+                              "completed",
+                              "failed",
+                              "errorRate",
+                              "spendCents",
+                              "costPerRunCents",
+                              "sampledRuns"
+                            ]
+                          },
+                          "lastWorkflowDay": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "orgId",
+                          "script",
+                          "workflow",
+                          "lastWorkflowDay"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "red",
+                    "verdict",
+                    "onWorkflow",
+                    "lastWorkflowDay",
+                    "window",
+                    "days",
+                    "orgs"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "since",
+              "minRunsForRed",
+              "outcomes"
+            ],
+            "description": "MIGRATE-1105 S2b: campaign Engines, per UTC day x outcome, runs by stored script (no workflow) vs by workflow, from this service's own run rows; spend from a runs-service cost sample."
           }
         },
         "required": [
           "since",
-          "outcomes"
+          "outcomes",
+          "engines"
         ]
       }
     },

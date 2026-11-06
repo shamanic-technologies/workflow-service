@@ -344,6 +344,13 @@
       "when": 1793400000000,
       "tag": "0048_engine_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1793500000000,
+      "tag": "0049_engine_monitoring_days",
+      "breakpoints": true
     }
   ]
 }
