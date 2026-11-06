@@ -36,6 +36,7 @@ import { ScriptRunFailed, productionLedgerDeps, runStoredScript } from "../lib/s
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
 import type { ReplayCase } from "../lib/scripts/replay.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, readMonitoring } from "../lib/scripts/script-monitoring.js";
+import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, readEngineMonitoring } from "../lib/scripts/engine-monitoring.js";
 import { noteScriptRunForGuard, rollBackSwitches, guardView } from "../lib/scripts/script-guard.js";
 import { SwitchError, recordSwitch } from "../lib/scripts/script-writer-switch.js";
 import { productionRollbackDeps } from "../lib/scripts/script-guard-deps.js";
@@ -410,7 +411,9 @@ internalScriptsRouter.get("/internal/scripts/monitoring", requireApiKey, async (
   }
   try {
     await maybeRefreshMonitoring(db, productionMonitoringDeps());
-    res.json(await readMonitoring(db, days));
+    // Campaign Engines (MIGRATE-1105 S2b): served from the stored rows; a stale series refreshes in the background.
+    void maybeRefreshEngineMonitoring(db, productionEngineMonitoringDeps());
+    res.json({ ...(await readMonitoring(db, days)), engines: await readEngineMonitoring(db, days) });
   } catch (err) {
     fail(res, err, "read script monitoring");
   }

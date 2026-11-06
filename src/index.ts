@@ -33,6 +33,7 @@ import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
 import enginesRoutes, { productionEngineRunDeps } from "./routes/engines.js";
 import { closeOrphanEngineRuns } from "./lib/scripts/engine-runner.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
+import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, setEngineMonitoringContext } from "./lib/scripts/engine-monitoring.js";
 import { setGuardContext } from "./lib/scripts/script-guard.js";
 import { productionRollbackDeps } from "./lib/scripts/script-guard-deps.js";
 
@@ -181,6 +182,12 @@ async function boot(): Promise<void> {
     // The fleet writer's roll-back guard: checked after script runs, at most once a minute (script-guard.ts).
     setGuardContext({ db, deps: productionRollbackDeps() });
     setTimeout(() => void maybeRefreshMonitoring(monitoring.db, monitoring.deps), 60_000).unref();
+    // Campaign Engines, script vs workflow (MIGRATE-1105 S2b): every 15 min at most, riding the same traffic.
+    if (process.env.FEATURES_SERVICE_URL && process.env.FEATURES_SERVICE_API_KEY) {
+      const engines = { db, deps: productionEngineMonitoringDeps() };
+      setEngineMonitoringContext(engines);
+      setTimeout(() => void maybeRefreshEngineMonitoring(engines.db, engines.deps), 90_000).unref();
+    }
   }
 
   // Validate & upgrade workflows last — the service already serves traffic

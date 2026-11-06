@@ -1,4 +1,5 @@
 import { noteScriptMonitoring } from "./scripts/script-monitoring.js";
+import { noteEngineMonitoring } from "./scripts/engine-monitoring.js";
 import type { db as DbInstance } from "../db/index.js";
 import type { WindmillClient } from "./windmill-client.js";
 import { cleanupOrphanedWindmillFlows } from "./windmill-flow-cleanup.js";
@@ -115,4 +116,5 @@ export function noteWorkflowWrite(): void {
   noteSiblingLinesMaybeStale();
   // FACTORY-P3: the scripts' daily Monitoring row rides the same traffic (at most once per UTC day).
   noteScriptMonitoring();
+  noteEngineMonitoring();
 }

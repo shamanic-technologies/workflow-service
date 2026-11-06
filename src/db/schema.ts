@@ -263,6 +263,25 @@ export const scriptMonitoringDays = pgTable(
   (table) => [primaryKey({ columns: [table.day, table.outcome, table.path] })]
 );
 
+// MIGRATE-1105 S2b: the daily Monitoring series of CAMPAIGN Engines, script vs workflow, per org
+// (src/lib/scripts/engine-monitoring.ts). Migration 0049.
+export const engineMonitoringDays = pgTable(
+  "engine_monitoring_days",
+  {
+    day: date("day", { mode: "string" }).notNull(),
+    outcome: text("outcome").notNull(),
+    path: text("path").notNull(),
+    orgId: text("org_id").notNull(),
+    runs: integer("runs").notNull(),
+    completed: integer("completed").notNull(),
+    failed: integer("failed").notNull(),
+    costSampleRuns: integer("cost_sample_runs"),
+    costSampleCents: numeric("cost_sample_cents"),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.day, table.outcome, table.path, table.orgId] })]
+);
+
 // FACTORY-P3 fleet writer switch: each workflow dynasty upgraded from content-generation's writer to a stored script,
 // and the version a roll-back re-activates (src/lib/scripts/script-writer-switch.ts). Migration 0044.
 export const scriptSwitches = pgTable(

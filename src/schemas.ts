@@ -2731,6 +2731,37 @@ export const ScriptGuardSchema = z
   })
   .openapi("ScriptGuard");
 
+const EnginePathSchema = z
+  .object({
+    runs: z.number().int(),
+    completed: z.number().int(),
+    failed: z.number().int(),
+    errorRate: z.number().nullable(),
+    spendCents: z.number().nullable().describe("Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."),
+    costPerRunCents: z.number().nullable(),
+    sampledRuns: z.number().int(),
+  })
+  .nullable();
+
+const EngineMonitoringSchema = z
+  .object({
+    since: z.string(),
+    minRunsForRed: z.number().int(),
+    outcomes: z.array(
+      z.object({
+        outcome: z.string().describe("The Engine: the step the campaign's leg reaches (`unassigned` = a workflow dynasty with no leg on record)."),
+        red: z.boolean().describe("Broken: the script path's failure rate over today + yesterday (at least minRunsForRed finished runs) is above the workflow path's over the window (+1 point), or above 2 % with no workflow run in the window. Never red for still running on a workflow."),
+        verdict: z.object({ scriptErrorRate: z.number().nullable(), scriptFinishedRuns: z.number().int(), workflowErrorRate: z.number().nullable(), thresholdErrorRate: z.number() }),
+        onWorkflow: z.boolean().describe("Some campaign ran this outcome on a workflow today."),
+        lastWorkflowDay: z.string().nullable(),
+        window: z.object({ script: EnginePathSchema, workflow: EnginePathSchema }),
+        days: z.array(z.object({ day: z.string(), script: EnginePathSchema, workflow: EnginePathSchema })),
+        orgs: z.array(z.object({ orgId: z.string(), script: EnginePathSchema, workflow: EnginePathSchema, lastWorkflowDay: z.string().nullable() })),
+      }),
+    ),
+  })
+  .describe("MIGRATE-1105 S2b: campaign Engines, per UTC day x outcome, runs by stored script (no workflow) vs by workflow, from this service's own run rows; spend from a runs-service cost sample.");
+
 export const ScriptMonitoringResponseSchema = z
   .object({
     since: z.string(),
@@ -2745,6 +2776,7 @@ export const ScriptMonitoringResponseSchema = z
         days: z.array(z.object({ day: z.string(), service: MonitoringPathDaySchema.nullable(), script: MonitoringPathDaySchema.nullable() })),
       }),
     ),
+    engines: EngineMonitoringSchema,
   })
   .openapi("ScriptMonitoringResponse");
 
