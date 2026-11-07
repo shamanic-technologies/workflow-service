@@ -20,7 +20,9 @@
  * `unmade "no_publishable_account: <why>"` = the brand has no account of this network software may post on (each
  * connected one named with its reason: personal, human-run, a LinkedIn company page our login cannot post as):
  * idle, never a post on a personal profile; `{content: {end}}` = the post went out; a throw = the run failed.
- * Tactics: `network` (x | linkedin, social-service's word), `recorded_by` social (social-service declares the Unit).
+ * Tactics: `network` (x | linkedin, social-service's word), `recorded_by` social (social-service declares the Unit), `channel`
+ * (x-post | linkedin-post): features-service runs a pipe on a script only when it states the pipe's channel or the pipe
+ * names a finer Engine outcome (`scriptWorksPipe`); these pipes end on the outcome itself. Stored as v2 with it.
  */
 import { asFunction, PORT_HEAD } from "./port-kit.js";
 import {
@@ -45,14 +47,14 @@ export const SOCIAL_POSTS = {
   x: {
     outcome: "x_post_published",
     dynasty: "dy_x_post",
-    tactics: { network: "x", recorded_by: "social" },
+    tactics: { network: "x", recorded_by: "social", channel: "x-post" },
     description:
       "Publishes one X post per run on the brand's X accounts typed Pro (AI), rotating across them and never on a personal account. Posts go out at least an hour apart during the day, each on a new subject, written only from the brand's own facts.",
   },
   linkedin: {
     outcome: "linkedin_post_published",
     dynasty: "dy_linkedin_post",
-    tactics: { network: "linkedin", recorded_by: "social" },
+    tactics: { network: "linkedin", recorded_by: "social", channel: "linkedin-post" },
     description:
       "Publishes one LinkedIn post per run on the brand's LinkedIn accounts typed Pro (AI), rotating across them and never on a personal profile. Posts go out at least an hour apart during the day, each on a new subject, written only from the brand's own facts.",
   },
