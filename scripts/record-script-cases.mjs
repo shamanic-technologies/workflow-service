@@ -411,11 +411,10 @@ if (args.from === "recorded" || args.source === "recorded") {
   // replay only unless `--apply`). Run inside the container: it reads dist.
   if (args["first-email-only"]) {
     const { firstEmailOnlyCase, firstEmailOnlySource } = await import("../dist/lib/scripts/first-email-only.js");
-    built = built.map((b) => (b.case ? firstEmailOnlyCase(b.case) : b));
-    const cases = built.filter((b) => b.case).map((b) => b.case);
+    const original = built.filter((b) => b.case).map((b) => b.case);
     const excluded = {};
     for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
-    console.log(`${outcome}/${args.dynasty}: ${gens.length} recorded generations, ${cases.length} cases restated, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (replay only)"}`);
+    console.log(`${outcome}/${args.dynasty}: ${gens.length} recorded generations, ${original.length} recorded cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (replay only)"}`);
     const key = process.env.WORKFLOW_SERVICE_API_KEY;
     if (!key) throw new Error("WORKFLOW_SERVICE_API_KEY is required");
     const { ORG_ID, USER_ID, RUN_ID, STAFF_EMAIL } = process.env;
@@ -427,6 +426,26 @@ if (args.from === "recorded" || args.source === "recorded") {
     if (!active) throw new Error(`${outcome}/${args.dynasty} has no runnable version`);
     const current = await fetch(`${base}/scripts/${active.id}`, { headers: identity }).then((r) => r.json());
     const code = firstEmailOnlySource(current.code);
+    const replayOnly = async (source, list) => {
+      const r = await fetch(`${base}/internal/scripts/dynasty/${outcome}/${args.dynasty}/upgrade-with-cases`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key },
+        body: JSON.stringify({ code: source, source: "replay only", cases: list, orgId: ORG_ID, createdBy: STAFF_EMAIL, dryRun: true }),
+      });
+      if (!r.ok) throw new Error(`replay only -> ${r.status} ${(await r.text()).slice(0, 300)}`);
+      return r.json();
+    };
+    // A record the ACTIVE version itself cannot replay (e.g. object keys the record's storage reordered) proves nothing
+    // about the rule: excluded with its id, never restated.
+    const asRecorded = await replayOnly(current.code, original);
+    if (asRecorded.cases - asRecorded.matches > asRecorded.failures.length) throw new Error(`${active.scriptSlug} misses ${asRecorded.cases - asRecorded.matches} records: too many to name, narrow --since`);
+    const unreplayable = new Set(asRecorded.failures.map((f) => f.id));
+    for (const f of asRecorded.failures) console.log(`  excluded ${f.id}: ${active.scriptSlug} does not replay the record (${f.diffs[0]?.slice(0, 160)})`);
+    built = built.map((b) => (b.case && unreplayable.has(b.case.id) ? { excluded: "the active version does not replay the record" } : b.case ? firstEmailOnlyCase(b.case) : b));
+    const cases = built.filter((b) => b.case).map((b) => b.case);
+    const excludedNow = {};
+    for (const b of built) if (b.excluded) excludedNow[b.excluded] = (excludedNow[b.excluded] ?? 0) + 1;
+    console.log(`  ${cases.length} cases restated, excluded ${JSON.stringify(excludedNow)}`);
     const res = await fetch(`${base}/internal/scripts/dynasty/${outcome}/${args.dynasty}/upgrade-with-cases`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": key },
