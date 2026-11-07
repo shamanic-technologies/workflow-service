@@ -1,6 +1,6 @@
 /**
  * MIGRATE-1105 S2b: the Monitoring series of every CAMPAIGN Engine (the outcome a campaign's leg reaches: conversation,
- * lead_found, post_published, client_satisfied...), so the owner sees in one second which outcomes still run on a
+ * lead_found, threads_post_published, client_satisfied...), so the owner sees in one second which outcomes still run on a
  * workflow. One STORED row per UTC day x outcome x path x org:
  *   - `script`: the campaign run executed its Engine's stored script with no workflow (a `workflow_runs` row with no
  *     workflow, `execution_scope = 'engine'`, its outcome in `inputs.engineOutcome`, engine-runner.ts);
