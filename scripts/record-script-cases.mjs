@@ -404,7 +404,46 @@ if (args.from === "recorded" || args.source === "recorded") {
   if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found, lead_identified, lead_found and audience_built");
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
   const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
-  const built = gens.map(fullWriterCase);
+  let built = gens.map(fullWriterCase);
+  // FOLLOWUP-JIT-1107-WRITER (owner 2026-11-07): `--first-email-only` restates each recorded case under the one-email
+  // rule (the request's system prompt as content-generation #392 states it, the first stored step expected) and
+  // UPGRADES the dynasty's active version with the same edits, replacing its cases atomically (`upgrade-with-cases`;
+  // replay only unless `--apply`). Run inside the container: it reads dist.
+  if (args["first-email-only"]) {
+    const { firstEmailOnlyCase, firstEmailOnlySource } = await import("../dist/lib/scripts/first-email-only.js");
+    built = built.map((b) => (b.case ? firstEmailOnlyCase(b.case) : b));
+    const cases = built.filter((b) => b.case).map((b) => b.case);
+    const excluded = {};
+    for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
+    console.log(`${outcome}/${args.dynasty}: ${gens.length} recorded generations, ${cases.length} cases restated, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (replay only)"}`);
+    const key = process.env.WORKFLOW_SERVICE_API_KEY;
+    if (!key) throw new Error("WORKFLOW_SERVICE_API_KEY is required");
+    const { ORG_ID, USER_ID, RUN_ID, STAFF_EMAIL } = process.env;
+    if (!ORG_ID || !USER_ID || !RUN_ID || !STAFF_EMAIL) throw new Error("ORG_ID, USER_ID, RUN_ID and STAFF_EMAIL (a real staff identity: who decided) are required");
+    const identity = { "x-api-key": key, "x-org-id": ORG_ID, "x-user-id": USER_ID, "x-run-id": RUN_ID };
+    const base = (process.env.WORKFLOW_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, "");
+    const dyn = await fetch(`${base}/scripts/dynasty/${outcome}/${args.dynasty}`, { headers: identity }).then((r) => r.json());
+    const active = dyn.versions?.find((v) => v.runnable);
+    if (!active) throw new Error(`${outcome}/${args.dynasty} has no runnable version`);
+    const current = await fetch(`${base}/scripts/${active.id}`, { headers: identity }).then((r) => r.json());
+    const code = firstEmailOnlySource(current.code);
+    const res = await fetch(`${base}/internal/scripts/dynasty/${outcome}/${args.dynasty}/upgrade-with-cases`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key },
+      body: JSON.stringify({
+        code,
+        source: `content-generation-service recorded generations ${new Date().toISOString().slice(0, 10)}, restated under FOLLOWUP-JIT-1107 (one email)`,
+        cases,
+        orgId: ORG_ID,
+        createdBy: STAFF_EMAIL,
+        ...(typeof args.description === "string" ? { description: args.description } : {}),
+        dryRun: !args.apply,
+      }),
+    });
+    const text = await res.text();
+    console.log(`  from ${active.scriptSlug}: ${res.status} ${text.slice(0, 1500)}`);
+    process.exit(res.ok ? 0 : 1);
+  }
   const cases = built.filter((b) => b.case).map((b) => b.case);
   const excluded = {};
   for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;

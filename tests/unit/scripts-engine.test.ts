@@ -147,6 +147,22 @@ describe("script catalogue (dynasties)", () => {
     const fork = await forkScript(db, "message_written", "dy_port", { dynasty: "dy_port_upper", code: WRITER_DIFFERENT, description: "New idea" }, author);
     expect(fork.replay).toBeNull();
   });
+
+  it("a behaviour change the OWNER decided is an upgrade carrying its restated cases, replaced atomically (FOLLOWUP-JIT-1107-WRITER)", async () => {
+    await putCases(db, "message_written", "dy_port", [CASE, { ...CASE, id: "fictional-old-2" }], "fictional");
+    await createScript(db, { outcome: "message_written", dynasty: "dy_port", code: WRITER_V1, description: "Port" }, author, deps);
+    const restated = { ...CASE, id: "fictional-restated", expect: { content: { subject: " HELLO ANA " } } };
+    // The new code must replay every GIVEN case: a miss writes nothing (the old cases and version stay).
+    expect(await code(upgradeScript(db, "message_written", "dy_port", { code: WRITER_DIFFERENT, replaceCases: { cases: [CASE], source: "x" } }, author))).toBe("422 replay_failed");
+    expect(await code(upgradeScript(db, "message_written", "dy_port", { code: WRITER_DIFFERENT, replaceCases: { cases: [restated, restated], source: "x" } }, author))).toBe("400 invalid_case");
+    expect((await activeVersion(db, "message_written", "dy_port"))!.version).toBe(1);
+    const v2 = await upgradeScript(db, "message_written", "dy_port", { code: WRITER_DIFFERENT, replaceCases: { cases: [restated], source: "restated under the rule" } }, author);
+    expect([v2.version, v2.status, v2.creationType, v2.replay]).toEqual([2, "active", "upgrade", { cases: 1, matches: 1 }]);
+    expect((await dynastyVersions(db, "message_written", "dy_port")).map((v) => [v.version, v.status])).toEqual([[2, "active"], [1, "deprecated"]]);
+    // The dynasty now carries exactly the restated cases: the next plain upgrade is proven on them.
+    expect(await reproveActive(db, "message_written", "dy_port")).toEqual({ scriptSlug: "message_written/dy_port/v2", cases: 1, matches: 1 });
+    expect(await code(upgradeScript(db, "message_written", "dy_port", { code: WRITER_V1 }, author))).toBe("422 replay_failed");
+  });
 });
 
 describe("a script run as a step: isolation and ledger declaration", () => {

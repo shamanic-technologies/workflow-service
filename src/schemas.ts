@@ -2525,6 +2525,18 @@ export const PutScriptCasesRequestSchema = z
   })
   .openapi("PutScriptCasesRequest");
 
+export const UpgradeScriptWithCasesRequestSchema = z
+  .object({
+    code: z.string().min(1).max(500_000),
+    description: z.string().min(1).max(2000).optional(),
+    source: z.string().min(1).max(300).describe("Where the cases come from and the owner rule they are restated under (e.g. `content-generation recorded generations, FOLLOWUP-JIT-1107 one email`)."),
+    cases: z.array(z.record(z.string(), z.unknown())).min(1).max(1000),
+    createdBy: z.string().min(1).max(200).describe("Who decided it (staff email)."),
+    orgId: z.string().min(1).max(200).describe("The staff org the version is written under."),
+    dryRun: z.boolean().optional().describe("`true`: replay only, nothing written."),
+  })
+  .openapi("UpgradeScriptWithCasesRequest");
+
 const scriptDynastyParams = z.object({ outcome: ScriptSlugSchema, dynasty: ScriptSlugSchema });
 const SCRIPT_INTRO =
   "A script is code stored as data (FACTORY-P2-ENGINES): it makes one Unit of its outcome or none, competes inside its dynasty, and a new idea is a new version or a fork created on the fly, never a deploy. ";
@@ -2709,6 +2721,21 @@ registry.registerPath({
   security: [{ apiKey: [] }],
   request: { params: scriptDynastyParams, query: z.object({ reprove: z.enum(["true", "false"]).optional().describe("`true` (the last batch): re-replay the active version on every case and store its proof; a miss makes the runner refuse it (409 not_proven) until a version replaying 100 % is upgraded in.") }), body: { required: true, content: { "application/json": { schema: PutScriptCasesRequestSchema } } } },
   responses: { 200: { description: "Stored", content: { "application/json": { schema: z.object({ stored: z.number().int(), total: z.number().int(), reproved: z.object({ scriptSlug: z.string(), cases: z.number().int(), matches: z.number().int() }).nullable() }) } } } },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/dynasty/{outcome}/{dynasty}/upgrade-with-cases",
+  tags: ["Scripts"],
+  summary: "Upgrade a port on a behaviour change the owner decided, replacing its recorded cases",
+  description:
+    "Service key only. The new code must replay 100 % of the GIVEN cases (production records restated under the owner's rule); in one transaction the dynasty's cases are replaced by them and the next version is stored (the previous one deprecated). `dryRun` replays only. Any other behaviour change to a port stays a fork.",
+  request: { params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: UpgradeScriptWithCasesRequestSchema } } } },
+  responses: {
+    200: { description: "Dry run: the replay", content: { "application/json": { schema: z.object({ cases: z.number().int(), matches: z.number().int(), failures: z.array(z.object({ id: z.string(), diffs: z.array(z.string()) })) }) } } },
+    201: { description: "New version", content: { "application/json": { schema: ScriptWithCodeSchema } } },
+    422: { description: "Replay failed", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
 });
 
 const MonitoringPathDaySchema = z.object({
