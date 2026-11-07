@@ -3684,6 +3684,61 @@
           "cases"
         ]
       },
+      "UpgradeScriptWithCasesRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500000
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "Where the cases come from and the owner rule they are restated under (e.g. `content-generation recorded generations, FOLLOWUP-JIT-1107 one email`)."
+          },
+          "cases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            },
+            "minItems": 1,
+            "maxItems": 1000
+          },
+          "createdBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Who decided it (staff email)."
+          },
+          "orgId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The staff org the version is written under."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "`true`: replay only, nothing written."
+          }
+        },
+        "required": [
+          "code",
+          "source",
+          "cases",
+          "createdBy",
+          "orgId"
+        ]
+      },
       "ScriptGuard": {
         "type": "object",
         "properties": {
@@ -10630,6 +10685,111 @@
                     "total",
                     "reproved"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/scripts/dynasty/{outcome}/{dynasty}/upgrade-with-cases": {
+      "post": {
+        "tags": [
+          "Scripts"
+        ],
+        "summary": "Upgrade a port on a behaviour change the owner decided, replacing its recorded cases",
+        "description": "Service key only. The new code must replay 100 % of the GIVEN cases (production records restated under the owner's rule); in one transaction the dynasty's cases are replaced by them and the next version is stored (the previous one deprecated). `dryRun` replays only. Any other behaviour change to a port stays a fork.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "dynasty",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeScriptWithCasesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dry run: the replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cases": {
+                      "type": "integer"
+                    },
+                    "matches": {
+                      "type": "integer"
+                    },
+                    "failures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "diffs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "diffs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "cases",
+                    "matches",
+                    "failures"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "New version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptWithCode"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Replay failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
