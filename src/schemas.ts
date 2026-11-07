@@ -2612,7 +2612,7 @@ registry.registerPath({
   security: [{ apiKey: [] }],
   request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: RehomeScriptRequestSchema } } } },
   responses: {
-    201: { description: "The re-homed version and what moved with it", content: { "application/json": { schema: z.object({ script: ScriptWithCodeSchema, from: z.object({ outcome: z.string(), dynasty: z.string(), version: z.number().int() }), casesCopied: z.number().int(), storageRowsCopied: z.number().int(), switchesCopied: z.array(z.object({ orgId: z.string().nullable(), state: z.string() })), waitsMoved: z.number().int() }) } } },
+    201: { description: "The re-homed version and what moved with it", content: { "application/json": { schema: z.object({ script: ScriptWithCodeSchema, from: z.object({ outcome: z.string(), dynasty: z.string(), version: z.number().int() }), casesCopied: z.number().int(), storageRowsCopied: z.number().int(), switchesCopied: z.array(z.object({ orgId: z.string().nullable(), state: z.string() })), serviceSwitchesCopied: z.array(z.object({ callerService: z.string(), callerTask: z.string().nullable(), state: z.string() })), waitsMoved: z.number().int() }) } } },
     400: { description: "Unknown outcome, invalid code or same outcome", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: { description: "No live version", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: { description: "Already re-homed", content: { "application/json": { schema: ErrorResponseSchema } } },

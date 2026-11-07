@@ -10,7 +10,7 @@
  *   - proven first: the code replays 100 % of the dynasty's recorded cases (a port stays a port), and the cases move
  *     with it (copied under the fine outcome, so every later upgrade is held to them);
  *   - nothing un-switched, nothing newly switched: every campaign switch scope of the family Engine (one org, or every
- *     org) is copied onto the fine Engine in the SAME state (a rolled-back org stays rolled back, a switched one
+ *     org), and every service switch of the dynasty (caller x task), is copied onto the fine Engine in the SAME state (a rolled-back org stays rolled back, a switched one
  *     switched), the script's own stored state (`script_storage`) is copied, and its open waits move with it;
  *   - the family version stays ACTIVE: a campaign whose pipe still names the family Engine keeps finding it. Its
  *     successor goes live when the pipe names the fine outcome (features-service `PUT /internal/catalogue/pipes/{id}/
@@ -45,6 +45,8 @@ export interface RehomeResult {
   casesCopied: number;
   storageRowsCopied: number;
   switchesCopied: Array<{ orgId: string | null; state: string }>;
+  /** The service switches of the dynasty (instantly's, apollo's...), each caller x task, in its state. */
+  serviceSwitchesCopied: Array<{ callerService: string; callerTask: string | null; state: string }>;
   waitsMoved: number;
 }
 
@@ -148,6 +150,35 @@ export async function rehomeScript(db: AnyPgDb, outcome: string, dynasty: string
       });
       switchesCopied.push({ orgId: r.orgId, state: r.state });
     }
+    // Every SERVICE switch of the outcome (a service that makes it in its own code and calls the script door, one row
+    // per caller x task), its LATEST row, in the same state: the service names the fine outcome from its next deploy on.
+    const serviceRows = await tx
+      .select()
+      .from(scriptSwitches)
+      .where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.dynasty, dynasty), sql`${scriptSwitches.callerService} is not null`, sql`${scriptSwitches.callerService} <> ${CAMPAIGN_CALLER}`))
+      .orderBy(desc(scriptSwitches.switchedAt));
+    const latestService = new Map<string, (typeof serviceRows)[number]>();
+    for (const r of serviceRows) {
+      const k = `${r.callerService}|${r.callerTask ?? ""}`;
+      if (!latestService.has(k)) latestService.set(k, r);
+    }
+    const serviceSwitchesCopied: RehomeResult["serviceSwitchesCopied"] = [];
+    for (const r of latestService.values()) {
+      await tx.insert(scriptSwitches).values({
+        outcome: toOutcome,
+        dynasty,
+        callerService: r.callerService,
+        callerTask: r.callerTask,
+        scriptVersion: row!.version,
+        fromVersion: 0,
+        toVersion: row!.version,
+        state: r.state,
+        switchedAt: r.switchedAt,
+        rolledBackAt: r.rolledBackAt,
+        rollbackReason: r.rollbackReason,
+      });
+      serviceSwitchesCopied.push({ callerService: r.callerService!, callerTask: r.callerTask, state: r.state });
+    }
     // Its open waits resume under the fine Engine (the campaign's dispatch claims waits by the Engine it runs).
     const versions = await tx.select({ id: scripts.id }).from(scripts).where(and(eq(scripts.outcome, outcome), eq(scripts.dynasty, dynasty)));
     const moved = versions.length
@@ -163,6 +194,7 @@ export async function rehomeScript(db: AnyPgDb, outcome: string, dynasty: string
       casesCopied: cases.length,
       storageRowsCopied: storage.length,
       switchesCopied,
+      serviceSwitchesCopied,
       waitsMoved: moved.length,
     };
   });
