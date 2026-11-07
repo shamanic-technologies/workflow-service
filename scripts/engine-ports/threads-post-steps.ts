@@ -1,12 +1,12 @@
-// MIGRATE-1105 S4b: the old workflow's step code, kept only as what the stored script post_published/dy_threads_thread was generated from.
+// MIGRATE-1105 S4b: the old workflow's step code, kept only as what the stored script threads_post_published/dy_threads_thread was generated from (v1 at the retired coarse `post_published`, DELETE-POST-PUBLISHED-1107).
 // The DAG and its workflow are gone (retired 2026-11-05, the script live since); fix the script by an UPGRADE of its dynasty.
 /**
- * THE WORKFLOW OF THE THREADS POSTS PIPE (`threads-post|start_to_post_published`, THREADS-CAMPAIGN-1028, owner
+ * THE WORKFLOW OF THE THREADS POSTS PIPE (`threads-post|start_to_threads_post_published`, THREADS-CAMPAIGN-1028, owner
  * 2026-10-28: « une campagne qui va automatiser ces 5 envois tous les jours », fully automatic, no daily approval).
  * Any brand: every run writes ONE Threads thread (a main post + 2 or 3 replies chained under it) and publishes it on
  * one of the brand's connected Threads accounts typed Pro (AI), rotating across them. A proactive Start pipe run by
  * campaign-service like every other; how many threads a day is the campaign's MAX VOLUME (billing counts the
- * `post_published` outcome meta-service declares per thread), never a count in this DAG.
+ * `threads_post_published` outcome meta-service declares per thread), never a count in this DAG.
  *
  * Each run, in order:
  *  - The campaign chassis (`/gate-check`, `/start-run`, an `/end-run` on every exit). A staff DRY RUN
@@ -44,7 +44,7 @@
  *
  * Spend: the reading calls by chat-service and the writing by content-generation, both on this run (x-run-id), the
  * features pick by features-service. The outcome
- * (`post_published`, one per thread) is meta-service's, the publisher's (cost-accounting doctrine).
+ * (`threads_post_published`, one per thread) is meta-service's, the publisher's (cost-accounting doctrine).
  *
  * Shape: three decisions (`decide-turn`, `check-ship`, `check-main`) are SIBLING top-level branchones, each pinned by
  * a convergence edge from `check-turn` (`nodeToModule` builds a condition nested in a branch as an ordinary module,
@@ -55,10 +55,10 @@ import { GENERATE_THREAD_PATH, withLegBestTemplate } from "../../src/lib/whatsap
 
 export const THREADS_POST_FEATURE_SLUG = "threads-post";
 
-/** The step a thread produces: the catalogue's existing `post_published` (object), shared with social-service. */
-export const THREADS_POST_STEP_KEY = "post_published";
+/** The step a thread produces: the catalogue's fine `threads_post_published` (the coarse `post_published` is retired, DELETE-POST-PUBLISHED-1107). */
+export const THREADS_POST_STEP_KEY = "threads_post_published";
 
-export const THREADS_POST_LEG_KEY = "start_to_post_published";
+export const THREADS_POST_LEG_KEY = "start_to_threads_post_published";
 
 export const THREADS_POST_PIPE_ID = `${THREADS_POST_FEATURE_SLUG}|${THREADS_POST_LEG_KEY}`;
 

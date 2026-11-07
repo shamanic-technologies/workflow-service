@@ -1,5 +1,5 @@
 /**
- * MIGRATE-1105 S4: the Threads post Engine (`post_published`) as ONE stored script, ported from the Threads workflow
+ * MIGRATE-1105 S4: the Threads post Engine (`threads_post_published`) as ONE stored script, ported from the Threads workflow
  * DAG step by step (`buildThreadsPostSource()` assembles it from the DAG's own step code, so nothing is rewritten by
  * hand). One run = one Threads thread on the brand's next Pro (AI) account, or an idle end:
  *
@@ -9,7 +9,7 @@
  *   scraping-service   the brand's site map and those pages;
  *   features-service   the pipe's best template dynasty + LLM for this campaign (never fixed here);
  *   content-generation the thread, written with that template head + LLM (its writer, its outcome rows);
- *   meta-service       publishes the main post then each reply (idempotent per part), and declares `post_published`.
+ *   meta-service       publishes the main post then each reply (idempotent per part), and declares `threads_post_published`.
  *
  * The campaign chassis (gate, start, end) is the Engine runner's. The script answers: `null` = nothing owed now (idle,
  * campaign-service rechecks), `{content: {end}}` = the thread went out, a throw = the run failed (as every DAG failure).
@@ -35,7 +35,7 @@ import { GATHER_CLIENT_FACTS_CODE } from "../../src/lib/cold-whatsapp-outreach-d
 import { THREAD_WRITER_PLAN_CODE } from "../../src/lib/whatsapp-template-writer.js";
 import { BRIEF_HEADER } from "../../src/lib/campaign-brief.js";
 
-export const THREADS_POST_OUTCOME = "post_published";
+export const THREADS_POST_OUTCOME = "threads_post_published";
 export const THREADS_POST_DYNASTY = "dy_threads_thread";
 export const THREADS_POST_TACTICS = { channel: THREADS_POST_FEATURE_SLUG, recorded_by: "meta" };
 
@@ -49,7 +49,7 @@ export function buildThreadsPostSource(): string {
   const plan = asFunction(PLAN_RUN_CODE.replace("const now = new Date();", "const now = new Date(__now);"), "planRun").replace("function planRun(", "function planRun(__now, ");
   return [
     `import type { ScriptContext, ScriptResult } from "@gtm-factory/core";`,
-    `/** Threads post (post_published): one thread per run on the brand's next Pro (AI) account, ported from the Threads workflow (MIGRATE-1105 S4). */`,
+    `/** Threads post (threads_post_published): one thread per run on the brand's next Pro (AI) account, ported from the Threads workflow (MIGRATE-1105 S4). */`,
     `const BRIEF_HEADER = ${JSON.stringify(BRIEF_HEADER)};`,
     PORT_HEAD,
     plan,
