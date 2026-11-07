@@ -9754,6 +9754,29 @@
                         ]
                       }
                     },
+                    "serviceSwitchesCopied": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "callerService": {
+                            "type": "string"
+                          },
+                          "callerTask": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "state": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "callerService",
+                          "callerTask",
+                          "state"
+                        ]
+                      }
+                    },
                     "waitsMoved": {
                       "type": "integer"
                     }
@@ -9764,6 +9787,7 @@
                     "casesCopied",
                     "storageRowsCopied",
                     "switchesCopied",
+                    "serviceSwitchesCopied",
                     "waitsMoved"
                   ]
                 }

@@ -95,6 +95,18 @@ describe("re-homing a dynasty onto its fine outcome", () => {
     expect(await db.select().from(scriptSwitches).where(and(eq(scriptSwitches.outcome, "threads_post_published"), eq(scriptSwitches.orgId, "org-a")))).toHaveLength(1);
   });
 
+  it("copies each service switch of the dynasty (caller x task) in its state", async () => {
+    await db.insert(scriptSwitches).values({ outcome: "post_published", dynasty: "dy_thread", callerService: "instantly", callerTask: "inbound-decision", scriptVersion: 1, fromVersion: 0, toVersion: 1, state: "switched" });
+    await db.insert(scriptSwitches).values({ outcome: "post_published", dynasty: "dy_thread", callerService: "instantly", callerTask: "orphan", scriptVersion: 1, fromVersion: 0, toVersion: 1, state: "shadow" });
+    const out = await rehomeScript(db, "post_published", "dy_thread", { toOutcome: "threads_post_published" }, author, deps);
+    expect(out.serviceSwitchesCopied.sort((a, b) => String(a.callerTask).localeCompare(String(b.callerTask)))).toEqual([
+      { callerService: "instantly", callerTask: "inbound-decision", state: "switched" },
+      { callerService: "instantly", callerTask: "orphan", state: "shadow" },
+    ]);
+    const rows = await db.select().from(scriptSwitches).where(and(eq(scriptSwitches.outcome, "threads_post_published"), eq(scriptSwitches.callerService, "instantly")));
+    expect(rows.map((r) => [r.callerTask, r.state, r.scriptVersion])).toEqual(expect.arrayContaining([["inbound-decision", "switched", 2], ["orphan", "shadow", 2]]));
+  });
+
   it("serves any campaign asking the fine Engine (no channel), and the Rating keeps the dynasty's record", async () => {
     const family = (await activeVersion(db, "post_published", "dy_thread"))!;
     await db.insert(scriptRuns).values({ scriptId: family.id, orgId: "org-a", runId: "r1", parentRunId: "p1", status: "made" });
