@@ -130,14 +130,23 @@ function failureDetails(summary: ReplaySummary) {
   };
 }
 
-async function requireProven(db: AnyPgDb, outcome: string, dynasty: string, code: string, tactics: Record<string, unknown> = {}): Promise<{ cases: number; matches: number } | null> {
-  const summary = await proveOnCases(db, outcome, dynasty, code, tactics);
+async function requireProven(
+  db: AnyPgDb,
+  outcome: string,
+  dynasty: string,
+  code: string,
+  tactics: Record<string, unknown> = {},
+  replacement?: readonly ReplayCase[],
+): Promise<{ cases: number; matches: number } | null> {
+  const summary = replacement
+    ? await replayAll(code, Object.keys(tactics).length === 0 ? replacement : replacement.map((c) => ({ ...c, tactics: { ...tactics, ...(c.tactics ?? {}) } })))
+    : await proveOnCases(db, outcome, dynasty, code, tactics);
   if (summary === null) return null;
   if (summary.matches !== summary.cases) {
     throw new ScriptCatalogueError(
       422,
       "replay_failed",
-      `${outcome}/${dynasty} is a port: this code matches ${summary.matches} of its ${summary.cases} recorded cases, every one must match. A behaviour change to a port is a fork.`,
+      `${outcome}/${dynasty} is a port: this code matches ${summary.matches} of its ${summary.cases} recorded cases, every one must match. A behaviour change to a port is a fork, unless the owner decided it: then an upgrade carrying its restated cases (replaceCases).`,
       { replay: failureDetails(summary) },
     );
   }
@@ -222,6 +231,12 @@ export interface UpgradeInput {
   code: string;
   description?: string;
   tactics?: Record<string, unknown>;
+  /**
+   * A behaviour change the OWNER decided on a port (FOLLOWUP-JIT-1107-WRITER): the dynasty's whole case set is
+   * REPLACED by these, in the upgrade's transaction, and the new code must replay 100 % of THEM (the old cases record
+   * the old behaviour). Each case is a production record restated under the owner's rule, named by `source`.
+   */
+  replaceCases?: { cases: ReplayCase[]; source: string };
 }
 
 /**
@@ -243,8 +258,17 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
     throw new ScriptCatalogueError(400, "no_change", "the code is the active version's, byte for byte: nothing to upgrade");
   }
   const read = await readSource(input.code);
-  const replay = await requireProven(db, outcome, dynasty, input.code, input.tactics ?? (current.tactics as Record<string, unknown>) ?? {});
+  const replacement = input.replaceCases;
+  if (replacement) {
+    if (replacement.cases.length === 0) throw new ScriptCatalogueError(400, "invalid_case", "replaceCases needs at least one case");
+    checkCases(replacement.cases);
+  }
+  const replay = await requireProven(db, outcome, dynasty, input.code, input.tactics ?? (current.tactics as Record<string, unknown>) ?? {}, replacement?.cases);
   return db.transaction(async (tx) => {
+    if (replacement) {
+      await tx.delete(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
+      for (const c of replacement.cases) await tx.insert(scriptCases).values({ outcome, dynasty, caseId: c.id, body: c, source: replacement.source });
+    }
     await tx
       .update(scripts)
       .set({ status: "deprecated", deprecationReason: `Upgraded: replaced by version ${current.version + 1}`, updatedAt: new Date() })
@@ -336,14 +360,21 @@ export async function setDynastyStatus(db: AnyPgDb, outcome: string, dynasty: st
 }
 
 /** Store (or replace) a dynasty's recorded cases. Idempotent per case id. */
-export async function putCases(db: AnyPgDb, outcome: string, dynasty: string, cases: ReplayCase[], source: string): Promise<{ stored: number; total: number }> {
-  checkSlug("outcome", outcome);
-  checkSlug("dynasty", dynasty);
+function checkCases(cases: readonly ReplayCase[]): void {
+  const ids = new Set<string>();
   for (const c of cases) {
     if (!c || typeof c.id !== "string" || !c.id || !Array.isArray(c.calls) || typeof c.units !== "object" || typeof c.expect !== "object") {
       throw new ScriptCatalogueError(400, "invalid_case", `a case needs id, units, calls and expect (case ${String((c as { id?: unknown })?.id)})`);
     }
+    if (ids.has(c.id)) throw new ScriptCatalogueError(400, "invalid_case", `case ${c.id} is given twice`);
+    ids.add(c.id);
   }
+}
+
+export async function putCases(db: AnyPgDb, outcome: string, dynasty: string, cases: ReplayCase[], source: string): Promise<{ stored: number; total: number }> {
+  checkSlug("outcome", outcome);
+  checkSlug("dynasty", dynasty);
+  checkCases(cases);
   for (const c of cases) {
     await db
       .insert(scriptCases)

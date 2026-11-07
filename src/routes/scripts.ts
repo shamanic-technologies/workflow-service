@@ -10,6 +10,7 @@ import {
   ForkScriptRequestSchema,
   RehomeScriptRequestSchema,
   PutScriptCasesRequestSchema,
+  UpgradeScriptWithCasesRequestSchema,
   ReplayScriptRequestSchema,
   RunScriptRequestSchema,
   ScriptDynastyStatusRequestSchema,
@@ -35,7 +36,7 @@ import {
 } from "../lib/scripts/script-catalogue.js";
 import { ScriptRunFailed, productionLedgerDeps, runStoredScript } from "../lib/scripts/script-runner.js";
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
-import type { ReplayCase } from "../lib/scripts/replay.js";
+import { replayAll, type ReplayCase } from "../lib/scripts/replay.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, readMonitoring } from "../lib/scripts/script-monitoring.js";
 import { rehomeScript } from "../lib/scripts/script-rehome.js";
 import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, readEngineMonitoring } from "../lib/scripts/engine-monitoring.js";
@@ -360,6 +361,35 @@ internalScriptsRouter.get("/internal/scripts/switches/service", requireApiKey, a
     res.json(await serviceSwitchState(db, outcome, callerService, callerTask));
   } catch (err) {
     fail(res, err, "read a service switch");
+  }
+});
+
+internalScriptsRouter.post("/internal/scripts/dynasty/:outcome/:dynasty/upgrade-with-cases", requireApiKey, async (req, res) => {
+  const parsed = UpgradeScriptWithCasesRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const { outcome, dynasty } = req.params;
+    const { code, description, source, createdBy, orgId, dryRun } = parsed.data;
+    const cases = parsed.data.cases as unknown as ReplayCase[];
+    if (dryRun) {
+      const active = await activeVersion(db, outcome, dynasty);
+      const tactics = (active?.tactics as Record<string, unknown>) ?? {};
+      const summary = await replayAll(code, cases.map((c) => ({ ...c, tactics: { ...tactics, ...(c.tactics ?? {}) } })));
+      res.json({
+        cases: summary.cases,
+        matches: summary.matches,
+        failures: summary.failures.slice(0, 5).map((f) => ({ id: f.id, diffs: f.diffs.slice(0, 3).map((d) => d.slice(0, 300)) })),
+      });
+      return;
+    }
+    const row = await upgradeScript(db, outcome, dynasty, { code, ...(description ? { description } : {}), replaceCases: { cases, source } }, { orgId, createdBy });
+    console.log(`[workflow-service] script upgraded with ${cases.length} replacement cases ${row.outcome}/${row.dynasty}/v${row.version} by ${row.createdBy} replay=${JSON.stringify(row.replay)} (${source})`);
+    res.status(201).json(serveScript(row, await caseCount(db, row.outcome, row.dynasty)));
+  } catch (err) {
+    fail(res, err, "upgrade script with cases");
   }
 });
 
