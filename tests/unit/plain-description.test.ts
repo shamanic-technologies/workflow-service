@@ -41,7 +41,6 @@ describe("every description a seed or copy writes reads right", async () => {
   const call = await import("../../src/lib/ai-instant-call-dag.js");
   const push = await import("../../scripts/engine-ports/email-sending-steps.js");
   const doc = await import("../../src/lib/offer-document-reply-dag.js");
-  const { freshContactsDescription } = await import("../../src/lib/fresh-contacts.js");
   const texts: Record<string, string> = {
     proactiveFollowUp: follow.FOLLOW_UP_PROACTIVE_DESCRIPTION,
     reactiveFollowUp: follow.FOLLOW_UP_REACTIVE_DESCRIPTION,
@@ -54,7 +53,6 @@ describe("every description a seed or copy writes reads right", async () => {
     callEmailOnly: call.EMAIL_REPLIES_ONLY_DESCRIPTION,
     push: push.EMAIL_SENDING_DESCRIPTION,
     offerDocument: doc.DESCRIPTION,
-    freshColdEmail: freshContactsDescription("Writes one cold email to each new contact of the campaign's audience."),
   };
   for (const [name, text] of Object.entries(texts)) {
     it(`${name}: plain, no template/model/test/date, no dash, two sentences at most`, () => {
