@@ -15,6 +15,7 @@
 import { COMPETITOR_FIRST_STRATEGY, NEW_FACT_STRATEGY, TEAM_DECIDES_STRATEGY } from "../follow-up-dag.js";
 import { WHY_NOW_STRATEGY } from "../occurrence-fact.js";
 import { PERSON_RELATIONSHIP_STRATEGY } from "../person-relationship.js";
+import { SENDER_PERSONA_FN } from "../sender-persona.js";
 import { EMAIL_MEDIUM, WHATSAPP_MEDIUM, localTimeStrategy, nextDateStrategy, rightMomentStrategy, MAX_NEXT_FOLLOW_UP_DAYS } from "../right-moment.js";
 
 /**
@@ -116,7 +117,8 @@ export function answerLeadScriptSource(): string {
     MAX_DAYS: MAX_NEXT_FOLLOW_UP_DAYS,
     CALL_CONSUMES: ANSWER_LEAD_CALL_CONSUMES,
   };
-  return `${SCRIPT_BODY}\nconst K = ${JSON.stringify(consts)};\n`;
+  // Who speaks on WhatsApp = the persona of the line that sends (SOPHIE-WA-1016), the owner's own text, word for word.
+  return `${SCRIPT_BODY}\n${SENDER_PERSONA_FN}\nconst K = ${JSON.stringify(consts)};\n`;
 }
 
 const SCRIPT_BODY = String.raw`
@@ -149,6 +151,8 @@ export default function run(ctx) {
   const brandId = s(req.brandId) || (Array.isArray(req.brandIds) ? s(req.brandIds[0]) : null);
   const campaignId = s(req.campaignId);
   const offerId = s(req.offerId);
+  // The WhatsApp line the campaign states it writes from (CAMPAIGN-WA-LINE-1028); none = crm-service picks.
+  const line = s(req.whatsappSenderPhone);
   if (!brandId || !campaignId) throw new Error("the run names no brand or campaign");
   const p = trigger.person || {};
   const named = { email: s(p.email) ? s(p.email).toLowerCase() : null, phone: s(p.phone), leadId: s(trigger.leadId) };
@@ -216,7 +220,7 @@ export default function run(ctx) {
   let medium = last && last.channel === "whatsapp" ? "whatsapp" : "email";
   let reach = null;
   if (medium === "whatsapp") {
-    const r = door("crm.whatsapp.reach", { body: { brandId: brandId, ...(email ? { email: email } : {}), ...(phone ? { phone: phone } : {}) } });
+    const r = door("crm.whatsapp.reach", { body: { brandId: brandId, ...(email ? { email: email } : {}), ...(phone ? { phone: phone } : {}), ...(line ? { fromAccount: line } : {}) } });
     if (r.ok && r.data.reachable === true) reach = r.data;
     else medium = email ? "email" : "none";
   }
@@ -244,7 +248,9 @@ export default function run(ctx) {
     const text = String(m.text || (m.event && m.event.text) || m.subject || "").slice(0, 2000);
     return "[" + String(m.at) + "] " + who + " (" + String(m.channel || m.source || "") + "): " + text;
   });
-  const system = [voice.content].concat(K.GAME, K.MEDIUM[medium], [s(req.brief) ? "THE CAMPAIGN'S BRIEF (from the client):\n" + req.brief : ""]).filter(Boolean).join("\n\n");
+  // On WhatsApp the writer IS the sending line's persona (crm-service states it on the reach answer); none = as before.
+  const persona = medium === "whatsapp" ? senderPersona(reach) : null;
+  const system = [voice.content].concat(persona ? personaLines(persona, String(brand.name || "")) : [], K.GAME, K.MEDIUM[medium], [s(req.brief) ? "THE CAMPAIGN'S BRIEF (from the client):\n" + req.brief : ""]).filter(Boolean).join("\n\n");
   const message = [
     "NOW: " + now + " (UTC).",
     "THEIR TIMEZONE: " + (s(lead.timezone) || "not stated") + ". Clues: " + [lead.city, lead.state, lead.country, phone].filter(Boolean).join(", "),
@@ -302,7 +308,7 @@ export default function run(ctx) {
   let sent;
   if (medium === "whatsapp") {
     const bubbles = text.split(/\n\s*\n/).map(function (t) { return t.trim(); }).filter(Boolean);
-    sent = door("crm.whatsapp.send", { body: { brandId: brandId, ...(email ? { email: email } : {}), ...(phone ? { phone: phone } : {}), ...(bubbles.length > 1 ? { messages: bubbles } : { text: text }), idempotencyKey: sendKey } });
+    sent = door("crm.whatsapp.send", { body: { brandId: brandId, ...(email ? { email: email } : {}), ...(phone ? { phone: phone } : {}), ...(bubbles.length > 1 ? { messages: bubbles } : { text: text }), ...(line ? { fromAccount: line } : {}), idempotencyKey: sendKey } });
   } else if (replied) {
     sent = door("instantly.reply.send", { body: { campaign_id: replied.campaignId, email: email, body_html: text, sent_by: "automation" } });
   } else {
