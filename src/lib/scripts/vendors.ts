@@ -182,6 +182,11 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "meta.threads.accounts": { service: "meta", method: "GET", path: "/orgs/threads/accounts", asRun: true },
   "meta.threads.publications": { service: "meta", method: "GET", path: "/orgs/threads/publications", asRun: true },
   "meta.threads.publish": { service: "meta", method: "POST", path: "/orgs/threads/accounts/{id}/posts", asRun: true, outcomeInBody: "outcomeKey" },
+  // X and LinkedIn posts (SOCIAL-POSTS-ENGINES-1107): social-service's brand accounts (typed, publishable or why not),
+  // what was published on them, and ONE post on one of them; social-service declares the Unit under the Engine's outcome.
+  "social.accounts": { service: "social", method: "GET", path: "/orgs/social/accounts", asRun: true },
+  "social.publications": { service: "social", method: "GET", path: "/orgs/social/publications", asRun: true },
+  "social.publish": { service: "social", method: "POST", path: "/orgs/social/accounts/{id}/posts", asRun: true, outcomeInBody: "outcomeKey" },
   "scraping.site.map": { service: "scraping", method: "POST", path: "/map", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
