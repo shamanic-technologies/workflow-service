@@ -13,8 +13,8 @@ const since = "2026-10-08T15:30:00.000Z";
 const acc = (id: string, username: string, extra: Record<string, unknown> = {}) => ({ id, username, accountType: "pro_ai", accountTypeLabel: "Pro (AI)", health: "connected", publishable: true, notPublishableReason: null, createdAt: "2026-10-30T00:00:00Z", ...extra });
 
 describe("the X / LinkedIn post script", () => {
-  it("is a valid script that needs no material; its doors are social-service's, the publish declaring the Engine's outcome", async () => {
-    expect((await validateSource(src)).materials).toEqual([]);
+  it("is a valid script whose one material it ASKS for itself (industry news); its doors are social-service's, the publish declaring the Engine's outcome", async () => {
+    expect((await validateSource(src)).materials).toEqual(["industry_news_found"]);
     expect(SERVICE_DOOR_VENDORS["social.publish"]).toMatchObject({ service: "social", path: "/orgs/social/accounts/{id}/posts", outcomeInBody: "outcomeKey" });
     expect(SOCIAL_POSTS.x.tactics.network).toBe("x");
     expect(SOCIAL_POSTS.linkedin.tactics.network).toBe("linkedin");
@@ -57,7 +57,7 @@ describe("the X / LinkedIn post script", () => {
   it("writes with the picked template + LLM and publishes ONE post on the account whose last post is oldest", async () => {
     const c: ReplayCase = {
       id: "published",
-      units: {},
+      units: { industry_news_found: { scanned: true, items: [] } },
       request,
       tactics: SOCIAL_POSTS.x.tactics,
       calls: [
@@ -77,6 +77,36 @@ describe("the X / LinkedIn post script", () => {
       expect: { content: { end: { success: true, stopCampaign: false } } },
     };
     expect((await replayCase(src, c)).diffs).toEqual([]);
+  });
+
+  it("asks the Industry news found Engine inside its run and hands the watch's items to the angle reader (INDUSTRY-NEWS-ENGINE-1108)", async () => {
+    const news = { scanned: true, items: [{ id: "n1", title: "@jdoe: Lemlist changed its pricing", url: "https://x.com/jdoe/status/1", source: "x", whyItMatters: "Names Lemlist." }] };
+    const c: ReplayCase = {
+      id: "with-news",
+      units: { industry_news_found: news },
+      request,
+      tactics: SOCIAL_POSTS.x.tactics,
+      calls: [
+        { name: "social.accounts", answer: ok({ accounts: [acc("x-2", "DistributeYou")] }) },
+        { name: "social.publications", answer: ok({ publications: [] }) },
+        { name: "brand.profile", answer: ok({ brand: { name: "Brand", domain: "brand.com" } }) },
+        { name: "brand.offer.answers", answer: ok({ answers: [] }) },
+        { name: "brand.offer.fields", answer: ok({ fields: [] }) },
+        { name: "brand.fields", answer: ok({ fields: [] }) },
+        { name: "llm.complete", answer: ok({ content: "angle" }) },
+        { name: "scraping.site.map", answer: { ok: false, data: { error: "down", status: 502 } } },
+        { name: "features.writer_pick", answer: ok({ template: { templateDynastySlug: "x-tpl" }, llm: { model: "sonnet", provider: "anthropic" } }) },
+        { name: "content.template_head", answer: ok({ template: { type: "x-tpl-v1" } }) },
+        { name: "content.thread.generate", answer: ok({ subject: "s", post: "One idea", replies: [] }) },
+        { name: "social.publish", answer: ok({ publication: { id: "row" }, created: true }) },
+      ],
+      expect: { content: { end: { success: true, stopCampaign: false } } },
+    };
+    const r = await replayCase(src, c);
+    expect(r.diffs).toEqual([]);
+    expect(src).toContain('ctx.get("industry_news_found")');
+    expect(SOCIAL_POSTS.x.tactics.asks).toEqual(["industry_news_found"]);
+    expect(SOCIAL_POSTS.linkedin.tactics.asks).toEqual(["industry_news_found"]);
   });
 
   it("refuses a script stored without a network tactic", async () => {

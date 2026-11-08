@@ -187,6 +187,11 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "social.accounts": { service: "social", method: "GET", path: "/orgs/social/accounts", asRun: true },
   "social.publications": { service: "social", method: "GET", path: "/orgs/social/publications", asRun: true },
   "social.publish": { service: "social", method: "POST", path: "/orgs/social/accounts/{id}/posts", asRun: true, outcomeInBody: "outcomeKey" },
+  // industry_news_found (social-service, INDUSTRY-NEWS-ENGINE-1108): one scan of the industry's fresh news for the run's
+  // brand (treg held + actualized on social-service's run under the script's; one Unit per item new for the brand, declared
+  // under the Engine's outcome), and the kept items any script reads back (one watch, never a second scan).
+  "social.news.scan": { service: "social", method: "POST", path: "/orgs/social/industry-news/scans", asRun: true, outcomeInBody: "outcomeKey" },
+  "social.news.items": { service: "social", method: "GET", path: "/orgs/social/industry-news", asRun: true },
   "scraping.site.map": { service: "scraping", method: "POST", path: "/map", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },

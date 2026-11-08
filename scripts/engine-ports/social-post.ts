@@ -47,14 +47,14 @@ export const SOCIAL_POSTS = {
   x: {
     outcome: "x_post_published",
     dynasty: "dy_x_post",
-    tactics: { network: "x", recorded_by: "social", channel: "x-post" },
+    tactics: { network: "x", recorded_by: "social", channel: "x-post", asks: ["industry_news_found"] },
     description:
       "Publishes one X post per run on the brand's X accounts typed Pro (AI), rotating across them and never on a personal account. Posts go out at least an hour apart during the day, each on a new subject, written only from the brand's own facts.",
   },
   linkedin: {
     outcome: "linkedin_post_published",
     dynasty: "dy_linkedin_post",
-    tactics: { network: "linkedin", recorded_by: "social", channel: "linkedin-post" },
+    tactics: { network: "linkedin", recorded_by: "social", channel: "linkedin-post", asks: ["industry_news_found"] },
     description:
       "Publishes one LinkedIn post per run on the brand's LinkedIn accounts typed Pro (AI), rotating across them and never on a personal profile. Posts go out at least an hour apart during the day, each on a new subject, written only from the brand's own facts.",
   },
@@ -124,6 +124,24 @@ export function buildSocialPostSource(): string {
 const LLM = ${JSON.stringify(THREADS_ANGLES_LLM)};
 const OWN_PAGES_SCHEMA = ${JSON.stringify(OWN_PAGES_SCHEMA)};
 
+/**
+ * INDUSTRY-NEWS-ENGINE-1108: the brand's fresh industry news, asked of the Industry news found Engine inside THIS run (a
+ * child run: its scan's spend and Units land on this campaign through the run tree; the day's scan is paid once, a second
+ * ask the same day reads it back). Social-service declares the Units (recordedBy social). No script / nothing kept = [].
+ */
+function freshNews(ctx: any, now: string): any[] {
+  ctx.ask({ units: {}, recordedBy: "social", request: { now } });
+  const u = ctx.get("industry_news_found");
+  return u && u.content && Array.isArray(u.content.items) ? u.content.items : [];
+}
+
+/** The angle reader's message with the watch's items first (each with its source URL), when there are any. */
+function withNews(message: string, news: any[]): string {
+  if (!news.length) return message;
+  const lines = news.slice(0, 12).map((i: any) => "- " + String(i.title ?? "").slice(0, 200) + " (" + String(i.url ?? "") + ")" + (i.whyItMatters ? ": " + String(i.whyItMatters).slice(0, 200) : ""));
+  return message + "\\n\\nFRESH INDUSTRY NEWS (the last day and a half, kept by the brand's own watch; start from these, with their source URL):\\n" + lines.join("\\n");
+}
+
 /** The post as written (the writer is trusted): dashes rewritten, its parts joined, the GET STARTED line closing it. */
 function finalPost(draft: any, compose: any): string {
   const undash = (s: any) => String(s ?? "").replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-").replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ").trim();
@@ -151,8 +169,9 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const brandFields = tolerated(ctx, "brand.fields", { params: { brandId: p.brandId } });
   const facts = gatherFacts(offerAnswers, offerFields, brandFields);
 
+  const news = freshNews(ctx, p.now);
   const a = composeAngles(brand, facts, p);
-  const angles = tolerated(ctx, "llm.complete", withBrief({ provider: LLM.provider, model: LLM.model, webSearch: true, maxTokens: 4000, message: a.message, systemPrompt: a.systemPrompt }, brief));
+  const angles = tolerated(ctx, "llm.complete", withBrief({ provider: LLM.provider, model: LLM.model, webSearch: true, maxTokens: 4000, message: withNews(a.message, news), systemPrompt: a.systemPrompt }, brief));
 
   const site = planOwnSite(brand, p);
   const map = tolerated(ctx, "scraping.site.map", { body: { url: site.url, brandIds: site.brandIds, campaignId } });
