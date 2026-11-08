@@ -409,8 +409,17 @@ if (args.from === "recorded" || args.source === "recorded") {
   // rule (the request's system prompt as content-generation #392 states it, the first stored step expected) and
   // UPGRADES the dynasty's active version with the same edits, replacing its cases atomically (`upgrade-with-cases`;
   // replay only unless `--apply`). Run inside the container: it reads dist.
-  if (args["first-email-only"]) {
-    const { firstEmailOnlyCase, firstEmailOnlySource } = await import("../dist/lib/scripts/first-email-only.js");
+  // WRITER-EMPTY-BODY-1108: `--one-email-schema` does the same with the response schema held to exactly one email
+  // (`one-email-schema.ts`): the request's schema restated, the recorded answer and email untouched.
+  const restatement = args["first-email-only"]
+    ? { module: "first-email-only", caseOf: "firstEmailOnlyCase", sourceOf: "firstEmailOnlySource", label: "FOLLOWUP-JIT-1107 (one email)" }
+    : args["one-email-schema"]
+      ? { module: "one-email-schema", caseOf: "oneEmailSchemaCase", sourceOf: "oneEmailSchemaSource", label: "WRITER-EMPTY-BODY-1108 (schema: exactly one email)" }
+      : null;
+  if (restatement) {
+    const restateModule = await import(`../dist/lib/scripts/${restatement.module}.js`);
+    const firstEmailOnlyCase = restateModule[restatement.caseOf];
+    const firstEmailOnlySource = restateModule[restatement.sourceOf];
     const original = built.filter((b) => b.case).map((b) => b.case);
     const excluded = {};
     for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
@@ -451,7 +460,7 @@ if (args.from === "recorded" || args.source === "recorded") {
       headers: { "content-type": "application/json", "x-api-key": key },
       body: JSON.stringify({
         code,
-        source: `content-generation-service recorded generations ${new Date().toISOString().slice(0, 10)}, restated under FOLLOWUP-JIT-1107 (one email)`,
+        source: `content-generation-service recorded generations ${new Date().toISOString().slice(0, 10)}, restated under ${restatement.label}`,
         cases,
         orgId: ORG_ID,
         createdBy: STAFF_EMAIL,
