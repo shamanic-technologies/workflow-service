@@ -769,12 +769,21 @@ describe("composing the prompt", () => {
       base.currentDate,
     );
 
-  it("puts the prospect's own words in front of the model and demands they be answered", async () => {
+  it("puts the whole conversation in front of the model and the sale to play, never a question to re-answer (WRITER-SELL-PRINCIPLE-1108)", async () => {
     const out = await call({ timezone: "Europe/Paris", degraded: false, bookingUrl: "https://calendly.com/a/b", slots: ["2026-09-04T10:00:00+02:00", "2026-09-04T14:00:00+02:00"] });
     const message = out.message as string;
     expect(message).toContain("Does it work with our SSO?");
     expect(message).toContain("Would this help your team?");
-    expect(message).toContain("ANSWER THE QUESTION THEY ASKED");
+    // The licence Mario's follow-up re-answered under is gone; the owner's principles stand in its place.
+    expect(message).not.toContain("ANSWER THE QUESTION THEY ASKED");
+    expect(message).not.toContain("Then propose the meeting.");
+    expect(message).not.toContain("WHAT THEY ASKED");
+    expect(message).toContain("HOW YOU SELL");
+    expect(message).toContain("the BIGGEST step you judge they will accept with certainty");
+    expect(message).toContain("Hormozi");
+    expect(message).toContain("The shortest sentences you can. The most airy structure");
+    expect(message).not.toMatch(/smallest step/i);
+    expect(out.systemPrompt as string).not.toContain("You answer what they asked before you ask for anything.");
     expect(message).toContain("PROSPECT");
     expect(message).toContain("US");
   });
@@ -822,7 +831,7 @@ describe("composing the prompt", () => {
     expect(message).toContain("Propose ONE concrete time for the call yourself");
     expect(message).toContain("Never ask them to suggest times instead of proposing one");
     expect(message).not.toContain("Ask them which times suit them");
-    expect(message).toContain("ANSWER THE QUESTION THEY ASKED");
+    expect(message).toContain("HOW YOU SELL");
   });
 
   it("grows the interval with each follow-up taken, with no cap", async () => {
@@ -1130,7 +1139,7 @@ describe("a last message that needs no reply at all", () => {
       "2026-09-28",
     );
     const message = out.message as string;
-    expect(message).toContain("FIRST: IS A REPLY OWED AT ALL");
+    expect(message).toContain("FIRST: IS A MESSAGE OWED AT ALL");
     expect(message).toContain("Set decision to no_reply_owed");
     expect(message).toContain("that is no_reply_owed, never escalate");
     expect(out.systemPrompt as string).toContain("you send nothing and hand nothing over");
@@ -1431,7 +1440,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     quiet();
     const facts = await loadMain(GATHER_FACTS_CODE)(plan, offerAnswers, offerFields, brandFields);
     const message = (await compose(facts)).message as string;
-    expect(message).toContain("- q1: How does it work?");
+    expect(message).not.toContain("- q1: How does it work?");
     expect(message).toContain("WHAT OUR CLIENT TOLD US");
     expect(message).toContain("- E1 How does it work?: We host a dinner for 20 local doctors; you present for 15 minutes.");
     expect(message).toContain("is theirs to state, not ours");
@@ -1441,10 +1450,12 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     expect(message).toContain("EXACTLY TWO");
   });
 
-  it("leaves the prompt without a facts section when they asked nothing", async () => {
-    const message = (await compose({ questions: [], exact: [], neverGive: [] })).message as string;
+  it("hands the facts to every message, a follow-up included, and never their questions as a to-do (WRITER-SELL-PRINCIPLE-1108)", async () => {
+    const message = (await compose({ questions: [{ key: "q1", question: "Can you send the scope?" }], exact: [], neverGive: [] })).message as string;
     expect(message).not.toContain("WHAT THEY ASKED");
-    expect(message).not.toContain("WHAT OUR CLIENT TOLD US");
+    expect(message).not.toContain("Can you send the scope?");
+    expect(message).toContain("WHAT OUR CLIENT TOLD US");
+    expect(message).toContain("(nothing yet)");
   });
 
   it("hands the model the whole person and company record, omitting what is absent", async () => {
@@ -1481,7 +1492,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("lets an answer through when every question has a source that holds facts", async () => {
     quiet();
-    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Hi</p>", answers: [{ key: "q1", source: "exact", facts: ["E1"] }, { key: "q2", source: "exact", facts: ["E1"] }] } };
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Hi</p>", answers: [{ question: "How does it work?", source: "exact", facts: ["E1"] }, { question: "What does it cost?", source: "exact", facts: ["E1"] }] } };
     const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
     expect(out.overridden).toBe(false);
     expect(out.json).toEqual(draft.json);
@@ -1489,7 +1500,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
 
   it("escalates with the precise unanswered question when no fact covers it — nothing is sent", async () => {
     quiet();
-    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>It costs $99</p>", answers: [{ key: "q1", source: "exact", facts: ["E1"] }, { key: "q2", source: "none", facts: [] }] } };
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>It costs $99</p>", answers: [{ question: "How does it work?", source: "exact", facts: ["E1"] }, { question: "What does it cost?", source: "none", facts: [] }] } };
     const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
     expect(out.overridden).toBe(true);
     const json = out.json as Record<string, unknown>;
@@ -1498,13 +1509,22 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
     expect(json.replyHtml).toBeUndefined();
   });
 
-  it("treats a question the draft did not account for, or a source that holds nothing, as unanswered", async () => {
+  it("treats an answer whose source holds nothing as unanswered", async () => {
     quiet();
-    // q2 missing; q1 claims the retired `interpreted` source, which is no source.
-    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>x</p>", answers: [{ key: "q1", source: "interpreted", facts: ["E1"] }] } };
+    // The retired `interpreted` source is no source.
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>x</p>", answers: [{ question: "How does it work?", source: "interpreted", facts: ["E1"] }] } };
     const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
     expect((out.json as Record<string, unknown>).decision).toBe("escalate");
-    expect((out.json as Record<string, unknown>).question).toBe("How does it work? / What does it cost?");
+    expect((out.json as Record<string, unknown>).question).toBe("How does it work?");
+  });
+
+  it("lets a message go out that takes up none of their earlier questions: which ones it answers is the writer's call (Mario, Beyond Logic, WRITER-SELL-PRINCIPLE-1108)", async () => {
+    quiet();
+    // His "send over the written project scope" was answered three days before; the due follow-up moves the sale on.
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Reply with a few lines on the project and Chaim writes your scope.</p>", answers: [] } };
+    const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
+    expect(out.overridden).toBe(false);
+    expect(out.json).toEqual(draft.json);
   });
 
   it("leaves every other decision untouched", async () => {
@@ -1528,13 +1548,13 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
       expect(text).not.toMatch(/\[site-(extraction|prefill)\]/);
       expect(text).toContain("State every fact in the first person, as our own knowledge");
       expect(text).toContain("never point to a website, a page, a brochure");
-      expect(text).toContain("Open your answer with the facts that bear on the question");
+      expect(text).toContain("Numbers exactly as stated.");
     });
 
     it("holds a cited fact id to an existing fact of that kind: an invented id is no source", async () => {
       quiet();
       const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>x</p>", answers: [
-        { key: "q1", source: "exact", facts: ["E9"] }, { key: "q2", source: "exact", facts: [] },
+        { question: "How does it work?", source: "exact", facts: ["E9"] }, { question: "What does it cost?", source: "exact", facts: [] },
       ] } };
       const out = await loadMain(GROUND_DRAFT_CODE)(draft, factsWithBoth);
       expect((out.json as Record<string, unknown>).decision).toBe("escalate");
@@ -1587,7 +1607,7 @@ describe("answering an information request from brand-service facts (Dr. Joe, Do
       // The draft can only cite ids that exist; the placeholder has none. Citing
       // the unrelated appointments fact under `exact` would pass the id check, so
       // the model is told to mark it none; a draft that cites nothing escalates.
-      const draft = { json: { decision: "answer", question: "How much is it?", reason: "r", replyHtml: "<p>It is free</p>", answers: [{ key: "q1", source: "exact", facts: [] }] } };
+      const draft = { json: { decision: "answer", question: "How much is it?", reason: "r", replyHtml: "<p>It is free</p>", answers: [{ question: "How much is it?", source: "exact", facts: [] }] } };
       const out = await loadMain(GROUND_DRAFT_CODE)(draft, facts);
       expect(out.overridden).toBe(true);
       expect((out.json as Record<string, unknown>).decision).toBe("escalate");
@@ -1694,7 +1714,7 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
     expect(t).toContain("never point to a website, a page, a brochure");
     expect(t).toContain("never hedge a fact");
     // Booking unchanged: two slots and the link.
-    expect(t).toContain("Propose EXACTLY TWO");
+    expect(t).toContain("When you propose the meeting, give EXACTLY TWO");
     expect(t).toContain(offer.bookingUrl);
   });
 
@@ -1718,7 +1738,7 @@ describe("the reply keeps the identity the thread gave the prospect (Dr. Joe, Do
   });
 
   const answered = (replyHtml: string, decision = "answer") => ({
-    json: { decision, question: "How does it work?", reason: "r", replyHtml, nextDueAt: "2026-10-09T00:00:00Z", answers: [{ key: "q1", source: "exact", facts: ["E1"] }] },
+    json: { decision, question: "How does it work?", reason: "r", replyHtml, nextDueAt: "2026-10-09T00:00:00Z", answers: [{ question: "How does it work?", source: "exact", facts: ["E1"] }] },
   });
 
   it("unclear: any reply that would be sent becomes an escalation; nothing is sent", async () => {
@@ -1871,7 +1891,7 @@ describe("a thread opened by the acquisition-questions sequence plays its game (
       json: {
         decision: "answer", question: "Who are you?", reason: "r",
         replyHtml: "<p>Fair question. We don't hold a group of patients today; the ones I mean already call you.</p>",
-        answers: [{ key: "q1", source: "playbook", facts: [] }, { key: "q2", source: "playbook", facts: [] }],
+        answers: [{ question: "Who are you?", source: "playbook", facts: [] }, { question: "Can you send the patients?", source: "playbook", facts: [] }],
       },
     };
     const played = await loadMain(GROUND_DRAFT_CODE)(draft, facts, blind, offer, brand, "acquisition_questions");
@@ -2429,7 +2449,7 @@ describe("a prospect who asks for a call gets it, even with a question no fact c
 
   it("Sam: the guard lets the reply go out when the uncovered question is taken to the call", async () => {
     quiet();
-    const draft = { json: { decision: "answer", question: "How does it work?", reason: "r", replyHtml: "<p>Great to hear, Sam. I will walk you through how it works on the call. Would Thursday 15 October at 10:00 work? I will send an invite.</p>", nextDueAt: "2026-10-16T09:00:00Z", answers: [{ key: "q1", source: "call", facts: [] }] } };
+    const draft = { json: { decision: "answer", question: "How does it work?", reason: "r", replyHtml: "<p>Great to hear, Sam. I will walk you through how it works on the call. Would Thursday 15 October at 10:00 work? I will send an invite.</p>", nextDueAt: "2026-10-16T09:00:00Z", answers: [{ question: "How does it work?", source: "call", facts: [] }] } };
     const out = await loadMain(GROUND_DRAFT_CODE)(draft, noFacts, INSIDER, { name: "Free first listing" }, { brand: { name: "DefiniteJobs" } }, "none", samAsked);
     expect(out.overridden).toBe(false);
     expect((out.json as Record<string, unknown>).decision).toBe("answer");
@@ -2440,9 +2460,9 @@ describe("a prospect who asks for a call gets it, even with a question no fact c
     const cost = { ...noFacts, questions: [{ key: "q1", question: "What does it cost?" }] };
     const t = (await compose(notAsked, cost)).message as string;
     expect(t).not.toContain("THEY ASKED FOR A CALL");
-    expect(t).toContain("If even ONE listed question has no answer in the facts above, set decision to escalate");
+    expect(t).toContain("If what you would tell them needs a fact that is not above, set decision to escalate");
     // A draft that claims "call" without their ask is no source: escalated.
-    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Let us talk on a call.</p>", answers: [{ key: "q1", source: "call", facts: [] }] } };
+    const draft = { json: { decision: "answer", question: "q", reason: "r", replyHtml: "<p>Let us talk on a call.</p>", answers: [{ question: "What does it cost?", source: "call", facts: [] }] } };
     const out = await loadMain(GROUND_DRAFT_CODE)(draft, cost, INSIDER, { name: "Free first listing" }, { brand: { name: "DefiniteJobs" } }, "none", notAsked);
     expect(out.overridden).toBe(true);
     expect((out.json as Record<string, unknown>).decision).toBe("escalate");
@@ -2552,7 +2572,7 @@ describe("a prospect who asks to know more is answered, never escalated (MB-ANSW
     expect(message).toContain("WHEN THEY ASK TO KNOW MORE");
     expect(message).toContain("A request to know more is never a reason to escalate.");
     expect(message).toContain("If they ask a SPECIFIC question whose answer is a fact that is not there");
-    expect(system).toContain("When they ask to know more or what you can do for them, you answer in a line or two from the facts in front of you and propose the meeting.");
+    expect(system).toContain("When they ask to know more or what you can do for them, you answer in a line or two from the facts in front of you and propose the next step.");
     expect(system).not.toContain("When you cannot answer from what is in front of you, you say so and hand over");
     expect(REPLY_RESPONSE_SCHEMA.properties.decision.description).toContain("A request to learn more or to hear what we can do for them is never one");
   });

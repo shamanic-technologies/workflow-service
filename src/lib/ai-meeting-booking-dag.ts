@@ -1268,11 +1268,10 @@ export async function main(plan, offerAnswers, offerFields, brandFields) {
 /**
  * STEP 3's guard: a question the facts do not answer is NEVER answered.
  *
- * The draft states, per listed question, where its answer came from
+ * The draft states, per question of theirs its message answers, where that answer came from
  * (`exact` | `booking` | `none`, plus `playbook` in a game thread) and the ids
  * of the facts it used. This script holds the model to it with no reading of
- * anyone's text: a question marked `none`, a question the draft did not account
- * for, any other source (the retired `interpreted` included; `call` unless
+ * anyone's text: an answer marked `none`, any other source (the retired `interpreted` included; `call` unless
  * their last message asked for the call, quoted by step 1), or an `exact`
  * answer that cites no fact our client stated (a withheld placeholder, an
  * invented id) turns an
@@ -1338,12 +1337,13 @@ export async function main(draft, facts, identity, offer, brand, playbook, callR
     }
   }
 
-  const listed = facts?.questions ?? [];
+  // Every answer the draft GIVES must stand on something in front of it. Which questions a message answers is the
+  // writer's call (WRITER-SELL-PRINCIPLE-1108): one answered days ago is not owed again.
   const exactIds = new Set((facts?.exact ?? []).map((f) => String(f?.id)));
-  const declared = new Map((Array.isArray(json.answers) ? json.answers : []).map((a) => [String(a?.key), a ?? {}]));
+  const declared = Array.isArray(json.answers) ? json.answers : [];
 
-  const audit = listed.map((q) => {
-    const a = declared.get(q.key) ?? {};
+  const audit = declared.map((a0) => {
+    const a = a0 ?? {};
     let source = String(a.source ?? "none");
     const cited = Array.isArray(a.facts) ? a.facts.map(String) : [];
     // "playbook" answers only exist in a thread that sequence opened (who we
@@ -1355,7 +1355,7 @@ export async function main(draft, facts, identity, offer, brand, playbook, callR
     if (callRequest?.asked === true) sources.push("call");
     if (!sources.includes(source)) source = "none";
     if (source === "exact" && !cited.some((id) => exactIds.has(id))) source = "none";
-    return { key: q.key, question: q.question, source, facts: cited };
+    return { question: String(a.question ?? "").trim() || "(unnamed question)", source, facts: cited };
   });
   const unanswered = audit.filter((a) => a.source === "none");
 
@@ -1423,7 +1423,41 @@ export const PLAYBOOK_QUIET_FOLLOWUPS = 2;
  * actually asked for; the ladder is what "grows the interval" means, and there
  * is deliberately no cap on the number of follow-ups.
  */
-export const COMPOSE_REPLY_PROMPT_CODE = `
+/**
+ * HOW THE WRITER SELLS (WRITER-SELL-PRINCIPLE-1108, owner 2026-11-08: « remplace les règles de cas par des GRANDS
+ * PRINCIPES »). Mario (Beyond Logic) wrote "Yes, please send over the written project scope", got our answer the
+ * same minute, and the follow-up due three days later answered him AGAIN ("Happy to, Mario..."): the prompt listed
+ * the questions of his last message and said "1. ANSWER THE QUESTION THEY ASKED. 2. Then propose the meeting".
+ * That licence is deleted; the writer reads the whole thread and plays these principles, in the owner's words.
+ * Never re-add a per-case rule ("a question already answered is closed", "when our message is last, say X"): the
+ * owner rejected both as too specific. Never a "smallest step": the BIGGEST step accepted WITH CERTAINTY.
+ */
+export const SELL_PRINCIPLES = [
+  "HOW YOU SELL: every message you write, an answer or a follow-up",
+  "Read the whole conversation first: where they stand, what they already said yes to, what they already got from us. Then:",
+  "1. Sell. Move them toward the sale by the BIGGEST step you judge they will accept with certainty. Certainty is read from them: what they asked for or said yes to is certain; what we proposed and they let pass is not.",
+  "2. Give value. A sale gives the lead something worth more than what they will eventually pay. Ask yourself how to give them value right now, and what our client accepts to do or give for free (the facts above say it). Give it now, with no strings: never make it wait on a step they did not ask for. When giving it needs something from them, ask for the least effort that gets it done.",
+  "3. Convert. Use Alex Hormozi's conversion levers on every message: his value equation (raise the dream outcome and their perceived likelihood of getting it, cut the time delay and the effort it takes them) and his offer levers (scarcity, urgency, bonuses, guarantees). Use only what the facts in front of you state: never invent a guarantee, a bonus, a deadline, a scarcity or a number.",
+  "4. Be short. The shortest sentences you can. The most airy structure: one idea per short paragraph, a blank line between them.",
+  "Set decision to answer when you write to them.",
+] as const;
+
+/**
+ * The writer's STYLE, competing inputs (owner 2026-11-08: « tu peux avoir une personnalité… oser être contrarian.
+ * Mais ça c'est différents templates que tu peux A/B test »). Never a rule in the shared principles: each style is
+ * its own sibling dynasty on the pipe (`writerStyle` in the builder options), and features-service picks between
+ * them on their measured results. `plain` adds nothing (the principles alone).
+ */
+export const WRITER_STYLES = {
+  plain: [] as string[],
+  personality: [
+    "YOUR STYLE",
+    "You have a personality. Never boring. When it helps, break the classic, boring structure of an email and dare to be contrarian: an unexpected first line, a frank opinion on their situation, the point nobody else would make. The facts rule above still binds every word.",
+  ],
+} as const;
+export type WriterStyle = keyof typeof WRITER_STYLES;
+
+const COMPOSE_REPLY_PROMPT_TEMPLATE = `
 export async function main(followup, leadDetail, conversation, priorGeneration, booking, offer, brand, currentDate, facts, identity, playbook, callRequest, who, sender) {
   const person = leadDetail?.leadDetail?.lead ?? {};
   if (!who || !Array.isArray(who.lines) || typeof who.strategy !== "string") {
@@ -1516,7 +1550,6 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   ].filter(Boolean);
 
   // What our client told us: the only facts a reply may state or promise.
-  const asked = facts?.questions ?? [];
   const exactFacts = facts?.exact ?? [];
   const neverGive = facts?.neverGive ?? [];
   const withheldFacts = facts?.withheld ?? [];
@@ -1525,13 +1558,10 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   const callAsked = callRequest?.asked === true;
   const callLines = !callAsked ? [] : [
     "THEY ASKED FOR A CALL in their last message (\\"" + String(callRequest?.evidence ?? "") + "\\"). The call is theirs, not a deflection: it is where a question the facts above do not answer gets answered, by the people who can.",
-    "So a listed question with no answer in the facts above does NOT escalate here: tell them plainly, in one sentence, that you will go through it with them on the call, and state NOTHING of the answer itself (no how-it-works, no price, no term, no step our client did not give us). Return it in answers with source call. A question the facts DO answer, answer it from them as usual.",
+    "So a question of theirs with no answer in the facts below does NOT escalate here: tell them plainly, in one sentence, that you will go through it with them on the call, and state NOTHING of the answer itself (no how-it-works, no price, no term, no step our client did not give us). Return it in answers with source call. A question the facts DO answer, answer it from them as usual.",
     "",
   ];
-  const factsSection = asked.length === 0 ? callLines : [
-    "WHAT THEY ASKED (listed from their last message)",
-    ...asked.map((q) => "- " + q.key + ": " + q.question),
-    "",
+  const factsSection = [
     "WHAT OUR CLIENT TOLD US: the only facts you may state or promise.",
     exactFacts.length ? exactFacts.map(factLine).join("\\n") : "(nothing yet)",
     "",
@@ -1540,15 +1570,14 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
       withheldFacts.map((w) => "- " + w.label).join("\\n"),
       "",
     ] : []),
-    "HOW TO ANSWER WHAT THEY ASKED",
-    "Our client answers for their offer, and we speak for them only with what they told us. A price, a guarantee, a term or a figure they did not give us is theirs to state, not ours, even when you believe it is true or public: a wrong one is a promise they never made. So answer each listed question ONLY from the facts above (or, for when to meet, from the availability under BOOKING), and add nothing they do not say.",
-    "Open your answer with the facts that bear on the question, numbers exactly as stated.",
+    "WHAT YOU MAY STATE",
+    "Our client answers for their offer, and we speak for them only with what they told us. A price, a guarantee, a term or a figure they did not give us is theirs to state, not ours, even when you believe it is true or public: a wrong one is a promise they never made. So whatever you tell them about the offer comes ONLY from the facts above (or, for when to meet, from the availability under BOOKING), and adds nothing they do not say. Numbers exactly as stated.",
     "State every fact in the voice set under WHO WE ARE TO THEM. The facts are what we know, not something we read somewhere: never point to a website, a page, a brochure or to how anyone describes it, and never hedge a fact.",
     "Owning a fact does not license more than it says: no promise, price, guarantee or number our client did not state.",
-    "For EVERY listed question, return it in answers with its key, the source you answered it from (exact, booking" + (callAsked ? ", call" : "") + ", or none), and in facts the ids of the facts you used (E1, E2, ...).",
+    "For every question or request of theirs your message answers, return it in answers: the question in their words, the source you answered it from (exact, booking" + (callAsked ? ", call" : "") + ", or none), and in facts the ids of the facts you used (E1, E2, ...).",
     callAsked
-      ? "If a listed question has no answer in the facts above, take it to the call they asked for (source call, see below) and set decision to answer: they get a reply now and their answer on the call."
-      : "If even ONE listed question has no answer in the facts above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets their real answer instead of a guess.",
+      ? "A question of theirs with no answer in the facts above goes to the call they asked for (source call, see below), and decision stays answer: they get a reply now and their answer on the call."
+      : "If what you would tell them needs a fact that is not above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets their real answer instead of a guess.",
     "",
     ...callLines,
   ];
@@ -1583,7 +1612,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
         "Write only the words the prospect reads, as HTML. No signature: the mailbox that answers appends its own.",
         "Never use an em dash or an en dash. Use a comma, a period, a colon or parentheses instead.",
         "No subject line: this goes into the thread they already have.",
-        "Short. Plain. The way one person writes to another.",
+        "The way one person writes to another.",
       ]
     : persona
     ? [
@@ -1656,13 +1685,13 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   // A blind thread never gives the link: a booking page names who runs it.
   const bookingSection = stance === "blind"
     ? (!booking?.degraded
-        ? "Availability over the coming weeks, " + inTheirZone + ", a few times per open day. Propose EXACTLY TWO of these, written out in plain words. Do NOT give any link (a booking page would reveal who our client is): if neither works, ask which times suit them and say you will send an invite. If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and ask which times in their window suit them.\\n" + slotLines
+        ? "Availability over the coming weeks, " + inTheirZone + ", a few times per open day. When you propose the meeting, give EXACTLY TWO of these, written out in plain words. Do NOT give any link (a booking page would reveal who our client is): if neither works, ask which times suit them and say you will send an invite. If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and ask which times in their window suit them.\\n" + slotLines
         : "The availability could not be read (" + booking?.degradedReason + "). Do NOT give any link (it would reveal who our client is). " + proposeTime)
     : booking?.degraded
     ? (booking?.bookingUrl
         ? "The booking page could not be read (" + booking.degradedReason + "). Do NOT invent times. Give them the booking link and let them pick: " + booking.bookingUrl
         : "This offer has no booking link (" + booking.degradedReason + "). Do NOT invent a link. " + proposeTime)
-    : "Availability over the coming weeks, " + inTheirZone + ", a few times per open day. Propose EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
+    : "Availability over the coming weeks, " + inTheirZone + ", a few times per open day. When you propose the meeting, give EXACTLY TWO of these, written out in plain words, and give the link so they can pick another if neither works: " + booking.bookingUrl + ". If they said when they are free, both times MUST fall inside what they said; if none of these does, propose no time and give them the link to pick one in their window.\\n" + slotLines;
 
   // THE HAND-OVER EMAIL (MB-ANSWER-NOT-ESCALATE-1102, owner 2026-11-02: one
   // writer handles every case, the hand-over competes inside the dynasty like
@@ -1710,7 +1739,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     }),
     "Read every day they name (\\"next week\\", \\"Thursday\\", \\"after the 15th\\") against the day and hour THEY wrote it, shown on their message below, in their timezone.",
     "",
-    "You are answering one prospect who replied to the outreach we sent for our client, " + client + ", and showed interest.",
+    "You write our next message to one prospect who replied to the outreach we sent for our client, " + client + ", and showed interest. The whole conversation below says where things stand.",
     "",
     ...voice,
     "",
@@ -1731,10 +1760,13 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     ...factsSection,
     ...neverGiveSection,
     ...gameSection,
-    "FIRST: IS A REPLY OWED AT ALL",
+    "FIRST: IS A MESSAGE OWED AT ALL",
     "Read their LAST message. Some messages need no answer from us: they declined or said they are not interested, asked us to stop writing, said their earlier message was sent in error, or said goodbye without asking or proposing anything.",
     "Writing back to those, even to propose the meeting, is exactly what makes us look like a machine. Set decision to no_reply_owed and write nothing: nobody hears from us, nobody is alerted, and their follow-ups stop. If they write again later, they come back on their own.",
-    "A message that asks something, raises a concern we could address, or leaves the door open (\\"not now, maybe after the summer\\") IS owed a reply.",
+    "Anything else (a question, a yes, a concern we could address, a door left open like \\"not now, maybe after the summer\\") is a conversation still open: we write the next message, the one that moves it forward.",
+    "",
+    ...SELL_PRINCIPLES_LINES,
+    ...WRITER_STYLE_LINES,
     "",
     "WHEN THEY TELL US THE MEETING IS BOOKED",
     "If their last message says they booked, scheduled or moved the meeting, the conversation is done and they are owed one short confirmation. Set decision to confirm_booking and write one or two sentences: thank them, and confirm the day or time in their words if they gave one. Nothing else: no question, no pitch, no times, no link, no request for anything. Their follow-ups stop after it.",
@@ -1742,11 +1774,6 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     ...pickSection,
     "WHEN THEY SAY WHEN THEY ARE FREE",
     "A message about WHEN they can meet (\\"I can't till next week\\", \\"after the 15th\\", \\"Thursday afternoon\\", \\"not until November\\") is a reply owed and one you can always answer: set decision to answer and offer times that fit what they said, from the availability below. If nothing there fits, follow BOOKING below (the booking link, or a time you propose inside their window). A timing preference is never a reason to escalate.",
-    "",
-    "WHAT YOU MUST DO WHEN A REPLY IS OWED",
-    "1. ANSWER THE QUESTION THEY ASKED. Read their last message and reply to what is in it. A reply that ignores what they wrote is worse than no reply at all.",
-    "2. Then propose the meeting.",
-    "Set decision to answer.",
     "",
     "WHEN THEY ASK TO KNOW MORE",
     "A message that asks to learn more, what we can do for them, how it works, or for information in general is a reply owed and one you can always answer: in one or two sentences, no more, say from the facts above what is done for someone like them (cite those facts), then propose the meeting as under BOOKING. The meeting is where they hear the rest: never list every fact. The whole reply is two short paragraphs: those one or two sentences, then the two times and the link. Set decision to answer. A request to know more is never a reason to escalate.",
@@ -1760,7 +1787,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Whatever you decide, return question: what they asked, in their own words (or, when no reply is owed, what their last message said; when you escalate, exactly the question(s) you could not answer). It is what the person taking over reads. And return reason: one short sentence on why you decided what you did.",
     "",
     ...handoffSection,
-    "BOOKING",
+    "BOOKING: when the step you propose is a meeting",
     bookingSection,
     "",
     "WHEN TO COME BACK",
@@ -1773,14 +1800,14 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
   ].join("\\n");
 
   const systemPrompt = [
-    "You answer one prospect at a time, in a conversation that is already running, by email or in a chat.",
+    "You write our next message to one prospect at a time, in a conversation that is already running, by email or in a chat.",
     persona
       ? "You are " + persona.name + (persona.role ? ", " + persona.role : "") + ", writing from the same number as our earlier messages in this chat. You present yourself exactly as your role says: if it says you are an AI or an assistant, you never claim or imply to be a human."
       : "You are the person who has been writing to them. You are not a bot and you do not say you are one.",
-    "You answer what they asked before you ask for anything.",
+    "Every message you write moves them toward the sale by the biggest step you judge they will accept with certainty, and gives them value now.",
     "You keep the identity the prospect was already given in this thread, as you are told it, and you state what you know plainly, never as what a website or a page says.",
     "You never invent availability, prices, names, or facts that are not in front of you.",
-    "When they ask to know more or what you can do for them, you answer in a line or two from the facts in front of you and propose the meeting.",
+    "When they ask to know more or what you can do for them, you answer in a line or two from the facts in front of you and propose the next step.",
     "When a specific question needs a fact that is not in front of you (a price, a spec, a commitment), you hand over rather than deflecting back to the meeting, unless they asked for the call themselves: then the call is where they get that answer.",
     "When their last message needs no answer (a refusal, a request to stop, a goodbye), you send nothing and hand nothing over.",
     "When they tell you the meeting is booked, you thank them and confirm it in a sentence or two, and ask for nothing.",
@@ -1799,7 +1826,51 @@ TIME_CONTEXT_FN_TEXT
   .replace("STANCES_LIST", JSON.stringify(STANCES))
   .replace("PLAYBOOKS_LIST", JSON.stringify(PLAYBOOKS))
   .replace("PLAYBOOK_LINES", JSON.stringify(ACQUISITION_QUESTIONS_PLAYBOOK))
+  .replace("SELL_PRINCIPLES_LINES", JSON.stringify(SELL_PRINCIPLES))
   .replaceAll("QUIET_FOLLOWUPS", String(PLAYBOOK_QUIET_FOLLOWUPS));
+
+/** What the seeded responders say they do (Jev reads tactics off it; the staff Research page shows it). */
+const LEADS_ONLY_SENTENCE =
+  "Leads only (pure_prospect): never answers a personal contact, a customer, a team member, an investor, a partner, a supplier or an advisor of the brand.";
+
+export const DESCRIPTION =
+  "Writes our next message to one prospect who showed sales interest, in their own thread on the channel they last wrote on: moves the sale forward by the biggest step they will surely accept, gives them value first, proposes two times from the offer's booking page when a meeting is that step, and keeps following up until they book or say no. " + LEADS_ONLY_SENTENCE;
+
+/** The competing PERSONALITY writer (WRITER-SELL-PRINCIPLE-1108): same steps, a bolder voice the pipe A/B tests. */
+export const PERSONALITY_DESCRIPTION =
+  "Writes our next message to one prospect who showed sales interest with a personality: a bold voice that may break the usual email shape and take a contrarian angle, while moving the sale forward and giving value first, until they book or say no. " + LEADS_ONLY_SENTENCE;
+
+/** The writer's prompt code in one style (see WRITER_STYLES). */
+export function composeReplyPromptCode(style: WriterStyle): string {
+  return COMPOSE_REPLY_PROMPT_TEMPLATE.replace("WRITER_STYLE_LINES", JSON.stringify(WRITER_STYLES[style]));
+}
+
+/** Every writer style's prompt code, for telling a stored responder's style apart. */
+export function writerStyleOf(code: unknown): WriterStyle | null {
+  for (const style of Object.keys(WRITER_STYLES) as WriterStyle[]) {
+    if (code === composeReplyPromptCode(style)) return style;
+  }
+  return null;
+}
+
+/**
+ * The style a stored responder writes in, read off its writer code even when that code is an older version: an
+ * upgrade keeps it (a seed rebuilding a personality dynasty as plain would erase the A/B).
+ */
+export function storedWriterStyle(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): WriterStyle {
+  const code = (dag?.nodes ?? []).find((n) => n?.id === "compose-prompt")?.config?.code;
+  return typeof code === "string" && code.includes(WRITER_STYLES.personality[1].slice(0, 40)) ? "personality" : "plain";
+}
+
+/** True when a stored responder's writer is not the current one in its own style (WRITER-SELL-PRINCIPLE-1108). */
+export function needsSellPrinciples(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
+  const nodes = dag?.nodes ?? [];
+  const reply = nodes.find((n) => n?.id === "compose-prompt")?.config?.code;
+  if (reply === undefined) return false;
+  return writerStyleOf(reply) === null;
+}
+
+export const COMPOSE_REPLY_PROMPT_CODE = composeReplyPromptCode("plain");
 
 /**
  * Bounds the date the model chose against the contract lead-service publishes.
@@ -2006,7 +2077,7 @@ export function needsGeneralInterestAnswer(dag: { nodes?: Array<{ id?: string; c
   const questions = code("compose-questions-prompt");
   const reply = code("compose-prompt");
   if (questions === undefined && reply === undefined) return false;
-  return questions !== COMPOSE_QUESTIONS_PROMPT_CODE || reply !== COMPOSE_REPLY_PROMPT_CODE;
+  return questions !== COMPOSE_QUESTIONS_PROMPT_CODE || writerStyleOf(reply) === null;
 }
 
 /**
@@ -2017,7 +2088,7 @@ export function needsGeneralInterestAnswer(dag: { nodes?: Array<{ id?: string; c
 export function needsTimeContext(dag: { nodes?: Array<{ id?: string; config?: Record<string, unknown> }> } | null | undefined): boolean {
   const reply = (dag?.nodes ?? []).find((n) => n?.id === "compose-prompt")?.config?.code;
   if (reply === undefined) return false;
-  return reply !== COMPOSE_REPLY_PROMPT_CODE;
+  return writerStyleOf(reply) === null;
 }
 
 /**
@@ -2125,6 +2196,8 @@ export interface AiMeetingBookingDagOptions {
    * `fable` (always-thinking models). The Gemini cell keeps its 0 / 0.4.
    */
   omitTemperature?: boolean;
+  /** The writer's style (WRITER_STYLES); absent = plain. Each style is its own dynasty on the pipe. */
+  writerStyle?: WriterStyle;
 }
 
 /**
@@ -2168,7 +2241,7 @@ export const REPLY_RESPONSE_SCHEMA = {
         "their follow-ups stop after it. " +
         "close_with_thanks: only when THE GAME this thread is in tells you to thank them and stop. Write one or two " +
         "sentences of thanks asking for nothing; their follow-ups stop after it. " +
-        "answer: you can answer what they wrote from the facts in front of you. " +
+        "answer: you write them our next message, from the facts in front of you. " +
         "escalate: they asked a specific question you cannot answer without inventing something: a price, " +
         "a spec, a reference, a commitment nobody here has made. A person takes the thread over. " +
         "A request to learn more or to hear what we can do for them is never one: answer it from the facts. " +
@@ -2220,16 +2293,16 @@ export const REPLY_RESPONSE_SCHEMA = {
     answers: {
       type: "array",
       description:
-        "One entry per listed question (q1, q2, ...): where its answer came from. exact = a fact our client told us; " +
+        "One entry per question or request of theirs your message answers: where its answer came from. exact = a fact our client told us; " +
         "booking = the availability or booking link; " +
         "playbook = answered from THE GAME this thread is in (only when you are told one); " +
         "call = taken to the call THEY asked for, stating nothing of the answer (only when you are told they asked for one); " +
-        "none = nothing in front of you answers it. Empty when no question was listed.",
+        "none = nothing in front of you answers it. Empty when your message answers no question of theirs.",
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          key: { type: "string", description: "The listed question's key, e.g. q1." },
+          question: { type: "string", description: "Their question or request, in their words." },
           source: { type: "string", enum: ["exact", "booking", "playbook", "call", "none"] },
           facts: {
             type: "array",
@@ -2237,7 +2310,7 @@ export const REPLY_RESPONSE_SCHEMA = {
             items: { type: "string" },
           },
         },
-        required: ["key", "source", "facts"],
+        required: ["question", "source", "facts"],
       },
     },
   },
@@ -2788,7 +2861,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
       {
         id: "compose-prompt",
         type: "script",
-        config: { code: COMPOSE_REPLY_PROMPT_CODE },
+        config: { code: composeReplyPromptCode(opts.writerStyle ?? "plain") },
         retries: 0,
         inputMapping: {
           followup: "$ref:claimed.output",
@@ -2831,7 +2904,7 @@ export function buildAiMeetingBookingDagUnvoiced(opts: AiMeetingBookingDagOption
           "body.systemPrompt": "$ref:compose-prompt.output.systemPrompt",
         },
       },
-      // STEP 3's guard: a listed question no fact covers turns an answer into an
+      // STEP 3's guard: an answer no fact covers turns the reply into an
       // escalation naming it. Everything downstream reads THIS, not the draft.
       {
         id: "ground-draft",
