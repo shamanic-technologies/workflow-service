@@ -167,12 +167,17 @@ const scopeKey = (s: GuardScope) => `${s.orgId ?? "*"}|${s.dynasty ?? "*"}`;
 const scopeLabel = (s: GuardScope) => [s.orgId ? `org ${s.orgId}` : null, s.dynasty ? `dynasty ${s.dynasty}` : null].filter(Boolean).join(", ") || "every org";
 
 /**
- * A call that got NO answer (undici's `fetch failed`: the host refused, reset or timed out the connection) is the box's
- * or the network's, never the script's code: counted apart like a failure the old path shares (2026-11-07 19:46: three
- * of the six counted failures were `ctx.get(message_written): fetch failed`, during a box load spike).
+ * An UPSTREAM / TRANSPORT failure is the box's, the network's or another service's, never the script's code: counted
+ * apart like a failure the old path shares, so it never rolls a script back (2026-11-07 19:46 UTC: the six "own"
+ * failures that rolled cold email back were all of this kind). It is: a call with no answer (undici `fetch failed`,
+ * a refused / reset / timed-out connection, an aborted request), a 5xx from a door or from chat-service
+ * (`-> 502`, `(503)`), a gateway's "Upstream service error", and the same nested in an asked Engine's failure
+ * (`message_written/... failed: llm.complete failed: chat-service POST /complete -> 502`). A 4xx is an answer: the
+ * script asked something wrong (a billing refusal has its own rule, `BILLING_REFUSED_PATTERN`).
  */
-export const NO_ANSWER_PATTERN = "fetch failed";
-const noAnswer = (error: string | null | undefined) => !!error && error.toLowerCase().includes(NO_ANSWER_PATTERN);
+export const NO_ANSWER_PATTERN =
+  "fetch failed|econnrefused|econnreset|etimedout|eai_again|socket hang up|other side closed|aborted due to timeout|the operation was aborted|-> ?5[0-9]{2}\\b|\\(5[0-9]{2}\\)|upstream service error|bad gateway|service unavailable|gateway timeout";
+export const noAnswer = (error: string | null | undefined) => !!error && new RegExp(NO_ANSWER_PATTERN, "i").test(error);
 
 export async function lastHour(db: AnyPgDb, outcome: string, now = new Date(), scope: GuardScope = {}): Promise<WindowStats> {
   const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);

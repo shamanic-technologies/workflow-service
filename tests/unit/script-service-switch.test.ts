@@ -169,6 +169,19 @@ describe("a service switch", () => {
     expect(bad.rollbackReason).toMatch(/for org org-bad \(4 of 25 runs; 3 more failed at a call the old path also fails or that got no answer, not counted\)/);
   });
 
+  it("an upstream / transport failure is never the script's: no answer, a 5xx, an upstream error, nested in an asked Engine (MIGRATE-1105 S6)", async () => {
+    const { noAnswer } = await import("../../src/lib/scripts/script-guard.js");
+    for (const e of [
+      "ctx.get(message_written): fetch failed",
+      "who-they-are: the person's thread could not be read (no status fetch failed); nothing is written blind",
+      "message_written/dy_template_writer_full/v2 (asked for message_written) failed: llm.complete failed: chat-service POST /complete -> 502: {}",
+      "email.send: Upstream service error",
+      "POST lead/orgs/buffer/next failed (503): busy",
+      "connect ECONNREFUSED 10.0.0.4:8080",
+    ]) expect(noAnswer(e)).toBe(true);
+    for (const e of ["TypeError: reply.content is undefined", "llm.complete failed: chat-service POST /complete -> 402: max budget", "lead.serve: 400 bad request", null]) expect(noAnswer(e)).toBe(false);
+  });
+
   it("the guard rolls a service switch back on a bad hour and Monitoring goes red", async () => {
     const script = await provenJudge();
     await switchService(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", callerService: "instantly" });
