@@ -1562,7 +1562,7 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "",
   ];
   const factsSection = [
-    "WHAT OUR CLIENT TOLD US: the only facts you may state or promise.",
+    "WHAT OUR CLIENT TOLD US: the only facts you may state or promise. Each fact says its own words and nothing more.",
     exactFacts.length ? exactFacts.map(factLine).join("\\n") : "(nothing yet)",
     "",
     ...(withheldFacts.length ? [
@@ -1574,7 +1574,8 @@ export async function main(followup, leadDetail, conversation, priorGeneration, 
     "Our client answers for their offer, and we speak for them only with what they told us. A price, a guarantee, a term or a figure they did not give us is theirs to state, not ours, even when you believe it is true or public: a wrong one is a promise they never made. So whatever you tell them about the offer comes ONLY from the facts above (or, for when to meet, from the availability under BOOKING), and adds nothing they do not say. Numbers exactly as stated.",
     "State every fact in the voice set under WHO WE ARE TO THEM. The facts are what we know, not something we read somewhere: never point to a website, a page, a brochure or to how anyone describes it, and never hedge a fact.",
     "Owning a fact does not license more than it says: no promise, price, guarantee or number our client did not state.",
-    "For every question or request of theirs your message answers, return it in answers: the question in their words, the source you answered it from (exact, booking" + (callAsked ? ", call" : "") + ", or none), and in facts the ids of the facts you used (E1, E2, ...).",
+    "Before you state a detail of the offer, find the words in a fact that say it. A detail no fact's words say (who does what, how it runs, what is included, a number) has no answer above, however likely or obvious it seems: never fill it in from how such offers usually work.",
+    "For every question or request of theirs your message answers, return it in answers: the question in their words, the source you answered it from (exact, booking" + (callAsked ? ", call" : "") + ", or none), in facts the ids of the facts you used (E1, E2, ...), and in quote the exact words of those facts that say your answer.",
     callAsked
       ? "A question of theirs with no answer in the facts above goes to the call they asked for (source call, see below), and decision stays answer: they get a reply now and their answer on the call."
       : "If what you would tell them needs a fact that is not above, set decision to escalate and put exactly the unanswered question(s) in question. Our client is then asked, and the prospect gets their real answer instead of a guess.",
@@ -2309,8 +2310,12 @@ export const REPLY_RESPONSE_SCHEMA = {
             description: "The ids of the facts the answer uses (E1, E2, ...). Empty for booking or none.",
             items: { type: "string" },
           },
+          quote: {
+            type: "string",
+            description: "The exact words of the cited facts that say your answer, copied. Empty for booking, call or none.",
+          },
         },
-        required: ["question", "source", "facts"],
+        required: ["question", "source", "facts", "quote"],
       },
     },
   },
