@@ -142,6 +142,27 @@ describe("the answering script", () => {
     expect(calls.find((c) => c.name === "crm.whatsapp.send")!.args).toMatchObject({ body: { messages: ["Hi Josh", "Friday works"], idempotencyKey: "answer-lead:event:ev-1" } });
   });
 
+  it("on WhatsApp the writer speaks as the sending line's persona, from the line the campaign states (Paul, 2026-11-07: Sophie's line signed 'Kevin')", async () => {
+    const { calls, bridge } = world({ ...BOOK, bookSlot: "", bookedMessage: "", message: "Hi Paul" }, {
+      "crm.person.thread": () => ({ ok: true, data: { items: [{ at: "2026-11-04T13:54:00Z", kind: "message", direction: "inbound", channel: "whatsapp", text: "ok" }] } }),
+      "crm.whatsapp.reach": () => ({ ok: true, data: { reachable: true, persona: { name: "Sophie", role: "AI assistant", instructions: null } } }),
+      "crm.whatsapp.send": () => ({ ok: true, data: { status: "sent" } }),
+    });
+    await runScript(answerLeadScriptSource(), spec({ ...REQUEST, whatsappSenderPhone: "+15550002222" }), bridge);
+    expect(String(calls.find((c) => c.name === "llm.complete")!.args.systemPrompt)).toContain("WHO YOU ARE: you are Sophie, AI assistant at Doc Dinners");
+    expect(calls.find((c) => c.name === "crm.whatsapp.reach")!.args).toMatchObject({ body: { fromAccount: "+15550002222" } });
+    expect(calls.find((c) => c.name === "crm.whatsapp.send")!.args).toMatchObject({ body: { fromAccount: "+15550002222" } });
+    // No persona, no stated line: the prompt names nobody and crm-service picks the line.
+    const plain = world({ ...BOOK, bookSlot: "", bookedMessage: "", message: "Hi" }, {
+      "crm.person.thread": () => ({ ok: true, data: { items: [{ at: "2026-11-04T13:54:00Z", kind: "message", direction: "inbound", channel: "whatsapp", text: "ok" }] } }),
+      "crm.whatsapp.reach": () => ({ ok: true, data: { reachable: true, persona: null } }),
+      "crm.whatsapp.send": () => ({ ok: true, data: { status: "sent" } }),
+    });
+    await runScript(answerLeadScriptSource(), spec(REQUEST), plain.bridge);
+    expect(String(plain.calls.find((c) => c.name === "llm.complete")!.args.systemPrompt)).not.toContain("WHO YOU ARE");
+    expect((plain.calls.find((c) => c.name === "crm.whatsapp.send")!.args.body as Record<string, unknown>).fromAccount).toBeUndefined();
+  });
+
   it("a positive reply or a form fill asks the Booking call Engine for the rep call first, then answers as always", async () => {
     const CALLED = { "get:booking_call": () => ({ ok: true, data: { outcome: "booking_call", content: { end: { success: true } } } }) };
     for (const sourceTriggerId of ["positive_reply_received", "form_submitted"]) {

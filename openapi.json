@@ -1897,7 +1897,7 @@
             "additionalProperties": {
               "nullable": true
             },
-            "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
+            "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName. Optional `noAudience: true` (BOX-LOAD-1107): the caller already decided this run serves NO audience; the campaign start-run node then sends `x-no-audience: true` to campaign-service `/start-run`, which consumes the decision instead of re-reading the projection. Absent = unchanged."
           }
         },
         "example": {
@@ -2494,7 +2494,7 @@
             "additionalProperties": {
               "nullable": true
             },
-            "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
+            "description": "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName. Optional `noAudience: true` (BOX-LOAD-1107): the caller already decided this run serves NO audience; the campaign start-run node then sends `x-no-audience: true` to campaign-service `/start-run`, which consumes the decision instead of re-reading the projection. Absent = unchanged."
           }
         },
         "example": {
@@ -3981,7 +3981,7 @@
             "additionalProperties": {
               "nullable": true
             },
-            "description": "What campaign-service hands a workflow on `/execute`: campaignId, brandId, featureSlug, audienceId, `trigger` (the occurrence this dispatch answers)..."
+            "description": "What campaign-service hands a workflow on `/execute`: campaignId, brandId, featureSlug, audienceId, `trigger` (the occurrence this dispatch answers), optional `noAudience: true` (BOX-LOAD-1107: no audience decided at the trigger; `/start-run` then carries `x-no-audience: true` and does not re-read the projection)..."
           },
           "conflictPolicy": {
             "type": "string",

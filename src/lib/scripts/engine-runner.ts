@@ -185,7 +185,10 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
       console.log(`[workflow-service] engine ${d.outcome} run=${runId} campaign=${d.campaignId}: gate refused (${String(gate.reason ?? "")})`);
       return;
     }
-    const start = await deps.campaign.call("/start-run", headers, {});
+    // BOX-LOAD-1107: campaign-service decided at its trigger that this run serves NO audience (`inputs.noAudience`):
+    // said to /start-run only, which then consumes the decision instead of re-reading features-service's grid.
+    const noAudience = !d.audienceId && d.inputs.noAudience === true;
+    const start = await deps.campaign.call("/start-run", noAudience ? { ...headers, "x-no-audience": "true" } : headers, {});
     started = true;
     const audienceId = typeof start.audienceId === "string" && start.audienceId ? start.audienceId : d.audienceId;
     const trigger = triggerOf(d);

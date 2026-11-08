@@ -210,6 +210,26 @@ describe("a campaign run executes its Engine's script, with no workflow", () => 
     noWorkflowSlugAnywhere(w);
   });
 
+  it("says x-no-audience to /start-run only, when campaign-service decided no audience at its trigger (BOX-LOAD-1107)", async () => {
+    await addScript("lead_found", "dy_serve", SERVE, { recorded_by: "lead" });
+    const w = world();
+    await runOnce(dispatch({ inputs: { noAudience: true } }), w);
+    const byPath = Object.fromEntries(w.calls.map((c) => [c.path, c.headers]));
+    expect(byPath["/start-run"]!["x-no-audience"]).toBe("true");
+    expect(byPath["/gate-check"]!["x-no-audience"]).toBeUndefined();
+    expect(byPath["/end-run"]!["x-no-audience"]).toBeUndefined();
+    expect(w.doors[0]!.headers["x-no-audience"]).toBeUndefined();
+  });
+
+  it("says nothing extra when no decision rode the dispatch, or an audience did", async () => {
+    await addScript("lead_found", "dy_serve", SERVE, { recorded_by: "lead" });
+    for (const over of [{}, { audienceId: "aud-9", inputs: { noAudience: true } }]) {
+      const w = world();
+      await runOnce(dispatch(over), w);
+      expect(w.calls.find((c) => c.path === "/start-run")!.headers["x-no-audience"]).toBeUndefined();
+    }
+  });
+
   it("a script stating a support function marks its run once it made its Unit (and the request carries the run's clock)", async () => {
     await addScript("lead_found", "dy_serve", SERVE, { recorded_by: "lead", support: { kind: "copilot", reason: "no outcome by design" } });
     const w = world();

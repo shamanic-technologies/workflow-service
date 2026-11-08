@@ -170,6 +170,36 @@ describe("http-call script", () => {
     ).rejects.toThrow('expected post.status="published", got "queued"');
   });
 
+  describe("noAudience (BOX-LOAD-1107)", () => {
+    // Windmill passes it by NAME; positionally it is the last parameter.
+    const NO_AUDIENCE_POSITION = 29;
+    const call = (noAudience: unknown, audienceId?: string) => {
+      const args: unknown[] = new Array(NO_AUDIENCE_POSITION + 1).fill(undefined);
+      ["campaign", "POST", "/internal/start-run", {}, undefined, {
+        CAMPAIGN_SERVICE_URL: "https://campaign.example.com",
+        CAMPAIGN_SERVICE_API_KEY: "campaign-key",
+      }].forEach((v, i) => { args[i] = v; });
+      args[23] = audienceId;
+      args[NO_AUDIENCE_POSITION] = noAudience;
+      return (main as (...a: unknown[]) => Promise<unknown>)(...args);
+    };
+
+    it("sends x-no-audience: true only when the caller decided no audience", async () => {
+      expect(main.length).toBe(NO_AUDIENCE_POSITION + 1);
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      await call(true);
+      expect(mockFetch.mock.calls[0][1].headers["x-no-audience"]).toBe("true");
+    });
+
+    it("sends nothing when absent, false, or when an audience is supplied", async () => {
+      for (const [flag, aud] of [[undefined, undefined], [false, undefined], ["true", undefined], [true, "aud-1"]] as const) {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+        await call(flag, aud);
+        expect(mockFetch.mock.calls.at(-1)![1].headers["x-no-audience"]).toBeUndefined();
+      }
+    });
+  });
+
   it("omits x-audience-id when audienceId is undefined (no empty header)", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 

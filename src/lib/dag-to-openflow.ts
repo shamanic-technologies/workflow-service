@@ -94,6 +94,16 @@ const LOOP_BODY_AUDIENCE_REF = `flow_input.iter.value?.${AUDIENCE_ITER_KEY}`;
  */
 const SUPPLIED_AUDIENCE_REF = "flow_input.audienceId";
 
+/**
+ * The start-run node's read of the caller's decision that this run serves NO
+ * audience (`inputs.noAudience: true` on execute, BOX-LOAD-1107). campaign-service
+ * picks the audience at its trigger over features-service's grid; when that grid
+ * enumerates none, its /start-run would re-read the same grid (up to 637 KB,
+ * 763 ms) only to find none again. The http.call script sends it as
+ * `x-no-audience: true`; undefined (every other caller) sends nothing.
+ */
+const SUPPLIED_NO_AUDIENCE_REF = "flow_input.noAudience";
+
 export interface FlowModule {
   id: string;
   summary?: string;
@@ -1480,6 +1490,15 @@ function nodeToModule(
       type: "javascript",
       expr: SUPPLIED_AUDIENCE_REF,
     };
+    // The caller's other answer to the same question: it decided this run
+    // serves NO audience (BOX-LOAD-1107), so /start-run does not re-read the
+    // grid to find none. See SUPPLIED_NO_AUDIENCE_REF.
+    if (!inputTransforms.noAudience) {
+      inputTransforms.noAudience = {
+        type: "javascript",
+        expr: SUPPLIED_NO_AUDIENCE_REF,
+      };
+    }
   }
 
   const mod: FlowModule = {

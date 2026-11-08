@@ -77,6 +77,11 @@ export async function main(
   // `throwWhenTimedOut: true` instead THROWS when the wait runs out, tolerateFailure or not: the answer is not one
   // the flow may act on (UNIBOX-FACT-LAG-1028: a person thread crm-service says is still moving is never written on).
   pollWhile?: { field: string; equals: unknown; intervalSeconds?: number; timeoutSeconds?: number; throwWhenTimedOut?: boolean },
+  // BOX-LOAD-1107: campaign-service ALREADY decided, before execute, that this run serves no audience (its
+  // features-service grid enumerates none). Read only by the start-run node (flow_input.noAudience) and sent as
+  // `x-no-audience: true`, so /start-run consumes the decision instead of re-reading the same grid. Last, so no
+  // positional caller moves; only `true` sends the header.
+  noAudience?: boolean,
 ) {
   if (skip === true) {
     console.log(`[http-call] ${method} ${service} ${path} not called: skip is true for this run`);
@@ -145,6 +150,7 @@ export async function main(
   // Per-run audience chosen by campaign-service /start-run, threaded forward
   // from that node's result so runs-service attributes downstream cost to it.
   if (audienceId) reqHeaders["x-audience-id"] = audienceId;
+  if (noAudience === true && !audienceId) reqHeaders["x-no-audience"] = "true";
   // Caller-supplied headers can override identity headers
   if (headers) Object.assign(reqHeaders, headers);
   for (const name of omitHeaders ?? []) delete reqHeaders[name.toLowerCase()];
