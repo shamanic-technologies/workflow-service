@@ -373,6 +373,19 @@ describe("dagToOpenFlow", () => {
     }
   });
 
+  it("gives the start-run node — and only it — the caller's no-audience decision (BOX-LOAD-1107)", () => {
+    const result = dagToOpenFlow(DAG_WITH_CAMPAIGN_START_RUN, "Audience Flow");
+    for (const mod of result.value.modules) {
+      if (mod.value.type !== "script") continue;
+      const transforms = mod.value.input_transforms as Record<string, { type: string; expr?: string }>;
+      if (mod.id === "start_run") {
+        expect(transforms.noAudience).toEqual({ type: "javascript", expr: "flow_input.noAudience" });
+      } else {
+        expect(transforms.noAudience).toBeUndefined();
+      }
+    }
+  });
+
   it("leaves nodes at-or-before start-run — other than start-run itself — without any audienceId", () => {
     // Regression for the two things the supplied-audience read must not move:
     // the pre-start-run nodes stay untouched, and nothing there gains a result
