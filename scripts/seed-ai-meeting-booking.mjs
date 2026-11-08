@@ -54,6 +54,10 @@ import {
   needsGeneralInterestAnswer,
   needsTimeContext,
   needsAutoBooking,
+  needsSellPrinciples,
+  storedWriterStyle,
+  DESCRIPTION,
+  PERSONALITY_DESCRIPTION,
 } from "../dist/lib/ai-meeting-booking-dag.js";
 import { needsPersonRelationship } from "../dist/lib/person-relationship.js";
 import { needsMessageWrittenDeclaration } from "../dist/lib/message-written-outcome.js";
@@ -92,8 +96,9 @@ export function cellForDag(dag) {
   return CELLS.find((c) => `${c.provider}::${c.model}` === key);
 }
 
-export const DESCRIPTION =
-  "Answers one prospect who showed sales interest and is owed our next message, in their own thread on the channel they last wrote on: answers what they asked, proposes two times from the offer's booking page in their timezone, and keeps following up until they book or say no. Leads only (pure_prospect): never answers a personal contact, a customer, a team member, an investor, a partner, a supplier or an advisor of the brand.";
+export { DESCRIPTION, PERSONALITY_DESCRIPTION };
+
+const descriptionOf = (style) => (style === "personality" ? PERSONALITY_DESCRIPTION : DESCRIPTION);
 
 function headers() {
   return {
@@ -432,7 +437,8 @@ async function main() {
         needsThreadCampaignReply(w.dag) ||
         needsGeneralInterestAnswer(w.dag) ||
         needsTimeContext(w.dag) ||
-        needsAutoBooking(w.dag))
+        needsAutoBooking(w.dag) ||
+        needsSellPrinciples(w.dag))
     ) {
       stale.push(w.workflowDynastySlug);
     }
@@ -452,10 +458,12 @@ async function main() {
       process.exitCode = 1;
       continue;
     }
+    // A personality dynasty stays one: its style is read off its own writer code, never reset to plain.
+    const style = storedWriterStyle(dagBySlug.get(slug));
     const res = await call("POST", "/workflows/upgrade", {
       workflowDynastySlug: slug,
-      dag: buildAiMeetingBookingDag(own),
-      description: DESCRIPTION,
+      dag: buildAiMeetingBookingDag({ ...own, writerStyle: style }),
+      description: descriptionOf(style),
     });
     if (res.status === 200 || res.status === 201) {
       console.log(`  ${slug}: upgraded -> ${res.payload?.workflowSlug ?? "unknown"}`);
@@ -493,6 +501,34 @@ async function main() {
       console.log(`  ${cell}: already exists (${payload?.existingWorkflowSlug ?? "unknown"})`);
     } else {
       console.error(`  ${cell}: FAILED ${status} ${JSON.stringify(payload)}`);
+      process.exitCode = 1;
+    }
+  }
+
+  // The competing PERSONALITY writer: one dynasty beside the plain one on the same pipe, so features-service picks
+  // between the two on their results (owner 2026-11-08: « différents templates que tu peux A/B test »).
+  const personality = [...dagBySlug.entries()].find(([, dag]) => storedWriterStyle(dag) === "personality");
+  if (personality) {
+    console.log(`  personality writer: already covered by ${personality[0]}`);
+  } else if (!APPLY) {
+    console.log("  personality writer: would create");
+  } else {
+    const { status, payload } = await call("POST", "/workflows", {
+      featureSlug: FEATURE_SLUG,
+      pipeId: PIPE_ID,
+      description: PERSONALITY_DESCRIPTION,
+      category: "sales",
+      channel: "email",
+      audienceType: "conversation-follow-up",
+      tags: ["email", "meeting-booking", "reply", "personality"],
+      dag: buildAiMeetingBookingDag({ ...CELLS[0], writerStyle: "personality" }),
+    });
+    if (status === 201) {
+      console.log(`  personality writer: created ${payload?.workflowDynastySlug}, assigned to ${PIPE_ID} in features-service`);
+    } else if (status === 409) {
+      console.log(`  personality writer: already exists (${payload?.existingWorkflowSlug ?? "unknown"})`);
+    } else {
+      console.error(`  personality writer: FAILED ${status} ${JSON.stringify(payload)}`);
       process.exitCode = 1;
     }
   }
