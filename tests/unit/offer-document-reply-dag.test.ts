@@ -230,7 +230,7 @@ describe("picking the document", () => {
 describe("grounding a reply that answers with the attached document", () => {
   const facts = { questions: [{ key: "q1", question: "Can you share a case study on 510(k)?" }], exact: [] };
   const draft = {
-    json: { decision: "answer", question: "Can you share a case study on 510(k)?", reason: "attached", replyHtml: "<p>I attached our 510(k) case study.</p>", answers: [{ key: "q1", source: "document", facts: [] }] },
+    json: { decision: "answer", question: "Can you share a case study on 510(k)?", reason: "attached", replyHtml: "<p>I attached our 510(k) case study.</p>", answers: [{ question: "Can you share a case study on 510(k)?", source: "document", facts: [] }] },
   };
   const args = [draft, facts, { stance: "insider" }, { name: "Audits" }, { brand: { name: "Acme" } }, "none", { asked: false }];
   const quiet = () => {
