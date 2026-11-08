@@ -151,8 +151,37 @@ export async function sharedFailureKinds(db: AnyPgDb, now = new Date()): Promise
   return kinds;
 }
 
-export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): Promise<WindowStats> {
+/**
+ * WHOSE runs judge a switch (MIGRATE-1105 S6, INCIDENT 2026-11-07 19:46 UTC: 6 failures in three orgs rolled the cold
+ * email Engine back for SIX orgs, two of which had not failed once, and the instantly send switch with them): a campaign
+ * Engine switch for one org is judged on that org's runs only; a service switch on its own dynasty's runs (and its org
+ * when it names one); an org-less campaign switch on every run of the Engine.
+ */
+export interface GuardScope {
+  orgId?: string | null;
+  dynasty?: string | null;
+}
+export const scopeOfSwitch = (sw: Pick<typeof scriptSwitches.$inferSelect, "callerService" | "orgId" | "dynasty">): GuardScope =>
+  sw.callerService && sw.callerService !== CAMPAIGN_CALLER ? { dynasty: sw.dynasty, orgId: sw.orgId ?? null } : { orgId: sw.orgId ?? null };
+const scopeKey = (s: GuardScope) => `${s.orgId ?? "*"}|${s.dynasty ?? "*"}`;
+const scopeLabel = (s: GuardScope) => [s.orgId ? `org ${s.orgId}` : null, s.dynasty ? `dynasty ${s.dynasty}` : null].filter(Boolean).join(", ") || "every org";
+
+/**
+ * A call that got NO answer (undici's `fetch failed`: the host refused, reset or timed out the connection) is the box's
+ * or the network's, never the script's code: counted apart like a failure the old path shares (2026-11-07 19:46: three
+ * of the six counted failures were `ctx.get(message_written): fetch failed`, during a box load spike).
+ */
+export const NO_ANSWER_PATTERN = "fetch failed";
+const noAnswer = (error: string | null | undefined) => !!error && error.toLowerCase().includes(NO_ANSWER_PATTERN);
+
+export async function lastHour(db: AnyPgDb, outcome: string, now = new Date(), scope: GuardScope = {}): Promise<WindowStats> {
   const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);
+  const scoped = and(
+    eq(scripts.outcome, outcome),
+    gte(scriptRuns.createdAt, since),
+    ...(scope.orgId ? [eq(scriptRuns.orgId, scope.orgId)] : []),
+    ...(scope.dynasty ? [eq(scripts.dynasty, scope.dynasty)] : []),
+  );
   const [row] = await db
     .select({
       runs: sql<number>`count(*) filter (where ${scriptRuns.status} <> 'running')::int`,
@@ -161,7 +190,7 @@ export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): 
     })
     .from(scriptRuns)
     .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
-    .where(and(eq(scripts.outcome, outcome), gte(scriptRuns.createdAt, since)));
+    .where(scoped);
   const runs = Number(row?.runs ?? 0);
   let failed = Number(row?.failed ?? 0);
   let shared = 0;
@@ -170,13 +199,15 @@ export async function lastHour(db: AnyPgDb, outcome: string, now = new Date()): 
       .select({ error: scriptRuns.error })
       .from(scriptRuns)
       .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
-      .where(and(eq(scripts.outcome, outcome), gte(scriptRuns.createdAt, since), sql`${scriptRuns.status} in ('failed', 'stopped')`, sql`not ${billingRefused(scriptRuns.error)}`));
-    const kinds = errors.map((e: { error: string | null }) => scriptFailureKind(e.error));
+      .where(and(scoped, sql`${scriptRuns.status} in ('failed', 'stopped')`, sql`not ${billingRefused(scriptRuns.error)}`));
+    const answered = errors.filter((e: { error: string | null }) => !noAnswer(e.error));
+    shared = errors.length - answered.length;
+    const kinds = answered.map((e: { error: string | null }) => scriptFailureKind(e.error));
     if (kinds.some((k: string | null) => k !== null)) {
       const old = await sharedFailureKinds(db, now);
-      shared = kinds.filter((k: string | null) => k !== null && old.has(k)).length;
-      failed -= shared;
+      shared += kinds.filter((k: string | null) => k !== null && old.has(k)).length;
     }
+    failed -= shared;
   }
   return { runs, failed, errorRate: runs > 0 ? failed / runs : null, unmade: Number(row?.unmade ?? 0), shared };
 }
@@ -237,17 +268,19 @@ export async function rollBackSwitches(
   db: AnyPgDb,
   deps: RollbackDeps,
   outcome: string,
-  reason: string,
+  reasonAll: string,
   decidedBy: string,
   /** Only these dynasties (a drill, a manual roll-back); default every switched one. */
   onlyDynasties?: string[],
   /** The automatic guard: a campaign Engine switch whose old path cannot run for one of its campaigns stays switched. */
-  opts: { holdStranded?: boolean } = {},
+  opts: { holdStranded?: boolean; onlyIds?: string[]; reasonOf?: (sw: typeof scriptSwitches.$inferSelect) => string } = {},
 ): Promise<RollbackResult> {
   const all = await db.select().from(scriptSwitches).where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
-  const rows = onlyDynasties ? all.filter((r) => onlyDynasties.includes(switchLabel(r))) : all;
+  const named = onlyDynasties ? all.filter((r) => onlyDynasties.includes(switchLabel(r))) : all;
+  const rows = opts.onlyIds ? named.filter((r) => opts.onlyIds!.includes(r.id)) : named;
   const out: RollbackResult = { rolledBack: [], skipped: [] };
   for (const sw of rows) {
+    const reason = opts.reasonOf ? opts.reasonOf(sw) : reasonAll;
     if (sw.callerService === CAMPAIGN_CALLER && opts.holdStranded) {
       const stranded = await campaignsWithoutOldPath(db, outcome, sw.orgId ?? null);
       if (stranded.length > 0) {
@@ -363,11 +396,34 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
   if (!live || Number(live.n) === 0) return { checked: false as const };
   const w = await lastHour(db, outcome, now);
   const baseline = await measuredBaseline(db, outcome);
-  const verdict = shouldRollBack(w, baseline.errorRate);
-  if (!verdict.rollBack) {
+  // Each live switch is judged on ITS OWN runs (scopeOfSwitch); the fleet window is served beside it.
+  const liveRows = await db.select().from(scriptSwitches).where(and(eq(scriptSwitches.outcome, outcome), eq(scriptSwitches.state, "switched")));
+  const scopes = new Map<string, { scope: GuardScope; ids: string[] }>();
+  for (const sw of liveRows) {
+    const scope = scopeOfSwitch(sw);
+    const k = scopeKey(scope);
+    scopes.set(k, { scope, ids: [...(scopes.get(k)?.ids ?? []), sw.id] });
+  }
+  const failing: Array<{ ids: string[]; reason: string; window: WindowStats; pValue: number | null }> = [];
+  for (const { scope, ids } of scopes.values()) {
+    const sw = scopeKey(scope) === scopeKey({}) ? w : await lastHour(db, outcome, now, scope);
+    const v = shouldRollBack(sw, baseline.errorRate);
+    if (!v.rollBack) continue;
+    failing.push({
+      ids,
+      window: sw,
+      pValue: v.pValue,
+      reason:
+        `the stored script's error rate on ${outcome} was ${(100 * sw.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes for ${scopeLabel(scope)} ` +
+        `(${sw.failed} of ${sw.runs} runs${sw.shared ? `; ${sw.shared} more failed at a call the old path also fails or that got no answer, not counted` : ""}), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
+        `${baseline.source} baseline beyond chance (p = ${v.pValue!.toExponential(1)})`,
+    });
+  }
+  const verdict = failing.length > 0 ? { rollBack: true, pValue: failing[0]!.pValue } : shouldRollBack({ ...w, failed: 0, errorRate: 0 }, baseline.errorRate);
+  if (failing.length === 0) {
     const flows = await workflowWindow(db, outcome, now);
     const flowVerdict = flows ? shouldRollBack(flows.window, flows.baseline.errorRate) : { rollBack: false, pValue: null };
-    if (!flows || !flowVerdict.rollBack) return { checked: true as const, window: w, ...verdict, workflows: flows?.window ?? null, result: null };
+    if (!flows || !flowVerdict.rollBack) return { checked: true as const, window: w, rollBack: false, pValue: verdict.pValue, workflows: flows?.window ?? null, result: null };
     const flowReason =
       `the switched workflows failed ${(100 * flows.window.errorRate!).toFixed(1)} % of their runs at the switched steps over the last ${WINDOW_MINUTES} minutes ` +
       `(${flows.window.failed} of ${flows.window.runs}, at ${flows.steps.join("/")}), above ${(100 * thresholdFor(flows.baseline.errorRate)).toFixed(1)} % and above their previous versions' ` +
@@ -375,11 +431,12 @@ export async function checkGuard(db: AnyPgDb, deps: RollbackDeps, outcome: strin
     const result = await rollBackSwitches(db, deps, outcome, flowReason, "workflow-service script guard", undefined, { holdStranded: true });
     return { checked: true as const, window: w, ...flowVerdict, workflows: flows.window, result };
   }
-  const reason =
-    `the stored script's error rate on ${outcome} was ${(100 * w.errorRate!).toFixed(1)} % over the last ${WINDOW_MINUTES} minutes ` +
-    `(${w.failed} of ${w.runs} runs${w.shared ? `; ${w.shared} more failed at a call the old path also fails, not counted` : ""}), above ${(100 * thresholdFor(baseline.errorRate)).toFixed(1)} % and above the service path's ${(100 * baseline.errorRate).toFixed(1)} % ` +
-    `${baseline.source} baseline beyond chance (p = ${verdict.pValue!.toExponential(1)})`;
-  const result = await rollBackSwitches(db, deps, outcome, reason, "workflow-service script guard", undefined, { holdStranded: true });
+  const reasonById = new Map(failing.flatMap((f) => f.ids.map((id) => [id, f.reason] as const)));
+  const result = await rollBackSwitches(db, deps, outcome, failing[0]!.reason, "workflow-service script guard", undefined, {
+    holdStranded: true,
+    onlyIds: [...reasonById.keys()],
+    reasonOf: (sw) => reasonById.get(sw.id)!,
+  });
   return { checked: true as const, window: w, ...verdict, result };
 }
 
