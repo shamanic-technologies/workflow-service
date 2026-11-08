@@ -113,7 +113,7 @@ describe("a service switch", () => {
     await db.insert(scriptRuns).values(Array.from({ length: 4 }, (_, i) => ({ scriptId: script.id, orgId: "o", runId: `t${i}`, parentRunId: "p", status: "failed", error: "TypeError: reply.content is undefined", createdAt: now })));
     const bad = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
     expect(bad.result?.rolledBack).toHaveLength(1);
-    expect((await serviceSwitchState(db, "lead_interested", "instantly")).rollbackReason).toMatch(/\(4 of 51 runs; 4 more failed at a call the old path also fails, not counted\)/);
+    expect((await serviceSwitchState(db, "lead_interested", "instantly")).rollbackReason).toMatch(/for dynasty dy_reply_judge \(4 of 51 runs; 4 more failed at a call the old path also fails or that got no answer, not counted\)/);
   });
 
   it("never rolls a campaign Engine back onto an old path that cannot run: held switched, red on Monitoring (INCIDENT 2026-11-06 18:05)", async () => {
@@ -146,6 +146,27 @@ describe("a service switch", () => {
     expect(back.result?.rolledBack).toHaveLength(1);
     expect((await engineState(db, "lead_interested", "org-a")).live).toBe(false);
     expect((await db.select().from(scriptSwitches)).every((r) => r.state === "rolled_back")).toBe(true);
+  });
+
+  it("judges each campaign switch on its OWN org's runs; a call with no answer is never the script's (INCIDENT 2026-11-07 19:46, MIGRATE-1105 S6)", async () => {
+    const script = await provenJudge();
+    await switchEngine(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", orgId: "org-bad" });
+    await switchEngine(db, { outcome: "lead_interested", dynasty: "dy_reply_judge", orgId: "org-clean" });
+    const now = new Date();
+    // org-bad: 25 runs, 4 throws of the script's own + 3 calls with no answer. org-clean: 25 runs, nothing failed.
+    await db.insert(scriptRuns).values([
+      ...Array.from({ length: 25 }, (_, i) => ({ scriptId: script.id, orgId: "org-bad", runId: `b${i}`, parentRunId: "p", status: i < 7 ? "failed" : "made", error: i < 4 ? "TypeError: x" : i < 7 ? "ctx.get(message_written): fetch failed" : null, createdAt: now })),
+      ...Array.from({ length: 25 }, (_, i) => ({ scriptId: script.id, orgId: "org-clean", runId: `c${i}`, parentRunId: "p", status: "made", createdAt: now })),
+    ]);
+    const { resetGuardMemo, lastHour } = await import("../../src/lib/scripts/script-guard.js");
+    resetGuardMemo();
+    expect(await lastHour(db, "lead_interested", now, { orgId: "org-bad" })).toMatchObject({ runs: 25, failed: 4, shared: 3 });
+    const out = await checkGuard(db, { restoreFlow: async () => {} }, "lead_interested", now);
+    expect(out.result?.rolledBack).toHaveLength(1);
+    expect((await engineState(db, "lead_interested", "org-bad")).live).toBe(false);
+    expect((await engineState(db, "lead_interested", "org-clean")).live).toBe(true);
+    const bad = (await db.select().from(scriptSwitches)).find((r) => r.orgId === "org-bad")!;
+    expect(bad.rollbackReason).toMatch(/for org org-bad \(4 of 25 runs; 3 more failed at a call the old path also fails or that got no answer, not counted\)/);
   });
 
   it("the guard rolls a service switch back on a bad hour and Monitoring goes red", async () => {
