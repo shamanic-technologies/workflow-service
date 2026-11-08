@@ -482,7 +482,8 @@ export const ExecuteWorkflowSchema = z
       "Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."
     ),
     inputs: z.record(z.string(), z.unknown()).optional().describe(
-      "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
+      "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName. " +
+      "Optional `noAudience: true` (BOX-LOAD-1107): the caller already decided this run serves NO audience; the campaign start-run node then sends `x-no-audience: true` to campaign-service `/start-run`, which consumes the decision instead of re-reading the projection. Absent = unchanged."
     ),
   })
   .openapi("ExecuteWorkflowRequest", {
@@ -567,7 +568,8 @@ export const ExecuteByNameSchema = z
       "Workflow-service copies this literally and never derives persona/profile/goal IDs from names or totals."
     ),
     inputs: z.record(z.string(), z.unknown()).optional().describe(
-      "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName."
+      "Runtime inputs for the workflow. Accessible in nodes via $ref:flow_input.fieldName. " +
+      "Optional `noAudience: true` (BOX-LOAD-1107): the caller already decided this run serves NO audience; the campaign start-run node then sends `x-no-audience: true` to campaign-service `/start-run`, which consumes the decision instead of re-reading the projection. Absent = unchanged."
     ),
   })
   .openapi("ExecuteBySlugRequest", {
@@ -2904,7 +2906,7 @@ registry.registerPath({
 export const EngineExecuteRequestSchema = z
   .object({
     fromOutcome: ScriptSlugSchema.describe("The campaign's outcome before this Engine's: `start` for a proactive campaign (the script finds its own subject), else the outcome whose Unit a trigger pushed (the occurrence in `inputs.trigger` is handed to the script as a Unit of it)."),
-    inputs: z.record(z.string(), z.unknown()).optional().describe("What campaign-service hands a workflow on `/execute`: campaignId, brandId, featureSlug, audienceId, `trigger` (the occurrence this dispatch answers)..."),
+    inputs: z.record(z.string(), z.unknown()).optional().describe("What campaign-service hands a workflow on `/execute`: campaignId, brandId, featureSlug, audienceId, `trigger` (the occurrence this dispatch answers), optional `noAudience: true` (BOX-LOAD-1107: no audience decided at the trigger; `/start-run` then carries `x-no-audience: true` and does not re-read the projection)..."),
     conflictPolicy: z.enum(["use_existing", "reject"]).optional().describe("Same admission as a workflow execution, keyed on the campaign (and `executionSubject`)."),
     executionSubject: z.string().min(1).max(512).optional(),
   })
