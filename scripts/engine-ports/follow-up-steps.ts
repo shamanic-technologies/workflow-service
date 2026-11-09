@@ -525,7 +525,7 @@ export async function main() {
 
 /**
  * The writer's GAME: who it writes to and why (owner rule: a strategy, never a canned reply per case). The lead game
- * is the follow-up channel's own; another audience (current clients, `client-check-in-dag.ts`) states its own four
+ * is the follow-up channel's own; another audience (current clients, `client-check-in-steps.ts`) states its own four
  * prompt lines and keeps everything else of the writer byte for byte. Each value is one line of the generated script
  * (a JS string literal, its comma and newline included).
  */
@@ -540,7 +540,7 @@ export interface FollowUpGame {
    */
   occurrenceItem?: boolean;
   /**
-   * The writer answers the brand's OWN team (`brand-team-dag.ts`): they ARE the people who decide, so WHAT ONLY THE TEAM
+   * The writer answers the brand's OWN team (`brand-team-steps.ts`): they ARE the people who decide, so WHAT ONLY THE TEAM
    * DECIDES is not stated. Absent = stated (every lead and client audience).
    */
   answersTheTeam?: boolean;
@@ -896,7 +896,7 @@ const SKIP_READS = "$ref:read-state.output.skip";
 const SKIP_MODEL = "$ref:channel-plan.output.skipModel";
 
 /**
- * Who a reactive follow-up writes to, when it is not the brand's leads (`client-check-in-dag.ts`): the claim body it
+ * Who a reactive follow-up writes to, when it is not the brand's leads (`client-check-in-steps.ts`): the claim body it
  * states (WHO = the pipe's strategy, judged by lead-service), the scripts that read the claim, the state and write the
  * prompt, and the end kinds its claim adds. Absent = the lead follow-up, byte for byte.
  */

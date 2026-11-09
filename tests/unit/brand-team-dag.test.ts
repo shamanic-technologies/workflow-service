@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
@@ -132,16 +131,5 @@ describe("the team game", () => {
     expect(out.message).toContain("Can you draft my Threads post?");
     expect(COMPOSE_BRAND_TEAM_CODE).not.toMatch(/[–—]/);
     expect(out.systemPrompt).not.toMatch(/[–—]/);
-  });
-});
-
-describe("the seeds", () => {
-  it("the follow-up seed never upgrades the team dynasty to the leads DAG; the team seed keeps it on its pipe", () => {
-    const followUp = readFileSync(new URL("../../scripts/seed-follow-up-workflows.mjs", import.meta.url), "utf8");
-    expect(followUp).toContain("isClientCheckInDag(r.dag) || isBrandTeamDag(r.dag)");
-    const team = readFileSync(new URL("../../scripts/seed-brand-team-workflow.mjs", import.meta.url), "utf8");
-    expect(team).toContain("isBrandTeamDag(r.dag)");
-    expect(team).toContain('"/workflows/upgrade"');
-    expect(team).not.toMatch(/fork/i);
   });
 });

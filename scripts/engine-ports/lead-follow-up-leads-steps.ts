@@ -13,8 +13,7 @@
  *    off the queue ends the run `personNotAdmitted` (final); one it cannot judge yet ends idle (redelivered);
  *  - everything else (state read, thread, channel, the game, right moment, next date) is the lead follow-up, byte for
  *    byte.
- * The seed (`seed-follow-up-workflows.mjs`) builds it for every dynasty on `LEADS_ONLY_LEG_KEYS` (an upgrade of the
- * dynasty, never a fork).
+ * The answering script (`paid_client/dy_answer_lead_pull`) runs it for leads (MIGRATE-1105 S7).
  */
 import type { DAG } from "../../src/lib/dag-validator.js";
 import {
