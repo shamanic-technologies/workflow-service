@@ -193,6 +193,13 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // under the Engine's outcome), and the kept items any script reads back (one watch, never a second scan).
   "social.news.scan": { service: "social", method: "POST", path: "/orgs/social/industry-news/scans", asRun: true, outcomeInBody: "outcomeKey" },
   "social.news.items": { service: "social", method: "GET", path: "/orgs/social/industry-news", asRun: true },
+  // backlink_earned (scraping-service, BACKLINK-ENGINE-1109): one check of the links to the run's brand site (treg held +
+  // actualized on scraping-service's run under the script's; each new link verified live and declared as one Unit under
+  // the Engine's outcome), the brand's kept links read back, and its link gap (domains linking to its competitors, not to
+  // it: treg metered the same way, no Unit, material for an outreach script).
+  "scraping.backlinks.check": { service: "scraping", method: "POST", path: "/orgs/backlinks/checks", asRun: true, outcomeInBody: "outcomeKey" },
+  "scraping.backlinks.list": { service: "scraping", method: "GET", path: "/orgs/backlinks", asRun: true },
+  "scraping.backlinks.link_gap": { service: "scraping", method: "POST", path: "/orgs/backlinks/link-gaps", asRun: true },
   "scraping.site.map": { service: "scraping", method: "POST", path: "/map", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
