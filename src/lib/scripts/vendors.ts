@@ -9,6 +9,7 @@
  * thrown error (the script decides; `throw` in its own code fails the run loudly).
  */
 import type { VendorAnswer } from "./replay.js";
+import { longRequest } from "./long-request.js";
 
 export interface VendorDeps {
   /** chat-service `POST /complete` on the run (its own key + the given headers). */
@@ -580,7 +581,7 @@ export function productionVendorDeps(): VendorDeps {
   return {
     async complete(body, headers) {
       need();
-      const res = await fetch(`${base}/complete`, {
+      const res = await longRequest(`${base}/complete`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, ...headers },
         body: JSON.stringify(body),
@@ -592,7 +593,7 @@ export function productionVendorDeps(): VendorDeps {
     },
     async judge(body, headers) {
       need();
-      const res = await fetch(`${base}/orgs/judgments`, {
+      const res = await longRequest(`${base}/orgs/judgments`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, ...headers },
         body: JSON.stringify(body),
@@ -604,7 +605,7 @@ export function productionVendorDeps(): VendorDeps {
     },
     async platformComplete(body, headers) {
       need();
-      const res = await fetch(`${base}/internal/platform-complete`, {
+      const res = await longRequest(`${base}/internal/platform-complete`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, ...headers },
         body: JSON.stringify(body),
@@ -616,7 +617,7 @@ export function productionVendorDeps(): VendorDeps {
     },
     async platformJudge(body, headers) {
       need();
-      const res = await fetch(`${base}/internal/platform-judgments`, {
+      const res = await longRequest(`${base}/internal/platform-judgments`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, ...headers },
         body: JSON.stringify(body),
@@ -631,7 +632,7 @@ export function productionVendorDeps(): VendorDeps {
       const base = (process.env[`${prefix}_SERVICE_URL`] ?? "").replace(/\/$/, "");
       const key = process.env[`${prefix}_SERVICE_API_KEY`] ?? "";
       if (!base || !key) throw new Error(`${prefix}_SERVICE_URL and ${prefix}_SERVICE_API_KEY must be set for its script doors`);
-      const res = await fetch(`${base}${path}`, {
+      const res = await longRequest(`${base}${path}`, {
         method,
         headers: { ...(body ? { "content-type": "application/json" } : {}), "x-api-key": key, ...headers },
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -654,7 +655,7 @@ export function productionVendorDeps(): VendorDeps {
     },
     async readSkill(slug) {
       need();
-      const res = await fetch(`${base}/internal/skills/${encodeURIComponent(slug)}`, { headers: { "x-api-key": key }, signal: AbortSignal.timeout(600_000) });
+      const res = await longRequest(`${base}/internal/skills/${encodeURIComponent(slug)}`, { headers: { "x-api-key": key }, signal: AbortSignal.timeout(600_000) });
       if (!res.ok) return null;
       return (await res.json()) as { content?: unknown; version?: unknown };
     },
