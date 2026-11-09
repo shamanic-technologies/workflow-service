@@ -17,7 +17,12 @@
 import { transform } from "sucrase";
 import { newQuickJSAsyncWASMModule, type QuickJSAsyncContext, type QuickJSHandle } from "quickjs-emscripten";
 
-export const SCRIPT_CPU_MS = 2_000;
+/**
+ * 10 s of the script's OWN compute (MIGRATE-1105 S7): a port that reads a whole thread (the brand team answer, a big
+ * Copilot context) computed 2 to 3 s on the box (QuickJS interprets, the box is shared) and 5 of its 60 recorded runs
+ * died on the old 2 s; the limit guards a runaway loop, never a normal read of a big thread.
+ */
+export const SCRIPT_CPU_MS = 10_000;
 export const SCRIPT_WALL_MS = 10 * 60_000;
 export const SCRIPT_MEMORY_MB = 64;
 /** A script that calls its host more often than this is stopped (a loop on a vendor). */
