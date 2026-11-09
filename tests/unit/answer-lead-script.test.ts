@@ -64,7 +64,7 @@ function world(draft: Record<string, unknown>, over: Answers = {}) {
 
 const spec = (request: Record<string, unknown>) => ({ subject: "lead-1", brand: "brand-1", day: 0, tactics: {}, request });
 const REQUEST = { now: NOW, brandIds: ["brand-1"], campaignId: "camp-lead-event", offerId: "offer-1", brief: null, trigger: { leadId: "lead-1", eventId: "ev-1", person: { email: "Dr@Clinic.test" }, item: { kind: "replied" } } };
-const BOOK = { decision: "write", message: "<p>Friday works.</p>", subject: "", bookSlot: SLOT, bookedMessage: "<p>You are booked for Friday, November 6 at 3:30 PM Central.</p>", nextFollowUpAt: "2026-11-05T15:00:00Z", nextFollowUpWhy: "Reminder the day before", question: "", reason: "They picked a time" };
+const BOOK = { decision: "write", channel: "email", replyTo: "", to: [] as string[], cc: [] as string[], bcc: [] as string[], message: "<p>Friday works.</p>", subject: "", bookSlot: SLOT, bookedMessage: "<p>You are booked for Friday, November 6 at 3:30 PM Central.</p>", nextFollowUpAt: "2026-11-05T15:00:00Z", nextFollowUpWhy: "Reminder the day before", question: "", reason: "They picked a time" };
 
 describe("the answering script", () => {
   it("is a valid script: transpiles, evaluates, a strict schema", async () => {
@@ -133,7 +133,7 @@ describe("the answering script", () => {
   });
 
   it("answers on WhatsApp when that is where they wrote last, in bubbles", async () => {
-    const { calls, bridge } = world({ ...BOOK, bookSlot: "", bookedMessage: "", message: "Hi Josh\n\nFriday works" }, {
+    const { calls, bridge } = world({ ...BOOK, channel: "whatsapp", bookSlot: "", bookedMessage: "", message: "Hi Josh\n\nFriday works" }, {
       "crm.person.thread": () => ({ ok: true, data: { items: [{ at: "2026-11-04T13:54:00Z", kind: "message", direction: "inbound", channel: "whatsapp", text: "ok" }] } }),
       "crm.whatsapp.reach": () => ({ ok: true, data: { reachable: true } }),
       "crm.whatsapp.send": () => ({ ok: true, data: { status: "sent" } }),
@@ -143,7 +143,7 @@ describe("the answering script", () => {
   });
 
   it("on WhatsApp the writer speaks as the sending line's persona, from the line the campaign states (Paul, 2026-11-07: Sophie's line signed 'Kevin')", async () => {
-    const { calls, bridge } = world({ ...BOOK, bookSlot: "", bookedMessage: "", message: "Hi Paul" }, {
+    const { calls, bridge } = world({ ...BOOK, channel: "whatsapp", bookSlot: "", bookedMessage: "", message: "Hi Paul" }, {
       "crm.person.thread": () => ({ ok: true, data: { items: [{ at: "2026-11-04T13:54:00Z", kind: "message", direction: "inbound", channel: "whatsapp", text: "ok" }] } }),
       "crm.whatsapp.reach": () => ({ ok: true, data: { reachable: true, persona: { name: "Sophie", role: "AI assistant", instructions: null } } }),
       "crm.whatsapp.send": () => ({ ok: true, data: { status: "sent" } }),
@@ -153,7 +153,7 @@ describe("the answering script", () => {
     expect(calls.find((c) => c.name === "crm.whatsapp.reach")!.args).toMatchObject({ body: { fromAccount: "+15550002222" } });
     expect(calls.find((c) => c.name === "crm.whatsapp.send")!.args).toMatchObject({ body: { fromAccount: "+15550002222" } });
     // No persona, no stated line: the prompt names nobody and crm-service picks the line.
-    const plain = world({ ...BOOK, bookSlot: "", bookedMessage: "", message: "Hi" }, {
+    const plain = world({ ...BOOK, channel: "whatsapp", bookSlot: "", bookedMessage: "", message: "Hi" }, {
       "crm.person.thread": () => ({ ok: true, data: { items: [{ at: "2026-11-04T13:54:00Z", kind: "message", direction: "inbound", channel: "whatsapp", text: "ok" }] } }),
       "crm.whatsapp.reach": () => ({ ok: true, data: { reachable: true, persona: null } }),
       "crm.whatsapp.send": () => ({ ok: true, data: { status: "sent" } }),
@@ -234,5 +234,81 @@ describe("the answering script", () => {
     expect(seen[0]).toEqual(["ask", { units: {}, request: REQUEST, recordedBy: "sender" }]);
     expect(await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ unmade: "later: tomorrow" }))).toEqual({ kind: "done", result: { unmade: "later: tomorrow" } });
     expect(await runScript(ANSWER_LEAD_PULL.source, spec({ ...REQUEST, trigger: null }), bridge({}))).toEqual({ kind: "done", result: { unmade: "no_occurrence" } });
+  });
+
+  // EVERY-PERSON-ON-THE-THREAD-1109: Markthalle Luzern, 2026-11-09 (made-up addresses, the real shape). Our cold email
+  // went to Thomas; his colleague Markus answered in the same thread. The writer sees Markus's email as himself and
+  // answers HIM, in that thread, copying Thomas as it judges.
+  describe("every person on the thread", () => {
+    const COLD = { direction: "outbound", from: "kevin@mailbox.test", to: "thomas@market.test", at: "2026-11-05T08:00:00Z", subject: "Psyllium for your stalls", text: "Hi Thomas, ...", messageId: "<cold-1@mailbox.test>", participants: [{ email: "kevin@mailbox.test", role: "from" }, { email: "thomas@market.test", role: "to" }] };
+    const MARKUS = { direction: "inbound", from: "markus@market.test", to: "kevin@mailbox.test", at: "2026-11-09T15:20:00Z", subject: "Re: Psyllium for your stalls", text: "Are psyllium husks grown in Switzerland?", messageId: "<markus-1@market.test>", participants: [{ email: "markus@market.test", role: "from" }, { email: "kevin@mailbox.test", role: "to" }, { email: "thomas@market.test", role: "cc" }] };
+    const THOMAS_RUN = {
+      "lead.followup.claim": () => ({ ok: true, data: { found: true, followup: { id: "row-t", email: "thomas@market.test", phone: null, leadId: "lead-t", dueAt: NOW } } }),
+      "crm.person.thread": () => ({ ok: false, data: { status: 404, error: "no person holds email:thomas@market.test" } }),
+      "instantly.conversation": () => ({ ok: true, data: { conversation: { messages: [COLD, MARKUS], threads: [{ replied: true, campaignId: "thomas-thread", lastInboundAt: MARKUS.at }] } } }),
+    };
+    const ANSWER = { ...BOOK, bookSlot: "", bookedMessage: "", message: "<p>Hi Markus, ...</p>", replyTo: "M2", to: ["Markus@Market.test"], cc: ["thomas@market.test", "markus@market.test", "not an address"] };
+
+    it("shows every email with its label, who wrote it and who was on it, even when crm holds no thread", async () => {
+      const w = world(ANSWER, THOMAS_RUN);
+      await runScript(answerLeadScriptSource(), spec(REQUEST), w.bridge);
+      const message = String(w.calls.find((c) => c.name === "llm.complete")!.args.message);
+      expect(message).toContain("label M1, from kevin@mailbox.test to thomas@market.test, subject: Psyllium for your stalls: Hi Thomas");
+      expect(message).toContain("THEM (email) label M2, from markus@market.test to kevin@mailbox.test cc thomas@market.test, subject: Re: Psyllium for your stalls: Are psyllium husks grown in Switzerland?");
+      expect(String(w.calls.find((c) => c.name === "llm.complete")!.args.systemPrompt)).toContain("a colleague who answered in their thread is waiting for our answer too");
+      const schema = w.calls.find((c) => c.name === "llm.complete")!.args.responseSchema as { properties: Record<string, { enum?: string[] }> };
+      expect(schema.properties.replyTo!.enum).toEqual(["M1", "M2", ""]);
+      expect(schema.properties.channel!.enum).toEqual(["email"]);
+    });
+
+    it("answers Markus in his message's thread, Thomas copied, as the writer chose", async () => {
+      const w = world(ANSWER, THOMAS_RUN);
+      const out = await runScript(answerLeadScriptSource(), spec(REQUEST), w.bridge);
+      expect(out).toEqual({ kind: "done", result: { content: { decision: "write", channel: "email", booked: null, inThread: true, replyTo: "<markus-1@market.test>", recipients: { to: ["markus@market.test"], cc: ["thomas@market.test"], bcc: [] } } } });
+      expect(w.calls.filter((c) => ["instantly.reply.send", "email.send"].includes(c.name))).toEqual([
+        { name: "instantly.reply.send", args: { body: { email: "thomas@market.test", body_html: "<p>Hi Markus, ...</p>", sent_by: "automation", in_reply_to: "<markus-1@market.test>", to: ["markus@market.test"], cc: ["thomas@market.test"] } } },
+      ]);
+    });
+
+    it("names nobody = the thread's default recipients; a new thread opens from their conversation's mailbox", async () => {
+      const plain = world({ ...ANSWER, to: [], cc: [] }, THOMAS_RUN);
+      await runScript(answerLeadScriptSource(), spec(REQUEST), plain.bridge);
+      expect(plain.calls.find((c) => c.name === "instantly.reply.send")!.args).toEqual({ body: { email: "thomas@market.test", body_html: "<p>Hi Markus, ...</p>", sent_by: "automation", in_reply_to: "<markus-1@market.test>" } });
+      const fresh = world({ ...ANSWER, replyTo: "", subject: "Swiss psyllium", to: [], cc: [] }, THOMAS_RUN);
+      await runScript(answerLeadScriptSource(), spec(REQUEST), fresh.bridge);
+      expect(fresh.calls.find((c) => c.name === "instantly.reply.send")!.args).toEqual({ body: { campaign_id: "thomas-thread", email: "thomas@market.test", body_html: "<p>Hi Markus, ...</p>", sent_by: "automation", new_thread_subject: "Swiss psyllium" } });
+    });
+
+    it("an email shown once when crm and the conversation both hold it (the conversation's copy carries everyone)", async () => {
+      const w = world(ANSWER, { ...THOMAS_RUN, "crm.person.thread": () => ({ ok: true, data: { items: [
+        { at: MARKUS.at, kind: "message", direction: "inbound", channel: "email", source: "sending_mailbox", from: "markus@market.test", to: "kevin@mailbox.test", text: MARKUS.text, ref: { messageId: MARKUS.messageId } },
+        { at: "2026-11-09T15:25:00Z", kind: "event", channel: "web", text: "visited the pricing page" },
+      ] } }) });
+      await runScript(answerLeadScriptSource(), spec(REQUEST), w.bridge);
+      const message = String(w.calls.find((c) => c.name === "llm.complete")!.args.message);
+      expect(message.split("Are psyllium husks grown in Switzerland?").length - 1).toBe(1);
+      expect(message).toContain("EVENT (web): visited the pricing page");
+    });
+
+    it("a channel that is not open, or an email not in the thread, sends nothing and fails the run", async () => {
+      const wa = world({ ...ANSWER, channel: "whatsapp" }, THOMAS_RUN);
+      expect(await runScript(answerLeadScriptSource(), spec(REQUEST), wa.bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("not open") });
+      const lost = world({ ...ANSWER, replyTo: "M9" }, THOMAS_RUN);
+      expect(await runScript(answerLeadScriptSource(), spec(REQUEST), lost.bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("not in the thread") });
+      expect([...wa.calls, ...lost.calls].some((c) => ["instantly.reply.send", "email.send", "crm.whatsapp.send"].includes(c.name))).toBe(false);
+    });
+
+    it("a person we can reach on both channels: the writer picks, each medium's lines headed", async () => {
+      const w = world({ ...ANSWER, channel: "whatsapp", message: "Hi Markus" }, { ...THOMAS_RUN,
+        "lead.followup.claim": () => ({ ok: true, data: { found: true, followup: { id: "row-t", email: "thomas@market.test", phone: "+41790000000", leadId: "lead-t", dueAt: NOW } } }),
+        "crm.whatsapp.reach": () => ({ ok: true, data: { reachable: true, persona: { name: "Sophie", role: "AI assistant", instructions: null } } }),
+      });
+      expect(await runScript(answerLeadScriptSource(), spec(REQUEST), w.bridge)).toMatchObject({ kind: "done", result: { content: { channel: "whatsapp", inThread: null } } });
+      const sys = String(w.calls.find((c) => c.name === "llm.complete")!.args.systemPrompt);
+      expect(sys).toContain("ON EMAIL:");
+      expect(sys).toContain("ON WHATSAPP:");
+      expect(sys).toContain("WHEN YOU WRITE ON WHATSAPP:\n\nWHO YOU ARE: you are Sophie");
+      expect(String(w.calls.find((c) => c.name === "llm.complete")!.args.message)).toContain("THE CHANNELS OPEN: email, whatsapp");
+    });
   });
 });
