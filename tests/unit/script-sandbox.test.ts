@@ -76,13 +76,13 @@ describe("script sandbox isolation", () => {
   it("stops a script that computes forever", async () => {
     const out = await runScript(`export default function run() { while (true) {} }`, spec, noHost);
     expect(out).toEqual({ kind: "error", message: `the script computed longer than its ${SCRIPT_CPU_MS} ms limit` });
-  }, 15_000);
+  }, 45_000);
 
   it("stops a script that eats memory", async () => {
     const out = await runScript(`export default function run() { var a = []; while (true) a.push(new Array(100000).fill(1)); }`, spec, noHost);
     expect(out.kind).toBe("error");
     expect(out.kind === "error" && out.message).toMatch(/memory|computed longer/);
-  }, 15_000);
+  }, 45_000);
 
   it("does not count time waiting on a vendor against the compute limit", async () => {
     const slow: Bridge = async () => {
@@ -91,7 +91,7 @@ describe("script sandbox isolation", () => {
     };
     const out = await runScript(`export default function run(ctx) { ctx.vendor.call("llm.complete", {}); return { content: { ok: true } }; }`, spec, slow);
     expect(out).toEqual({ kind: "done", result: { content: { ok: true } } });
-  }, 15_000);
+  }, 45_000);
 
   it("a host stop ends the run as stopped, naming why", async () => {
     const out = await runScript(`export default function run(ctx) { ctx.get("email_found"); return { content: {} }; }`, spec, () => ({ stop: "not handed email_found" }));

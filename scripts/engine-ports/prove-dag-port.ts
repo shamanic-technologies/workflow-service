@@ -16,11 +16,13 @@ import { caseFromFlow, type RecordedFlow, type RecordedStep } from "../../src/li
 import { replayAll, sameJson, type ReplayCase } from "../../src/lib/scripts/replay.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { portDag } from "./dag-port.js";
-import { CLIENT_WHATSAPP, FOLLOW_UP_DUE } from "./follow-up.js";
+import { BRAND_TEAM, CLIENT_CHECK_IN, CLIENT_WHATSAPP, FOLLOW_UP_DUE } from "./follow-up.js";
 
 const PORTS = {
   "follow-up-due": { port: FOLLOW_UP_DUE, title: "Follow-up of a lead whose follow-up date passed", fromOutcome: "start" },
   "client-whatsapp": { port: CLIENT_WHATSAPP, title: "WhatsApp look after one current client when something happens with them", fromOutcome: "start" },
+  "client-check-in": { port: CLIENT_CHECK_IN, title: "Answer of one current client of the brand when something happens with them", fromOutcome: "start" },
+  "brand-team": { port: BRAND_TEAM, title: "Answer of one member of the brand's own team when they write or something happens with them", fromOutcome: "start" },
 } as const;
 const LEDGER_STEPS = ["pipe-of-run", "declare-consumed-lead", "declare-message-written"];
 
