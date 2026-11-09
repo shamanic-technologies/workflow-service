@@ -66,7 +66,7 @@ const current = buildColdWhatsappOutreachDag();
 
 const existing = await call(BASE_URL, API_KEY, "GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
 if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
-// The Client Satisfied workflow (client-satisfied-dag.ts) is a cold WhatsApp dynasty with its own seed: never overwritten here.
+// The Client Satisfied workflow (client-satisfied-steps.ts) is a cold WhatsApp dynasty with its own seed: never overwritten here.
 const rows = (Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? [])).filter((r) => !isClientSatisfiedDag(r.dag));
 
 if (rows.length === 0) {

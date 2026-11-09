@@ -1,5 +1,5 @@
 /**
- * MIGRATE-1105 S4b: the follow-up DAGs (`follow-up-dag.ts`) as stored scripts, through the generic DAG port
+ * MIGRATE-1105 S4b: the follow-up DAGs (`follow-up-steps.ts`) as stored scripts, through the generic DAG port
  * (`dag-port.ts`): the steps, their text and their order are the old DAG's own:
  *  - the lead follow-up when a lead's follow-up date passed (`conversation/dy_follow_up_due`, proactive: lead-service
  *    serves the person), the "Lead follow-up due" campaigns;

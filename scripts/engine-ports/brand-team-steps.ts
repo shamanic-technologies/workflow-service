@@ -3,8 +3,8 @@
  * CONVERSE AVEC LES LEADS ET LES CLIENTS AU BON MOMENT ET DE LA BONNE FAÇON », « Quand un lead nous écrit c'est un lead
  * event non ? », « tu veux faire un cas particulier ? WTF ».
  *
- * Every message a person writes to the brand is a Lead event. Leads have their play (`lead-follow-up-leads-dag.ts`,
- * claim `pure_prospect`), current clients theirs (`client-check-in-dag.ts`, claim `current_client`); the brand's OWN
+ * Every message a person writes to the brand is a Lead event. Leads have their play (`lead-follow-up-leads-steps.ts`,
+ * claim `pure_prospect`), current clients theirs (`client-check-in-steps.ts`, claim `current_client`); the brand's OWN
  * TEAM (its members, our staff, anyone tagged team) was refused by both and got no answer (prod 2026-10-29: a staff test
  * on the distribute.you assistant line, refused `not_a_lead` and `team_member`). This is the third audience of the same
  * follow-up channel's reactive DAG, its own dynasty on `ai-follow-up-email|start_to_paid_client`:

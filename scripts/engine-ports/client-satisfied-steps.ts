@@ -4,8 +4,8 @@
  * positifs [...] Ainsi ce serait un nouveau pipe qui cherche à maximiser la client satisfaction. »
  *
  * The workflow of the pipe `cold-whatsapp-outreach|paid_client_to_client_satisfied` (Paid client -> Client Satisfied,
- * reactive on ⚡ Lead event). It is the follow-up channel's reactive DAG (`follow-up-dag.ts`) with the client audience
- * of the client check-in (`client-check-in-dag.ts`: claim `current_client`, judged by lead-service; the client's own
+ * reactive on ⚡ Lead event). It is the follow-up channel's reactive DAG (`follow-up-steps.ts`) with the client audience
+ * of the client check-in (`client-check-in-steps.ts`: claim `current_client`, judged by lead-service; the client's own
  * stops only), and three differences, all stated here:
  *  - THE GAME is the owner's client strategy (`CLIENT_SATISFIED_GAME`): value with the least disturbance, done for
  *    them, only useful news (asked, necessary, good news, an improvement; a budget suggestion only on a positive ROI
