@@ -70,3 +70,13 @@ describe("the backlink check script", () => {
     expect((await replayCase(src, c)).diffs).toEqual([]);
   });
 });
+
+describe("a one-off run of a script whose Units its owning service declares", () => {
+  it("accepts social and scraping as the recording service (never a second declaration of their Units)", async () => {
+    const { RunScriptRequestSchema } = await import("../../src/schemas.js");
+    for (const recordedBy of ["scraping", "social"]) {
+      expect(RunScriptRequestSchema.safeParse({ outcome: BACKLINK_CHECK.outcome, dynasty: BACKLINK_CHECK.dynasty, subject: { service: "brand-service", id: "b1" }, units: {}, recordedBy }).success).toBe(true);
+    }
+    expect(RunScriptRequestSchema.safeParse({ outcome: "x", dynasty: "y", subject: { service: "brand-service", id: "b1" }, units: {}, recordedBy: "nobody" }).success).toBe(false);
+  });
+});
