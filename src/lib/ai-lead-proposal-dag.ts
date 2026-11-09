@@ -38,7 +38,7 @@
  */
 import { withSupportMark } from "./run-support-mark.js";
 import type { DAG } from "./dag-validator.js";
-import { ANSWERS_LEADS_ONLY_POLICY, NOT_A_LEAD_REASON } from "./ai-meeting-booking-dag.js";
+import { ANSWERS_LEADS_ONLY_POLICY, NOT_A_LEAD_REASON } from "./answering-steps.js";
 import { DELIVERED } from "./occurrence-delivery.js";
 
 export const AI_LEAD_PROPOSAL_FEATURE_SLUG = "ai-lead-proposal";

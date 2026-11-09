@@ -12,12 +12,8 @@ import {
   chatLlmDoorKind,
 } from "../../src/lib/campaign-brief.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
-import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
@@ -39,7 +35,6 @@ type Mod = {
   };
 };
 
-const CELL = { provider: "google", model: "pro" } as const;
 
 /** A cold email head (content-generation `/generate` + its script-writer materials door). */
 const COLD_EMAIL: DAG = {
@@ -63,12 +58,8 @@ const COLD_EMAIL: DAG = {
 const DAGS: Record<string, DAG> = {
   "cold-email": COLD_EMAIL,
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
-  "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
-  "ai-instant-call": buildAiInstantCallDag(),
   "ai-lead-proposal": buildAiLeadProposalDag(),
-  "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
-  "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),
@@ -111,7 +102,7 @@ describe("every LLM step of every workflow reads the campaign's brief (ONE-BRIEF
     });
   }
   it("the builders hold LLM doors at all (the loop above judged something)", () => {
-    expect(doorsSeen).toBeGreaterThan(20);
+    expect(doorsSeen).toBeGreaterThan(10);
   });
 
   it("no source file reads the retired instruction off /start-run", () => {
@@ -152,10 +143,9 @@ describe("bodyWithBriefExpr", () => {
     }
   });
 
-  it("the compiled list_questions / draft bodies are objects under Windmill's evaluation, brief or not", () => {
-    const mods = allModules(dagToOpenFlow(buildAiMeetingBookingDag(CELL), "amb").value.modules as Mod[]);
+  it("the compiled draft body is an object under Windmill's evaluation, brief or not", () => {
     const fu = allModules(dagToOpenFlow(buildFollowUpReactiveDag({ readFigures: false }), "fu").value.modules as Mod[]);
-    for (const [m, id] of [[mods, "list_questions"], [mods, "draft_reply"], [fu, "draft"]] as const) {
+    for (const [m, id] of [[fu, "draft"]] as const) {
       const expr = m.find((x) => x.id === id)!.value.input_transforms!.body.expr!;
       for (const brief of ["Sell to dentists only.", null]) {
         const out = evalAsWindmill(expr, { results: { start_run: { brief } }, flow_input: {} });
