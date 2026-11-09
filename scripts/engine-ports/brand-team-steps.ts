@@ -18,9 +18,9 @@
  *  - The writer is the Copilot (one AI), with the person's own account in reach; everything else (thread, channel,
  *    persona of the sending line, right moment, next date) is the follow-up's.
  */
-import type { DAG } from "./dag-validator.js";
-import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
-import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, CLIENT_CHECK_IN_PIPE_ID, admissionResolveCode } from "./client-check-in-dag.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
+import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-steps.js";
+import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, CLIENT_CHECK_IN_PIPE_ID, admissionResolveCode } from "./client-check-in-steps.js";
 
 /** Same pipe as the client check-in: Lead event heads it. */
 export const BRAND_TEAM_LEG_KEY = CLIENT_CHECK_IN_LEG_KEY;

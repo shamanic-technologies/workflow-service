@@ -3,8 +3,8 @@ import { main } from "../../scripts/nodes/http-call.js";
 import { dagToOpenFlow, readsPersonThread, SETTLED_THREAD_WAIT } from "../../src/lib/dag-to-openflow.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
 
 /**
  * UNIBOX-FACT-LAG-1028 (prod 2026-10-28, tari@slipless.ng): two card charges were refused at 05:00 and 05:01, the

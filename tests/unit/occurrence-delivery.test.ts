@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { SEND_DELIVERY_CODE } from "../../src/lib/occurrence-delivery.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag, FOLLOW_UP_END_KINDS } from "../../src/lib/follow-up-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag, FOLLOW_UP_END_KINDS } from "../../scripts/engine-ports/follow-up-steps.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 
 /**

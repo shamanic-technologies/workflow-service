@@ -10,7 +10,7 @@ import {
   needsPersonRelationship,
 } from "../../src/lib/person-relationship.js";
 import { buildColdWhatsappOutreachDag, COMPOSE_MESSAGE_PROMPT_CODE } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
+import { buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../scripts/engine-ports/follow-up-steps.js";
 
 /**
  * RELATIONSHIP-TAGS-1014: every writer reads who the person is to the brand (lead-service tags) and their whole
