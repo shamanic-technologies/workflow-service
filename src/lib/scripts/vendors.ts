@@ -268,6 +268,21 @@ function completionBody(args: Record<string, unknown>, ctx: VendorCallContext): 
     body.responseSchema = args.responseSchema;
   }
   for (const f of PASSTHROUGH_FIELDS) if (args[f] !== undefined) body[f] = args[f];
+  if (args.brandTools !== undefined) {
+    // BRAND-MCP-1109: the brand's own MCP tools on this call (chat-service runs a bounded tool loop when the brand
+    // plugged a server, else today's one-shot call). Each tier names the brand the way its endpoint reads it:
+    // `/complete` reads the org off the run's `x-org-id`; `/internal/platform-complete` takes it in the body.
+    const bt = args.brandTools as { brandId?: unknown } | null;
+    const brandId = bt && typeof bt === "object" ? str(bt.brandId) : null;
+    if (!brandId) return { error: "brandTools needs {brandId}" };
+    if (ctx.billing === "platform") {
+      const orgId = str(ctx.headers["x-org-id"]);
+      if (!orgId) return { error: "brandTools needs the run's org: a brand's tools belong to its org, and this platform run names none" };
+      body.brandTools = { orgId, brandId };
+    } else {
+      body.brandTools = { brandId };
+    }
+  }
   return { body };
 }
 
@@ -286,7 +301,19 @@ async function complete(name: string, args: Record<string, unknown>, ctx: Vendor
     if (!json || typeof json !== "object" || Array.isArray(json)) return refuse("chat.complete: the model answered no JSON object");
     return { ok: true, data: json as Record<string, unknown> };
   }
-  return { ok: true, data: { content: answer.content ?? null, json: answer.json ?? null, model: answer.model ?? null, tokensInput: answer.tokensInput ?? null, tokensOutput: answer.tokensOutput ?? null } };
+  return {
+    ok: true,
+    data: {
+      content: answer.content ?? null,
+      json: answer.json ?? null,
+      model: answer.model ?? null,
+      tokensInput: answer.tokensInput ?? null,
+      tokensOutput: answer.tokensOutput ?? null,
+      // BRAND-MCP-1109: how many brand tool calls the model made (served only when the brand has a server plugged;
+      // each call is a `brand-mcp-tool-call` event on chat-service's run, a child of the script's run).
+      ...(typeof answer.brandToolCalls === "number" ? { brandToolCalls: answer.brandToolCalls } : {}),
+    },
+  };
 }
 
 async function jevNoul(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {

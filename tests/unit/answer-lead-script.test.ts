@@ -188,6 +188,36 @@ describe("the answering script", () => {
     expect(quiet.gotten).toEqual([]);
   });
 
+  it("asks for the brand's own tools on its one LLM call (BRAND-MCP-1109), whatever the picked model", async () => {
+    for (const llm of [{ provider: "anthropic", model: "opus" }, { provider: "google", model: "flash" }, { provider: "deepseek", model: "v4-flash" }]) {
+      const w = world(BOOK, { "features.writer_pick": () => ({ ok: true, data: { llm } }) });
+      await runScript(answerLeadScriptSource(), spec(REQUEST), w.bridge);
+      const call = w.calls.filter((c) => c.name === "llm.complete");
+      expect(call).toHaveLength(1);
+      expect(call[0]!.args).toMatchObject({ ...llm, brandTools: { brandId: "brand-1" } });
+    }
+  });
+
+  it("records how many brand tool calls the writer made, on every outcome (Chaim: a client's own 'not a true lead')", async () => {
+    const TOOLS = 3;
+    const answered = (draft: Record<string, unknown>) => ({ "llm.complete": () => ({ ok: true, data: { json: draft, brandToolCalls: TOOLS } }) });
+    const stop = world(BOOK, answered({ ...BOOK, decision: "stop", message: "", bookSlot: "", bookedMessage: "", reason: "The client says he is not a true lead; marked him in their CRM" }));
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), stop.bridge)).toEqual({ kind: "done", result: { content: { decision: "stop", reason: "The client says he is not a true lead; marked him in their CRM", brandToolCalls: TOOLS } } });
+    const write = world(BOOK, answered(BOOK));
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), write.bridge)).toMatchObject({ kind: "done", result: { content: { decision: "write", brandToolCalls: TOOLS } } });
+    const esc = world(BOOK, answered({ ...BOOK, decision: "escalate", message: "", bookSlot: "", bookedMessage: "", question: "Price?" }));
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), esc.bridge)).toMatchObject({ kind: "done", result: { content: { decision: "escalate", brandToolCalls: TOOLS } } });
+    const later = world(BOOK, answered({ ...BOOK, decision: "later", message: "", bookSlot: "", bookedMessage: "", nextFollowUpWhy: "after the demo" }));
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toEqual({ kind: "done", result: { unmade: "later: after the demo (brand tool calls: 3)" } });
+  });
+
+  it("no server plugged (no brandToolCalls answered): the same decisions and outputs as before", async () => {
+    const write = world(BOOK);
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), write.bridge)).toEqual({ kind: "done", result: { content: { decision: "write", channel: "email", booked: SLOT, inThread: true } } });
+    const later = world({ ...BOOK, decision: "later", message: "", bookSlot: "", bookedMessage: "", nextFollowUpWhy: "after the demo" });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toEqual({ kind: "done", result: { unmade: "later: after the demo" } });
+  });
+
   it("the Lead event Target script asks the Message sent Engine for the answer, with the run's own Request", async () => {
     expect(ANSWER_LEAD_OUTCOME).toBe("message_sent");
     await expect(validateSource(ANSWER_LEAD_PULL.source)).resolves.toMatchObject({ materials: ["message_sent"] });

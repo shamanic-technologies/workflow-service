@@ -10,6 +10,7 @@
  * This module only BUILDS the script's source (the code that is stored in the catalogue, `scripts` table), from the
  * owner's written strategies in this repo, word for word, so a rule the owner gave the old writers is never retyped.
  * The script reaches the world only through its vendors (run doors, `llm.complete`, `voice.read`, `booking.slots`).
+ * Its one LLM call carries the brand's own MCP tools (BRAND-MCP-1109): stored as a new version of the dynasty.
  * Every improvement after this is an UPGRADE of the dynasty through the MCP, never a code change here.
  */
 import { COMPETITOR_FIRST_STRATEGY, NEW_FACT_STRATEGY, TEAM_DECIDES_STRATEGY } from "../follow-up-dag.js";
@@ -268,28 +269,34 @@ export default function run(ctx) {
   const writer = must("features.writer_pick", { query: { campaignId: campaignId } });
   const llm = writer.llm || {};
   if (!s(llm.provider) || !s(llm.model)) throw new Error("no writer LLM picked for this campaign: " + String(writer.llmUnavailableReason || "none"));
-  const draft = must("llm.complete", { provider: llm.provider, model: llm.model, systemPrompt: system, message: message, responseFormat: "json", responseSchema: K.SCHEMA });
+  // The brand's own tools on every call (BRAND-MCP-1109): the writer looks up what this person already has with the
+  // brand, and acts when the brand's team asks, before it decides. No server plugged = today's one-shot call.
+  const draft = must("llm.complete", { provider: llm.provider, model: llm.model, systemPrompt: system, message: message, responseFormat: "json", responseSchema: K.SCHEMA, brandTools: { brandId: brandId } });
   const d = draft.json || {};
+  // What the writer looked up or did through the brand's tools, on the run's output (each call is an event on the
+  // completion's run); absent when the brand plugged no server, so those outputs are unchanged.
+  const tools = typeof draft.brandToolCalls === "number" ? { brandToolCalls: draft.brandToolCalls } : {};
+  const toolsNote = typeof draft.brandToolCalls === "number" ? " (brand tool calls: " + draft.brandToolCalls + ")" : "";
   const nextAt = s(d.nextFollowUpAt);
   const nextOk = nextAt && Date.parse(nextAt) > Date.parse(now) && Date.parse(nextAt) <= Date.parse(now) + K.MAX_DAYS * 86400000;
 
   if (d.decision === "stop") {
     setDate({ stop: { reason: String(d.reason || "their own words").slice(0, 500) } });
     close("follow_up_stopped");
-    return { content: { decision: "stop", reason: String(d.reason || "") } };
+    return { content: { decision: "stop", reason: String(d.reason || ""), ...tools } };
   }
   if (!nextOk) throw new Error("the writer gave no usable next date: " + JSON.stringify(nextAt));
   if (d.decision === "later") {
     setDate({ nextFollowupAt: nextAt, reason: String(d.nextFollowUpWhy || "later").slice(0, 500) });
     close("follow_up_later");
-    return { unmade: "later: " + String(d.nextFollowUpWhy || "") };
+    return { unmade: "later: " + String(d.nextFollowUpWhy || "") + toolsNote };
   }
   if (d.decision === "escalate") {
     const rep = s(brand.salesRepPhone);
     if (rep) door("crm.whatsapp.send", { body: { brandId: brandId, phone: rep, text: "A lead needs your answer: " + [lead.firstName, lead.lastName].filter(Boolean).join(" ") + " (" + (email || phone) + ") asked: " + String(d.question || "") + ". Nothing was sent to them.", idempotencyKey: sendKey + ":rep-alert" }, omitHeaders: ["x-campaign-id"] });
     setDate({ nextFollowupAt: nextAt, reason: "Escalated to the team: " + String(d.question || "").slice(0, 400) });
     close("follow_up_escalated");
-    return { content: { decision: "escalate", question: String(d.question || ""), repAlerted: Boolean(rep) } };
+    return { content: { decision: "escalate", question: String(d.question || ""), repAlerted: Boolean(rep), ...tools } };
   }
   if (d.decision !== "write") throw new Error("the writer answered an unknown decision " + JSON.stringify(d.decision));
 
@@ -319,12 +326,12 @@ export default function run(ctx) {
     if (s(sent.data.code) && sent.data.status >= 400 && sent.data.status < 500) {
       setDate({ nextFollowupAt: nextAt, reason: "Not sent: " + sent.data.code });
       close("follow_up_refused");
-      return { unmade: "refused: " + sent.data.code };
+      return { unmade: "refused: " + sent.data.code + toolsNote };
     }
     throw new Error("the send failed: " + String(sent.data.error));
   }
   setDate({ nextFollowupAt: nextAt, reason: String(d.nextFollowUpWhy || "next look").slice(0, 500), sent: { channel: medium } });
   close(booked ? "booking_confirmed" : "follow_up_sent");
-  return { content: { decision: "write", channel: medium, booked: booked, inThread: medium === "email" ? Boolean(replied) : null } };
+  return { content: { decision: "write", channel: medium, booked: booked, inThread: medium === "email" ? Boolean(replied) : null, ...tools } };
 }
 `;
