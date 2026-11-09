@@ -15,8 +15,8 @@
  *    Everything else (the whole Unibox thread read first, the channel chosen before the model, the right moment,
  *    their local time, the persona of the sending account, the next date stated after every run) is the follow-up's.
  */
-import type { DAG } from "./dag-validator.js";
-import { FOLLOW_UP_FEATURE_SLUG, RESOLVE_CLAIMED_PERSON_CODE, buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
+import { FOLLOW_UP_FEATURE_SLUG, RESOLVE_CLAIMED_PERSON_CODE, buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-steps.js";
 
 /** The pipe: Lead event (any fact about a person) heads it; a current client reloading is the paid client outcome. */
 export const CLIENT_CHECK_IN_LEG_KEY = "start_to_paid_client";

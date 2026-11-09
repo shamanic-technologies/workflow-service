@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { COMPETITOR_FIRST_STRATEGY, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
-import { COMPOSE_CLIENT_CHECK_IN_CODE } from "../../src/lib/client-check-in-dag.js";
-import { COMPOSE_BRAND_TEAM_CODE } from "../../src/lib/brand-team-dag.js";
+import { COMPETITOR_FIRST_STRATEGY, COMPOSE_FOLLOW_UP_CODE } from "../../scripts/engine-ports/follow-up-steps.js";
+import { COMPOSE_CLIENT_CHECK_IN_CODE } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { COMPOSE_BRAND_TEAM_CODE } from "../../scripts/engine-ports/brand-team-steps.js";
 
 // COMPETITOR-FIRST-1105: a lead wrote he was testing another vendor "and getting good success"; the owner wants the
 // writer to learn whether it fully works for them (cost per result, what is missing) before any pitch.

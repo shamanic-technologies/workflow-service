@@ -16,7 +16,7 @@
  * The seed (`seed-follow-up-workflows.mjs`) builds it for every dynasty on `LEADS_ONLY_LEG_KEYS` (an upgrade of the
  * dynasty, never a fork).
  */
-import type { DAG } from "./dag-validator.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
 import {
   FOLLOW_UP_REACTIVE_DESCRIPTION,
   LEAD_FOLLOW_UP_GAME,
@@ -24,8 +24,8 @@ import {
   READ_STATE_CODE,
   buildFollowUpReactiveDag,
   type FollowUpAudience,
-} from "./follow-up-dag.js";
-import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, admissionResolveCode } from "./client-check-in-dag.js";
+} from "./follow-up-steps.js";
+import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, admissionResolveCode } from "./client-check-in-steps.js";
 
 /** lead-service's claim policy "leads only" (the same literal ai-meeting-booking and ai-lead-proposal state). */
 export const LEADS_ONLY_POLICY = "pure_prospect";

@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
-import { CLAIM_PERSON_CODE, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
-import { buildLeadFollowUpLeadsOnlyDag } from "../../src/lib/lead-follow-up-leads-dag.js";
+import { CLAIM_PERSON_CODE, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { buildLeadFollowUpLeadsOnlyDag } from "../../scripts/engine-ports/lead-follow-up-leads-steps.js";
 
 /**
  * CLAIM-OCCURRENCE-PERSON-1025: a reactive follow-up run answering an occurrence claims THAT person's row (lead-service
@@ -54,7 +54,7 @@ describe("the claim states the occurrence's person", () => {
   }
 
   it("a claim skipped for a nameless occurrence ends final, never answering a queued person", async () => {
-    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../scripts/engine-ports/follow-up-steps.js");
     const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
     expect(await resolve({ ok: false, skipped: true, notCalled: true }, null, { eventId: "e", person: {} })).toMatchObject({
       endKind: "names_nobody",
@@ -90,7 +90,7 @@ describe("a due person lead-service holds back ends the run with the reason, nev
   const claim = { found: false, reason: "nothing_due", heldBack: [held] };
 
   it("a run naming nobody (a campaign naming its people, no occurrence) states the held person's reason", async () => {
-    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../scripts/engine-ports/follow-up-steps.js");
     const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
     expect(await resolve(claim, null, null)).toMatchObject({
       ok: false,
@@ -101,7 +101,7 @@ describe("a due person lead-service holds back ends the run with the reason, nev
   });
 
   it("an occurrence reads only ITS person's entry: by lead id, by email; someone else's hold is not theirs", async () => {
-    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../scripts/engine-ports/follow-up-steps.js");
     const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
     expect(await resolve(claim, null, { eventId: "e", leadId: "lead-1" })).toMatchObject({ endKind: "held_back" });
     expect(await resolve(claim, null, { eventId: "e", person: { email: "INFO@martiandbb.com" } })).toMatchObject({ endKind: "held_back" });
@@ -109,15 +109,15 @@ describe("a due person lead-service holds back ends the run with the reason, nev
   });
 
   it("no heldBack (lead-service before it, or nobody due): today's endings, byte for byte", async () => {
-    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../src/lib/follow-up-dag.js");
+    const { RESOLVE_CLAIMED_PERSON_CODE } = await import("../../scripts/engine-ports/follow-up-steps.js");
     const resolve = loadMain(RESOLVE_CLAIMED_PERSON_CODE);
     expect(await resolve({ found: false, reason: "nothing_due" }, null, null)).toEqual({ ok: false, why: "nobody claimed", endKind: "idle" });
     expect(await resolve({ found: false, reason: "nothing_due", heldBack: [] }, null, { eventId: "e", leadId: "l" })).toMatchObject({ endKind: "unclaimed" });
   });
 
   it("the client check-in and leads-only resolvers fall through to it too", async () => {
-    const { RESOLVE_CLIENT_CODE } = await import("../../src/lib/client-check-in-dag.js");
-    const { RESOLVE_LEAD_CODE } = await import("../../src/lib/lead-follow-up-leads-dag.js");
+    const { RESOLVE_CLIENT_CODE } = await import("../../scripts/engine-ports/client-check-in-steps.js");
+    const { RESOLVE_LEAD_CODE } = await import("../../scripts/engine-ports/lead-follow-up-leads-steps.js");
     for (const code of [RESOLVE_CLIENT_CODE, RESOLVE_LEAD_CODE]) {
       expect(await loadMain(code)(claim, null, { eventId: "e", leadId: "lead-1" })).toMatchObject({
         endKind: "held_back",

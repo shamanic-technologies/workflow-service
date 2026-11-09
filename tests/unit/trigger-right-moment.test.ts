@@ -15,7 +15,7 @@ import {
   WHATSAPP_FOLLOW_UP_STOPPED_REASON,
   WHATSAPP_OCCURRENCE_SENT_REASON,
 } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
+import { COMPOSE_FOLLOW_UP_CODE } from "../../scripts/engine-ports/follow-up-steps.js";
 import {
   EMAIL_MEDIUM,
   LOCAL_TIME_FN,

@@ -10,7 +10,7 @@ import {
   needsConsumedLeadDeclaration,
   needsMessageWrittenDeclaration,
 } from "../../src/lib/message-written-outcome.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 
 /**

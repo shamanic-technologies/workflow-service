@@ -14,10 +14,10 @@
  * The runner declares nothing for them: the sender (crm-service on WhatsApp, the email gateway by email) records what
  * went out. The ledger steps of the old DAG (`pipe-of-run`, `declare-*`) are the runner's, left out.
  */
-import { buildFollowUpProactiveDag, FOLLOW_UP_FEATURE_SLUG } from "../../src/lib/follow-up-dag.js";
-import { buildClientSatisfiedDag, CLIENT_SATISFIED_FEATURE_SLUG } from "../../src/lib/client-satisfied-dag.js";
-import { buildClientCheckInDag, CURRENT_CLIENTS_POLICY } from "../../src/lib/client-check-in-dag.js";
-import { buildBrandTeamDag, OWN_TEAM_POLICY } from "../../src/lib/brand-team-dag.js";
+import { buildFollowUpProactiveDag, FOLLOW_UP_FEATURE_SLUG } from "./follow-up-steps.js";
+import { buildClientSatisfiedDag, CLIENT_SATISFIED_FEATURE_SLUG } from "./client-satisfied-steps.js";
+import { buildClientCheckInDag, CURRENT_CLIENTS_POLICY } from "./client-check-in-steps.js";
+import { buildBrandTeamDag, OWN_TEAM_POLICY } from "./brand-team-steps.js";
 import { portDag } from "./dag-port.js";
 
 const LEDGER_STEPS = ["pipe-of-run", "declare-consumed-lead", "declare-message-written"];

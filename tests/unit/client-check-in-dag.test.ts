@@ -3,7 +3,7 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 import { descriptionProblem } from "../../src/lib/plain-description.js";
-import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
+import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../scripts/engine-ports/follow-up-steps.js";
 import {
   CLIENT_CHECK_IN_DESCRIPTION,
   COMPOSE_CLIENT_CHECK_IN_CODE,
@@ -12,7 +12,7 @@ import {
   RESOLVE_CLIENT_CODE,
   buildClientCheckInDag,
   isClientCheckInDag,
-} from "../../src/lib/client-check-in-dag.js";
+} from "../../scripts/engine-ports/client-check-in-steps.js";
 
 /**
  * CLIENT-CHECKIN-ON-LEAD-EVENT-1024 (owner 2026-10-24): every Unibox event of a current client starts a reactive run

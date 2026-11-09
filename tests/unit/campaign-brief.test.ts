@@ -14,10 +14,10 @@ import {
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
 import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
-import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
-import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { buildClientSatisfiedDag } from "../../scripts/engine-ports/client-satisfied-steps.js";
+import { buildBrandTeamDag } from "../../scripts/engine-ports/brand-team-steps.js";
 import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
 
 /**
