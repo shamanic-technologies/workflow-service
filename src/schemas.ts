@@ -2511,7 +2511,7 @@ export const RunScriptResponseSchema = z
     status: z.enum(["made", "nothing", "unmade", "stopped", "failed"]).describe("`unmade`: no Unit for a reason the world gave (`error` says it), never a script error."),
     unit: z.object({ outcome: z.string(), subject: SubjectRefSchema, content: z.record(z.string(), z.unknown()), found: z.string().optional() }).nullable(),
     error: z.string().nullable(),
-    vendorCalls: z.array(z.object({ name: z.string(), ok: z.boolean(), error: z.string().optional(), ms: z.number() })),
+    vendorCalls: z.array(z.object({ name: z.string(), ok: z.boolean(), error: z.string().optional(), ms: z.number(), brandToolCalls: z.number().int().optional().describe("Brand MCP tool calls the model made on this completion (BRAND-MCP-1109; present only when the brand has a server plugged).") })),
     declared: z.object({ produced: z.array(OccurrenceSchema), consumed: z.array(OccurrenceSchema) }),
     recordedBy: z.string().optional(),
     trace: z

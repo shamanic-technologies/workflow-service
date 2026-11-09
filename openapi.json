@@ -3395,6 +3395,10 @@
                 },
                 "ms": {
                   "type": "number"
+                },
+                "brandToolCalls": {
+                  "type": "integer",
+                  "description": "Brand MCP tool calls the model made on this completion (BRAND-MCP-1109; present only when the brand has a server plugged)."
                 }
               },
               "required": [

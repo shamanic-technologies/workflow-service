@@ -256,6 +256,18 @@ describe("a script run as a step: isolation and ledger declaration", () => {
     expect(l2.calls.at(-1)).toEqual(["close", { runId: "run-child-1", status: "failed", orgId: "org-test" }]);
   });
 
+  it("BRAND-TOOLS-EVERY-SCRIPT-1109: a script that never names brandTools gets the run's brand tools; the run records brandToolCalls", async () => {
+    await createScript(db, { outcome: "message_written", dynasty: "dy_writer", code: WRITER_V1, description: "x" }, author, deps);
+    const brandId = "4c6b1d3e-2f0a-4b8e-9d7c-1a2b3c4d5e6f";
+    const v = vendors();
+    const inner = v.deps.complete;
+    v.deps.complete = async (body, headers) => ({ ...(await inner(body, headers)), brandToolCalls: 3 });
+    const out = await runStoredScript(db, input, { ...who, headers: { ...who.headers, "x-brand-id": brandId } }, { ledger: ledger().deps, vendors: v.deps });
+    expect(WRITER_V1).not.toContain("brandTools");
+    expect(v.calls[0]!.body.brandTools).toEqual({ brandId });
+    expect(out.vendorCalls).toEqual([expect.objectContaining({ name: "llm.complete", ok: true, brandToolCalls: 3 })]);
+  });
+
   it("a declaration the ledger refuses fails the step (untracked spend is a bug)", async () => {
     await createScript(db, { outcome: "message_written", dynasty: "dy_writer", code: WRITER_V1, description: "x" }, author, deps);
     const l = ledger();

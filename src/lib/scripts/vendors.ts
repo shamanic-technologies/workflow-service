@@ -268,10 +268,12 @@ function completionBody(args: Record<string, unknown>, ctx: VendorCallContext): 
     body.responseSchema = args.responseSchema;
   }
   for (const f of PASSTHROUGH_FIELDS) if (args[f] !== undefined) body[f] = args[f];
+  // BRAND-MCP-1109: the brand's own MCP tools on this call (chat-service runs a bounded tool loop when the brand
+  // plugged a server, else today's one-shot call). Each tier names the brand the way its endpoint reads it:
+  // `/complete` reads the org off the run's `x-org-id`; `/internal/platform-complete` takes it in the body.
+  if (args.brandTools === false) return { body };
   if (args.brandTools !== undefined) {
-    // BRAND-MCP-1109: the brand's own MCP tools on this call (chat-service runs a bounded tool loop when the brand
-    // plugged a server, else today's one-shot call). Each tier names the brand the way its endpoint reads it:
-    // `/complete` reads the org off the run's `x-org-id`; `/internal/platform-complete` takes it in the body.
+    // Stated by the script: its brand, or a refusal it can read.
     const bt = args.brandTools as { brandId?: unknown } | null;
     const brandId = bt && typeof bt === "object" ? str(bt.brandId) : null;
     if (!brandId) return { error: "brandTools needs {brandId}" };
@@ -282,8 +284,35 @@ function completionBody(args: Record<string, unknown>, ctx: VendorCallContext): 
     } else {
       body.brandTools = { brandId };
     }
+    return { body };
   }
+  // BRAND-TOOLS-EVERY-SCRIPT-1109: unstated = the run's brand, by default, on every completion of every script (owner
+  // 2026-11-09: our AI uses the brand's tools before it writes to its leads and clients). The default never makes a
+  // call fail: it is attached only where chat-service serves it, else the call runs exactly as before.
+  const defaulted = defaultBrandTools(body, ctx);
+  if (defaulted) body.brandTools = defaulted;
   return { body };
+}
+
+/**
+ * Providers whose one request cannot ground on their own web search AND call tools (chat-service refuses the pair with
+ * a 400 before any spend: Gemini's generateContent). A vendor fact mirrored from chat-service's `brandToolsRefusalFor`,
+ * never a script's choice: a call there that asks `webSearch` keeps its web search and runs without the default tools.
+ */
+const WEB_SEARCH_WITHOUT_TOOLS = new Set(["google"]);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The run's brand tools a completion gets unasked, or null (no single brand behind the run, or a pair chat-service refuses). */
+function defaultBrandTools(body: Record<string, unknown>, ctx: VendorCallContext): Record<string, string> | null {
+  const brands = (ctx.headers["x-brand-id"] ?? "").split(",").map((b) => b.trim()).filter(Boolean);
+  // One brand = one owner of the tools; a brand set (several) has none to pick without a rule, so the script names it.
+  if (brands.length !== 1 || !UUID.test(brands[0]!)) return null;
+  if (body.webSearch && body.webSearch !== "false" && WEB_SEARCH_WITHOUT_TOOLS.has(String(body.provider))) return null;
+  if (ctx.billing === "platform") {
+    const orgId = str(ctx.headers["x-org-id"]);
+    return orgId ? { orgId, brandId: brands[0]! } : null;
+  }
+  return { brandId: brands[0]! };
 }
 
 async function complete(name: string, args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
