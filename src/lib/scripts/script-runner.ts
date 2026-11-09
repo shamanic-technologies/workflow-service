@@ -107,7 +107,7 @@ export interface ScriptRunResult {
   error: string | null;
   /** On `unmade`: the script said the look did not finish (ask again soon, never idle). */
   again?: boolean;
-  vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number }>;
+  vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number; brandToolCalls?: number }>;
   declared: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] };
   /** Who declares this run's occurrences when not the run itself. */
   recordedBy?: string;
@@ -227,7 +227,9 @@ export async function runStoredScript(
         { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
         deps.vendors,
       );
-      vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }) });
+      // BRAND-TOOLS-EVERY-SCRIPT-1109: how many brand tool calls a completion made, on the run's record (any vendor that serves it).
+      const brandToolCalls = answer.ok && typeof answer.data.brandToolCalls === "number" ? answer.data.brandToolCalls : undefined;
+      vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }), ...(brandToolCalls !== undefined ? { brandToolCalls } : {}) });
       if (input.trace) trace.push({ name, args: args[1] ?? null, answer, ...(exchange ? (exchange as { sent: Record<string, unknown>; raw: Record<string, unknown> }) : {}) });
       return { v: answer };
     }

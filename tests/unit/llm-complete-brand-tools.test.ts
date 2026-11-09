@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { callVendor, LLM_COMPLETE, type VendorDeps } from "../../src/lib/scripts/vendors.js";
+import { callVendor, CHAT_COMPLETE, LLM_COMPLETE, type VendorDeps } from "../../src/lib/scripts/vendors.js";
 
 // BRAND-MCP-1109: a script asks chat-service for the brand's own MCP tools on its completion (`brandTools`). The door
 // states the opt-in on BOTH tiers, each in the shape its endpoint reads: `/complete` = `{brandId}` (the org is the
@@ -51,9 +51,10 @@ describe("llm.complete with the brand's tools", () => {
     expect(v.seen).toEqual([]);
   });
 
-  it("without brandTools the body is byte-identical to before", async () => {
+  it("a run with no brand: the body is byte-identical to before", async () => {
     const v = vendors();
-    await callVendor(LLM_COMPLETE, ARGS, { headers: HEADERS, tactics: {} }, v.deps);
+    const { "x-brand-id": _b, ...noBrand } = HEADERS;
+    await callVendor(LLM_COMPLETE, ARGS, { headers: noBrand, tactics: {} }, v.deps);
     expect(v.seen[0]![1]).toEqual({ message: "M", systemPrompt: "S", provider: "anthropic", model: "opus", responseSchema: { type: "object", properties: {} }, responseFormat: "json" });
   });
 
@@ -67,5 +68,79 @@ describe("llm.complete with the brand's tools", () => {
     const v = vendors();
     const out = await callVendor(LLM_COMPLETE, { ...ARGS, brandTools: { brandId: "brand-1" } }, { headers: HEADERS, tactics: {} }, v.deps);
     expect(out.data).toEqual({ content: "{}", json: { decision: "later" }, model: "m", tokensInput: null, tokensOutput: null });
+  });
+});
+
+// BRAND-TOOLS-EVERY-SCRIPT-1109: every completion of every script on a branded run gets the brand's tools unasked, at
+// the door (both tiers), so no script restates it.
+const BRAND = "4c6b1d3e-2f0a-4b8e-9d7c-1a2b3c4d5e6f";
+const BRANDED = { ...HEADERS, "x-brand-id": BRAND };
+const PLAIN = { provider: "anthropic", model: "sonnet", systemPrompt: "S", message: "M" };
+
+describe("llm.complete: the run's brand tools by default", () => {
+  it("org tier: a script that never names brandTools gets {brandId} of the run's brand", async () => {
+    const v = vendors();
+    const out = await callVendor(LLM_COMPLETE, PLAIN, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(out.ok).toBe(true);
+    expect(v.seen[0]![0]).toBe("complete");
+    expect(v.seen[0]![1].brandTools).toEqual({ brandId: BRAND });
+  });
+
+  it("platform tier: {orgId, brandId}, the org from the run", async () => {
+    const v = vendors();
+    await callVendor(LLM_COMPLETE, PLAIN, { headers: BRANDED, tactics: {}, billing: "platform" }, v.deps);
+    expect(v.seen[0]![0]).toBe("platformComplete");
+    expect(v.seen[0]![1].brandTools).toEqual({ orgId: "org-1", brandId: BRAND });
+  });
+
+  it("chat.complete gets it too (same door)", async () => {
+    const v = vendors();
+    await callVendor(CHAT_COMPLETE, PLAIN, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(v.seen[0]![1].brandTools).toEqual({ brandId: BRAND });
+  });
+
+  it("platform run with no org: no default, the plain call runs (the default never refuses)", async () => {
+    const v = vendors();
+    const out = await callVendor(LLM_COMPLETE, PLAIN, { headers: { ...BRANDED, "x-org-id": "" }, tactics: {}, billing: "platform" }, v.deps);
+    expect(out.ok).toBe(true);
+    expect(v.seen[0]![1]).not.toHaveProperty("brandTools");
+  });
+
+  it("webSearch on google: keeps its web search, no default tools (chat-service refuses that pair)", async () => {
+    const v = vendors();
+    const out = await callVendor(LLM_COMPLETE, { ...PLAIN, provider: "google", model: "gemini-3-flash", webSearch: true }, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(out.ok).toBe(true);
+    expect(v.seen[0]![1]).toMatchObject({ webSearch: true, provider: "google" });
+    expect(v.seen[0]![1]).not.toHaveProperty("brandTools");
+  });
+
+  it("webSearch on anthropic keeps both (chat-service serves the pair)", async () => {
+    const v = vendors();
+    await callVendor(LLM_COMPLETE, { ...PLAIN, webSearch: true }, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(v.seen[0]![1]).toMatchObject({ webSearch: true, brandTools: { brandId: BRAND } });
+  });
+
+  it("google without webSearch gets the tools", async () => {
+    const v = vendors();
+    await callVendor(LLM_COMPLETE, { ...PLAIN, provider: "google", model: "gemini-3-flash" }, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(v.seen[0]![1].brandTools).toEqual({ brandId: BRAND });
+  });
+
+  it("a brand set (several brands): no default, the script names the brand", async () => {
+    const v = vendors();
+    await callVendor(LLM_COMPLETE, PLAIN, { headers: { ...HEADERS, "x-brand-id": `${BRAND},5d7c2e4f-3a1b-4c9f-8e0d-2b3c4d5e6f70` }, tactics: {} }, v.deps);
+    expect(v.seen[0]![1]).not.toHaveProperty("brandTools");
+  });
+
+  it("a script's explicit brandTools still wins", async () => {
+    const v = vendors();
+    await callVendor(LLM_COMPLETE, { ...PLAIN, brandTools: { brandId: "other-brand" } }, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(v.seen[0]![1].brandTools).toEqual({ brandId: "other-brand" });
+  });
+
+  it("brandTools: false opts the call out", async () => {
+    const v = vendors();
+    await callVendor(LLM_COMPLETE, { ...PLAIN, brandTools: false }, { headers: BRANDED, tactics: {} }, v.deps);
+    expect(v.seen[0]![1]).toEqual({ message: "M", systemPrompt: "S", provider: "anthropic", model: "sonnet" });
   });
 });
