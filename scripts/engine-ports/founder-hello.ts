@@ -41,7 +41,7 @@ import {
   REACH_VERDICT_CODE,
   VOICE_PLAN_CODE,
   VOICE_SAMPLE_PEOPLE,
-} from "../../src/lib/founder-hello-dag.js";
+} from "./founder-hello-steps.js";
 import { CLAIM_PERSON_CODE } from "../../src/lib/claim-person.js";
 import { SENDER_PERSONA_FN } from "../../src/lib/sender-persona.js";
 import { WHATSAPP_WRITER_PLAN_CODE } from "../../src/lib/whatsapp-template-writer.js";

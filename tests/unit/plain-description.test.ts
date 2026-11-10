@@ -34,7 +34,7 @@ describe("BEST-TPL-LLM-1022 plain descriptions", () => {
 
 describe("every description a seed or copy writes reads right", async () => {
   const follow = await import("../../src/lib/follow-up-dag.js");
-  const proposal = await import("../../src/lib/ai-lead-proposal-dag.js");
+  const proposal = await import("../../scripts/engine-ports/ai-lead-proposal-steps.js");
   const wa = await import("../../src/lib/cold-whatsapp-outreach-dag.js");
   const video = await import("../../src/lib/industry-update-video-dag.js");
   const call = await import("../../scripts/engine-ports/ai-instant-call-steps.js");

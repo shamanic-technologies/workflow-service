@@ -13,12 +13,10 @@ import {
 } from "../../src/lib/campaign-brief.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
 import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
-import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
 
 /**
  * ONE-BRIEF-1105: every LLM step of a campaign run reads the campaign's brief, verbatim, through ONE conversion-time
@@ -59,14 +57,12 @@ const DAGS: Record<string, DAG> = {
   "cold-email": COLD_EMAIL,
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
-  "ai-lead-proposal": buildAiLeadProposalDag(),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),
   "client-check-in": buildClientCheckInDag(),
   "client-satisfied": buildClientSatisfiedDag(),
   "brand-team": buildBrandTeamDag(),
-  "founder-hello": buildFounderHelloDag(),
 };
 
 function allModules(mods: Mod[]): Mod[] {

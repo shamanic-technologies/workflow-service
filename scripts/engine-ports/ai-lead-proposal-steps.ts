@@ -1,3 +1,5 @@
+// MIGRATE-1105 S4c: the old workflow's step code, kept only as what the stored script paid_client/dy_hot_lead_proposal was generated from.
+// The DAG and its workflow are gone (the script live since 2026-11-05); fix the script by an UPGRADE of its dynasty.
 /**
  * The DAG of the `ai-lead-proposal|start_to_paid_client` pipe (channel "AI Lead Proposal", REACTIVE on `hot_lead`;
  * HOT-LEAD-PROPOSAL-1019, owner 2026-10-19: « Sophie me notifie à chq fois qu'une lead non client non perso nous
@@ -36,10 +38,10 @@
  *    same person is a new fact), run ends `delivery: delivered`.
  *  - Cost: the Copilot turn is declared by chat-service on this run (`x-run-id`); nothing is declared here.
  */
-import { withSupportMark } from "./run-support-mark.js";
-import type { DAG } from "./dag-validator.js";
-import { ANSWERS_LEADS_ONLY_POLICY, NOT_A_LEAD_REASON } from "./answering-steps.js";
-import { DELIVERED } from "./occurrence-delivery.js";
+/** lead-service relationship policy the claim states: leads only. */
+export const ANSWERS_LEADS_ONLY_POLICY = "pure_prospect";
+/** lead-service's reason when it refuses someone who is not a lead of the brand. */
+export const NOT_A_LEAD_REASON = "not_a_lead";
 
 export const AI_LEAD_PROPOSAL_FEATURE_SLUG = "ai-lead-proposal";
 export const AI_LEAD_PROPOSAL_LEG_KEY = "start_to_paid_client";
@@ -246,144 +248,6 @@ export async function main(ask) {
 }
 `.trim();
 
-const endRun = (id: string, body: Record<string, unknown>, inputMapping?: Record<string, string>) => ({
-  id,
-  type: "http.call" as const,
-  config: { service: "campaign", method: "POST", path: "/end-run", body },
-  ...(inputMapping ? { inputMapping } : {}),
-});
-
-const stopRow = (id: string, reason: string) => ({
-  id,
-  type: "http.call" as const,
-  config: { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", body: { kind: "stopped", reason } },
-  retries: 0,
-  inputMapping: { "params.id": "$ref:claimed.output.rowId" },
-});
-
-const outcomeIs = (node: string, outcome: string) => `results['${node}']?.outcome == '${outcome}'`;
-
-export const ASK = outcomeIs("claimed", "ask");
-export const NOT_ADMITTED = outcomeIs("claimed", "not_admitted");
-export const PENDING = outcomeIs("claimed", "pending");
-export const NOBODY_DUE = outcomeIs("claimed", "nobody_due");
-export const OTHER_PERSON = outcomeIs("claimed", "other_person");
-export const UNCLAIMED = outcomeIs("claimed", "unclaimed");
-export const ASKED = outcomeIs("classify-ask", "asked");
-export const NO_COPILOT_USER = outcomeIs("classify-ask", NO_COPILOT_USER_CODE);
-
-/**
- * The proposal's DAG. The Copilot turn it asks for produces no outcome by design (the team decides what follows), so
- * the run marks itself support `copilot` once the turn was asked (LEDGER-HISTORY-1024), instead of reading undeclared.
- */
-export function buildAiLeadProposalDag(): DAG {
-  return withSupportMark(buildProposalDag(), {
-    after: "ask-copilot",
-    kind: "copilot",
-    reason: AI_LEAD_PROPOSAL_SUPPORT_REASON,
-    markedBy: "workflow-service ai-lead-proposal (LEDGER-HISTORY-1024)",
-  });
-}
 
 export const AI_LEAD_PROPOSAL_SUPPORT_REASON =
   "AI Lead Proposal: one proactive Copilot turn telling the brand's team about a hot lead; nothing is sent to the person and no outcome is produced by design";
-
-function buildProposalDag(): DAG {
-  return {
-    nodes: [
-      {
-        id: "gate-check",
-        type: "http.call",
-        config: { service: "campaign", method: "POST", path: "/gate-check", stopAfterIf: "result.allowed == false" },
-      },
-      { id: "start-run", type: "http.call", config: { service: "campaign", method: "POST", path: "/start-run" } },
-      { id: "plan-claim", type: "script", config: { code: PLAN_CLAIM_CODE }, retries: 0, inputMapping: { trigger: "$ref:flow_input.trigger" } },
-      // THIS campaign's own queue (campaign-service made the hot lead due on it right before the dispatch).
-      // WHO: pure prospects of the brand only (`ANSWERS_LEADS_ONLY_POLICY`): lead-service refuses the rest.
-      {
-        id: "claim-own",
-        type: "http.call",
-        config: {
-          service: "lead",
-          method: "POST",
-          path: "/orgs/campaigns/{campaignId}/followups/claim-next",
-          body: { relationships: ANSWERS_LEADS_ONLY_POLICY },
-        },
-        retries: 0,
-        inputMapping: { "params.campaignId": "$ref:flow_input.campaignId", skip: "$ref:plan-claim.output.skip" },
-      },
-      {
-        id: "claimed",
-        type: "script",
-        config: { code: CLAIMED_CODE },
-        retries: 0,
-        inputMapping: {
-          plan: "$ref:plan-claim.output",
-          claim: "$ref:claim-own.output",
-          trigger: "$ref:flow_input.trigger",
-          orgId: "$ref:flow_input.orgId",
-          brandId: "$ref:flow_input.brandId",
-        },
-      },
-      { id: "check-claim", type: "condition" },
-      // What they wrote: their latest inbound message. Tolerated: the Copilot reads the thread itself.
-      {
-        id: "person-thread",
-        type: "http.call",
-        config: { service: "crm", method: "GET", path: "/orgs/people/timeline", tolerateFailure: true },
-        inputMapping: { query: "$ref:claimed.output.timelineQuery", skip: "$ref:claimed.output.skipTimeline" },
-      },
-      {
-        id: "compose-turn",
-        type: "script",
-        config: { code: COMPOSE_TURN_CODE },
-        retries: 0,
-        inputMapping: { claimed: "$ref:claimed.output", timeline: "$ref:person-thread.output" },
-      },
-      // The one thing this workflow does: ask the brand's assistant to tell the brand's team. Idempotent on the fact.
-      {
-        id: "ask-copilot",
-        type: "http.call",
-        config: { service: "chat", method: "POST", path: "/internal/copilot/proactive-turns", tolerateFailure: true },
-        retries: 0,
-        inputMapping: { body: "$ref:compose-turn.output.request" },
-      },
-      { id: "classify-ask", type: "script", config: { code: CLASSIFY_ASK_CODE }, retries: 0, inputMapping: { ask: "$ref:ask-copilot.output" } },
-      // Converges (edge from `claimed`, outside check-claim's branch) so it is a top-level branchone.
-      { id: "check-asked", type: "condition" },
-      stopRow("record-asked", HOT_LEAD_PROPOSED_REASON),
-      stopRow("record-no-copilot-user", HOT_LEAD_NO_COPILOT_USER_REASON),
-      endRun("end-run", { success: true, stopCampaign: false, delivery: DELIVERED }),
-      endRun("end-run-no-copilot-user", { success: true, stopCampaign: false }, { "body.delivery": "$ref:classify-ask.output.delivery" }),
-      endRun("end-run-person-not-admitted", { success: true, stopCampaign: false }, { "body.personNotAdmitted": "$ref:claimed.output.notAdmitted" }),
-      endRun("end-run-pending", { success: true, stopCampaign: false, noWorkAvailable: true }),
-      endRun("end-run-nobody-due", { success: true, stopCampaign: false, noWorkAvailable: true }),
-      endRun("end-run-other-person", { success: false, stopCampaign: false }),
-      endRun("end-run-unclaimed", { success: false, stopCampaign: false }),
-      endRun("end-run-error", { success: false, stopCampaign: false }),
-    ],
-    edges: [
-      { from: "gate-check", to: "start-run" },
-      { from: "start-run", to: "plan-claim" },
-      { from: "plan-claim", to: "claim-own" },
-      { from: "claim-own", to: "claimed" },
-      { from: "claimed", to: "check-claim" },
-      { from: "check-claim", to: "person-thread", condition: ASK },
-      { from: "check-claim", to: "end-run-person-not-admitted", condition: NOT_ADMITTED },
-      { from: "check-claim", to: "end-run-pending", condition: PENDING },
-      { from: "check-claim", to: "end-run-nobody-due", condition: NOBODY_DUE },
-      { from: "check-claim", to: "end-run-other-person", condition: OTHER_PERSON },
-      { from: "check-claim", to: "end-run-unclaimed", condition: UNCLAIMED },
-      { from: "person-thread", to: "compose-turn" },
-      { from: "compose-turn", to: "ask-copilot" },
-      { from: "ask-copilot", to: "classify-ask" },
-      { from: "classify-ask", to: "check-asked" },
-      { from: "claimed", to: "check-asked" },
-      { from: "check-asked", to: "record-asked", condition: ASKED },
-      { from: "check-asked", to: "record-no-copilot-user", condition: NO_COPILOT_USER },
-      { from: "record-asked", to: "end-run" },
-      { from: "record-no-copilot-user", to: "end-run-no-copilot-user" },
-    ],
-    onError: "end-run-error",
-  };
-}
