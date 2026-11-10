@@ -5,12 +5,10 @@ import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outrea
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
 import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
-import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
 import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
-import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
 
 /**
  * LLM-SPEND-NO-SEND-1016: a run reports its end to campaign-service ONCE. An `/end-run` node that is the target of
@@ -28,14 +26,12 @@ const DAGS: Record<string, DAG> = {
   "industry-update-video": buildIndustryUpdateVideoDag(),
   "ai-instant-call": buildAiInstantCallDag(),
   "ai-instant-call-email-only": buildAiInstantCallDag({ emailRepliesOnly: true }),
-  "ai-lead-proposal": buildAiLeadProposalDag(),
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),
   "client-check-in": buildClientCheckInDag(),
-  "founder-hello": buildFounderHelloDag(),
 };
 
 const moduleId = (nodeId: string) => nodeId.replace(/-/g, "_");

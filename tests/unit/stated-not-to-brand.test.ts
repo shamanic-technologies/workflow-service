@@ -19,7 +19,7 @@ import {
 import { WHATSAPP_ONLY_CHANNEL_PLAN_CODE, buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
-import { FOUNDER_HELLO_REFUSAL_CODES, OUTCOME_CODE as FOUNDER_OUTCOME_CODE, buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
+import { FOUNDER_HELLO_REFUSAL_CODES, OUTCOME_CODE as FOUNDER_OUTCOME_CODE } from "../../scripts/engine-ports/founder-hello-steps.js";
 import {
   CLASSIFY_SEND_CODE,
   NAME_THREAD_REFUSAL_CODE,
@@ -166,9 +166,6 @@ describe("founder hello", () => {
   it("another refusal is still a refused delivery", async () => {
     const out = await outcome(person, {}, { refused: { code: "not_on_whatsapp", reason: "x" } }, null, notCalled, null, null, null);
     expect(out).toMatchObject({ endKind: "refused", delivery: { state: "refused", code: "not_on_whatsapp" } });
-  });
-  it("the hello's send reads the refusal", () => {
-    expect(sendNode(buildFounderHelloDag(), "send-whatsapp")?.config?.skipOnRefusalCodes).toContain(CODE);
   });
 });
 

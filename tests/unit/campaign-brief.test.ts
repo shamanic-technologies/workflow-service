@@ -15,14 +15,12 @@ import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outrea
 import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
 import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
-import { buildAiLeadProposalDag } from "../../src/lib/ai-lead-proposal-dag.js";
 import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
 import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
-import { buildFounderHelloDag } from "../../src/lib/founder-hello-dag.js";
 
 /**
  * ONE-BRIEF-1105: every LLM step of a campaign run reads the campaign's brief, verbatim, through ONE conversion-time
@@ -66,7 +64,6 @@ const DAGS: Record<string, DAG> = {
   "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
   "ai-instant-call": buildAiInstantCallDag(),
-  "ai-lead-proposal": buildAiLeadProposalDag(),
   "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
   "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   "follow-up-proactive": buildFollowUpProactiveDag(),
@@ -75,7 +72,6 @@ const DAGS: Record<string, DAG> = {
   "client-check-in": buildClientCheckInDag(),
   "client-satisfied": buildClientSatisfiedDag(),
   "brand-team": buildBrandTeamDag(),
-  "founder-hello": buildFounderHelloDag(),
 };
 
 function allModules(mods: Mod[]): Mod[] {
