@@ -223,6 +223,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
     }).json || {};
     if (read.isCompanyList !== true) { keep(domain, { status: "not_a_list", page: pageUrl }); continue; }
     if (read.namesBrand === true) { keep(domain, { status: "already_lists_brand", page: pageUrl }); continue; }
+    if (!Array.isArray(read.competitorsNamed) || read.competitorsNamed.length === 0) { keep(domain, { status: "names_no_competitor", page: pageUrl }); continue; }
     const first = String(read.authorFirstName ?? "").trim();
     const last = String(read.authorLastName ?? "").trim();
     if (!first || !last) { keep(domain, { status: "no_author", page: pageUrl, title: read.title ?? null }); continue; }

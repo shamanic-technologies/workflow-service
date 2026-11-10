@@ -133,6 +133,8 @@ describe("the listicle outreach script", () => {
     expect((await replayCase(outreach, c)).diffs).toEqual([]);
     const noAuthor = { ...c, id: "no-author", calls: [briefYes, brand, gap, map, pick, page, read({ authorFirstName: "", authorLastName: "" })] };
     expect((await replayCase(outreach, noAuthor)).diffs).toEqual([]);
+    const noCompetitor = { ...c, id: "no-competitor", calls: [briefYes, brand, gap, map, pick, page, read({ competitorsNamed: [] })] };
+    expect((await replayCase(outreach, noCompetitor)).diffs).toEqual([]);
   });
 
   it("never pitches an address the verifier calls undeliverable", async () => {
