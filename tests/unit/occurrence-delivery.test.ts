@@ -3,10 +3,7 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { SEND_DELIVERY_CODE } from "../../src/lib/occurrence-delivery.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag, FOLLOW_UP_END_KINDS } from "../../src/lib/follow-up-dag.js";
-import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildAiMeetingBookingDag, needsOccurrenceDelivery } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 
 /**
  * PUSHED-TRUTH-1015, second pass: every DAG whose run carries a trigger occurrence tells campaign-service on /end-run
@@ -85,36 +82,6 @@ describe("cold-whatsapp-outreach", () => {
     for (const id of ["end-run", "end-run-followup", "end-run-unreachable", "end-run-released"]) {
       expect(endRunBody(dag, id, { record_plan: { delivery: refused } })).toEqual({ success: true, stopCampaign: false, delivery: refused });
     }
-    expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
-  });
-});
-
-describe("ai-meeting-booking replies (and the offer-document responder derived from it)", () => {
-  const opts = { provider: "google", model: "pro" };
-  for (const [name, dag] of [["ai-meeting-booking", buildAiMeetingBookingDag(opts)], ["offer-document-reply", buildOfferDocumentReplyDag(opts)]] as const) {
-    it(`${name}: a sent reply = delivered; the sender refusing it (human_took_over) = refused verbatim`, () => {
-      for (const id of ["end-run", "end-run-booking-confirmed", "end-run-closed-with-thanks"]) {
-        expect(endRunBody(dag, id, {})).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
-      }
-      const took = delivery("human_took_over", "A person answers this thread");
-      expect(endRunBody(dag, "end-run-human-took-over", { classify_send: { outcome: "human_took_over", delivery: took } }))
-        .toEqual({ success: true, stopCampaign: false, delivery: took });
-      expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
-      expect(needsOccurrenceDelivery(dag)).toBe(false);
-    });
-  }
-  it("the seed predicate calls a stored DAG without it stale", () => {
-    const dag = buildAiMeetingBookingDag(opts);
-    const stale = { nodes: dag.nodes.map((n) => (n.id === "end-run-human-took-over" ? { ...n, inputMapping: undefined } : n)) };
-    expect(needsOccurrenceDelivery(stale)).toBe(true);
-    expect(needsOccurrenceDelivery({ nodes: [] })).toBe(false);
-  });
-});
-
-describe("ai-instant-call", () => {
-  it("a placed call = delivered; a throw = no delivery", () => {
-    const dag = buildAiInstantCallDag();
-    expect(endRunBody(dag, "end-run", {})).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
     expect(endRunBody(dag, "end-run-error", {})).toEqual(ERROR_BODY);
   });
 });

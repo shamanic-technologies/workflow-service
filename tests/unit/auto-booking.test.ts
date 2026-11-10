@@ -1,12 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { BOOKING_OUTCOME_CODE, CRM_BOOKING_CALL, PLAN_BOOKING_CODE } from "../../src/lib/auto-booking.js";
-import {
-  buildAiMeetingBookingDag,
-  needsAutoBooking,
-  readBookingSlotsCode,
-  REPLY_RESPONSE_SCHEMA,
-} from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
+import { readBookingSlotsCode } from "../../src/lib/booking-slots.js";
 
 function loadMain(code: string): (...args: unknown[]) => Promise<Record<string, any>> {
   const body = code.replace(/^export async function main/, "async function main") + "\nreturn main;";
@@ -102,45 +96,10 @@ describe("AUTO-BOOK-1103: a prospect who picks one of our times is booked, then 
     const o = await outcome({ skip: true, why: "no time picked" }, { ok: false, skipped: true, notCalled: true }, picked);
     expect(o).toMatchObject({ booked: false, replyHtml: picked.json.replyHtml });
   });
-
-  it("the writer is told to pick and confirm, and its schema carries both fields", () => {
-    expect(REPLY_RESPONSE_SCHEMA.properties.bookSlot.type).toBe("string");
-    expect(REPLY_RESPONSE_SCHEMA.properties.bookedReplyHtml.type).toBe("string");
-    expect(REPLY_RESPONSE_SCHEMA.required).not.toContain("bookSlot");
-  });
 });
 
-describe("AUTO-BOOK-1103: the reply DAG books before it sends", () => {
-  const dag = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
-  const node = (id: string) => dag.nodes.find((n) => n.id === id);
-
-  it("sits between the next-due resolution and the send, and the send reads what the booking decided", () => {
-    const edges = dag.edges.map((e) => `${e.from}->${e.to}`);
-    expect(edges).toContain("resolve-next-due->plan-booking");
-    expect(edges).toContain("plan-booking->book-slot");
-    expect(edges).toContain("book-slot->booking-outcome");
-    expect(edges).toContain("booking-outcome->finalize-reply");
-    expect(node("send-reply")?.inputMapping?.["body.body_html"]).toBe("$ref:booking-outcome.output.replyHtml");
-    expect(node("finalize-reply")?.inputMapping?.draft).toBe("$ref:booking-outcome.output.draft");
-    expect(node("book-slot")?.inputMapping?.skip).toBe("$ref:plan-booking.output.skip");
-  });
-
-  it("a booked run stops their follow-ups like a booking they told us about; an unbooked answer is recorded as today", () => {
-    const toStop = dag.edges.find((e) => e.from === "check-sent" && e.to === "stop-followups-booked");
-    const toRecord = dag.edges.find((e) => e.from === "check-sent" && e.to === "record-followup");
-    expect(toStop?.condition).toContain("results['booking-outcome']?.booked == true");
-    expect(toRecord?.condition).toContain("results['booking-outcome']?.booked != true");
-  });
-
+describe("AUTO-BOOK-1103: the slot reader", () => {
   it("the slot read hands over the GoHighLevel calendar it read on", () => {
     expect(readBookingSlotsCode()).toContain("ok(slots, readOn)");
-  });
-
-  it("the seed calls a DAG without the booking step stale, the current one current; the document copy books too", () => {
-    expect(needsAutoBooking(dag)).toBe(false);
-    expect(needsAutoBooking({ nodes: dag.nodes.filter((n) => n.id !== "book-slot") })).toBe(true);
-    expect(needsAutoBooking({ nodes: dag.nodes.map((n) => (n.id === "booking-slots" ? { ...n, config: { code: "old" } } : n)) })).toBe(true);
-    const copy = buildOfferDocumentReplyDag({ provider: "anthropic", model: "opus" } as never);
-    expect(copy.nodes.some((n) => n.id === "book-slot")).toBe(true);
   });
 });

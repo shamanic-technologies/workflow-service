@@ -23,13 +23,7 @@ import {
   FOLLOW_UP_WHATSAPP_REFUSAL_CODES,
   buildFollowUpReactiveDag,
 } from "../../src/lib/follow-up-dag.js";
-import {
-  COMPOSE_REPLY_PROMPT_CODE,
-  SENDER_REACH_PLAN_CODE,
-  buildAiMeetingBookingDag,
-  needsSenderPersona,
-} from "../../src/lib/ai-meeting-booking-dag.js";
-import { followUpArgs, replyArgs } from "../fixtures/sender-persona-args.js";
+import { followUpArgs } from "../fixtures/sender-persona-args.js";
 
 type Fn = (...args: unknown[]) => Promise<Record<string, any>>;
 const loadMain = (code: string): Fn =>
@@ -62,12 +56,6 @@ describe("no persona on the sending account: every prompt is the one of before, 
     expect(await loadMain(COMPOSE_FOLLOW_UP_CODE)(...followUpArgs({ persona: null }))).toEqual(golden);
   });
 
-  it("the conversation responder answering on WhatsApp", async () => {
-    const golden = fixture("sender-persona-golden-reply.json");
-    expect(await loadMain(COMPOSE_REPLY_PROMPT_CODE)(...replyArgs())).toEqual(golden);
-    expect(await loadMain(COMPOSE_REPLY_PROMPT_CODE)(...replyArgs({ reachable: true, persona: null }))).toEqual(golden);
-  });
-
   it("still fails loud with no owner voice to imitate", async () => {
     await expect(composeWhatsapp({ skip: false }, { ...a.history, voiceLines: [] })).rejects.toThrow(/owner's voice/);
   });
@@ -97,28 +85,6 @@ describe("a persona on the sending account: the writer speaks as it", () => {
     // Email never speaks as a WhatsApp persona.
     const email = await loadMain(COMPOSE_FOLLOW_UP_CODE)(...followUpArgs({ channel: "email", email: "n@x.com", persona: SOPHIE }));
     expect(email.systemPrompt).not.toContain("Sophie");
-  });
-
-  it("the auto-reply with a persona never carries the \"not a bot\" line, and speaks as Sophie", async () => {
-    const out = await loadMain(COMPOSE_REPLY_PROMPT_CODE)(...replyArgs({ reachable: true, persona: SOPHIE }));
-    const all = (out.systemPrompt as string) + (out.message as string);
-    expect(all).not.toContain("You are not a bot");
-    expect(all).not.toContain("not a bot");
-    expect(out.systemPrompt).toContain("You are Sophie, AI assistant");
-    expect(out.message).toContain("Write it as a chat message from you, Sophie");
-    expect(out.message).toContain(SOPHIE.instructions);
-  });
-
-  it("the auto-reply asks crm-service who sends only on WhatsApp, by the person the send names", async () => {
-    const plan = loadMain(SENDER_REACH_PLAN_CODE);
-    expect(await plan({ brandId: "b", email: "x@y.com", phone: "+1" }, { replyChannel: "whatsapp" })).toEqual({ skip: false, body: { brandId: "b", email: "x@y.com" } });
-    expect(await plan({ brandId: "b", email: null, phone: "+15855550123" }, { replyChannel: "whatsapp" })).toEqual({ skip: false, body: { brandId: "b", phone: "+15855550123" } });
-    expect(await plan({ brandId: "b", email: "x@y.com" }, { replyChannel: "email" })).toEqual({ skip: true, body: {} });
-    const dag = buildAiMeetingBookingDag({ provider: "anthropic", model: "opus" } as never);
-    expect(needsSenderPersona(dag)).toBe(false);
-    expect(needsSenderPersona({ ...dag, nodes: dag.nodes.filter((n) => n.id !== "sender-reach") })).toBe(true);
-    // The rep alert still goes to the brand's sales rep: unchanged.
-    expect(dag.nodes.find((n) => n.id === "alert-rep")).toBeDefined();
   });
 });
 
