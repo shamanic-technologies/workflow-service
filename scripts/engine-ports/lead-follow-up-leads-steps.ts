@@ -13,10 +13,9 @@
  *    off the queue ends the run `personNotAdmitted` (final); one it cannot judge yet ends idle (redelivered);
  *  - everything else (state read, thread, channel, the game, right moment, next date) is the lead follow-up, byte for
  *    byte.
- * The seed (`seed-follow-up-workflows.mjs`) builds it for every dynasty on `LEADS_ONLY_LEG_KEYS` (an upgrade of the
- * dynasty, never a fork).
+ * The answering script (`paid_client/dy_answer_lead_pull`) runs it for leads (MIGRATE-1105 S7).
  */
-import type { DAG } from "./dag-validator.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
 import {
   FOLLOW_UP_REACTIVE_DESCRIPTION,
   LEAD_FOLLOW_UP_GAME,
@@ -24,8 +23,8 @@ import {
   READ_STATE_CODE,
   buildFollowUpReactiveDag,
   type FollowUpAudience,
-} from "./follow-up-dag.js";
-import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, admissionResolveCode } from "./client-check-in-dag.js";
+} from "./follow-up-steps.js";
+import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, admissionResolveCode } from "./client-check-in-steps.js";
 
 /** lead-service's claim policy "leads only" (the same literal ai-meeting-booking and ai-lead-proposal state). */
 export const LEADS_ONLY_POLICY = "pure_prospect";

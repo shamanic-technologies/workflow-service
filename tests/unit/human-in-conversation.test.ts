@@ -12,7 +12,7 @@ import {
   WHATSAPP_REFUSAL_CODES,
   buildColdWhatsappOutreachDag,
 } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { FOLLOW_UP_WHATSAPP_REFUSAL_CODES } from "../../src/lib/follow-up-dag.js";
+import { FOLLOW_UP_WHATSAPP_REFUSAL_CODES } from "../../scripts/engine-ports/follow-up-steps.js";
 
 type Fn = (...args: unknown[]) => Promise<Record<string, any>>;
 const loadMain = (code: string): Fn =>

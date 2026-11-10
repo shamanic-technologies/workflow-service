@@ -14,7 +14,7 @@ import {
   SET_NEXT_DATE,
   buildFollowUpProactiveDag,
   buildFollowUpReactiveDag,
-} from "../../src/lib/follow-up-dag.js";
+} from "../../scripts/engine-ports/follow-up-steps.js";
 
 /**
  * MULTICHANNEL-FOLLOWUP-1016 (owner 2026-10-16): the follow-up channel writes on the best channel of the Unibox

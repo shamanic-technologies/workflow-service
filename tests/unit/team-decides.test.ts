@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { COMPOSE_FOLLOW_UP_CODE, FOLLOW_UP_RESPONSE_SCHEMA, TEAM_DECIDES_STRATEGY } from "../../src/lib/follow-up-dag.js";
-import { COMPOSE_CLIENT_CHECK_IN_CODE } from "../../src/lib/client-check-in-dag.js";
-import { COMPOSE_BRAND_TEAM_CODE } from "../../src/lib/brand-team-dag.js";
+import { COMPOSE_FOLLOW_UP_CODE, FOLLOW_UP_RESPONSE_SCHEMA, TEAM_DECIDES_STRATEGY } from "../../scripts/engine-ports/follow-up-steps.js";
+import { COMPOSE_CLIENT_CHECK_IN_CODE } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { COMPOSE_BRAND_TEAM_CODE } from "../../scripts/engine-ports/brand-team-steps.js";
 
 // ZARINA-WRITER-INVENTED-1104: a paying client asked for "the details and options on how to move forward"; the writer
 // answered as the owner with a plan, an invented account status and a yes to her sample idea, instead of escalating.

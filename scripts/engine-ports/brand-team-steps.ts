@@ -3,8 +3,8 @@
  * CONVERSE AVEC LES LEADS ET LES CLIENTS AU BON MOMENT ET DE LA BONNE FAÇON », « Quand un lead nous écrit c'est un lead
  * event non ? », « tu veux faire un cas particulier ? WTF ».
  *
- * Every message a person writes to the brand is a Lead event. Leads have their play (`lead-follow-up-leads-dag.ts`,
- * claim `pure_prospect`), current clients theirs (`client-check-in-dag.ts`, claim `current_client`); the brand's OWN
+ * Every message a person writes to the brand is a Lead event. Leads have their play (`lead-follow-up-leads-steps.ts`,
+ * claim `pure_prospect`), current clients theirs (`client-check-in-steps.ts`, claim `current_client`); the brand's OWN
  * TEAM (its members, our staff, anyone tagged team) was refused by both and got no answer (prod 2026-10-29: a staff test
  * on the distribute.you assistant line, refused `not_a_lead` and `team_member`). This is the third audience of the same
  * follow-up channel's reactive DAG, its own dynasty on `ai-follow-up-email|start_to_paid_client`:
@@ -18,9 +18,9 @@
  *  - The writer is the Copilot (one AI), with the person's own account in reach; everything else (thread, channel,
  *    persona of the sending line, right moment, next date) is the follow-up's.
  */
-import type { DAG } from "./dag-validator.js";
-import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
-import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, CLIENT_CHECK_IN_PIPE_ID, admissionResolveCode } from "./client-check-in-dag.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
+import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-steps.js";
+import { CLIENT_CHECK_IN_AUDIENCE, CLIENT_CHECK_IN_LEG_KEY, CLIENT_CHECK_IN_PIPE_ID, admissionResolveCode } from "./client-check-in-steps.js";
 
 /** Same pipe as the client check-in: Lead event heads it. */
 export const BRAND_TEAM_LEG_KEY = CLIENT_CHECK_IN_LEG_KEY;

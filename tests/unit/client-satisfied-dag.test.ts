@@ -3,8 +3,8 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 import { descriptionProblem } from "../../src/lib/plain-description.js";
-import { CHANNEL_PLAN_CODE, FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { CURRENT_CLIENTS_POLICY, buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
+import { CHANNEL_PLAN_CODE, FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { CURRENT_CLIENTS_POLICY, buildClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
 import {
   CLIENT_SATISFIED_DESCRIPTION,
   CLIENT_SATISFIED_PIPE_ID,
@@ -12,7 +12,7 @@ import {
   WHATSAPP_ONLY_CHANNEL_PLAN_CODE,
   buildClientSatisfiedDag,
   isClientSatisfiedDag,
-} from "../../src/lib/client-satisfied-dag.js";
+} from "../../scripts/engine-ports/client-satisfied-steps.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { isCopilotTurn } from "../../src/lib/copilot-turn-node.js";
 

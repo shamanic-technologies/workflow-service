@@ -3,8 +3,8 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 import { descriptionProblem } from "../../src/lib/plain-description.js";
-import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag, READ_STATE_CODE, COMPOSE_FOLLOW_UP_CODE, LEAD_FOLLOW_UP_GAME, composeFollowUpCode } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag, isClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
+import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag, READ_STATE_CODE, COMPOSE_FOLLOW_UP_CODE, LEAD_FOLLOW_UP_GAME, composeFollowUpCode } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag, isClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
 import {
   FOLLOW_UP_REACTIVE_LEADS_DESCRIPTION,
   LEADS_ONLY_LEG_KEYS,
@@ -12,7 +12,7 @@ import {
   RESOLVE_LEAD_CODE,
   buildLeadFollowUpLeadsOnlyDag,
   isLeadsOnlyFollowUpDag,
-} from "../../src/lib/lead-follow-up-leads-dag.js";
+} from "../../scripts/engine-ports/lead-follow-up-leads-steps.js";
 import { COPILOT_TURN_PLAN_CODE, isCopilotTurn } from "../../src/lib/copilot-turn-node.js";
 
 /**

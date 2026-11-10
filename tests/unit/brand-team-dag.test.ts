@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { computeDAGSignature } from "../../src/lib/dag-signature.js";
 import { descriptionProblem } from "../../src/lib/plain-description.js";
-import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag, isClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
-import { buildLeadFollowUpLeadsOnlyDag, isLeadsOnlyFollowUpDag } from "../../src/lib/lead-follow-up-leads-dag.js";
+import { FOLLOW_UP_END_KINDS, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag, isClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { buildLeadFollowUpLeadsOnlyDag, isLeadsOnlyFollowUpDag } from "../../scripts/engine-ports/lead-follow-up-leads-steps.js";
 import {
   BRAND_TEAM_DESCRIPTION,
   BRAND_TEAM_PIPE_ID,
@@ -16,7 +15,7 @@ import {
   RESOLVE_TEAM_CODE,
   buildBrandTeamDag,
   isBrandTeamDag,
-} from "../../src/lib/brand-team-dag.js";
+} from "../../scripts/engine-ports/brand-team-steps.js";
 import { isCopilotTurn } from "../../src/lib/copilot-turn-node.js";
 
 /**
@@ -132,16 +131,5 @@ describe("the team game", () => {
     expect(out.message).toContain("Can you draft my Threads post?");
     expect(COMPOSE_BRAND_TEAM_CODE).not.toMatch(/[–—]/);
     expect(out.systemPrompt).not.toMatch(/[–—]/);
-  });
-});
-
-describe("the seeds", () => {
-  it("the follow-up seed never upgrades the team dynasty to the leads DAG; the team seed keeps it on its pipe", () => {
-    const followUp = readFileSync(new URL("../../scripts/seed-follow-up-workflows.mjs", import.meta.url), "utf8");
-    expect(followUp).toContain("isClientCheckInDag(r.dag) || isBrandTeamDag(r.dag)");
-    const team = readFileSync(new URL("../../scripts/seed-brand-team-workflow.mjs", import.meta.url), "utf8");
-    expect(team).toContain("isBrandTeamDag(r.dag)");
-    expect(team).toContain('"/workflows/upgrade"');
-    expect(team).not.toMatch(/fork/i);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { COMPOSE_FOLLOW_UP_CODE, NEW_FACT_STRATEGY, READ_STATE_CODE } from "../../src/lib/follow-up-dag.js";
-import { COMPOSE_CLIENT_CHECK_IN_CODE } from "../../src/lib/client-check-in-dag.js";
-import { LEADS_ONLY_AUDIENCE, buildLeadFollowUpLeadsOnlyDag } from "../../src/lib/lead-follow-up-leads-dag.js";
+import { COMPOSE_FOLLOW_UP_CODE, NEW_FACT_STRATEGY, READ_STATE_CODE } from "../../scripts/engine-ports/follow-up-steps.js";
+import { COMPOSE_CLIENT_CHECK_IN_CODE } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { LEADS_ONLY_AUDIENCE, buildLeadFollowUpLeadsOnlyDag } from "../../scripts/engine-ports/lead-follow-up-leads-steps.js";
 
 /**
  * MEETING-REMINDER-1103 (owner 2026-11-03): a Lead event run answering a new fact decides the lead's ONE next date

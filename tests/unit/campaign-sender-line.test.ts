@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dagToOpenFlow, campaignSenderLineExpr, CAMPAIGN_SENDER_LINE_FIELD } from "../../src/lib/dag-to-openflow.js";
-import { buildLeadFollowUpLeadsOnlyDag } from "../../src/lib/lead-follow-up-leads-dag.js";
+import { buildLeadFollowUpLeadsOnlyDag } from "../../scripts/engine-ports/lead-follow-up-leads-steps.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 
 /** CAMPAIGN-WA-LINE-1028: a campaign's stated WhatsApp line rides every crm WhatsApp reach/send body. */

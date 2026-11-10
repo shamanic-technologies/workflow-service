@@ -3,7 +3,7 @@
  * client actuel (non perso) une campagne réactive se déclenche pour se demander si ça lui écrit pour un check-in ou
  * l'accompagner pour avoir plus de valeur avec le service ».
  *
- * The follow-up channel's reactive DAG (`follow-up-dag.ts`), for a CURRENT CLIENT of the brand instead of a lead:
+ * The follow-up channel's reactive DAG (`follow-up-steps.ts`), for a CURRENT CLIENT of the brand instead of a lead:
  *  - WHO: the claim states `relationships: CURRENT_CLIENTS_POLICY` (features-service's tactic "Current clients only"
  *    reads that literal; the strategy that requires it is the pipe's play). lead-service judges and refuses everyone
  *    else (prospects, personal contacts, the brand's team, staff); a refused person named by the run's occurrence
@@ -15,8 +15,8 @@
  *    Everything else (the whole Unibox thread read first, the channel chosen before the model, the right moment,
  *    their local time, the persona of the sending account, the next date stated after every run) is the follow-up's.
  */
-import type { DAG } from "./dag-validator.js";
-import { FOLLOW_UP_FEATURE_SLUG, RESOLVE_CLAIMED_PERSON_CODE, buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
+import { FOLLOW_UP_FEATURE_SLUG, RESOLVE_CLAIMED_PERSON_CODE, buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-steps.js";
 
 /** The pipe: Lead event (any fact about a person) heads it; a current client reloading is the paid client outcome. */
 export const CLIENT_CHECK_IN_LEG_KEY = "start_to_paid_client";
@@ -49,7 +49,7 @@ export const CLIENT_CHECK_IN_DESCRIPTION =
 
 /**
  * The claim read of a reactive follow-up whose claim states a relationship policy (a client here, a lead on the Lead
- * follow-up, `lead-follow-up-leads-dag.ts`): a person lead-service refuses or keeps off the queue ends the run final,
+ * follow-up, `lead-follow-up-leads-steps.ts`): a person lead-service refuses or keeps off the queue ends the run final,
  * named; one it cannot judge yet ends idle. Everyone else is the follow-up's own resolve, unchanged. `noun` names who
  * the pipe answers in the logs; `defaultReason` is stated when a refusal carries none.
  */

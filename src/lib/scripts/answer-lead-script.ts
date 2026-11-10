@@ -13,7 +13,7 @@
  * Its one LLM call carries the brand's own MCP tools (BRAND-MCP-1109): stored as a new version of the dynasty.
  * Every improvement after this is an UPGRADE of the dynasty through the MCP, never a code change here.
  */
-import { COMPETITOR_FIRST_STRATEGY, NEW_FACT_STRATEGY, TEAM_DECIDES_STRATEGY } from "../follow-up-dag.js";
+import { COMPETITOR_FIRST_STRATEGY, NEW_FACT_STRATEGY, TEAM_DECIDES_STRATEGY } from "../answering-strategies.js";
 import { WHY_NOW_STRATEGY } from "../occurrence-fact.js";
 import { PERSON_RELATIONSHIP_STRATEGY } from "../person-relationship.js";
 import { SENDER_PERSONA_FN } from "../sender-persona.js";

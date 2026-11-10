@@ -14,7 +14,9 @@
  * Env: WORKFLOW_SERVICE_API_KEY, FEATURES_SERVICE_URL, FEATURES_SERVICE_API_KEY (all in the container), BASE_URL
  * (default localhost:8080), ORG_ID, USER_ID, RUN_ID (a REAL staff run: runs-service rejects an unknown parent run).
  */
-import { isClientSatisfiedDag } from "../dist/lib/client-satisfied-dag.js";
+// The Client Satisfied workflow's claim states current clients only (its builder lives in scripts/engine-ports since
+// MIGRATE-1105 S7; the stored script is the source of truth): never overwritten here.
+const isClientSatisfiedDag = (dag) => Array.isArray(dag?.nodes) && dag.nodes.some((n) => n.id === "claim-followup" && n.config?.body?.relationships === "current_client");
 import {
   COLD_WHATSAPP_OUTREACH_DESCRIPTION,
   COLD_WHATSAPP_OUTREACH_FEATURE_SLUG,
@@ -64,7 +66,7 @@ const current = buildColdWhatsappOutreachDag();
 
 const existing = await call(BASE_URL, API_KEY, "GET", `/workflows?featureSlug=${encodeURIComponent(slug)}&status=active`);
 if (existing.status !== 200) throw new Error(`list ${slug}: ${existing.status} ${JSON.stringify(existing.payload)}`);
-// The Client Satisfied workflow (client-satisfied-dag.ts) is a cold WhatsApp dynasty with its own seed: never overwritten here.
+// The Client Satisfied workflow (client-satisfied-steps.ts) is a cold WhatsApp dynasty with its own seed: never overwritten here.
 const rows = (Array.isArray(existing.payload) ? existing.payload : (existing.payload.workflows ?? [])).filter((r) => !isClientSatisfiedDag(r.dag));
 
 if (rows.length === 0) {
