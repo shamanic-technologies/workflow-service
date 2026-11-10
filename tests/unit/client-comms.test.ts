@@ -16,7 +16,7 @@ import {
 } from "../../src/lib/client-comms.js";
 import { validateDAG, type DAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { GENERATE_WHATSAPP_PATH } from "../../src/lib/whatsapp-template-writer.js";
 import { followUpArgs } from "../fixtures/sender-persona-args.js";

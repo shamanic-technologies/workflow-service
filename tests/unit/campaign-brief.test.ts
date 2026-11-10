@@ -13,10 +13,10 @@ import {
 } from "../../src/lib/campaign-brief.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
-import { buildClientSatisfiedDag } from "../../src/lib/client-satisfied-dag.js";
-import { buildBrandTeamDag } from "../../src/lib/brand-team-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
+import { buildClientSatisfiedDag } from "../../scripts/engine-ports/client-satisfied-steps.js";
+import { buildBrandTeamDag } from "../../scripts/engine-ports/brand-team-steps.js";
 
 /**
  * ONE-BRIEF-1105: every LLM step of a campaign run reads the campaign's brief, verbatim, through ONE conversion-time

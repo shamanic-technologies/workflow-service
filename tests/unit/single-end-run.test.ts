@@ -3,8 +3,8 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
+import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildClientCheckInDag } from "../../scripts/engine-ports/client-check-in-steps.js";
 
 /**
  * LLM-SPEND-NO-SEND-1016: a run reports its end to campaign-service ONCE. An `/end-run` node that is the target of

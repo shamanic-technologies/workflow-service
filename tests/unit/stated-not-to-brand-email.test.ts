@@ -10,7 +10,7 @@ import {
   NO_CHANNEL_RECHECK_DAYS,
   OUTCOME_CODE as FOLLOW_UP_OUTCOME_CODE,
   buildFollowUpReactiveDag,
-} from "../../src/lib/follow-up-dag.js";
+} from "../../scripts/engine-ports/follow-up-steps.js";
 
 /**
  * DUALIST-WA-SILENCE-EMAIL-1104: email-gateway `/orgs/send` and instantly-service `/orgs/replies` (+ `/escalate`)

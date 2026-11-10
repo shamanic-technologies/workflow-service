@@ -13,8 +13,8 @@ import {
   FINALIZE_FOLLOW_UP_CODE,
   FOLLOW_UP_RESPONSE_SCHEMA,
   OUTCOME_CODE,
-} from "../../src/lib/follow-up-dag.js";
-import { buildLeadFollowUpLeadsOnlyDag } from "../../src/lib/lead-follow-up-leads-dag.js";
+} from "../../scripts/engine-ports/follow-up-steps.js";
+import { buildLeadFollowUpLeadsOnlyDag } from "../../scripts/engine-ports/lead-follow-up-leads-steps.js";
 
 /**
  * MERCHANT-DEMO-LINE-1103 (owner 2026-11-03): a brand's AI line whose stated persona asks to answer as the business of

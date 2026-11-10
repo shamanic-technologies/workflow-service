@@ -22,7 +22,7 @@ import {
   COMPOSE_FOLLOW_UP_CODE,
   FOLLOW_UP_WHATSAPP_REFUSAL_CODES,
   buildFollowUpReactiveDag,
-} from "../../src/lib/follow-up-dag.js";
+} from "../../scripts/engine-ports/follow-up-steps.js";
 import { followUpArgs } from "../fixtures/sender-persona-args.js";
 
 type Fn = (...args: unknown[]) => Promise<Record<string, any>>;

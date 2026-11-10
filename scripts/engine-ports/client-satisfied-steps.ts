@@ -4,8 +4,8 @@
  * positifs [...] Ainsi ce serait un nouveau pipe qui cherche à maximiser la client satisfaction. »
  *
  * The workflow of the pipe `cold-whatsapp-outreach|paid_client_to_client_satisfied` (Paid client -> Client Satisfied,
- * reactive on ⚡ Lead event). It is the follow-up channel's reactive DAG (`follow-up-dag.ts`) with the client audience
- * of the client check-in (`client-check-in-dag.ts`: claim `current_client`, judged by lead-service; the client's own
+ * reactive on ⚡ Lead event). It is the follow-up channel's reactive DAG (`follow-up-steps.ts`) with the client audience
+ * of the client check-in (`client-check-in-steps.ts`: claim `current_client`, judged by lead-service; the client's own
  * stops only), and three differences, all stated here:
  *  - THE GAME is the owner's client strategy (`CLIENT_SATISFIED_GAME`): value with the least disturbance, done for
  *    them, only useful news (asked, necessary, good news, an improvement; a budget suggestion only on a positive ROI
@@ -19,11 +19,11 @@
  * that is how features-service measures the pipe. Who is a positive client message is lead-service's judgment, never
  * this workflow's.
  */
-import type { DAG } from "./dag-validator.js";
-import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-dag.js";
-import { CLIENT_CHECK_IN_AUDIENCE, CURRENT_CLIENTS_POLICY } from "./client-check-in-dag.js";
-import { SENDER_PERSONA_FN } from "./sender-persona.js";
-import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
+import type { DAG } from "../../src/lib/dag-validator.js";
+import { buildFollowUpReactiveDag, composeFollowUpCode, type FollowUpAudience, type FollowUpGame } from "./follow-up-steps.js";
+import { CLIENT_CHECK_IN_AUDIENCE, CURRENT_CLIENTS_POLICY } from "./client-check-in-steps.js";
+import { SENDER_PERSONA_FN } from "../../src/lib/sender-persona.js";
+import { STATED_NOT_TO_BRAND_CODE } from "../../src/lib/stated-not-to-brand.js";
 
 export const CLIENT_SATISFIED_FEATURE_SLUG = "cold-whatsapp-outreach";
 export const CLIENT_SATISFIED_LEG_KEY = "paid_client_to_client_satisfied";
