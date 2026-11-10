@@ -201,6 +201,9 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "scraping.backlinks.list": { service: "scraping", method: "GET", path: "/orgs/backlinks", asRun: true },
   "scraping.backlinks.link_gap": { service: "scraping", method: "POST", path: "/orgs/backlinks/link-gaps", asRun: true },
   "scraping.site.map": { service: "scraping", method: "POST", path: "/map", asRun: true },
+  // LISTICLE-OUTREACH-1110: one person's work email (apollo-service's finder: treg or Explee, metered on the caller's
+  // run, idempotent per person, the address verified before it is served).
+  "apollo.email.find": { service: "apollo", method: "POST", path: "/email-finder/find", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
   "crm.people.list": { service: "crm", method: "GET", path: "/orgs/people", asRun: true },

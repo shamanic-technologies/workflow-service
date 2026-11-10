@@ -356,7 +356,7 @@ async function provide(
     }
     units[k] = v as MaterialUnit | MaterialUnit[];
   }
-  const pick = await pickScript(db, { outcome, servable: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null });
+  const pick = await pickScript(db, { outcome, servable: Object.keys(units), handed: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null });
   // No script of that Engine this campaign may run (none live, or its strategy keeps none): an ANSWER the asking script
   // reads (`unmade: "no_script: ..."`, no content, no child run), never a fallback script and never a stop: the asker
   // decides (MIGRATE-1105 S1b: the answering script asks for a rep call, and a campaign whose strategy keeps no call
