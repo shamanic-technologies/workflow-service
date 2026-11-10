@@ -130,6 +130,25 @@ export interface PickInput {
    * that holds strategies and judges each script's tactics, S0-STRATEGY). Absent/null = not a campaign run: no strategy.
    */
   campaignId?: string | null;
+  /**
+   * The Units an ASKING script handed (`ctx.ask`, LISTICLE-OUTREACH-1110): the work it ordered. Among the candidates,
+   * only those reading the most of them serve the ask (`readersOfHanded`); absent / none read = every candidate.
+   */
+  handed?: string[];
+}
+
+/**
+ * PURE (LISTICLE-OUTREACH-1110): an asked Engine serves the ask with the scripts that READ what the asker handed. A
+ * script whose code reads none of it (it serves people, or reads its occurrence off the Request) answers a different
+ * question: the outreach script hands a found address + a written email to the email Engine, and a cold email script
+ * that serves its own audience must not answer that ask. Scripts reading more of the handed Units win; when no
+ * candidate reads any (an ask handing occurrences a script reads off its Request), nothing is narrowed.
+ */
+export function readersOfHanded<T extends { materials: string[] | null }>(candidates: T[], handed: readonly string[] | undefined): T[] {
+  if (!handed || handed.length === 0) return candidates;
+  const read = (c: T) => (c.materials ?? []).filter((m) => handed.includes(m)).length;
+  const best = Math.max(0, ...candidates.map(read));
+  return best === 0 ? candidates : candidates.filter((c) => read(c) === best);
 }
 
 /** The script dynasties a campaign's strategy keeps for one Engine. Throws when it cannot be read (fail closed). */
@@ -212,7 +231,7 @@ export async function servesChannel(db: AnyPgDb, outcome: string, channel: strin
 
 /** The Rating's pick for one run (null: no script of this Engine can run on what this run holds). */
 export async function pickScript(db: AnyPgDb, input: PickInput, random: () => number = Math.random): Promise<Pick | null> {
-  const candidates = await candidatesOf(db, input);
+  const candidates = readersOfHanded(await candidatesOf(db, input), input.handed);
   if (candidates.length === 0) return null;
   const dynasties = candidates.map((c) => c.dynasty);
   const since = new Date(Date.now() - RATING_WINDOW_DAYS * 86_400_000);
