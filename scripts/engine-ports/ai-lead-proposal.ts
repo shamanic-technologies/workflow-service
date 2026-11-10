@@ -24,8 +24,8 @@ import {
   HOT_LEAD_PROPOSED_REASON,
   NO_COPILOT_USER_CODE,
   PLAN_CLAIM_CODE,
-} from "../../src/lib/ai-lead-proposal-dag.js";
-import { ANSWERS_LEADS_ONLY_POLICY } from "../../src/lib/answering-steps.js";
+} from "./ai-lead-proposal-steps.js";
+import { ANSWERS_LEADS_ONLY_POLICY } from "./ai-lead-proposal-steps.js";
 import { SETTLED_THREAD_WAIT } from "../../src/lib/dag-to-openflow.js";
 
 export const AI_LEAD_PROPOSAL_OUTCOME = "paid_client";

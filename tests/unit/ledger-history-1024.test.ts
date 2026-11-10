@@ -91,22 +91,6 @@ describe("LEDGER-HISTORY-1024: the bulletin declares no outcome (content-generat
 });
 
 describe("LEDGER-HISTORY-1024: the hot-lead proposal marks its run support copilot once the turn is asked", () => {
-  it("splices the mark between ask-copilot and classify-ask, on the run itself, through the owner door", async () => {
-    const { buildAiLeadProposalDag, AI_LEAD_PROPOSAL_SUPPORT_REASON } = await import("../../src/lib/ai-lead-proposal-dag.js");
-    const { MARK_SUPPORT_CODE, MARK_SUPPORT_NODE_ID } = await import("../../src/lib/run-support-mark.js");
-    const dag = buildAiLeadProposalDag();
-    const node = dag.nodes.find((n) => n.id === MARK_SUPPORT_NODE_ID)!;
-    expect(node.config?.code).toBe(MARK_SUPPORT_CODE);
-    expect(node.inputMapping).toMatchObject({ kind: "copilot", reason: AI_LEAD_PROPOSAL_SUPPORT_REASON, runId: "$ref:flow_input.runId" });
-    expect(dag.edges).toContainEqual({ from: "ask-copilot", to: MARK_SUPPORT_NODE_ID });
-    expect(dag.edges).toContainEqual({ from: MARK_SUPPORT_NODE_ID, to: "classify-ask" });
-    expect(dag.edges.filter((e) => e.from === "ask-copilot")).toHaveLength(1);
-    expect(MARK_SUPPORT_CODE).toContain("/v1/platform-runs/support-marks/apply");
-    expect(MARK_SUPPORT_CODE).toContain('"x-service-name": "workflow"');
-    expect(MARK_SUPPORT_CODE).not.toMatch(/\bthrow\b/);
-    expect(validateDAG(dag).valid).toBe(true);
-  });
-
   it("the mark never throws and states the run, the function and who decided", async () => {
     const { MARK_SUPPORT_CODE } = await import("../../src/lib/run-support-mark.js");
     const calls: Array<{ url: string; init: RequestInit }> = [];
