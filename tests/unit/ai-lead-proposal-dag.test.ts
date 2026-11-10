@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { validateDAG } from "../../src/lib/dag-validator.js";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
-import { ANSWERS_LEADS_ONLY_POLICY } from "../../src/lib/ai-meeting-booking-dag.js";
+import { ANSWERS_LEADS_ONLY_POLICY } from "../../src/lib/answering-steps.js";
 import {
   AI_LEAD_PROPOSAL_DESCRIPTION,
   AI_LEAD_PROPOSAL_PIPE_ID,

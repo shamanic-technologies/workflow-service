@@ -27,7 +27,7 @@ import {
   buildAiInstantCallSource,
   NO_REP_UNMADE,
 } from "./ai-instant-call.js";
-import { NO_SALES_REP_PHONE_REASON } from "../../src/lib/ai-instant-call-dag.js";
+import { NO_SALES_REP_PHONE_REASON } from "./ai-instant-call-steps.js";
 
 interface Port {
   outcome: string;
