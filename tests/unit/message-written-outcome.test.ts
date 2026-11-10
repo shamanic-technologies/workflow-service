@@ -10,11 +10,7 @@ import {
   needsConsumedLeadDeclaration,
   needsMessageWrittenDeclaration,
 } from "../../src/lib/message-written-outcome.js";
-import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
-import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 
 /**
@@ -31,8 +27,6 @@ type WriterSpec = { after: string; next: string; signal: string; sentWhen: strin
 const WRITERS: Array<[string, DAG, WriterSpec]> = [
   ["follow-up proactive", buildFollowUpProactiveDag(), { after: "record-row", next: "check-end", signal: "$ref:outcome.output.endKind", sentWhen: "sent", leadId: "$ref:resolve-person.output.leadId", consumedAfter: "now", consumedNext: "followup-state" }],
   ["follow-up reactive", buildFollowUpReactiveDag({ readFigures: true }), { after: "record-row", next: "check-end", signal: "$ref:outcome.output.endKind", sentWhen: "sent", leadId: "$ref:resolve-person.output.leadId", consumedAfter: "now", consumedNext: "followup-state" }],
-  ["form meeting booking", buildFormMeetingBookingDag(), { after: "send-whatsapp", next: "end-run", signal: "$ref:send-email.output.success", sentWhen: "true", leadId: "$ref:resolve-form.output.leadId", consumedAfter: "resolve-form", consumedNext: "offer-economics" }],
-  ["ai meeting booking", buildAiMeetingBookingDag({ provider: "google", model: "pro" }), { after: "classify-send", next: "check-sent", signal: "$ref:classify-send.output.outcome", sentWhen: "sent", leadId: "$ref:claimed.output.followup.leadId", consumedAfter: "campaign-detail", consumedNext: "offer-economics" }],
 ];
 
 /** Every node reachable from `from` along the DAG's edges. */
@@ -95,39 +89,13 @@ describe("every chat writer declares its written message on the ledger", () => {
     });
   }
 
-  it("ai meeting booking: a run that decides NOT to write (escalate, no reply owed, refused) has already named its lead", () => {
-    const dag = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
-    const after = reachable(dag, DECLARE_CONSUMED_LEAD_NODE_ID);
-    for (const end of ["escalate-unanswerable", "name-no-reply-owed", "end-run-escalated", "end-run-no-reply-owed", "end-run-human-took-over", "draft-reply"]) {
-      expect(after.has(end)).toBe(true);
-    }
-    // and it sits after the claim found someone, never on the nobody-due path
-    expect(reachable(dag, "campaign-detail").has(DECLARE_CONSUMED_LEAD_NODE_ID)).toBe(true);
-    expect(reachable(dag, "end-run-nobody-due").has(DECLARE_CONSUMED_LEAD_NODE_ID)).toBe(false);
-  });
-
-  it("ai instant call states the lead it acted on too, before it decides to ring", () => {
-    const dag = buildAiInstantCallDag();
-    expect(validateDAG(dag).errors).toEqual([]);
-    expect(() => dagToOpenFlow(dag, "mw-instant-call")).not.toThrow();
-    const node = dag.nodes.find((n) => n.id === DECLARE_CONSUMED_LEAD_NODE_ID)!;
-    expect(node.inputMapping?.leadId).toBe("$ref:claim-followup.output.followup.leadId");
-    expect(dag.edges.filter((e) => e.to === "pipe-of-run")).toEqual([{ from: "lead-detail", to: "pipe-of-run" }]);
-    for (const end of ["record-no-rep", "ring-rep"]) expect(reachable(dag, DECLARE_CONSUMED_LEAD_NODE_ID).has(end)).toBe(true);
-  });
-
-  it("the offer-document copy inherits it from its parent", () => {
-    const dag = buildOfferDocumentReplyDag({ provider: "anthropic", model: "opus" } as never);
-    expect(dag.nodes.filter((n) => n.id === DECLARE_MESSAGE_WRITTEN_NODE_ID)).toHaveLength(1);
-  });
-
   it("cold WhatsApp writes through content-generation, which declares itself: nothing declared here", () => {
     const dag = buildColdWhatsappOutreachDag();
     expect(dag.nodes.some((n) => n.id === DECLARE_MESSAGE_WRITTEN_NODE_ID)).toBe(false);
   });
 
   it("a stored writer that does not state the lead it consumed is stale for the seed", () => {
-    const dag = buildAiMeetingBookingDag({ provider: "google", model: "pro" });
+    const dag = buildFollowUpReactiveDag({ readFigures: true });
     expect(needsMessageWrittenDeclaration({ nodes: dag.nodes.filter((n) => n.id !== DECLARE_CONSUMED_LEAD_NODE_ID) })).toBe(true);
     expect(
       needsMessageWrittenDeclaration({
@@ -137,7 +105,7 @@ describe("every chat writer declares its written message on the ledger", () => {
   });
 
   it("a stored writer without it (or with an older script) is stale for the seed", () => {
-    const dag = buildFormMeetingBookingDag();
+    const dag = buildFollowUpReactiveDag({ readFigures: true });
     expect(needsMessageWrittenDeclaration({ nodes: dag.nodes.filter((n) => n.id !== DECLARE_MESSAGE_WRITTEN_NODE_ID) })).toBe(true);
     expect(
       needsMessageWrittenDeclaration({

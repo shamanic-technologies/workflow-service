@@ -19,42 +19,19 @@ import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
 import { GENERATE_WHATSAPP_PATH } from "../../src/lib/whatsapp-template-writer.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
-import { buildAiMeetingBookingDag, needsClientCommsVoice } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
-import { followUpArgs, replyArgs } from "../fixtures/sender-persona-args.js";
+import { followUpArgs } from "../fixtures/sender-persona-args.js";
 
 type Fn = (...args: unknown[]) => Promise<Record<string, any>>;
 const loadMain = (code: string): Fn =>
   new Function(code.replace(/^export async function main/m, "async function main") + "\nreturn main;")() as Fn;
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8"));
 const a = fixture("trigger-right-moment-occurrence.json").args as Record<string, any>;
-const WHO = { state: "not_known", lines: ["Not known to the brand."], threadLines: [], strategy: "WHO STRATEGY" };
-
-const CELL = { provider: "anthropic", model: "opus", omitTemperature: true } as const;
 
 /** Every writer: its DAG, the model call a person's message is drafted by, the node that builds its prompt, and args. */
 const WRITERS: Array<{ name: string; dag: DAG; draft: string; compose: string; args: () => unknown[] }> = [
   { name: "follow-up (served)", dag: buildFollowUpProactiveDag(), draft: "draft", compose: "compose", args: () => followUpArgs() },
   { name: "follow-up (claimed)", dag: buildFollowUpReactiveDag({ readFigures: false }), draft: "draft", compose: "compose", args: () => followUpArgs() },
   { name: "follow-up (claimed, figures)", dag: buildFollowUpReactiveDag({ readFigures: true }), draft: "draft", compose: "compose", args: () => followUpArgs() },
-  {
-    name: "form meeting booking",
-    dag: buildFormMeetingBookingDag(),
-    draft: "draft-answer",
-    compose: "compose-answer",
-    args: () => [
-      { rowId: "row-1", email: "jo@example.com", fullName: "Jo Smith", firstName: "Jo", form: null, eventId: null },
-      { name: "Private dinners", bookingUrl: "https://cal.example.com/doc" },
-      { brand: { name: "Doc Dinners" } },
-      { salesRepFirstName: "Joe" },
-      { exact: [], neverGive: [] },
-      "2026-10-16",
-      WHO,
-    ],
-  },
-  { name: "AI meeting booking", dag: buildAiMeetingBookingDag(CELL), draft: "draft-reply", compose: "compose-prompt", args: () => replyArgs() },
-  { name: "offer-document reply", dag: buildOfferDocumentReplyDag(CELL), draft: "draft-reply", compose: "compose-prompt", args: () => replyArgs() },
 ];
 
 const SKILL_V1 = { slug: "client-comms", version: 7, content: "# How we talk\n- Answer first.\n- Short and warm." };
@@ -138,16 +115,9 @@ describe("the voice step", () => {
   });
 
   it("refuses a DAG it cannot voice, and a DAG already voiced", () => {
-    const dag = buildFormMeetingBookingDag();
-    expect(() => withClientCommsVoice(dag, "draft-answer")).toThrow(/already reads/);
+    const dag = buildFollowUpReactiveDag({ readFigures: false });
+    expect(() => withClientCommsVoice(dag, "draft")).toThrow(/already reads/);
     expect(() => withClientCommsVoice({ nodes: [{ id: "x", type: "script", config: { code: "" } }], edges: [] }, "x")).toThrow(/not a chat-service \/complete call/);
-  });
-
-  it("seed predicate: a stored responder drafting without our voice is stale", () => {
-    const voiced = buildAiMeetingBookingDag(CELL);
-    expect(needsClientCommsVoice(voiced)).toBe(false);
-    const stale = { nodes: voiced.nodes.filter((n) => n.id !== CLIENT_COMMS_VOICE_NODE_ID) };
-    expect(needsClientCommsVoice(stale)).toBe(true);
   });
 
   it("never copies the skill's text into code", () => {

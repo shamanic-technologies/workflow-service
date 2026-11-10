@@ -2,11 +2,7 @@ import { describe, expect, it } from "vitest";
 import { dagToOpenFlow } from "../../src/lib/dag-to-openflow.js";
 import type { DAG } from "../../src/lib/dag-validator.js";
 import { buildColdWhatsappOutreachDag } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildFormMeetingBookingDag } from "../../src/lib/form-meeting-booking-dag.js";
 import { buildIndustryUpdateVideoDag } from "../../src/lib/industry-update-video-dag.js";
-import { buildAiInstantCallDag } from "../../src/lib/ai-instant-call-dag.js";
-import { buildAiMeetingBookingDag } from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 import { buildFollowUpProactiveDag, buildFollowUpReactiveDag } from "../../src/lib/follow-up-dag.js";
 import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
 
@@ -19,15 +15,9 @@ import { buildClientCheckInDag } from "../../src/lib/client-check-in-dag.js";
  */
 type Mod = { id: string; value: { type: string; branches?: { modules: Mod[] }[]; default?: Mod[] } };
 
-const CELL = { provider: "google", model: "pro" } as const;
 const DAGS: Record<string, DAG> = {
   "cold-whatsapp-outreach": buildColdWhatsappOutreachDag(),
-  "form-meeting-booking": buildFormMeetingBookingDag(),
   "industry-update-video": buildIndustryUpdateVideoDag(),
-  "ai-instant-call": buildAiInstantCallDag(),
-  "ai-instant-call-email-only": buildAiInstantCallDag({ emailRepliesOnly: true }),
-  "ai-meeting-booking": buildAiMeetingBookingDag(CELL),
-  "offer-document-reply": buildOfferDocumentReplyDag(CELL),
   "follow-up-proactive": buildFollowUpProactiveDag(),
   "follow-up-reactive": buildFollowUpReactiveDag({ readFigures: false }),
   "follow-up-reactive-figures": buildFollowUpReactiveDag({ readFigures: true }),

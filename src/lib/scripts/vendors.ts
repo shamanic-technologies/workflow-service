@@ -656,7 +656,7 @@ export function productionVendorDeps(): VendorDeps {
     },
     async readBookingSlots(bookingUrl, timezone) {
       // The same reader the old answering step ran (a public page, free, no credential), loaded once as a module.
-      const { readBookingSlotsCode } = await import("../ai-meeting-booking-dag.js");
+      const { readBookingSlotsCode } = await import("../booking-slots.js");
       const mod = (await import(`data:text/javascript,${encodeURIComponent(readBookingSlotsCode())}`)) as { main: (u: string, t: string) => Promise<Record<string, unknown>> };
       return mod.main(bookingUrl, timezone);
     },

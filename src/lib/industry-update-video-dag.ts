@@ -37,7 +37,7 @@
  * reads never ran.
  */
 import type { DAG } from "./dag-validator.js";
-import { CHAT_STEP_MAX_TOKENS } from "./ai-meeting-booking-dag.js";
+import { CHAT_STEP_MAX_TOKENS } from "./answering-steps.js";
 import {
   INDUSTRY_NAME,
   MAX_CANDIDATES,

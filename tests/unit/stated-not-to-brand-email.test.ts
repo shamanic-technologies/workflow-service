@@ -11,15 +11,6 @@ import {
   OUTCOME_CODE as FOLLOW_UP_OUTCOME_CODE,
   buildFollowUpReactiveDag,
 } from "../../src/lib/follow-up-dag.js";
-import { buildFormMeetingBookingDag, REFUSED as FORM_REFUSED } from "../../src/lib/form-meeting-booking-dag.js";
-import {
-  CLASSIFY_SEND_CODE,
-  COMPOSE_REP_ALERT_CODE,
-  PLAN_HAND_OVER_CODE,
-  buildAiMeetingBookingDag,
-  needsStatedNotToBrandSkip,
-} from "../../src/lib/ai-meeting-booking-dag.js";
-import { buildOfferDocumentReplyDag } from "../../src/lib/offer-document-reply-dag.js";
 
 /**
  * DUALIST-WA-SILENCE-EMAIL-1104: email-gateway `/orgs/send` and instantly-service `/orgs/replies` (+ `/escalate`)
@@ -85,17 +76,6 @@ describe("the cold-email send list (REFUSAL_SKIP_CODES, injected by the converte
   });
 });
 
-describe("form responder: every 409 already read, no other channel", () => {
-  it("form responder: a refused email never goes on to WhatsApp", () => {
-    const dag = buildFormMeetingBookingDag();
-    expect(node(dag, "send-email")?.config?.skipOnRefusalCodes).toContain(CODE);
-    expect(dag.edges).toContainEqual({ from: "check-sent", to: "record-refused", condition: FORM_REFUSED });
-    const fromRefused = dag.edges.filter((e) => e.from === "record-refused").map((e) => e.to);
-    expect(fromRefused).toEqual(["end-run-refused"]);
-    expect(node(dag, "end-run-refused")?.config?.body).toEqual({ success: true, stopCampaign: false });
-  });
-});
-
 describe("the follow-up channel's email", () => {
   const person = (over: Record<string, unknown> = {}) => ({ ok: true, entry: "claimed", rowId: "row-1", leadId: "lead-1", email: "sam@example.com", brandId: "b", ...over });
   const plan = { proceed: true, kind: "owed" };
@@ -130,68 +110,5 @@ describe("the follow-up channel's email", () => {
     expect(kept).toMatchObject({ endKind: "refused_kept", delivery: { state: "refused", code: "recent_brand_contact" } });
     const final = await outcome(person(), plan, { channel: "email" }, write, notCalled, refusedSend("lead_opted_out"), now);
     expect(final).toMatchObject({ endKind: "refused_final", skipStop: false, delivery: { state: "refused", code: "lead_opted_out" } });
-  });
-});
-
-describe("ai-meeting-booking (and its offer-document copy): the email reply and the escalation", () => {
-  const OPTS = { provider: "google", model: "pro" } as const;
-  const classify = loadMain(CLASSIFY_SEND_CODE);
-  const replyRefusal = (code: string) => ({ success: false, status: 409, error: JSON.stringify({ error: "refused", code }) });
-
-  it("a 409 stated_not_to_brand on /orgs/replies ends on end-run-stated-not-to-brand, no delivery", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await classify(replyRefusal(CODE), notCalled, "email")).toEqual({ outcome: CODE, status: 409, channel: "email" });
-    // Also when the sender nests the code under details.
-    const nested = { success: false, status: 409, error: JSON.stringify({ error: "refused", details: { code: CODE } }) };
-    expect(await classify(nested, notCalled, "email")).toMatchObject({ outcome: CODE });
-    for (const dag of [buildAiMeetingBookingDag(OPTS), buildOfferDocumentReplyDag(OPTS)]) {
-      expect(dag.edges).toContainEqual({ from: "check-sent", to: "end-run-stated-not-to-brand", condition: `results['classify-send']?.outcome == '${CODE}'` });
-      expect(node(dag, "end-run-stated-not-to-brand")?.config?.body).toEqual({ success: true, stopCampaign: false });
-      expect(node(dag, "end-run-stated-not-to-brand")?.inputMapping).toBeUndefined();
-      expect(validateDAG(dag).valid).toBe(true);
-    }
-  });
-
-  it("the takeover and every other refusal behave as before", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await classify(replyRefusal("human_took_over"), notCalled, "email"))
-      .toMatchObject({ outcome: "human_took_over", delivery: { state: "refused", code: "human_took_over" } });
-    await expect(classify(replyRefusal("no_reply_to_thread"), notCalled, "email")).rejects.toThrow(/could not be sent/);
-    // A non-409 carrying the code is not the refusal.
-    await expect(classify({ success: false, status: 500, error: JSON.stringify({ code: CODE }) }, notCalled, "email")).rejects.toThrow(/could not be sent/);
-  });
-
-  it("a refused escalation hands no row and alerts nobody", async () => {
-    for (const dag of [buildAiMeetingBookingDag(OPTS), buildOfferDocumentReplyDag(OPTS)]) {
-      expect(node(dag, "escalate-unanswerable")?.config?.skipOnRefusalCodes).toEqual([CODE]);
-    }
-    const planHandOver = loadMain(PLAN_HAND_OVER_CODE);
-    const thread = { replyChannel: "email" };
-    const claimed = { queue: "own", followup: { id: "row-1" } };
-    expect(await planHandOver(thread, claimed, refusedSend(CODE))).toMatchObject({ skip: true });
-    // The rep alert is email-thread-skipped already (escalation only runs on an email thread).
-    const alert = await loadMain(COMPOSE_REP_ALERT_CODE)({ json: { question: "q" } }, { email: "sam@example.com" }, thread, { brand: { salesRepPhone: "+33600000000" } }, null);
-    expect(alert).toMatchObject({ skip: true, reason: "email_thread" });
-  });
-
-  it("an escalation that went through, or was not called, is handed as before", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const planHandOver = loadMain(PLAN_HAND_OVER_CODE);
-    const claimed = { queue: "own", followup: { id: "row-1" } };
-    expect(await planHandOver({ replyChannel: "email" }, claimed, { success: true, escalation: { followupsStopped: true } })).toMatchObject({ skip: false });
-    expect(await planHandOver({ replyChannel: "whatsapp" }, claimed, notCalled)).toMatchObject({ skip: false });
-  });
-
-  it("the seed upgrades a stored DAG whose escalation or reply does not read it", () => {
-    const dag = buildAiMeetingBookingDag(OPTS);
-    expect(needsStatedNotToBrandSkip(dag)).toBe(false);
-    const oldEscalate = {
-      nodes: dag.nodes.map((n) => (n.id === "escalate-unanswerable" ? { ...n, config: { ...n.config, skipOnRefusalCodes: undefined } } : n)),
-    };
-    expect(needsStatedNotToBrandSkip(oldEscalate)).toBe(true);
-    const oldClassify = { nodes: dag.nodes.map((n) => (n.id === "classify-send" ? { ...n, config: { code: "old" } } : n)) };
-    expect(needsStatedNotToBrandSkip(oldClassify)).toBe(true);
-    const oldPlan = { nodes: dag.nodes.map((n) => (n.id === "plan-hand-over" ? { ...n, config: { code: "old" } } : n)) };
-    expect(needsStatedNotToBrandSkip(oldPlan)).toBe(true);
   });
 });

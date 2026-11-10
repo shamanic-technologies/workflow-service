@@ -34,25 +34,21 @@ describe("BEST-TPL-LLM-1022 plain descriptions", () => {
 
 describe("every description a seed or copy writes reads right", async () => {
   const follow = await import("../../src/lib/follow-up-dag.js");
-  const form = await import("../../src/lib/form-meeting-booking-dag.js");
   const proposal = await import("../../scripts/engine-ports/ai-lead-proposal-steps.js");
   const wa = await import("../../src/lib/cold-whatsapp-outreach-dag.js");
   const video = await import("../../src/lib/industry-update-video-dag.js");
-  const call = await import("../../src/lib/ai-instant-call-dag.js");
+  const call = await import("../../scripts/engine-ports/ai-instant-call-steps.js");
   const push = await import("../../scripts/engine-ports/email-sending-steps.js");
-  const doc = await import("../../src/lib/offer-document-reply-dag.js");
   const texts: Record<string, string> = {
     proactiveFollowUp: follow.FOLLOW_UP_PROACTIVE_DESCRIPTION,
     reactiveFollowUp: follow.FOLLOW_UP_REACTIVE_DESCRIPTION,
     figuresFollowUp: follow.FOLLOW_UP_REACTIVE_FIGURES_DESCRIPTION,
-    form: form.FORM_MEETING_BOOKING_DESCRIPTION,
     proposal: proposal.AI_LEAD_PROPOSAL_DESCRIPTION,
     whatsapp: wa.COLD_WHATSAPP_OUTREACH_DESCRIPTION,
     video: video.INDUSTRY_UPDATE_DESCRIPTION,
     call: call.AI_INSTANT_CALL_DESCRIPTION,
     callEmailOnly: call.EMAIL_REPLIES_ONLY_DESCRIPTION,
     push: push.EMAIL_SENDING_DESCRIPTION,
-    offerDocument: doc.DESCRIPTION,
   };
   for (const [name, text] of Object.entries(texts)) {
     it(`${name}: plain, no template/model/test/date, no dash, two sentences at most`, () => {

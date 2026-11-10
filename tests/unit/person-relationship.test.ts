@@ -10,9 +10,7 @@ import {
   needsPersonRelationship,
 } from "../../src/lib/person-relationship.js";
 import { buildColdWhatsappOutreachDag, COMPOSE_MESSAGE_PROMPT_CODE } from "../../src/lib/cold-whatsapp-outreach-dag.js";
-import { buildAiMeetingBookingDag, COMPOSE_REPLY_PROMPT_CODE } from "../../src/lib/ai-meeting-booking-dag.js";
 import { buildFollowUpReactiveDag, COMPOSE_FOLLOW_UP_CODE } from "../../src/lib/follow-up-dag.js";
-import { buildFormMeetingBookingDag, COMPOSE_ANSWER_PROMPT_CODE } from "../../src/lib/form-meeting-booking-dag.js";
 
 /**
  * RELATIONSHIP-TAGS-1014: every writer reads who the person is to the brand (lead-service tags) and their whole
@@ -187,8 +185,6 @@ function descendants(dag: DAG, start: string): Set<string> {
 describe("every writer runs the shared step before writing, the same way", () => {
   const writers: Array<{ name: string; dag: DAG; compose: string }> = [
     { name: "cold-whatsapp-outreach", dag: buildColdWhatsappOutreachDag(), compose: "compose-message" },
-    { name: "ai-meeting-booking", dag: buildAiMeetingBookingDag({ provider: "anthropic", model: "opus" } as never), compose: "compose-prompt" },
-    { name: "form-meeting-booking", dag: buildFormMeetingBookingDag(), compose: "compose-answer" },
   ];
 
   for (const w of writers) {
@@ -280,27 +276,8 @@ describe("every writer puts who they are to us in front of the model", () => {
     expect(withPersonRelationshipStep(dag)).toBe(dag);
   });
 
-  it("form responder: the relationship, the strategy and the thread", async () => {
-    const text = await prompt(COMPOSE_ANSWER_PROMPT_CODE, [{ email: "y@example.com", form: null }, offer, brand, {}, facts, "2026-10-14", known]);
-    expect(text).toContain("WHO THEY ARE TO US:");
-    expect(text).toContain(PERSON_RELATIONSHIP_STRATEGY);
-    expect(text).toContain("THE THREAD with this person");
-  });
-
-  it("conversation responder: the relationship and the strategy", async () => {
-    const booking = { timezone: "UTC", slots: [], bookingUrl: null, degradedReason: "no booking link" };
-    const text = await prompt(COMPOSE_REPLY_PROMPT_CODE, [
-      { followup: { email: "y@example.com", step: 1 } }, { leadDetail: { lead: { firstName: "Yuliia" } } },
-      { messages: [] }, null, booking, { name: "Revenue made easy" }, brand, "2026-10-14", facts,
-      { stance: "insider", evidence: "" }, "none", undefined, known,
-    ]);
-    expect(text).toContain("WHO THEY ARE TO US");
-    expect(text).toContain(PERSON_RELATIONSHIP_STRATEGY);
-  });
-
   it("every writer refuses to write without the step", async () => {
     await expect(loadMain(COMPOSE_FOLLOW_UP_CODE)({}, { channel: "email" }, offer, brand, facts, {}, undefined, "x")).rejects.toThrow(/nothing is written blind/);
-    await expect(loadMain(COMPOSE_ANSWER_PROMPT_CODE)({ email: "a@b.c" }, offer, brand, {}, facts, "d", undefined)).rejects.toThrow(/nothing is written blind/);
   });
 });
 
