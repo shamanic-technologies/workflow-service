@@ -4,10 +4,14 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { readMonitoring, refreshMonitoring, type TaskOutcome } from "../../src/lib/scripts/script-monitoring.js";
-import type { AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
+import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
+import { switchService } from "../../src/lib/scripts/script-service-switch.js";
+import { noAnswer } from "../../src/lib/scripts/script-guard.js";
+import { scriptRuns } from "../../src/db/schema.js";
 
-// FACTORY-P3 Monitoring series on a real Postgres: daily runs = the total's delta, red when the script path errs more
-// than the service path, ready to delete after 7 stored days with zero service runs.
+// FACTORY-P3 Monitoring series on a real Postgres: daily runs = the total's delta, ready to delete after 7 stored days
+// with zero service runs. Red = the roll-back guard's rule on this service's own script runs (MON-SCRIPTS-RED-1111),
+// never the raw daily series.
 async function freshDb() {
   const client = new PGlite();
   const dir = join(__dirname, "../../drizzle");
@@ -29,7 +33,7 @@ beforeEach(async () => {
 const day = (d: number) => new Date(Date.UTC(2026, 9, d, 12));
 
 describe("script monitoring series", () => {
-  it("stores both paths per day, serves runs as deltas, error rates and cost per run, and flags red", async () => {
+  it("stores both paths per day, serves runs as deltas, error rates and cost per run; the series alone is never red", async () => {
     const answers: Record<string, TaskOutcome[]> = {
       "content-generation-service": [task("single-generation", 1000, 99, 1, 200), task("other", 5, 5, 0, 1)],
       workflow: [task("script:message_written/dy_template_writer", 10, 9, 1, 30), task("execute-workflow", 9999, 10, 0, 1)],
@@ -46,7 +50,8 @@ describe("script monitoring series", () => {
     expect(mw.days.map((d) => [d.day, d.service?.runs, d.script?.runs])).toEqual([["2026-10-20", null, null], ["2026-10-21", 100, 4]]);
     expect(mw.days[1]!.service).toMatchObject({ errorRate: 0.02, avgCostCents: 1.96, tasks: ["single-generation"] });
     expect(mw.days[1]!.script).toMatchObject({ errorRate: 2 / 14, avgCostCents: 2 });
-    expect(mw.red).toBe(true);
+    // MON-SCRIPTS-RED-1111: the runs-service sample errs more than the service path, but no script run of ours failed.
+    expect(mw.red).toBe(false);
     expect(mw.readyToDelete).toBe(false);
   });
 
@@ -56,5 +61,54 @@ describe("script monitoring series", () => {
     const mw = (await readMonitoring(db, 30, day(8))).outcomes.find((o) => o.outcome === "message_written")!;
     expect(mw.readyToDelete).toBe(true);
     expect(mw.red).toBe(false);
+  });
+
+  describe("red = the guard's rule on our own script runs (MON-SCRIPTS-RED-1111)", () => {
+    const CODE = `export default function run(ctx) { return { content: { ok: true } }; }`;
+    async function switched() {
+      await putCases(db, "lead_interested", "dy_judge", [{ id: "c1", units: {}, calls: [], expect: { content: { ok: true } } }], "test");
+      const s = await createScript(db, { outcome: "lead_interested", dynasty: "dy_judge", code: CODE, description: "x" }, { orgId: "o", createdBy: "t" }, { isKnownOutcome: async () => true });
+      await switchService(db, { outcome: "lead_interested", dynasty: "dy_judge", callerService: "instantly" });
+      return s;
+    }
+    const runs = (scriptId: string, n: number, at: Date, error: string | null, status = error ? "failed" : "made") =>
+      Array.from({ length: n }, (_, i) => ({ scriptId, orgId: "o", runId: `${at.getTime()}-${status}-${i}-${error ?? ""}`, parentRunId: "p", status, error, createdAt: at }));
+    const red = async (now: Date) => (await readMonitoring(db, 30, now)).outcomes.find((o) => o.outcome === "lead_interested")!;
+
+    it("a failure with no answer (a 5xx, our client's timeout) or a billing refusal is never red", async () => {
+      const s = await switched();
+      const now = new Date();
+      expect(noAnswer("lead.serve: Internal server error")).toBe(true);
+      expect(noAnswer("bounceverify: runs-service POST /v1/runs timed out after 30000ms")).toBe(true);
+      expect(noAnswer("llm.complete failed: POST /complete gave no answer within 300 s")).toBe(true);
+      expect(noAnswer('POST email-gateway/orgs/send failed (409): {"code":"email_not_verified"}')).toBe(false);
+      await db.insert(scriptRuns).values([
+        ...runs(s.id, 60, now, null),
+        ...runs(s.id, 5, now, "lead.serve: Internal server error"),
+        ...runs(s.id, 5, now, "bounceverify: runs-service POST /v1/runs timed out after 30000ms"),
+        ...runs(s.id, 5, now, "llm.complete failed: chat-service POST /complete -> 402: Insufficient credits"),
+      ]);
+      const o = await red(now);
+      expect(o.guard.lastDay).toMatchObject({ runs: 75, failed: 0, shared: 10 });
+      expect(o.red).toBe(false);
+    });
+
+    it("a script error rate above the rule over the last 24 hours is red, though the last hour is quiet", async () => {
+      const s = await switched();
+      const now = new Date();
+      const earlier = new Date(now.getTime() - 5 * 3_600_000);
+      await db.insert(scriptRuns).values([...runs(s.id, 90, earlier, null), ...runs(s.id, 10, earlier, "TypeError: x is undefined")]);
+      const o = await red(now);
+      expect(o.guard.lastHour).toMatchObject({ runs: 0 });
+      expect(o.guard.lastDay).toMatchObject({ runs: 100, failed: 10 });
+      expect(o.red).toBe(true);
+    });
+
+    it("one script error in 400 runs is not red", async () => {
+      const s = await switched();
+      const now = new Date();
+      await db.insert(scriptRuns).values([...runs(s.id, 399, now, null), ...runs(s.id, 1, now, "TypeError: x is undefined")]);
+      expect((await red(now)).red).toBe(false);
+    });
   });
 });

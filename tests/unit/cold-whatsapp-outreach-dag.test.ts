@@ -398,7 +398,10 @@ describe("finalizing and recording", () => {
     // No usable next date: thrown BEFORE the send, never a message whose next look cannot be recorded.
     await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: "" } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/not a date/);
     await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(-1) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/not in the future/);
-    await expect(fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(400) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/365/);
+    // Beyond the year lead-service accepts: brought back inside it, never a failed run (MON-SCRIPTS-RED-1111).
+    const far = await fin({ json: { decision: "write", message: "Hi", nextFollowUpAt: inDays(400) } }, { kind: "first", leadId: "l-1", step: 1, email: "ana@x.com" }, "c-1");
+    expect(Date.parse(far.nextFollowUpAt)).toBeLessThanOrEqual(Date.now() + 365 * 86_400_000);
+    expect(Date.parse(far.nextFollowUpAt)).toBeGreaterThan(Date.now() + 364 * 86_400_000);
     // Only a follow-up look may wait or stop.
     await expect(fin({ json: { decision: "later", message: "", nextFollowUpAt: inDays(4) } }, { kind: "first", leadId: "l-1", step: 1 }, "c-1")).rejects.toThrow(/a first message to a new person is always written/);
   });

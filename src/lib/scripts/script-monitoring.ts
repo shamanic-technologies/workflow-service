@@ -6,8 +6,11 @@
  * whole-subtree cost per run. Daily runs = the total's day-over-day delta (null on a path's first stored day).
  *
  * Served (`GET /internal/scripts/monitoring`) with two verdicts the Monitoring hub reads, never an email:
- * `red` = the script path's error rate is above the service path's on the latest day (with script runs in sample), or
- * the roll-back guard fired / would fire (`guard`, script-guard.ts: last hour, threshold, switched workflows);
+ * `red` = the roll-back guard fired, or its rule (script-guard.ts: this service's own `script_runs`, a billing refusal,
+ * a call with no answer or a failure the old path shares counted apart, a threshold AND a binomial test against the
+ * service path's baseline) already crosses on the last hour or on the last 24 hours. The daily series above is a chart,
+ * never the verdict (MON-SCRIPTS-RED-1111: its raw runs-service failed counts read a lead-service 500, a 402 and one
+ * failure in 400 as red, against a service task that is not even the same decision; four outcomes red with 0 errors);
  * `readyToDelete` = the service path made ZERO runs on each of the last 7 stored days (its code may then leave its repo).
  *
  * Refreshed once per UTC day by whatever comes first: a read of the series, a workflow write/dispatch, or the sweep a
@@ -178,15 +181,13 @@ export async function readMonitoring(db: AnyPgDb, days: number, now = new Date()
     outcomes: outcomes.map((outcome) => {
       const script = pathDays(rows.filter((r) => r.outcome === outcome && r.path === "script"));
       const service = pathDays(rows.filter((r) => r.outcome === outcome && r.path === "service"));
-      const lastScript = script.at(-1);
-      const lastService = service.at(-1);
       const guard = guards.get(outcome)!;
-      // Red = broken: the script path errs more than the service path on the latest stored day, the roll-back guard
-      // fired (the switched workflows run their previous version), or the last hour already crosses its rule.
+      // Red = broken: the roll-back guard fired (the switched callers run their previous code), or the guard's own rule
+      // already crosses on the last hour or the last day of script runs.
       const red =
-        (!!lastScript && lastScript.sample > 0 && lastScript.errorRate !== null && lastScript.errorRate > (lastService?.errorRate ?? 0)) ||
         guard.state === "rolled_back" ||
-        (guard.state === "watching" && shouldRollBack(guard.lastHour, guard.baselineErrorRate).rollBack);
+        (guard.state === "watching" &&
+          (shouldRollBack(guard.lastHour, guard.baselineErrorRate).rollBack || shouldRollBack(guard.lastDay, guard.baselineErrorRate).rollBack));
       const lastWeek = service.slice(-READY_TO_DELETE_DAYS);
       const readyToDelete = lastWeek.length === READY_TO_DELETE_DAYS && lastWeek.every((d) => d.runs === 0);
       return {

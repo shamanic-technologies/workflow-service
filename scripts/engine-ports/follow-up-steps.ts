@@ -112,6 +112,14 @@ export const FOLLOW_UP_WHATSAPP_REFUSAL_CODES = [
 ] as const;
 
 /**
+ * Email refusals about the ADDRESS, never the person (MON-SCRIPTS-RED-1111): the sender's verifier judged it invalid
+ * (`email_not_verified`, a verdict that holds until a date). Nothing went out; the person stays followed up and is looked
+ * at again after NO_CHANNEL_RECHECK_DAYS, like a person no route reaches. Before, the 409 failed the run (45 follow-ups
+ * in 3 days) and the next due date served them again.
+ */
+export const UNREACHABLE_EMAIL_REFUSAL_CODES = ["email_not_verified"] as const;
+
+/**
  * Email refusals that mean the person is out for good (opted out, not a prospect): the chain stops. Not the brand's
  * statement (`stated_not_to_brand`): it can be undone, so it ends as `not_to_brand` with a recheck date.
  */
@@ -857,6 +865,11 @@ export async function main(person, plan, channel, final, sendWhatsapp, sendEmail
   // The brand's statement, refused by crm-service (WhatsApp) or by the email sender (DUALIST-WA-SILENCE-EMAIL-1104).
   if (code === "${STATED_NOT_TO_BRAND_CODE}") return notToBrand();
   const refused = { state: "refused", code, reason: typeof send.reason === "string" ? send.reason : code };
+  // Their address failed the sender's verification: no email route now, looked at again later, never a stop.
+  if (final.channel === "email" && ${JSON.stringify(UNREACHABLE_EMAIL_REFUSAL_CODES)}.includes(code)) {
+    const at = new Date(now + ${NO_CHANNEL_RECHECK_DAYS} * 86400000).toISOString();
+    return { endKind: "refused_kept", ...row(R.refused), ...date(at, "Not sent (" + code + "): their email address did not pass verification"), delivery: refused };
+  }
   // A refusal on WhatsApp is about the channel (reach changed since the check), never about the person: kept.
   // By email, a passing refusal keeps them (a queued step, a live thread); any other says they are out.
   if (final.channel === "whatsapp" || PASSING.includes(code)) {
@@ -1123,7 +1136,7 @@ function tail(opts: { readFigures: boolean; reactive: boolean; audience?: Follow
         path: "/orgs/send",
         body: { type: "broadcast", tag: "follow-up", followUp: true },
         validateResponse: { field: "success", equals: true },
-        skipOnRefusalCodes: [...FOLLOW_UP_SEND_REFUSAL_CODES],
+        skipOnRefusalCodes: [...FOLLOW_UP_SEND_REFUSAL_CODES, ...UNREACHABLE_EMAIL_REFUSAL_CODES],
       },
       retries: 0,
       inputMapping: {

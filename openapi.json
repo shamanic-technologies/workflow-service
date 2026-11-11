@@ -3787,6 +3787,33 @@
             ],
             "description": "Finished script runs of this outcome over the window (failed = failed + stopped; `unmade` = no Unit for a reason the world gave, counted apart, never an error; `shared` = failures at an upstream call the old path's workflow runs also failed at over the last 7 days, counted apart, never an error)."
           },
+          "lastDay": {
+            "type": "object",
+            "properties": {
+              "runs": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "errorRate": {
+                "type": "number",
+                "nullable": true
+              },
+              "unmade": {
+                "type": "integer"
+              },
+              "shared": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "runs",
+              "failed",
+              "errorRate"
+            ],
+            "description": "The same count over the last 24 hours (MON-SCRIPTS-RED-1111): the Monitoring verdict is red when the guard rule crosses on the last hour or on this day."
+          },
           "baselineErrorRate": {
             "type": "number",
             "description": "The service path's error rate the script is held to: its latest stored Monitoring day (`baselineSource` measured), else 0.5 % (default)."
@@ -3856,6 +3883,7 @@
           "state",
           "windowMinutes",
           "lastHour",
+          "lastDay",
           "baselineErrorRate",
           "baselineSource",
           "thresholdErrorRate",
@@ -4198,7 +4226,7 @@
                 },
                 "red": {
                   "type": "boolean",
-                  "description": "Broken: the script path's error rate is above the service path's on the latest day, or the roll-back guard fired (or its rule is crossed in the last hour)."
+                  "description": "Broken: the roll-back guard fired, or its rule (our own script runs; billing refusals, calls with no answer and failures the old path shares counted apart) is crossed over the last hour or the last 24 hours. The daily series is a chart, never the verdict."
                 },
                 "readyToDelete": {
                   "type": "boolean",
