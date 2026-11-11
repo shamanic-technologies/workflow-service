@@ -282,6 +282,43 @@ export default function run(ctx) {
     expect(end.success).toBe(true);
   });
 
+  it("a child's own decision reaches /end-run as a completed run, never a refusal (MON-UNSENT-RED-1111)", async () => {
+    const ASKER = `
+export default function run(ctx) {
+  ctx.ask({ units: { brand_context: { content: { name: "Reed" } } } });
+  const written = ctx.get("message_written");
+  if (written.unmade) return { unmade: written.unmade, decided: written.decided };
+  return { content: { subject: written.content.subject }, subject: { service: "lead-service", id: "lead-9" } };
+}`;
+    await addScript("conversation", "dy_cold", ASKER, { asks: ["message_written"] });
+    await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); return { unmade: "later: next working hour", decided: "done" }; }`);
+    const w = world();
+    const trigger = { eventId: "ev-9", leadId: "lead-9", item: {} };
+    const { runId } = await runOnce(dispatch({ outcome: "conversation", fromOutcome: "start", inputs: { trigger } }), w);
+    const parentRow = (await db.select().from(scriptRuns)).find((x) => x.runId === runId)!;
+    expect(parentRow.status).toBe("unmade");
+    expect(parentRow.error).toBe("later: next working hour");
+    const end = w.calls.find((c) => c.path === "/end-run")!.body;
+    expect(end).toEqual({ success: true, stopCampaign: false });
+  });
+
+  it("a child that made nothing at all is read as nothing to do now (idle), never a refusal", async () => {
+    const ASKER = `
+export default function run(ctx) {
+  ctx.ask({ units: { brand_context: { content: { name: "Reed" } } } });
+  const written = ctx.get("message_written");
+  if (written.unmade) return { unmade: written.unmade, decided: written.decided };
+  return null;
+}`;
+    await addScript("conversation", "dy_cold", ASKER, { asks: ["message_written"] });
+    await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); return null; }`);
+    const w = world();
+    const trigger = { eventId: "ev-9", leadId: "lead-9", item: {} };
+    await runOnce(dispatch({ outcome: "conversation", fromOutcome: "start", inputs: { trigger } }), w);
+    const end = w.calls.find((c) => c.path === "/end-run")!.body;
+    expect(end).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+  });
+
   it("stops the asking script with the child's reason when the child fails or would wait", async () => {
     await addScript("conversation", "dy_cold", PARENT, { asks: ["message_written"] });
     await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); ctx.wait(3); return null; }`);
