@@ -346,6 +346,21 @@ describe("the Rating", () => {
     expect(endRunBodyOf({ status: "unmade", error: "person_not_admitted: customer" }, true)).toEqual({ success: true, stopCampaign: false, personNotAdmitted: { reason: "customer" } });
   });
 
+  it("a script's OWN decision is never a sender refusal (MON-UNSENT-RED-1111): done = completed, idle = nothing to do now", () => {
+    // Answer lead's `later` / `stopped` / writer stop / escalate: the look did its work, no delivery stated.
+    for (const error of ["later: Next working hour is 8:00am Chicago", "stopped: no_action_toward_us", "stop: their own words", "escalate: Price? (sales rep alerted)"]) {
+      expect(endRunBodyOf({ status: "unmade", error, decided: "done" }, true)).toEqual({ success: true, stopCampaign: false });
+      expect(endRunBodyOf({ status: "unmade", error, decided: "done" }, false)).toEqual({ success: true, stopCampaign: false });
+    }
+    // Nobody owed / relationship not judged yet: noWorkAvailable (campaign-service redelivers, bounded, then "nothing to do").
+    for (const error of ["nobody_due: nothing_due", "nobody_due: relationship_pending"]) {
+      expect(endRunBodyOf({ status: "unmade", error, decided: "idle" }, true)).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+    }
+    // A refusal the world gave stays a refusal, byte for byte.
+    expect(endRunBodyOf({ status: "unmade", error: "refused: lead_opted_out" }, true)).toEqual({ success: true, stopCampaign: false, delivery: { state: "refused", code: "refused", reason: "lead_opted_out" } });
+    expect(endRunBodyOf({ status: "unmade", error: "no_channel" }, true)).toEqual({ success: true, stopCampaign: false, delivery: { state: "refused", code: "no_channel", reason: "no_channel" } });
+  });
+
   it("an Engine serves a campaign's channel only when one of its scripts runs for it (else the campaign keeps its workflow)", async () => {
     expect(await servesChannel(db, "conversation", "email-sending")).toBe(false);
     await addScript("conversation", "dy_hello", ANSWER, { channel: "founder-hello" });

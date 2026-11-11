@@ -107,6 +107,8 @@ export interface ScriptRunResult {
   error: string | null;
   /** On `unmade`: the script said the look did not finish (ask again soon, never idle). */
   again?: boolean;
+  /** On `unmade`: the script's own decision (`done` = completed look, `idle` = nothing to do now), never a refusal. */
+  decided?: "done" | "idle";
   vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number; brandToolCalls?: number }>;
   declared: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] };
   /** Who declares this run's occurrences when not the run itself. */
@@ -300,6 +302,7 @@ export async function runStoredScript(
         : null,
     error,
     ...(finalStatus === "unmade" && made?.again === true ? { again: true } : {}),
+    ...(finalStatus === "unmade" && (made?.decided === "done" || made?.decided === "idle") ? { decided: made.decided } : {}),
     vendorCalls,
     declared: { produced: declaredOk ? produced : [], consumed: declaredOk ? consumed : [] },
     ...(input.recordedBy ? { recordedBy: input.recordedBy } : {}),
@@ -392,7 +395,10 @@ async function provide(
   // (`{outcome, unmade, run}`, no content) and decides on, e.g. by returning `{unmade}` itself: a stop would fail the
   // asking run and the campaign would redeliver its occurrence, re-running the child for the same verdict.
   if (child.status === "unmade" || child.status === "nothing") {
-    return { v: { id: `${child.runId}:${outcome}`, outcome, subject: "", ageDays: 0, content: null, unmade: child.error ?? "nothing", run: child } };
+    // `decided`: the child's own decision (a child that made nothing at all = nothing to do now), so an asking script
+    // that forwards the answer states it as such, never as a refusal (MON-UNSENT-RED-1111).
+    const decided = child.status === "nothing" ? "idle" : child.decided;
+    return { v: { id: `${child.runId}:${outcome}`, outcome, subject: "", ageDays: 0, content: null, unmade: child.error ?? "nothing", ...(decided ? { decided } : {}), run: child } };
   }
   if (child.status !== "made" || !child.unit) return { stop: `${child.scriptSlug} (asked for ${outcome}) made no Unit: ${child.status}${child.error ? ` (${child.error})` : ""}` };
   return { v: { id: `${child.runId}:${outcome}`, outcome, subject: child.unit.subject?.id ?? "", ageDays: 0, content: child.unit.content, run: child } };

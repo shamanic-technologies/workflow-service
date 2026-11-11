@@ -108,7 +108,7 @@ export default function run(ctx) {
   if (!ctx.request || !ctx.request.trigger) return { unmade: "no_occurrence" };
   ctx.ask({ units: {}, request: ctx.request, recordedBy: "sender" });
   const answer = ctx.get("message_sent");
-  if (answer && typeof answer.unmade === "string") return { unmade: answer.unmade };
+  if (answer && typeof answer.unmade === "string") return { unmade: answer.unmade, ...(answer.decided === "done" || answer.decided === "idle" ? { decided: answer.decided } : {}) };
   return { content: { answered: answer.content } };
 }
 `,
@@ -181,7 +181,10 @@ export default function run(ctx) {
   const claim = must("lead.followup.claim", { params: { campaignId: campaignId }, body: { person: named, relationships: relationships } });
   if (!claim.found) {
     const refused = ((claim.relationships && claim.relationships.refused) || [])[0];
-    return { unmade: refused ? "person_not_admitted: " + String(refused.reason || refused.code || "refused") : "nobody_due: " + String(claim.reason || "") };
+    // Nobody owed on this campaign (or their relationship is not judged yet) is this script's reading, never a refusal:
+    // nothing to do now (MON-UNSENT-RED-1111).
+    if (refused) return { unmade: "person_not_admitted: " + String(refused.reason || refused.code || "refused") };
+    return { unmade: "nobody_due: " + String(claim.reason || ""), decided: "idle" };
   }
   const row = claim.followup;
 
@@ -212,7 +215,7 @@ export default function run(ctx) {
   });
   if (owed.kind === "stop" && (stops.length > 0 || !Array.isArray(owed.reasons) || owed.reasons.length === 0)) {
     close("follow_up_stopped");
-    return { unmade: "stopped: " + String(owed.reason || stops[0] || "stop") };
+    return { unmade: "stopped: " + String(owed.reason || stops[0] || "stop"), decided: "done" };
   }
 
   // 3. READ everything the writer needs.
@@ -340,20 +343,20 @@ export default function run(ctx) {
   if (d.decision === "stop") {
     setDate({ stop: { reason: String(d.reason || "their own words").slice(0, 500) } });
     close("follow_up_stopped");
-    return { content: { decision: "stop", reason: String(d.reason || ""), ...tools } };
+    return { unmade: "stop: " + String(d.reason || "their own words") + toolsNote, decided: "done" };
   }
   if (!nextOk) throw new Error("the writer gave no usable next date: " + JSON.stringify(nextAt));
   if (d.decision === "later") {
     setDate({ nextFollowupAt: nextAt, reason: String(d.nextFollowUpWhy || "later").slice(0, 500) });
     close("follow_up_later");
-    return { unmade: "later: " + String(d.nextFollowUpWhy || "") + toolsNote };
+    return { unmade: "later: " + String(d.nextFollowUpWhy || "") + toolsNote, decided: "done" };
   }
   if (d.decision === "escalate") {
     const rep = s(brand.salesRepPhone);
     if (rep) door("crm.whatsapp.send", { body: { brandId: brandId, phone: rep, text: "A lead needs your answer: " + [lead.firstName, lead.lastName].filter(Boolean).join(" ") + " (" + (email || phone) + ") asked: " + String(d.question || "") + ". Nothing was sent to them.", idempotencyKey: sendKey + ":rep-alert" }, omitHeaders: ["x-campaign-id"] });
     setDate({ nextFollowupAt: nextAt, reason: "Escalated to the team: " + String(d.question || "").slice(0, 400) });
     close("follow_up_escalated");
-    return { content: { decision: "escalate", question: String(d.question || ""), repAlerted: Boolean(rep), ...tools } };
+    return { unmade: "escalate: " + String(d.question || "") + (rep ? " (sales rep alerted)" : " (no sales rep phone)") + toolsNote, decided: "done" };
   }
   if (d.decision !== "write") throw new Error("the writer answered an unknown decision " + JSON.stringify(d.decision));
   const medium = s(d.channel);

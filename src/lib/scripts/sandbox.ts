@@ -57,6 +57,13 @@ export type ScriptResult = {
    * nor exhausted: the campaign re-runs on its short cadence (MIGRATE-1105 S3, lead-service's `serve_timed_out`).
    */
   again?: boolean;
+  /**
+   * With `unmade`: no Unit because the SCRIPT decided so, not because the world refused (MON-UNSENT-RED-1111). `done` =
+   * the look did its work (write later with the next date set, a stop, an escalation): a completed run, never a sender
+   * refusal. `idle` = nothing to do for this person on this campaign now (nobody owed, a relationship not judged yet):
+   * the campaign may ask again. Absent = a refusal the world gave (a sender 409, no channel), stated as such.
+   */
+  decided?: "done" | "idle";
   /** Who the Unit is about, when the run was handed no subject (an Engine run that found its own: MIGRATE-1105 S0). */
   subject?: { service: string; id: string };
 } | null;
