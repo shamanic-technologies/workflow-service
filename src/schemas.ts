@@ -2932,6 +2932,29 @@ export const EngineSwitchRequestSchema = z
   })
   .openapi("EngineSwitchRequest");
 
+export const EnginePickRequestSchema = z
+  .object({
+    keptDynasties: z
+      .array(ScriptSlugSchema)
+      .min(1)
+      .describe("The dynasties of this Engine a strategy keeps (features-service `GET /internal/script-strategy`): the Rating picks among these only."),
+    servable: z
+      .array(ScriptSlugSchema)
+      .describe("The outcomes the caller will hand the script as Units (`units` keys of the run): a script asking for another material is not a candidate."),
+    channel: z.string().min(1).nullable().optional().describe("The channel the script would run for: a script stating a tactic `channel` runs only for it. Absent = none."),
+  })
+  .openapi("EnginePickRequest");
+
+export const EnginePickResponseSchema = z
+  .object({
+    outcome: z.string(),
+    dynasty: z.string().describe("The dynasty the Rating picked: pass it to `POST /orgs/scripts/run`."),
+    version: z.number().int().describe("Its active version (the one a run of the dynasty executes)."),
+    scriptId: z.string(),
+    draws: z.array(z.object({ dynasty: z.string(), version: z.number().int(), made: z.number().int(), runs: z.number().int(), draw: z.number() })),
+  })
+  .openapi("EnginePickResponse");
+
 export const EngineOffRequestSchema = z
   .object({ orgId: z.string().min(1).nullable().optional(), reason: z.string().min(5) })
   .openapi("EngineOffRequest");
@@ -2987,6 +3010,22 @@ registry.registerPath({
     201: { description: "Live (or already live)", content: { "application/json": { schema: EngineStateSchema } } },
     404: { description: "No live version of the dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: { description: "Not runnable, or a fleet switch on a script that is not a proven port", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/engines/{outcome}/pick",
+  summary: "The Rating's pick for an Engine outside a campaign run: which kept dynasty, which version (service key only)",
+  description:
+    "PREVIEW-RATING-PICK-1111. The same Rating a campaign run uses (Thompson sampling on each dynasty's made share over 30 days, same candidate rules: active, runnable, materials the caller hands, channel), among the dynasties the caller's strategy keeps. Reads only: nothing spent, nothing written, no run opened. 404 `no_runnable_script` = no kept dynasty of this Engine can run on what the caller hands (unknown outcome included); never another Engine's script, never a default.",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EnginePickRequestSchema } } } },
+  responses: {
+    200: { description: "The pick", content: { "application/json": { schema: EnginePickResponseSchema } } },
+    400: { description: "Not an outcome key, or an invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "`no_runnable_script`: no kept dynasty can run", content: { "application/json": { schema: z.object({ error: z.string(), code: z.literal("no_runnable_script") }) } } },
   },
 });
 

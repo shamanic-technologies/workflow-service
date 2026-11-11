@@ -131,6 +131,12 @@ export interface PickInput {
    */
   campaignId?: string | null;
   /**
+   * The dynasties a strategy keeps, already read by a caller with no campaign (PREVIEW-RATING-PICK-1111:
+   * content-generation's preview asks features-service for a strategy's kept scripts itself). Stated = it replaces the
+   * campaign read; the Rating then picks among them exactly as a run does.
+   */
+  keptDynasties?: string[];
+  /**
    * The Units an ASKING script handed (`ctx.ask`, LISTICLE-OUTREACH-1110): the work it ordered. Among the candidates,
    * only those reading the most of them serve the ask (`readersOfHanded`); absent / none read = every candidate.
    */
@@ -189,7 +195,11 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     .from(scripts)
     .where(and(eq(scripts.outcome, input.outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
   // Read only when there is something to narrow; unreadable throws (never "any script").
-  const kept = input.campaignId && rows.length > 0 ? new Set(await scriptStrategy(input.campaignId, input.outcome)) : null;
+  const kept = input.keptDynasties
+    ? new Set(input.keptDynasties)
+    : input.campaignId && rows.length > 0
+      ? new Set(await scriptStrategy(input.campaignId, input.outcome))
+      : null;
   const out: ScriptRow[] = [];
   for (const row of rows) {
     if (kept && !kept.has(row.dynasty)) continue;
