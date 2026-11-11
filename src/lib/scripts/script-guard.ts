@@ -172,15 +172,21 @@ const scopeLabel = (s: GuardScope) => [s.orgId ? `org ${s.orgId}` : null, s.dyna
  * failures that rolled cold email back were all of this kind). It is: a call with no answer (undici `fetch failed`,
  * a refused / reset / timed-out connection, an aborted request), a 5xx from a door or from chat-service
  * (`-> 502`, `(503)`), a gateway's "Upstream service error", and the same nested in an asked Engine's failure
- * (`message_written/... failed: llm.complete failed: chat-service POST /complete -> 502`). A 4xx is an answer: the
+ * (`message_written/... failed: llm.complete failed: chat-service POST /complete -> 502`), and a call our own client
+ * timed out (`runs-service POST /v1/runs timed out after 30000ms`, `POST /complete gave no answer within 300 s`:
+ * MON-SCRIPTS-RED-1111, 8 runs-service timeouts rolled email_found back on 2026-11-07), and a door's 500 told only by
+ * its words (`lead.serve: Internal server error`: the door keeps the producer's words, not its status). A 4xx is an answer: the
  * script asked something wrong (a billing refusal has its own rule, `BILLING_REFUSED_PATTERN`).
  */
 export const NO_ANSWER_PATTERN =
-  "fetch failed|econnrefused|econnreset|etimedout|eai_again|socket hang up|other side closed|aborted due to timeout|the operation was aborted|-> ?5[0-9]{2}\\b|\\(5[0-9]{2}\\)|upstream service error|bad gateway|service unavailable|gateway timeout";
+  "timed out after|gave no answer within|internal server error|fetch failed|econnrefused|econnreset|etimedout|eai_again|socket hang up|other side closed|aborted due to timeout|the operation was aborted|-> ?5[0-9]{2}\\b|\\(5[0-9]{2}\\)|upstream service error|bad gateway|service unavailable|gateway timeout";
 export const noAnswer = (error: string | null | undefined) => !!error && new RegExp(NO_ANSWER_PATTERN, "i").test(error);
 
-export async function lastHour(db: AnyPgDb, outcome: string, now = new Date(), scope: GuardScope = {}): Promise<WindowStats> {
-  const since = new Date(now.getTime() - WINDOW_MINUTES * 60_000);
+/** The window the Monitoring hub also reads (MON-SCRIPTS-RED-1111): a slow excess an hour never shows. */
+export const DAY_WINDOW_MINUTES = 24 * 60;
+
+export async function lastHour(db: AnyPgDb, outcome: string, now = new Date(), scope: GuardScope = {}, windowMinutes = WINDOW_MINUTES): Promise<WindowStats> {
+  const since = new Date(now.getTime() - windowMinutes * 60_000);
   const scoped = and(
     eq(scripts.outcome, outcome),
     gte(scriptRuns.createdAt, since),
@@ -492,6 +498,7 @@ export function resetGuardMemo(): void {
 export async function guardView(db: AnyPgDb, outcome: string, now = new Date()) {
   const rows = await db.select().from(scriptSwitches).where(eq(scriptSwitches.outcome, outcome));
   const window = await lastHour(db, outcome, now);
+  const day = await lastHour(db, outcome, now, {}, DAY_WINDOW_MINUTES);
   const baseline = await measuredBaseline(db, outcome);
   const switched = rows.filter((r) => r.state === "switched");
   const rolled = rows.filter((r) => r.state === "rolled_back").sort((a, b) => (b.rolledBackAt?.getTime() ?? 0) - (a.rolledBackAt?.getTime() ?? 0));
@@ -500,6 +507,7 @@ export async function guardView(db: AnyPgDb, outcome: string, now = new Date()) 
     state,
     windowMinutes: WINDOW_MINUTES,
     lastHour: window,
+    lastDay: day,
     baselineErrorRate: baseline.errorRate,
     baselineSource: baseline.source,
     thresholdErrorRate: thresholdFor(baseline.errorRate),

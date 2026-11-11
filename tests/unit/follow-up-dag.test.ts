@@ -280,6 +280,14 @@ describe("every run that reached a person leaves a next date, except a stop", ()
     const waRefused = { ok: false, skipped: true, code: "not_on_whatsapp", reason: "x" };
     expect(await main(person(), plan, { channel: "whatsapp" }, write("whatsapp"), waRefused, notCalled, NOW)).toMatchObject({ endKind: "refused_kept", skipSetDate: false });
   });
+  it("an address the sender's verifier judged invalid keeps the person, looked at again later (MON-SCRIPTS-RED-1111)", async () => {
+    const invalid = { ok: false, skipped: true, status: 409, code: "email_not_verified", reason: "our verifier's verdict is invalid" };
+    const out = await main(person(), plan, em, write("email"), notCalled, invalid, NOW);
+    expect(out).toMatchObject({ endKind: "refused_kept", skipSetDate: false, skipStop: true, delivery: { state: "refused", code: "email_not_verified" } });
+    expect(Date.parse(out.setDateBody.nextFollowupAt)).toBeCloseTo(Date.now() + NO_CHANNEL_RECHECK_DAYS * 86400000, -5);
+    const send = buildFollowUpProactiveDag().nodes.find((n) => n.id === "send-email")!;
+    expect((send.config as { skipOnRefusalCodes: string[] }).skipOnRefusalCodes).toContain("email_not_verified");
+  });
   it("lead-service's stop writes nothing; a served person has no queue row", async () => {
     expect(await main(person(), { proceed: false, kind: "stop" }, null, null, notCalled, notCalled, NOW)).toMatchObject({ endKind: "not_owed", skipSetDate: true, skipStop: true });
     expect((await main(person({ entry: "served" }), plan, em, write("email"), notCalled, { success: true }, NOW)).skipRow).toBe(true);
