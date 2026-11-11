@@ -13,7 +13,11 @@
  *
  * Verdict (never an email): `red` = the script path's recent failure rate (today + yesterday, at least
  * `RED_MIN_RUNS` finished runs) is above the workflow path's over the window (+1 point of noise), or above 2 % when the
- * outcome never ran on a workflow in the window. An outcome still on a workflow is NOT red: it is served
+ * outcome never ran on a workflow in the window. A failure is the run's OWN: a run that failed because a call got no
+ * answer or billing refused it is counted apart (`unanswered`, the roll-back guard's rule: `NO_ANSWER_PATTERN`,
+ * `BILLING_REFUSED_PATTERN`) on both paths (MON-SCRIPTS-FOLLOWUP-DYNASTIES-1111: paid_client and client_satisfied read
+ * red at 7.7 % and 11 %, 87 of their failures were distribute.you's WhatsApp bridge answering 502 "reconnecting",
+ * zero a script error). An outcome still on a workflow is NOT red: it is served
  * `onWorkflow` (a normal "not yet").
  *
  * Refreshed at most every 15 minutes per process, never awaited by a read: the read, workflow traffic, and a sweep a
@@ -23,6 +27,10 @@ import { and, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { engineMonitoringDays } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 import { ENGINE_EXECUTION_SCOPE } from "./engine-runner.js";
+import { BILLING_REFUSED_PATTERN, NO_ANSWER_PATTERN } from "./script-guard.js";
+
+/** The guard's rule as a Postgres regex (`\b` is a backspace there, `\y` the word boundary). */
+const UNANSWERED_SQL_PATTERN = `${NO_ANSWER_PATTERN}|${BILLING_REFUSED_PATTERN}`.replace(/\\b/g, "\\y");
 
 export const ENGINE_BACKFILL_DAYS = 30;
 /** Completed days whose spend is still read (older ones keep a null sample). */
@@ -66,6 +74,7 @@ interface RunGroupRow {
   runs: number;
   completed: number;
   failed: number;
+  unanswered: number;
 }
 
 function rowsOf<T>(result: unknown): T[] {
@@ -91,6 +100,8 @@ function outcomeResolver(deps: EngineMonitoringDeps) {
 
 /** The day's campaign runs grouped by path, org and what names their outcome. */
 async function groupedRuns(db: AnyPgDb, since: string, until: string | null): Promise<RunGroupRow[]> {
+  // A workflow run states its failed call in `failed_reason`, an Engine run in `error`.
+  const unanswered = sql`coalesce(coalesce(r.failed_reason, r.error) ~* ${UNANSWERED_SQL_PATTERN}, false)`;
   return rowsOf<RunGroupRow>(
     await db.execute(sql`
       SELECT to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
@@ -99,7 +110,8 @@ async function groupedRuns(db: AnyPgDb, since: string, until: string | null): Pr
              w.feature_slug, w.workflow_dynasty_slug AS dynasty,
              count(*)::int AS runs,
              count(*) FILTER (WHERE r.status = 'completed')::int AS completed,
-             count(*) FILTER (WHERE r.status = 'failed')::int AS failed
+             count(*) FILTER (WHERE r.status = 'failed' AND NOT ${unanswered})::int AS failed,
+             count(*) FILTER (WHERE r.status = 'failed' AND ${unanswered})::int AS unanswered
       FROM workflow_runs r
       LEFT JOIN workflows w ON w.id = r.workflow_id
       WHERE r.created_at >= ${`${since}T00:00:00Z`}::timestamptz
@@ -114,14 +126,15 @@ async function groupedRuns(db: AnyPgDb, since: string, until: string | null): Pr
 /** Recount every day from `since` (inclusive) to today; the cost sample of an already costed day is kept. */
 export async function recountEngineDays(db: AnyPgDb, deps: EngineMonitoringDeps, since: string, now = new Date()): Promise<number> {
   const resolve = outcomeResolver(deps);
-  const totals = new Map<string, { day: string; outcome: string; path: string; orgId: string; runs: number; completed: number; failed: number }>();
+  const totals = new Map<string, { day: string; outcome: string; path: string; orgId: string; runs: number; completed: number; failed: number; unanswered: number }>();
   for (const g of await groupedRuns(db, since, null)) {
     const outcome = g.path === "script" ? (g.engine_outcome ?? UNASSIGNED_OUTCOME) : await resolve(g.feature_slug, g.dynasty);
     const key = `${g.day}|${outcome}|${g.path}|${g.org_id}`;
-    const t = totals.get(key) ?? { day: g.day, outcome, path: g.path, orgId: g.org_id, runs: 0, completed: 0, failed: 0 };
+    const t = totals.get(key) ?? { day: g.day, outcome, path: g.path, orgId: g.org_id, runs: 0, completed: 0, failed: 0, unanswered: 0 };
     t.runs += Number(g.runs);
     t.completed += Number(g.completed);
     t.failed += Number(g.failed);
+    t.unanswered += Number(g.unanswered);
     totals.set(key, t);
   }
   for (const t of totals.values()) {
@@ -130,7 +143,7 @@ export async function recountEngineDays(db: AnyPgDb, deps: EngineMonitoringDeps,
       .values({ ...t, computedAt: now })
       .onConflictDoUpdate({
         target: [engineMonitoringDays.day, engineMonitoringDays.outcome, engineMonitoringDays.path, engineMonitoringDays.orgId],
-        set: { runs: t.runs, completed: t.completed, failed: t.failed, computedAt: now },
+        set: { runs: t.runs, completed: t.completed, failed: t.failed, unanswered: t.unanswered, computedAt: now },
       });
   }
   return totals.size;
@@ -243,25 +256,31 @@ type Row = typeof engineMonitoringDays.$inferSelect;
 interface PathAgg {
   runs: number;
   completed: number;
+  /** The runs' own failures. */
   failed: number;
+  /** Failed because a call got no answer or billing refused: never a failure of the script or workflow. */
+  unanswered: number;
   /** Spend estimated from the cost sample (null when no org of the day has a sample). */
   spendCents: number | null;
   sampledRuns: number;
 }
 
-const emptyAgg = (): PathAgg => ({ runs: 0, completed: 0, failed: 0, spendCents: null, sampledRuns: 0 });
+const emptyAgg = (): PathAgg => ({ runs: 0, completed: 0, failed: 0, unanswered: 0, spendCents: null, sampledRuns: 0 });
 
 function add(agg: PathAgg, r: Row): void {
   agg.runs += r.runs;
   agg.completed += r.completed;
   agg.failed += r.failed;
+  agg.unanswered += r.unanswered;
   if (r.costSampleRuns && r.costSampleRuns > 0 && r.costSampleCents !== null) {
     agg.spendCents = (agg.spendCents ?? 0) + (Number(r.costSampleCents) / r.costSampleRuns) * r.runs;
     agg.sampledRuns += r.costSampleRuns;
   }
 }
 
-const errorRate = (a: PathAgg) => (a.completed + a.failed > 0 ? a.failed / (a.completed + a.failed) : null);
+/** Finished runs, the unanswered ones included (they finished, through no fault of their own). */
+const finishedOf = (a: PathAgg) => a.completed + a.failed + a.unanswered;
+const errorRate = (a: PathAgg) => (finishedOf(a) > 0 ? a.failed / finishedOf(a) : null);
 
 function served(a: PathAgg | undefined) {
   if (!a) return null;
@@ -269,6 +288,7 @@ function served(a: PathAgg | undefined) {
     runs: a.runs,
     completed: a.completed,
     failed: a.failed,
+    unanswered: a.unanswered,
     errorRate: errorRate(a),
     spendCents: a.spendCents === null ? null : Number(a.spendCents.toFixed(4)),
     costPerRunCents: a.spendCents === null || a.runs === 0 ? null : Number((a.spendCents / a.runs).toFixed(4)),
@@ -306,7 +326,7 @@ export async function readEngineMonitoring(db: AnyPgDb, days: number, now = new 
     const scriptRate = errorRate(recentScript);
     const workflowRate = errorRate(window.workflow);
     const threshold = workflowRate === null ? RED_FLOOR : workflowRate + RED_NOISE;
-    const finished = recentScript.completed + recentScript.failed;
+    const finished = finishedOf(recentScript);
     const red = finished >= RED_MIN_RUNS && scriptRate !== null && scriptRate > threshold;
     const todayRow = byDay.get(today);
     const lastWorkflowDay = [...byDay.entries()].filter(([, d]) => d.workflow.runs > 0).map(([day]) => day).sort().at(-1) ?? null;
