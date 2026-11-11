@@ -403,19 +403,26 @@ if ((args.from === "recorded" || args.source === "recorded") && outcome === "lea
 if (args.from === "recorded" || args.source === "recorded") {
   if (outcome !== "message_written") throw new Error("--source recorded serves message_written, lead_interested, email_found, lead_identified, lead_found and audience_built");
   if (!args.dynasty || args.dynasty === true) throw new Error("--dynasty is required");
-  const gens = await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
-  let built = gens.map(fullWriterCase);
+  // `--cases-stdin`: the dynasty's OWN stored cases (a JSON array piped in from the box's database), restated instead
+  // of fresh records, when the fresh ones do not replay on the active version (SENDER-NAME-BODY-1111: since ~11-09 every
+  // recorded lead object comes back key-reordered). Each one already replayed 100 % on the active version.
+  const gens = args["cases-stdin"] ? [] : await recordedWriterCases(typeof args.since === "string" ? args.since : null, Number(args.max ?? 300));
+  let built = args["cases-stdin"] ? JSON.parse(readFileSync(0, "utf8")).map((c) => ({ case: c })) : gens.map(fullWriterCase);
   // FOLLOWUP-JIT-1107-WRITER (owner 2026-11-07): `--first-email-only` restates each recorded case under the one-email
   // rule (the request's system prompt as content-generation #392 states it, the first stored step expected) and
   // UPGRADES the dynasty's active version with the same edits, replacing its cases atomically (`upgrade-with-cases`;
   // replay only unless `--apply`). Run inside the container: it reads dist.
   // WRITER-EMPTY-BODY-1108: `--one-email-schema` does the same with the response schema held to exactly one email
   // (`one-email-schema.ts`): the request's schema restated, the recorded answer and email untouched.
+  // SENDER-NAME-BODY-1111: `--sender-identity` does the same with the writer told who sends (`sender-identity.ts`):
+  // the request's system prompt restated, the recorded answer and email untouched.
   const restatement = args["first-email-only"]
     ? { module: "first-email-only", caseOf: "firstEmailOnlyCase", sourceOf: "firstEmailOnlySource", label: "FOLLOWUP-JIT-1107 (one email)" }
     : args["one-email-schema"]
       ? { module: "one-email-schema", caseOf: "oneEmailSchemaCase", sourceOf: "oneEmailSchemaSource", label: "WRITER-EMPTY-BODY-1108 (schema: exactly one email)" }
-      : null;
+      : args["sender-identity"]
+        ? { module: "sender-identity", caseOf: "senderIdentityCase", sourceOf: "senderIdentitySource", label: "SENDER-NAME-BODY-1111 (who sends the email)" }
+        : null;
   if (restatement) {
     const restateModule = await import(`../dist/lib/scripts/${restatement.module}.js`);
     const firstEmailOnlyCase = restateModule[restatement.caseOf];
@@ -423,7 +430,7 @@ if (args.from === "recorded" || args.source === "recorded") {
     const original = built.filter((b) => b.case).map((b) => b.case);
     const excluded = {};
     for (const b of built) if (b.excluded) excluded[b.excluded] = (excluded[b.excluded] ?? 0) + 1;
-    console.log(`${outcome}/${args.dynasty}: ${gens.length} recorded generations, ${original.length} recorded cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (replay only)"}`);
+    console.log(`${outcome}/${args.dynasty}: ${args["cases-stdin"] ? "stored cases" : `${gens.length} recorded generations`}, ${original.length} cases, excluded ${JSON.stringify(excluded)}${args.apply ? "" : " (replay only)"}`);
     const key = process.env.WORKFLOW_SERVICE_API_KEY;
     if (!key) throw new Error("WORKFLOW_SERVICE_API_KEY is required");
     const { ORG_ID, USER_ID, RUN_ID, STAFF_EMAIL } = process.env;
@@ -435,19 +442,11 @@ if (args.from === "recorded" || args.source === "recorded") {
     if (!active) throw new Error(`${outcome}/${args.dynasty} has no runnable version`);
     const current = await fetch(`${base}/scripts/${active.id}`, { headers: identity }).then((r) => r.json());
     const code = firstEmailOnlySource(current.code);
-    const replayOnly = async (source, list) => {
-      const r = await fetch(`${base}/internal/scripts/dynasty/${outcome}/${args.dynasty}/upgrade-with-cases`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": key },
-        body: JSON.stringify({ code: source, source: "replay only", cases: list, orgId: ORG_ID, createdBy: STAFF_EMAIL, dryRun: true }),
-      });
-      if (!r.ok) throw new Error(`replay only -> ${r.status} ${(await r.text()).slice(0, 300)}`);
-      return r.json();
-    };
     // A record the ACTIVE version itself cannot replay (e.g. object keys the record's storage reordered) proves nothing
     // about the rule: excluded with its id, never restated.
-    const asRecorded = await replayOnly(current.code, original);
-    if (asRecorded.cases - asRecorded.matches > asRecorded.failures.length) throw new Error(`${active.scriptSlug} misses ${asRecorded.cases - asRecorded.matches} records: too many to name, narrow --since`);
+    // Replayed HERE, uncapped (the route names at most 5 failures): same sandbox, same replay code as the route.
+    const { replayAll } = await import("../dist/lib/scripts/replay.js");
+    const asRecorded = await replayAll(current.code, original);
     const unreplayable = new Set(asRecorded.failures.map((f) => f.id));
     for (const f of asRecorded.failures) console.log(`  excluded ${f.id}: ${active.scriptSlug} does not replay the record (${f.diffs[0]?.slice(0, 160)})`);
     built = built.map((b) => (b.case && unreplayable.has(b.case.id) ? { excluded: "the active version does not replay the record" } : b.case ? firstEmailOnlyCase(b.case) : b));
@@ -460,7 +459,7 @@ if (args.from === "recorded" || args.source === "recorded") {
       headers: { "content-type": "application/json", "x-api-key": key },
       body: JSON.stringify({
         code,
-        source: `content-generation-service recorded generations ${new Date().toISOString().slice(0, 10)}, restated under ${restatement.label}`,
+        source: `${args["cases-stdin"] ? "the dynasty's stored cases" : "content-generation-service recorded generations"} ${new Date().toISOString().slice(0, 10)}, restated under ${restatement.label}`,
         cases,
         orgId: ORG_ID,
         createdBy: STAFF_EMAIL,
