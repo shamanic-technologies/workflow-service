@@ -151,8 +151,9 @@ export const NEXT_DATE_SCHEMA_PROPERTIES = {
 
 /**
  * `nextDate(json, label)`: the model's next date held to its contract strictly BEFORE anything is sent or recorded:
- * a date, strictly in the future, at most a year out (lead-service refuses beyond). Throws otherwise: a write whose
- * next date cannot be recorded, or a later with no date, is the dead end this exists to prevent. Script text,
+ * a date, strictly in the future (throws otherwise: a write whose next date cannot be recorded, or a later with no
+ * date, is the dead end this exists to prevent), brought back to at most a year out (lead-service refuses beyond;
+ * MON-SCRIPTS-RED-1111: "a year from now" written as the same hour next year failed 8 follow-ups in 3 days). Script text,
  * appended after `main` in a Windmill rawscript (function declarations hoist).
  */
 export const NEXT_DATE_FN = `
@@ -160,9 +161,9 @@ function nextDate(json, label) {
   const at = Date.parse(String(json?.nextFollowUpAt ?? ""));
   if (!Number.isFinite(at)) throw new Error(label + ": the next follow-up date is not a date: " + JSON.stringify(json?.nextFollowUpAt));
   if (at <= Date.now()) throw new Error(label + ": the next follow-up date is not in the future: " + JSON.stringify(json?.nextFollowUpAt));
-  if (at > Date.now() + ${MAX_NEXT_FOLLOW_UP_DAYS} * 86400000) {
-    throw new Error(label + ": the next follow-up date is more than ${MAX_NEXT_FOLLOW_UP_DAYS} days away: " + JSON.stringify(json?.nextFollowUpAt));
-  }
-  return { nextFollowUpAt: new Date(at).toISOString(), nextFollowUpWhy: String(json?.nextFollowUpWhy ?? "") };
+  // A date beyond the year lead-service accepts is brought back to that year's end (a deterministic cleanup of a
+  // trusted writer's output, never a refusal: "in a year" written as the same day next year is a few hours too far).
+  const max = Date.now() + ${MAX_NEXT_FOLLOW_UP_DAYS} * 86400000 - 3600000;
+  return { nextFollowUpAt: new Date(Math.min(at, max)).toISOString(), nextFollowUpWhy: String(json?.nextFollowUpWhy ?? "") };
 }
 `.trim();

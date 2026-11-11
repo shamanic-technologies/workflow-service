@@ -177,7 +177,7 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
     const { endRunBodyOf } = await import("./engine-runner.js");
     const status = failed !== null ? "failed" : unmade !== null ? "unmade" : result?.content ? "made" : "nothing";
     const occurrence = !!(c.request && typeof c.request === "object" && (c.request as Record<string, unknown>).trigger && typeof ((c.request as Record<string, unknown>).trigger as Record<string, unknown>)?.leadId === "string");
-    const got = endRunBodyOf({ status, error: failed ?? unmade, again: result?.again === true }, occurrence);
+    const got = endRunBodyOf({ status, error: failed ?? unmade, again: result?.again === true, ...(result?.decided === "done" || result?.decided === "idle" ? { decided: result.decided } : {}) }, occurrence);
     if (!sameJson(endFlags(got), endFlags(want.end))) diffs.push(firstDiff("end", endFlags(got), endFlags(want.end)) + (failed ? ` (failed: ${failed.slice(0, 200)})` : unmade ? ` (unmade: ${unmade.slice(0, 120)})` : ""));
   } else if (failed !== null) {
     diffs.push(`failed: ${failed.slice(0, 300)}`);

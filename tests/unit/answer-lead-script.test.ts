@@ -99,10 +99,10 @@ describe("the answering script", () => {
 
   it("later sends nothing and leaves the one next date; escalate alerts the rep, nothing to them", async () => {
     const later = world({ ...BOOK, decision: "later", message: "", bookSlot: "", bookedMessage: "" });
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toMatchObject({ kind: "done", result: { unmade: expect.stringMatching(/^later/) } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toMatchObject({ kind: "done", result: { unmade: expect.stringMatching(/^later/), decided: "done" } });
     expect(later.calls.some((c) => ["instantly.reply.send", "email.send", "crm.whatsapp.send", "crm.meeting.book"].includes(c.name))).toBe(false);
     const esc = world({ ...BOOK, decision: "escalate", message: "", bookSlot: "", bookedMessage: "", question: "What is the price?" });
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), esc.bridge)).toMatchObject({ kind: "done", result: { content: { decision: "escalate", repAlerted: true } } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), esc.bridge)).toEqual({ kind: "done", result: { unmade: "escalate: What is the price? (sales rep alerted)", decided: "done" } });
     const alert = esc.calls.filter((c) => c.name === "crm.whatsapp.send");
     expect(alert).toHaveLength(1);
     expect(alert[0]!.args).toMatchObject({ body: { phone: "+15550001111" }, omitHeaders: ["x-campaign-id"] });
@@ -117,8 +117,14 @@ describe("the answering script", () => {
 
   it("their own stop ends it; a run with no occurrence or no clock does nothing", async () => {
     const stop = world(BOOK, { "lead.followup_date.read": () => ({ ok: true, data: { owed: { kind: "stop", reason: "opted_out", reasons: ["opted_out"] } } }) });
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), stop.bridge)).toMatchObject({ kind: "done", result: { unmade: "stopped: opted_out" } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), stop.bridge)).toEqual({ kind: "done", result: { unmade: "stopped: opted_out", decided: "done" } });
     expect(stop.calls.some((c) => c.name === "llm.complete")).toBe(false);
+    // Nobody owed on this campaign (or not judged yet): nothing to do now, never a refusal (MON-UNSENT-RED-1111).
+    const none = world(BOOK, { "lead.followup.claim": () => ({ ok: true, data: { found: false, reason: "relationship_pending" } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), none.bridge)).toEqual({ kind: "done", result: { unmade: "nobody_due: relationship_pending", decided: "idle" } });
+    // Refused by lead-service's judgment = WHO, stated as personNotAdmitted (no `decided`).
+    const refused = world(BOOK, { "lead.followup.claim": () => ({ ok: true, data: { found: false, reason: "nothing_due", relationships: { refused: [{ reason: "customer" }] } } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), refused.bridge)).toEqual({ kind: "done", result: { unmade: "person_not_admitted: customer" } });
     const idle = world(BOOK);
     expect(await runScript(answerLeadScriptSource(), spec({ ...REQUEST, trigger: null }), idle.bridge)).toEqual({ kind: "done", result: { unmade: "no_occurrence" } });
     expect((await runScript(answerLeadScriptSource(), spec({ ...REQUEST, now: undefined }), idle.bridge)).kind).toBe("error");
@@ -202,20 +208,20 @@ describe("the answering script", () => {
     const TOOLS = 3;
     const answered = (draft: Record<string, unknown>) => ({ "llm.complete": () => ({ ok: true, data: { json: draft, brandToolCalls: TOOLS } }) });
     const stop = world(BOOK, answered({ ...BOOK, decision: "stop", message: "", bookSlot: "", bookedMessage: "", reason: "The client says he is not a true lead; marked him in their CRM" }));
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), stop.bridge)).toEqual({ kind: "done", result: { content: { decision: "stop", reason: "The client says he is not a true lead; marked him in their CRM", brandToolCalls: TOOLS } } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), stop.bridge)).toEqual({ kind: "done", result: { unmade: "stop: The client says he is not a true lead; marked him in their CRM (brand tool calls: 3)", decided: "done" } });
     const write = world(BOOK, answered(BOOK));
     expect(await runScript(answerLeadScriptSource(), spec(REQUEST), write.bridge)).toMatchObject({ kind: "done", result: { content: { decision: "write", brandToolCalls: TOOLS } } });
     const esc = world(BOOK, answered({ ...BOOK, decision: "escalate", message: "", bookSlot: "", bookedMessage: "", question: "Price?" }));
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), esc.bridge)).toMatchObject({ kind: "done", result: { content: { decision: "escalate", brandToolCalls: TOOLS } } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), esc.bridge)).toEqual({ kind: "done", result: { unmade: "escalate: Price? (sales rep alerted) (brand tool calls: 3)", decided: "done" } });
     const later = world(BOOK, answered({ ...BOOK, decision: "later", message: "", bookSlot: "", bookedMessage: "", nextFollowUpWhy: "after the demo" }));
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toEqual({ kind: "done", result: { unmade: "later: after the demo (brand tool calls: 3)" } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toEqual({ kind: "done", result: { unmade: "later: after the demo (brand tool calls: 3)", decided: "done" } });
   });
 
   it("no server plugged (no brandToolCalls answered): the same decisions and outputs as before", async () => {
     const write = world(BOOK);
     expect(await runScript(answerLeadScriptSource(), spec(REQUEST), write.bridge)).toEqual({ kind: "done", result: { content: { decision: "write", channel: "email", booked: SLOT, inThread: true } } });
     const later = world({ ...BOOK, decision: "later", message: "", bookSlot: "", bookedMessage: "", nextFollowUpWhy: "after the demo" });
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toEqual({ kind: "done", result: { unmade: "later: after the demo" } });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), later.bridge)).toEqual({ kind: "done", result: { unmade: "later: after the demo", decided: "done" } });
   });
 
   it("the Lead event Target script asks the Message sent Engine for the answer, with the run's own Request", async () => {
@@ -232,7 +238,10 @@ describe("the answering script", () => {
     const made = await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ content: { decision: "write" } }));
     expect(made).toEqual({ kind: "done", result: { content: { answered: { decision: "write" } } } });
     expect(seen[0]).toEqual(["ask", { units: {}, request: REQUEST, recordedBy: "sender" }]);
-    expect(await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ unmade: "later: tomorrow" }))).toEqual({ kind: "done", result: { unmade: "later: tomorrow" } });
+    expect(await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ unmade: "later: tomorrow", decided: "done" }))).toEqual({ kind: "done", result: { unmade: "later: tomorrow", decided: "done" } });
+    expect(await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ unmade: "nobody_due: nothing_due", decided: "idle" }))).toEqual({ kind: "done", result: { unmade: "nobody_due: nothing_due", decided: "idle" } });
+    // A refusal the world gave is forwarded as it is: no `decided`, so the runner states it as a refusal.
+    expect(await runScript(ANSWER_LEAD_PULL.source, spec(REQUEST), bridge({ unmade: "refused: lead_opted_out" }))).toEqual({ kind: "done", result: { unmade: "refused: lead_opted_out" } });
     expect(await runScript(ANSWER_LEAD_PULL.source, spec({ ...REQUEST, trigger: null }), bridge({}))).toEqual({ kind: "done", result: { unmade: "no_occurrence" } });
   });
 

@@ -126,7 +126,7 @@ export const planTaskName = (d: EngineDispatch, plan: EnginePlan) =>
   plan.kind === "none" ? engineTaskName(d.outcome) : scriptTaskName(plan.script.outcome, plan.script.dynasty);
 
 /** The `/end-run` body a script's status states, the same for every Engine (campaign-service's contract). */
-export function endRunBodyOf(result: (Pick<ScriptRunResult, "status" | "error"> & { again?: boolean }) | null, answersOccurrence: boolean): Record<string, unknown> {
+export function endRunBodyOf(result: (Pick<ScriptRunResult, "status" | "error"> & { again?: boolean; decided?: "done" | "idle" }) | null, answersOccurrence: boolean): Record<string, unknown> {
   if (!result) return { success: true, stopCampaign: false, noWorkAvailable: true };
   switch (result.status) {
     case "made":
@@ -144,6 +144,11 @@ export function endRunBodyOf(result: (Pick<ScriptRunResult, "status" | "error"> 
       // An unfinished look (`again`): a NORMAL run, so the campaign asks again on its short cadence; on an occurrence,
       // nothing is stated about the person (it is redelivered), never a refusal.
       if (result.again === true) return answersOccurrence ? { success: true, stopCampaign: false, noWorkAvailable: true } : { success: true, stopCampaign: false };
+      // The script's OWN decision (MON-UNSENT-RED-1111), never a refusal the world gave: `done` = the look did its work
+      // (write later with the next date set, a stop, an escalation): a completed run, no delivery stated; `idle` = nothing
+      // to do for this person on this campaign now (campaign-service may redeliver an occurrence, bounded).
+      if (result.decided === "done") return { success: true, stopCampaign: false };
+      if (result.decided === "idle") return { success: true, stopCampaign: false, noWorkAvailable: true };
       // The occurrence's person is not someone this campaign acts for (a refusal about WHO, final, never redelivered).
       if (reason === "person_not_admitted" && answersOccurrence) return { success: true, stopCampaign: false, personNotAdmitted: { reason: (split ? split[2]! : reason).slice(0, 200) } };
       if (answersOccurrence) return { success: true, stopCampaign: false, delivery: { state: "refused", code: reason, reason: (split ? split[2]! : stated).slice(0, 2000) } };
