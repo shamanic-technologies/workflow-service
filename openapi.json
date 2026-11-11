@@ -4026,6 +4026,94 @@
           "dynasty"
         ]
       },
+      "EnginePickResponse": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string"
+          },
+          "dynasty": {
+            "type": "string",
+            "description": "The dynasty the Rating picked: pass it to `POST /orgs/scripts/run`."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Its active version (the one a run of the dynasty executes)."
+          },
+          "scriptId": {
+            "type": "string"
+          },
+          "draws": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "dynasty": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer"
+                },
+                "made": {
+                  "type": "integer"
+                },
+                "runs": {
+                  "type": "integer"
+                },
+                "draw": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "dynasty",
+                "version",
+                "made",
+                "runs",
+                "draw"
+              ]
+            }
+          }
+        },
+        "required": [
+          "outcome",
+          "dynasty",
+          "version",
+          "scriptId",
+          "draws"
+        ]
+      },
+      "EnginePickRequest": {
+        "type": "object",
+        "properties": {
+          "keptDynasties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "minItems": 1,
+            "description": "The dynasties of this Engine a strategy keeps (features-service `GET /internal/script-strategy`): the Rating picks among these only."
+          },
+          "servable": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "description": "The outcomes the caller will hand the script as Units (`units` keys of the run): a script asking for another material is not a candidate."
+          },
+          "channel": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "description": "The channel the script would run for: a script stating a tactic `channel` runs only for it. Absent = none."
+          }
+        },
+        "required": [
+          "keptDynasties",
+          "servable"
+        ]
+      },
       "EngineOffRequest": {
         "type": "object",
         "properties": {
@@ -11412,6 +11500,87 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}/pick": {
+      "post": {
+        "summary": "The Rating's pick for an Engine outside a campaign run: which kept dynasty, which version (service key only)",
+        "description": "PREVIEW-RATING-PICK-1111. The same Rating a campaign run uses (Thompson sampling on each dynasty's made share over 30 days, same candidate rules: active, runnable, materials the caller hands, channel), among the dynasties the caller's strategy keeps. Reads only: nothing spent, nothing written, no run opened. 404 `no_runnable_script` = no kept dynasty of this Engine can run on what the caller hands (unknown outcome included); never another Engine's script, never a default.",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnginePickRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pick",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnginePickResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an outcome key, or an invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`no_runnable_script`: no kept dynasty can run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "no_runnable_script"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
                 }
               }
             }
