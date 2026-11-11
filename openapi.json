@@ -4422,11 +4422,17 @@
                               "type": "integer"
                             },
                             "failed": {
-                              "type": "integer"
+                              "type": "integer",
+                              "description": "The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."
+                            },
+                            "unanswered": {
+                              "type": "integer",
+                              "description": "Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."
                             },
                             "errorRate": {
                               "type": "number",
-                              "nullable": true
+                              "nullable": true,
+                              "description": "failed / finished runs (completed + failed + unanswered)."
                             },
                             "spendCents": {
                               "type": "number",
@@ -4445,6 +4451,7 @@
                             "runs",
                             "completed",
                             "failed",
+                            "unanswered",
                             "errorRate",
                             "spendCents",
                             "costPerRunCents",
@@ -4462,11 +4469,17 @@
                               "type": "integer"
                             },
                             "failed": {
-                              "type": "integer"
+                              "type": "integer",
+                              "description": "The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."
+                            },
+                            "unanswered": {
+                              "type": "integer",
+                              "description": "Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."
                             },
                             "errorRate": {
                               "type": "number",
-                              "nullable": true
+                              "nullable": true,
+                              "description": "failed / finished runs (completed + failed + unanswered)."
                             },
                             "spendCents": {
                               "type": "number",
@@ -4485,6 +4498,7 @@
                             "runs",
                             "completed",
                             "failed",
+                            "unanswered",
                             "errorRate",
                             "spendCents",
                             "costPerRunCents",
@@ -4516,11 +4530,17 @@
                                 "type": "integer"
                               },
                               "failed": {
-                                "type": "integer"
+                                "type": "integer",
+                                "description": "The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."
+                              },
+                              "unanswered": {
+                                "type": "integer",
+                                "description": "Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."
                               },
                               "errorRate": {
                                 "type": "number",
-                                "nullable": true
+                                "nullable": true,
+                                "description": "failed / finished runs (completed + failed + unanswered)."
                               },
                               "spendCents": {
                                 "type": "number",
@@ -4539,6 +4559,7 @@
                               "runs",
                               "completed",
                               "failed",
+                              "unanswered",
                               "errorRate",
                               "spendCents",
                               "costPerRunCents",
@@ -4556,11 +4577,17 @@
                                 "type": "integer"
                               },
                               "failed": {
-                                "type": "integer"
+                                "type": "integer",
+                                "description": "The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."
+                              },
+                              "unanswered": {
+                                "type": "integer",
+                                "description": "Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."
                               },
                               "errorRate": {
                                 "type": "number",
-                                "nullable": true
+                                "nullable": true,
+                                "description": "failed / finished runs (completed + failed + unanswered)."
                               },
                               "spendCents": {
                                 "type": "number",
@@ -4579,6 +4606,7 @@
                               "runs",
                               "completed",
                               "failed",
+                              "unanswered",
                               "errorRate",
                               "spendCents",
                               "costPerRunCents",
@@ -4612,11 +4640,17 @@
                                 "type": "integer"
                               },
                               "failed": {
-                                "type": "integer"
+                                "type": "integer",
+                                "description": "The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."
+                              },
+                              "unanswered": {
+                                "type": "integer",
+                                "description": "Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."
                               },
                               "errorRate": {
                                 "type": "number",
-                                "nullable": true
+                                "nullable": true,
+                                "description": "failed / finished runs (completed + failed + unanswered)."
                               },
                               "spendCents": {
                                 "type": "number",
@@ -4635,6 +4669,7 @@
                               "runs",
                               "completed",
                               "failed",
+                              "unanswered",
                               "errorRate",
                               "spendCents",
                               "costPerRunCents",
@@ -4652,11 +4687,17 @@
                                 "type": "integer"
                               },
                               "failed": {
-                                "type": "integer"
+                                "type": "integer",
+                                "description": "The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."
+                              },
+                              "unanswered": {
+                                "type": "integer",
+                                "description": "Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."
                               },
                               "errorRate": {
                                 "type": "number",
-                                "nullable": true
+                                "nullable": true,
+                                "description": "failed / finished runs (completed + failed + unanswered)."
                               },
                               "spendCents": {
                                 "type": "number",
@@ -4675,6 +4716,7 @@
                               "runs",
                               "completed",
                               "failed",
+                              "unanswered",
                               "errorRate",
                               "spendCents",
                               "costPerRunCents",

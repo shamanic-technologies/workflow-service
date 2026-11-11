@@ -57,7 +57,7 @@ async function workflow(dynasty: string, featureSlug: string) {
 }
 
 let n = 0;
-async function runs(count: number, o: { workflowId?: string; outcome?: string; org?: string; status: string; at: Date; campaignId?: string | null }) {
+async function runs(count: number, o: { workflowId?: string; outcome?: string; org?: string; status: string; at: Date; campaignId?: string | null; error?: string }) {
   for (let i = 0; i < count; i++) {
     n++;
     await db.insert(workflowRuns).values({
@@ -68,6 +68,7 @@ async function runs(count: number, o: { workflowId?: string; outcome?: string; o
       status: o.status,
       executionScope: o.workflowId ? "campaign" : "engine",
       inputs: o.workflowId ? {} : { engineOutcome: o.outcome },
+      ...(o.error ? (o.workflowId ? { failedReason: o.error } : { error: o.error }) : {}),
       createdAt: o.at,
     });
   }
@@ -132,6 +133,35 @@ describe("campaign Engine monitoring", () => {
     expect(conv.onWorkflow).toBe(false);
     expect(conv.red).toBe(true);
     expect(conv.verdict.thresholdErrorRate).toBeCloseTo(1 / 101 + 0.01);
+  });
+
+  it("counts a run failed by a call with no answer or a billing refusal apart, on both paths, never as red (MON-SCRIPTS-FOLLOWUP-DYNASTIES-1111)", async () => {
+    const ballad = await workflow("cold-ballad", "cold");
+    await runs(100, { workflowId: ballad, status: "completed", at: at(3) });
+    await runs(5, { workflowId: ballad, status: "failed", at: at(3), error: "POST lead/orgs/buffer/next failed (500): Internal server error" });
+    await runs(160, { outcome: "conversation", status: "completed", at: at(6) });
+    // distribute.you's WhatsApp bridge, 2026-11-11: 87 runs refused 502 while it reconnected; nothing was sent.
+    const reconnecting =
+      'POST crm/orgs/whatsapp/reach failed (502): {"type":"upstream","code":"bridge_error","error":"WhatsApp bridge: WHATSAPP_RECONNECTING the brand\'s WhatsApp is reconnecting right now"}';
+    await runs(29, { outcome: "conversation", status: "failed", at: at(6), error: reconnecting });
+    await runs(2, { outcome: "conversation", status: "failed", at: at(6), error: "message_sent/dy_answer_lead/v3 (asked for message_sent) failed: llm.complete failed: fetch failed" });
+    await runs(1, { outcome: "conversation", status: "failed", at: at(6), error: "chat-service POST /complete -> 402: Sales funnel max budget reached" });
+    await runs(1, { outcome: "conversation", status: "failed", at: at(6), error: "finalize: decision write by email with an empty subject or body" });
+    await refreshEngineMonitoring(db, deps, at(6, 13));
+    const conv = (await readEngineMonitoring(db, 30, at(6, 13))).outcomes.find((o) => o.outcome === "conversation")!;
+    expect(conv.days[0]!.workflow).toMatchObject({ failed: 0, unanswered: 5 });
+    expect(conv.days[1]!.script).toMatchObject({ runs: 193, completed: 160, failed: 1, unanswered: 32 });
+    expect(conv.verdict.scriptErrorRate).toBeCloseTo(1 / 193);
+    expect(conv.verdict.scriptFinishedRuns).toBe(193);
+    expect(conv.verdict.workflowErrorRate).toBe(0);
+    expect(conv.red).toBe(false);
+
+    // The script's own failures still turn it red.
+    await runs(10, { outcome: "conversation", status: "failed", at: at(6, 14), error: "finalize: the next follow-up date is not a date" });
+    await refreshEngineMonitoring(db, deps, at(6, 15));
+    const red = (await readEngineMonitoring(db, 30, at(6, 15))).outcomes.find((o) => o.outcome === "conversation")!;
+    expect(red.days[1]!.script).toMatchObject({ failed: 11, unanswered: 32 });
+    expect(red.red).toBe(true);
   });
 
   it("is never red under 20 finished script runs, nor for an outcome that only runs on a workflow", async () => {
