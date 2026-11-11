@@ -5,6 +5,7 @@
  *   POST /engines/{outcome}/execute             run it for one campaign dispatch (same identity/admission as a workflow)
  *   POST /internal/engines/{outcome}/switch     switch it on for one org, or every org (staff / the migration steps)
  *   POST /internal/engines/{outcome}/off        switch it off for one org, or every org
+ *   POST /internal/engines/{outcome}/pick       the Rating's pick among kept dynasties, outside a run (a preview)
  *
  * Mounted before the identity gate: the execute route checks its own headers (and never needs `x-workflow-slug`).
  */
@@ -14,10 +15,10 @@ import { type WorkflowRun } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
-import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema } from "../schemas.js";
+import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema } from "../schemas.js";
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
-import { engineState, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
+import { engineState, pickScript, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
 import { ENGINE_EXECUTION_SCOPE, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../lib/scripts/engine-runner.js";
 import { productionLedgerDeps, runStoredScript } from "../lib/scripts/script-runner.js";
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
@@ -139,6 +140,37 @@ router.post("/internal/engines/:outcome/off", requireApiKey, async (req, res) =>
     res.json({ switchedOff: rows.length, state: await engineState(db, outcome, parsed.data.orgId ?? null) });
   } catch (err) {
     console.error("[workflow-service] engine off:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PREVIEW-RATING-PICK-1111: the Rating's pick with no campaign and no run (content-generation's email preview). The SAME
+// `pickScript` a run calls, among the dynasties the caller's strategy keeps: reads only, nothing spent or written.
+router.post("/internal/engines/:outcome/pick", requireApiKey, async (req, res) => {
+  const outcome = outcomeOf(req, res);
+  if (!outcome) return;
+  const parsed = EnginePickRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const pick = await pickScript(db, {
+      outcome,
+      servable: parsed.data.servable,
+      channel: parsed.data.channel ?? null,
+      keptDynasties: parsed.data.keptDynasties,
+    });
+    if (!pick) {
+      res.status(404).json({
+        code: "no_runnable_script",
+        error: `no script of Engine ${outcome} among ${parsed.data.keptDynasties.join(", ")} can run on ${parsed.data.servable.length ? parsed.data.servable.join(", ") : "no Units"}${parsed.data.channel ? ` for channel ${parsed.data.channel}` : ""}`,
+      });
+      return;
+    }
+    res.json({ outcome, dynasty: pick.script.dynasty, version: pick.script.version, scriptId: pick.script.id, draws: pick.draws });
+  } catch (err) {
+    console.error("[workflow-service] engine pick:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
