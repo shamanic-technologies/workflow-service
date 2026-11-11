@@ -275,6 +275,8 @@ export const engineMonitoringDays = pgTable(
     runs: integer("runs").notNull(),
     completed: integer("completed").notNull(),
     failed: integer("failed").notNull(),
+    /** Failed runs whose call got no answer or billing refused (MON-SCRIPTS-FOLLOWUP-DYNASTIES-1111), never in `failed`. */
+    unanswered: integer("unanswered").notNull().default(0),
     costSampleRuns: integer("cost_sample_runs"),
     costSampleCents: numeric("cost_sample_cents"),
     computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),

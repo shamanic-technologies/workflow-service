@@ -2793,8 +2793,9 @@ const EnginePathSchema = z
   .object({
     runs: z.number().int(),
     completed: z.number().int(),
-    failed: z.number().int(),
-    errorRate: z.number().nullable(),
+    failed: z.number().int().describe("The runs' own failures (a call that got no answer or a billing refusal is in `unanswered`)."),
+    unanswered: z.number().int().describe("Runs failed because a call got no answer (an upstream 5xx, a reset or timed-out connection) or billing refused it: never a failure of the script or workflow, never red."),
+    errorRate: z.number().nullable().describe("failed / finished runs (completed + failed + unanswered)."),
     spendCents: z.number().nullable().describe("Estimated: each org's runs x its sampled cost per run (runs-service subtree cost), summed. Null = no sample yet (today, or older than 7 days)."),
     costPerRunCents: z.number().nullable(),
     sampledRuns: z.number().int(),
