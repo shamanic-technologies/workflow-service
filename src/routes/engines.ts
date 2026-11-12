@@ -19,7 +19,7 @@ import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequest
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
 import { engineState, pickScript, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
-import { ENGINE_EXECUTION_SCOPE, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../lib/scripts/engine-runner.js";
+import { ENGINE_EXECUTION_SCOPE, executeEngineRun, planEngineRun, planScriptSlug, planTaskName, type EngineDispatch, type EngineRunDeps } from "../lib/scripts/engine-runner.js";
 import { productionLedgerDeps, runStoredScript } from "../lib/scripts/script-runner.js";
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
 import { SwitchError } from "../lib/scripts/script-writer-switch.js";
@@ -247,6 +247,7 @@ router.post("/engines/:outcome/execute", requireApiKey, executeRateLimit, async 
         orgId: d.orgId,
         userId: d.userId,
         taskName: planTaskName(d, plan),
+        ...(planScriptSlug(plan) ? { scriptSlug: planScriptSlug(plan) } : {}),
         headers: {
           "x-campaign-id": d.campaignId,
           "x-brand-id": d.brandIdHeader,

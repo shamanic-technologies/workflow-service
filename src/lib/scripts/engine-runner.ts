@@ -125,6 +125,11 @@ export async function planEngineRun(db: AnyPgDb, d: EngineDispatch): Promise<Eng
 export const planTaskName = (d: EngineDispatch, plan: EnginePlan) =>
   plan.kind === "none" ? engineTaskName(d.outcome) : scriptTaskName(plan.script.outcome, plan.script.dynasty);
 
+/** The script (`<outcome>/<dynasty>/v<version>`) the run executes, stated on its runs-service run (MON-SCRIPT-PRICES-2-1111):
+ *  the planned row, whose version the run is pinned to. Undefined when the run executes none. */
+export const planScriptSlug = (plan: EnginePlan): string | undefined =>
+  plan.kind === "none" ? undefined : `${plan.script.outcome}/${plan.script.dynasty}/v${plan.script.version}`;
+
 /** The `/end-run` body a script's status states, the same for every Engine (campaign-service's contract). */
 export function endRunBodyOf(result: (Pick<ScriptRunResult, "status" | "error"> & { again?: boolean; decided?: "done" | "idle" }) | null, answersOccurrence: boolean): Record<string, unknown> {
   if (!result) return { success: true, stopCampaign: false, noWorkAvailable: true };
@@ -210,7 +215,14 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
               ...(plan.wait.subject ? { subject: plan.wait.subject as SubjectRef } : {}),
               units: (plan.wait.units ?? {}) as Record<string, MaterialUnit>,
             }
-          : { outcome: plan.script.outcome, dynasty: plan.script.dynasty, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units };
+          : {
+              outcome: plan.script.outcome,
+              dynasty: plan.script.dynasty,
+              // the picked version, pinned: the run executes the script its runs-service run states (planScriptSlug)
+              version: plan.script.version,
+              ...(pushed.subject ? { subject: pushed.subject } : {}),
+              units: pushed.units,
+            };
       const recordedBy = (plan.script.tactics as Record<string, unknown>)?.recorded_by;
       // `now`: the run's clock, stated once (a script never reads Date.now(), so a replay of the run is the run); the
       // campaign the run is for rides the Request too (a script's door call names it: the writer pick, the send).

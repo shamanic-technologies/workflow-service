@@ -219,7 +219,7 @@ describe("a script run as a step: isolation and ledger declaration", () => {
     const v = vendors();
     const out = await runStoredScript(db, input, who, { ledger: l.deps, vendors: v.deps });
     expect(out).toMatchObject({ status: "made", runId: "run-child-1", scriptSlug: "message_written/dy_writer/v1", unit: { outcome: "message_written", content: { subject: "Hi Ana" } } });
-    expect(l.calls[0]).toEqual(["create", { parentRunId: "run-parent", orgId: "org-test", userId: "user-1", taskName: scriptTaskName("message_written", "dy_writer"), headers: who.headers }]);
+    expect(l.calls[0]).toEqual(["create", { parentRunId: "run-parent", orgId: "org-test", userId: "user-1", taskName: scriptTaskName("message_written", "dy_writer"), scriptSlug: "message_written/dy_writer/v1", headers: who.headers }]);
     expect(v.calls[0]!.headers).toMatchObject({ "x-run-id": "run-child-1", "x-org-id": "org-test", "x-user-id": "user-1", "x-brand-id": "brand-1", "x-campaign-id": "camp-1" });
     expect(v.calls[0]!.body).toMatchObject({ message: "Write to Ana", provider: "anthropic", model: "sonnet", responseFormat: "json" });
     expect(v.calls[0]!.body.systemPrompt).toBe("You write cold emails.");
