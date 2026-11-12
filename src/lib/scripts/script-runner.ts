@@ -79,7 +79,9 @@ export interface RunIdentity {
 }
 
 export interface LedgerDeps {
-  createRun(opts: { parentRunId: string; orgId: string; userId: string; taskName: string; headers: Record<string, string> }): Promise<string>;
+  /** `scriptSlug` (`<outcome>/<dynasty>/v<version>`): the stored script the run executes, stated to runs-service so the ledger
+   *  measures each script apart (MON-SCRIPT-PRICES-2-1111); absent on a run that executes none (an idle Engine run). */
+  createRun(opts: { parentRunId: string; orgId: string; userId: string; taskName: string; scriptSlug?: string; headers: Record<string, string> }): Promise<string>;
   declareOutcomes(runId: string, orgId: string, body: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] }): Promise<Record<string, unknown>>;
   closeRun(runId: string, status: "completed" | "failed", orgId: string): Promise<void>;
   /**
@@ -184,6 +186,7 @@ export async function runStoredScript(
       orgId: who.orgId,
       userId: who.userId,
       taskName: scriptTaskName(row.outcome, row.dynasty),
+      scriptSlug,
       headers: who.headers,
     }));
   const [record] = await db
@@ -464,7 +467,12 @@ export function productionLedgerDeps(): LedgerDeps {
       const headers: Record<string, string> = { ...opts.headers, "content-type": "application/json", "x-api-key": key, "x-org-id": opts.orgId, "x-user-id": opts.userId, "x-run-id": opts.parentRunId };
       // A service's own sweep runs for an org with no person behind it (instantly's reply-judging run): no user.
       if (!opts.userId) delete headers["x-user-id"];
-      const res = await fetch(`${base}/v1/runs`, { method: "POST", headers, body: JSON.stringify({ serviceName: "workflow", taskName: opts.taskName }), signal: AbortSignal.timeout(600_000) });
+      const res = await fetch(`${base}/v1/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ serviceName: "workflow", taskName: opts.taskName, ...(opts.scriptSlug ? { scriptSlug: opts.scriptSlug } : {}) }),
+        signal: AbortSignal.timeout(600_000),
+      });
       const text = await res.text();
       if (!res.ok) throw new Error(`runs-service POST /v1/runs -> ${res.status}: ${text.slice(0, 300)}`);
       return (JSON.parse(text) as { id: string }).id;
