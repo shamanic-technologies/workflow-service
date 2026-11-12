@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { callVendor, LLM_COMPLETE, LLM_PICK, type VendorDeps } from "../../src/lib/scripts/vendors.js";
-import { LLM_PICK_UPGRADES, NAMED_MODEL, PICK_LLM_FN, restateCase, UpgradeEditError } from "../../src/lib/scripts/llm-pick-upgrade.js";
+import { callVendor, LLM_COMPLETE, LLM_PICK, TEMPLATE_PICK, type VendorDeps } from "../../src/lib/scripts/vendors.js";
+import { LLM_PICK_UPGRADES, NAMED_MODEL, PICK_LLM_FN, restateCase, restateTemplateCase, TEMPLATE_PICK_UPGRADES, UpgradeEditError } from "../../src/lib/scripts/llm-pick-upgrade.js";
 import { replayCase, type ReplayCase } from "../../src/lib/scripts/replay.js";
 
 // LLM-PICK-SCRIPTS-1112 (owner 2026-11-12): every LLM call of a script asks the Rating's pick for its Engine and that
@@ -128,5 +128,50 @@ describe("the upgrade of a script that named a model", () => {
     expect(NAMED_MODEL.test('{ model: "sonnet" }')).toBe(true);
     expect(NAMED_MODEL.test('provider: "anthropic", model: "opus"')).toBe(true);
     expect(NAMED_MODEL.test("/\\.(ogg|opus|mp3)$/i")).toBe(false);
+  });
+});
+
+// Phase 2 (LLM-RATING-PER-ENGINE-1112): the template of a writing call is the Rating's pick too.
+function templateDoor(status = 200) {
+  const asked: string[] = [];
+  const deps: VendorDeps = {
+    async complete() { return {}; }, async platformComplete() { return {}; }, async judge() { return {}; }, async platformJudge() { return {}; }, async readSkill() { return null; },
+    async serviceDoor(_s, _m, path) {
+      asked.push(path);
+      return status === 200
+        ? { status, body: { template: { templateDynastySlug: "x-post-shape-rotation", name: "X: Shape of the day", head: "x-post-shape-rotation-v2" } } }
+        : { status, body: { error: "no active template dynasty the x Engine may write with", reason: "no_template_for_engine" } };
+    },
+  };
+  return { asked, deps };
+}
+
+describe("template.pick", () => {
+  it("asks the Rating's template pick for the script's Engine and writing call, per call", async () => {
+    const v = templateDoor();
+    const out = await callVendor(TEMPLATE_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps);
+    expect(v.asked).toEqual(["/internal/template-pick?outcome=x_post_published&place=writer&campaignId=camp-1"]);
+    expect(out).toMatchObject({ ok: true, data: { templateDynastySlug: "x-post-shape-rotation", template: { templateDynastySlug: "x-post-shape-rotation" } } });
+  });
+  it("no template for the Engine = a refusal (never a fixed template)", async () => {
+    const out = await callVendor(TEMPLATE_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, templateDoor(422).deps);
+    expect(out).toMatchObject({ ok: false, data: { status: 422, code: "no_template_for_engine" } });
+  });
+  it("the upgrade replaces the legacy writer pick call, and its record is restated as the template pick", async () => {
+    const u = TEMPLATE_PICK_UPGRADES.find((x) => x.dynasty === "dy_x_post")!;
+    const stored = `export default function run(ctx: any) {
+  const writerPick = must(ctx, "features.writer_pick", { query: { campaignId } });
+  return writerPick;
+}
+function must(ctx: any, n: string, a: any) { const r = ctx.vendor.call(n, a); if (!r.ok) throw new Error(n); return r.data; }
+const campaignId = "c";
+`;
+    const code = u.code(stored);
+    expect(code).toContain('must(ctx, "template.pick", { place: "writer" })');
+    expect(code).not.toContain("writer_pick");
+    const c: ReplayCase = { id: "t1", units: {}, calls: [{ name: "features.writer_pick", args: { query: { campaignId: "c" } }, answer: { ok: true, data: { template: { templateDynastySlug: "x-post-shape-rotation" }, llm: { model: "fable" } } } }], expect: { content: undefined } };
+    const r = restateTemplateCase(u, c);
+    expect(r.calls[0]).toMatchObject({ name: "template.pick", args: { place: "writer" }, answer: { ok: true, data: { template: { templateDynastySlug: "x-post-shape-rotation" } } } });
+    expect(JSON.stringify(r)).not.toContain("fable");
   });
 });

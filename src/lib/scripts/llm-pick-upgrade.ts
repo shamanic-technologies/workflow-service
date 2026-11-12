@@ -95,6 +95,8 @@ export interface LlmPickUpgrade {
    * `dy_split_proposal`'s door (`human.split.complete`), a call its code never makes (its v1 replays 101/110).
    */
   keepCase?: (c: ReplayCase) => boolean;
+  /** What an upgraded version already carries (skipped when present): default `"llm.pick"`. */
+  marker?: string;
   /** A recorded call REPLACED by the pick (the follow-up port's writer pick step). */
   replaceCall?: { name: string; args: Record<string, unknown> };
 }
@@ -267,3 +269,46 @@ export const LLM_PICK_UPGRADES: LlmPickUpgrade[] = [
 
 /** Model names no active script may state (the AC grep). */
 export const NAMED_MODEL = /["'`](opus|sonnet|fable|haiku|claude-[a-z0-9.-]+|deepseek-[a-z0-9.-]+|gemini[a-z0-9.-]*|gpt-[a-z0-9.-]+|glm-[a-z0-9.-]+|kimi[a-z0-9.-]*|flash|pro|flash-pro|flash-lite)["'`]/i;
+
+// ─── Phase 2: the TEMPLATE (LLM-RATING-PER-ENGINE-1112 phase 2) ─────────────────────────────────────────────────
+
+/** The legacy writer pick call becomes the Rating's template pick for the script's own Engine, its writing call. */
+function templatePickCode(stored: string): string {
+  let code = edit(stored, "writer pick call", /"features\.writer_pick", \{ query: \{ campaignId(?:: req\.campaignId)? \} \}/, '"template.pick", { place: "writer" }');
+  code = code.replace(/"features\.writer_pick: "/g, '"template.pick: "');
+  if (code.includes("features.writer_pick")) throw new UpgradeEditError("the code still calls features.writer_pick");
+  return code;
+}
+
+/** A recorded legacy writer pick restated as the template pick answering the template it served (the head is read live). */
+export function restateTemplateCase(u: LlmPickUpgrade, c: ReplayCase): ReplayCase {
+  return {
+    ...c,
+    calls: c.calls.map((call) => {
+      if (call.name !== "features.writer_pick") return call;
+      const tpl = (call.answer?.data as Record<string, unknown> | undefined)?.template as Record<string, unknown> | undefined;
+      const slug = tpl ? str(tpl.templateDynastySlug) : null;
+      const answer: RecordedCall["answer"] = call.answer?.ok
+        ? (() => {
+            const picked = { templateDynastySlug: slug, name: tpl ? str(tpl.name) : null, head: null };
+            return { ok: true, data: { ...picked, place: "writer", outcome: u.outcome, template: picked } };
+          })()
+        : call.answer;
+      return { name: "template.pick", ...(call.args !== undefined ? { args: { place: "writer" } } : {}), answer };
+    }),
+  };
+}
+
+export const TEMPLATE_PICK_UPGRADES: LlmPickUpgrade[] = [
+  "x_post_published/dy_x_post",
+  "linkedin_post_published/dy_linkedin_post",
+  "threads_post_published/dy_threads_thread",
+  "email_sent/dy_cold_email",
+  "email_sent/dy_cold_email_site",
+  "email_sent/dy_cold_email_signed_client_person",
+  "email_sent/dy_cold_email_signed_sender_client_brand",
+  "whatsapp_message_sent/dy_founder_hello",
+].map((key) => {
+  const [outcome, dynasty] = key.split("/") as [string, string];
+  return { outcome, dynasty, code: templatePickCode, marker: '"template.pick"' };
+});
