@@ -93,6 +93,13 @@ export const VOICE_READ = "voice.read";
  * nothing is written, the run is retried later, never a fallback model. No script names a model.
  */
 export const LLM_PICK = "llm.pick";
+/**
+ * The TEMPLATE of one writing call (LLM-RATING-PER-ENGINE-1112 phase 2): `{place, outcome?}` -> the Rating's template
+ * pick (features-service `GET /internal/template-pick`) for the script's Engine (or one it asks) and that call, narrowed
+ * by the campaign's strategy. Answers `{templateDynastySlug, name, head, place, outcome, template}`; none (422
+ * `no_template_for_engine`) = a refusal the script throws on: nothing written, retried later, never a fixed template.
+ */
+export const TEMPLATE_PICK = "template.pick";
 /** The open times of the offer's public booking page (`{bookingUrl, timezone}` -> `{slots, calendarId?, ...}`). */
 export const BOOKING_SLOTS = "booking.slots";
 /**
@@ -223,7 +230,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
 };
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
-export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, JEV_CHOICE, LLM_PICK, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
+export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, JEV_CHOICE, LLM_PICK, TEMPLATE_PICK, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
 
 /** Response schemas a script may name instead of spelling one (Anthropic needs a strict schema). */
 export const NAMED_RESPONSE_SCHEMAS: Record<string, Record<string, unknown>> = {
@@ -581,6 +588,46 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
   }
 }
 
+/** Which Engine and call a Rating pick is for: the script's own Engine, or one it asks (tactic `asks`). */
+function pickTarget(name: string, args: Record<string, unknown>, ctx: VendorCallContext): { outcome: string; place: string; query: URLSearchParams; headers: Record<string, string> } | { error: string } {
+  const q = plainRecord(args.query) ? args.query : {};
+  const place = str(args.place) ?? str(q.place);
+  if (!place) return { error: `${name} needs a place: the name the script gives this call (writer, angles...)` };
+  const own = ctx.outcome ?? null;
+  const named = str(args.outcome) ?? str(q.outcome);
+  let outcome = own;
+  if (named && named !== own) {
+    const asks = Array.isArray(ctx.tactics.asks) ? (ctx.tactics.asks as unknown[]) : [];
+    if (!asks.includes(named)) return { error: `${name}: ${named} is neither this script's Engine nor one it asks (tactic asks)` };
+    outcome = named;
+  }
+  if (!outcome) return { error: `${name}: the run states no Engine outcome` };
+  const query = new URLSearchParams({ outcome, place });
+  const campaignId = str(ctx.headers["x-campaign-id"]);
+  if (campaignId) query.set("campaignId", campaignId);
+  const runId = ctx.headers["x-run-id"];
+  return { outcome, place, query, headers: runId ? { "x-run-id": runId } : {} };
+}
+
+/** One `template.pick`: the Rating's template for this Engine and this writing call, read per call. */
+async function templatePick(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+  const t = pickTarget(TEMPLATE_PICK, args, ctx);
+  if ("error" in t) return refuse(t.error);
+  try {
+    const out = await askThroughBoot(() => deps.serviceDoor("features", "GET", `/internal/template-pick?${t.query}`, null, t.headers), deps);
+    const tpl = plainRecord(out.body.template) ? out.body.template : null;
+    if (out.status !== 200 || !tpl) {
+      return { ok: false, data: { error: `template.pick ${t.outcome}|${t.place}: ${String(out.body.error ?? `features-service answered ${out.status}`)}`, status: out.status, code: str(out.body.reason) } };
+    }
+    const slug = str(tpl.templateDynastySlug);
+    if (!slug) return refuse(`template.pick ${t.outcome}|${t.place}: features-service picked ${JSON.stringify(tpl)}, with no template dynasty`);
+    const picked = { templateDynastySlug: slug, name: str(tpl.name), head: str(tpl.head) };
+    return { ok: true, data: { ...picked, place: t.place, outcome: t.outcome, template: picked } };
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** One `llm.pick`: the Rating's LLM for this Engine and this call, read per call (LLM-PICK-SCRIPTS-1112). */
 async function llmPick(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   const q = plainRecord(args.query) ? args.query : {};
@@ -623,6 +670,7 @@ async function llmPick(args: Record<string, unknown>, ctx: VendorCallContext, de
 export async function callVendor(name: string, args: Record<string, unknown> | null, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   if (name === LLM_COMPLETE || name === CHAT_COMPLETE) return complete(name, args ?? {}, ctx, deps);
   if (name === LLM_PICK) return llmPick(args ?? {}, ctx, deps);
+  if (name === TEMPLATE_PICK) return templatePick(args ?? {}, ctx, deps);
   if (name === JEV_NOUL) return jevNoul(args ?? {}, ctx, deps);
   if (name === JEV_CHOICE) return jevChoice(args ?? {}, ctx, deps);
   if (name === VOICE_READ) return voiceRead(deps);

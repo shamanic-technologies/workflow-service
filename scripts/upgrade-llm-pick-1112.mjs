@@ -8,15 +8,21 @@
 const { db } = await import("../dist/db/index.js");
 const { activeVersion, loadCases, upgradeScript } = await import("../dist/lib/scripts/script-catalogue.js");
 const { replayAll } = await import("../dist/lib/scripts/replay.js");
-const { LLM_PICK_UPGRADES, restateCase, NAMED_MODEL } = await import("../dist/lib/scripts/llm-pick-upgrade.js");
+const { LLM_PICK_UPGRADES, TEMPLATE_PICK_UPGRADES, restateCase, restateTemplateCase, NAMED_MODEL } = await import("../dist/lib/scripts/llm-pick-upgrade.js");
+// `--templates`: phase 2, the TEMPLATE of each writing call asks the Rating (`template.pick`) instead of the legacy writer pick.
+const templates = process.argv.includes("--templates");
+const UPGRADES = templates ? TEMPLATE_PICK_UPGRADES : LLM_PICK_UPGRADES;
+const restate = templates ? restateTemplateCase : restateCase;
 
 const apply = process.argv.includes("--apply");
 const onlyAt = process.argv.indexOf("--only");
 const only = onlyAt >= 0 ? process.argv[onlyAt + 1] : null;
-const SOURCE = "LLM-PICK-SCRIPTS-1112: production records restated, one llm.pick before each LLM call (owner 2026-11-12)";
+const SOURCE = process.argv.includes("--templates")
+  ? "LLM-RATING-PER-ENGINE-1112 phase 2: production records restated, the writer pick read as the template pick (owner 2026-11-12)"
+  : "LLM-PICK-SCRIPTS-1112: production records restated, one llm.pick before each LLM call (owner 2026-11-12)";
 
 let failed = 0;
-for (const u of LLM_PICK_UPGRADES) {
+for (const u of UPGRADES) {
   if (only && u.dynasty !== only) continue;
   const label = `${u.outcome}/${u.dynasty}`;
   const row = await activeVersion(db, u.outcome, u.dynasty);
@@ -24,8 +30,8 @@ for (const u of LLM_PICK_UPGRADES) {
     console.log(`${label}: no active version, skipped`);
     continue;
   }
-  if (row.code.includes('"llm.pick"')) {
-    console.log(`${label}: v${row.version} already asks llm.pick, skipped`);
+  if (row.code.includes(u.marker ?? '"llm.pick"')) {
+    console.log(`${label}: v${row.version} already asks ${u.marker ?? "llm.pick"}, skipped`);
     continue;
   }
   let code;
@@ -43,7 +49,7 @@ for (const u of LLM_PICK_UPGRADES) {
   const stored = await loadCases(db, u.outcome, u.dynasty);
   const own = u.keepCase ? stored.filter(u.keepCase) : stored;
   if (own.length !== stored.length) console.log(`${label}: ${stored.length - own.length} stored case(s) are another dynasty's records, left out`);
-  const cases = own.map((c) => restateCase(u, c));
+  const cases = own.map((c) => restate(u, c));
   let score = "no cases";
   if (cases.length) {
     const summary = await replayAll(code, cases.map((c) => ({ ...c, tactics: { ...effective, ...(c.tactics ?? {}) } })));
