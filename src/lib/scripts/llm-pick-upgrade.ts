@@ -90,6 +90,11 @@ export interface LlmPickUpgrade {
   tactics?: (stored: Record<string, unknown>) => Record<string, unknown>;
   /** How a recorded case is restated (absent = cases unchanged, the dynasty carries none). */
   insertions?: PickInsertion[];
+  /**
+   * Which stored cases are this dynasty's own (default all): `dy_audience_split` holds 9 records of
+   * `dy_split_proposal`'s door (`human.split.complete`), a call its code never makes (its v1 replays 101/110).
+   */
+  keepCase?: (c: ReplayCase) => boolean;
   /** A recorded call REPLACED by the pick (the follow-up port's writer pick step). */
   replaceCall?: { name: string; args: Record<string, unknown> };
 }
@@ -235,6 +240,14 @@ function listicleCode(stored: string): string {
 }
 const dropLlmTactics = (t: Record<string, unknown>) => Object.fromEntries(Object.entries(t).filter(([k]) => k !== "llm" && k !== "readerLlm"));
 
+/**
+ * A recorded call whose REQUEST was not recorded (`args` absent: the replay compares no request for it) used the model the
+ * old code stated, the only one it could call: the restated pick answers that one, so the replay proves the rest.
+ */
+const JUDGE_STATED = { provider: "deepseek", model: "deepseek-flash" };
+const SPLIT_STATED = { provider: "anthropic", model: "sonnet" };
+const UNRECORDED = (c: RecordedCall, stated: { provider: string; model: string }) => (c.args === undefined ? stated : null);
+
 export const LLM_PICK_UPGRADES: LlmPickUpgrade[] = [
   { outcome: "x_post_published", dynasty: "dy_x_post", code: postCode, insertions: postInsertions("content.thread.generate") },
   { outcome: "linkedin_post_published", dynasty: "dy_linkedin_post", code: postCode, insertions: postInsertions("content.thread.generate") },
@@ -247,8 +260,8 @@ export const LLM_PICK_UPGRADES: LlmPickUpgrade[] = [
   { outcome: "message_sent", dynasty: "dy_answer_lead", code: answerLeadCode },
   { outcome: "whatsapp_message_sent", dynasty: "dy_founder_hello", code: founderHelloCode, insertions: [{ before: "content.whatsapp.generate", place: "writer", llmOf: (c, prev) => (str(bodyOf(c).model) ? { provider: writerPickLlm(prev)?.provider ?? "", model: str(bodyOf(c).model)! } : writerPickLlm(prev)) }] },
   { outcome: "conversation", dynasty: "dy_follow_up_due", code: followUpCode, replaceCall: { name: "llm.pick", args: FOLLOW_UP_PICK_ARGS } },
-  { outcome: "lead_interested", dynasty: "dy_reply_judge", code: replyJudgeCode, insertions: [{ before: "llm.complete", place: "judge", llmOf: (c) => argsLlm(c) }] },
-  { outcome: "audience_built", dynasty: "dy_audience_split", code: (s) => splitCode(s, "inline"), insertions: [{ before: "chat.complete", place: "split", llmOf: (c) => argsLlm(c) }] },
+  { outcome: "lead_interested", dynasty: "dy_reply_judge", code: replyJudgeCode, insertions: [{ before: "llm.complete", place: "judge", llmOf: (c) => argsLlm(c) ?? UNRECORDED(c, JUDGE_STATED) }] },
+  { outcome: "audience_built", dynasty: "dy_audience_split", code: (s) => splitCode(s, "inline"), keepCase: (c) => !c.calls.some((x) => x.name === "human.split.complete"), insertions: [{ before: "chat.complete", place: "split", llmOf: (c) => argsLlm(c) ?? UNRECORDED(c, SPLIT_STATED) }] },
   { outcome: "audience_built", dynasty: "dy_split_proposal", code: (s) => splitCode(s, "door"), insertions: [{ before: "human.split.complete", place: "split", llmOf: (c) => argsLlm(c) }] },
 ];
 

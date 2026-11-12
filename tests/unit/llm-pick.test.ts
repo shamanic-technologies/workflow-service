@@ -103,6 +103,13 @@ describe("the upgrade of a script that named a model", () => {
     expect(await replayCase(code, restated)).toMatchObject({ match: true });
   });
 
+  it("a recorded call whose request was not recorded is restated with the model the old code stated", async () => {
+    const unrecorded: ReplayCase = { ...RECORDED, calls: [{ name: "llm.complete", answer: RECORDED.calls[0]!.answer }] };
+    const restated = restateCase(JUDGE, unrecorded);
+    expect(restated.calls[0]).toEqual({ name: "llm.pick", answer: { ok: true, data: expect.objectContaining({ provider: "deepseek", model: "deepseek-flash" }) } });
+    expect(await replayCase(JUDGE.code(JUDGE_V2), restated)).toMatchObject({ match: true });
+  });
+
   it("a pick that answers no LLM fails the run before any LLM call: nothing is written", async () => {
     const code = JUDGE.code(JUDGE_V2);
     const refused: ReplayCase = {
