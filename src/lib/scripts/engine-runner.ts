@@ -53,7 +53,7 @@ export interface EngineDispatch {
 /** What the run will execute, decided before it is opened (so the run is named by it). */
 export type EnginePlan =
   | { kind: "resume"; wait: EngineWaitRow; script: ScriptRow }
-  | { kind: "pick"; script: ScriptRow; draws: Array<Record<string, unknown>> }
+  | { kind: "pick"; script: ScriptRow; draws: Array<Record<string, unknown>>; fallbacks?: ScriptRow[] }
   | { kind: "none" };
 
 export interface CampaignCallbacks {
@@ -119,7 +119,25 @@ export async function planEngineRun(db: AnyPgDb, d: EngineDispatch): Promise<Eng
   }
   const { units } = pushedUnits(d);
   const pick = await pickScript(db, { outcome: d.outcome, servable: Object.keys(units), channel: d.featureSlug, campaignId: d.campaignId });
-  return pick ? { kind: "pick", script: pick.script, draws: pick.draws } : { kind: "none" };
+  return pick ? { kind: "pick", script: pick.script, draws: pick.draws, fallbacks: pick.ranked.slice(1) } : { kind: "none" };
+}
+
+/**
+ * RATING-UNMADE-FALLTHROUGH-1112: the most scripts one proactive run tries. The Rating's pick can have nothing to make
+ * for THIS campaign (nobody it owes, its own population spent) while a lower-rated kept script serves it: an unmade run
+ * never changed the next pick (fleet-pooled rate), so the campaign idled forever. The run then asks the next candidate
+ * in the order of the same draw, each in its own child run named by its script, until one makes or this many tried.
+ */
+export const MAX_SCRIPTS_PER_RUN = 5;
+
+/**
+ * Whether a script's answer lets the run ask the Rating's next candidate: a proactive run (no occurrence: a refusal
+ * about a pushed person is final) whose script made nothing and did not decide its look was done or unfinished.
+ */
+export function fallsThrough(result: Pick<ScriptRunResult, "status" | "again" | "decided"> | null, answersOccurrence: boolean): boolean {
+  if (!result || answersOccurrence) return false;
+  if (result.status === "nothing") return true;
+  return result.status === "unmade" && result.again !== true && result.decided !== "done";
 }
 
 export const planTaskName = (d: EngineDispatch, plan: EnginePlan) =>
@@ -199,6 +217,7 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
     const trigger = triggerOf(d);
     const answersOccurrence = !!trigger;
     let result: ScriptRunResult | null = null;
+    const tried: ScriptRunResult[] = [];
     if (plan.kind !== "none") {
       const pushed = pushedUnits(d);
       const input: RunScriptInput =
@@ -211,46 +230,74 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
               units: (plan.wait.units ?? {}) as Record<string, MaterialUnit>,
             }
           : { outcome: plan.script.outcome, dynasty: plan.script.dynasty, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units };
-      const recordedBy = (plan.script.tactics as Record<string, unknown>)?.recorded_by;
       // `now`: the run's clock, stated once (a script never reads Date.now(), so a replay of the run is the run); the
       // campaign the run is for rides the Request too (a script's door call names it: the writer pick, the send).
       // `runId`: the script's own run (a step that keys a send on its run, one look per run, reads it there).
-      input.request = { campaignId: d.campaignId, ...start, trigger: trigger ?? null, now: new Date().toISOString(), runId };
-      if (typeof recordedBy === "string" && recordedBy) input.recordedBy = recordedBy;
+      const request = { campaignId: d.campaignId, ...start, trigger: trigger ?? null, now: new Date().toISOString() };
       const vendorHeaders: Record<string, string> = { ...headers, ...(audienceId ? { "x-audience-id": audienceId } : {}) };
       delete vendorHeaders["x-engine-outcome"];
-      try {
-        result = await deps.runScript(input, { orgId: d.orgId, userId: d.userId, parentRunId: d.callerRunId, headers: vendorHeaders }, {
-          runId,
-          onWait: async (days) => {
-            await db.insert(engineWaits).values({
-              orgId: d.orgId,
-              campaignId: d.campaignId,
-              outcome: d.outcome,
-              scriptId: plan.script.id,
-              subject: input.subject ?? null,
-              units: input.units,
-              dueAt: new Date(Date.now() + days * 86_400_000),
-              fromRunId: runId,
-            });
-          },
-        });
-      } catch (e) {
-        if (!(e instanceof ScriptRunFailed)) throw e;
-        result = e.result;
-      }
-      deps.noteScriptRun?.(d.outcome);
-      // A script whose work produces no outcome by design states its support function (tactic `support: {kind,
-      // reason}`); the run is marked once it made its Unit. Never fails the run: a refusal is logged loudly.
-      const support = (plan.script.tactics as Record<string, unknown>)?.support as { kind?: unknown; reason?: unknown } | undefined;
-      if (result?.status === "made" && support && typeof support.kind === "string" && typeof support.reason === "string" && deps.ledger.markSupport) {
-        await deps.ledger
-          .markSupport(runId, { kind: support.kind, reason: support.reason, markedBy: `workflow-service engine ${scriptTaskName(plan.script.outcome, plan.script.dynasty)}` })
-          .catch((e) => console.error(`[workflow-service] engine run ${runId}: SUPPORT MARK FAILED:`, e instanceof Error ? e.message : e));
-      }
+      /** One script of the plan on its own run: the Engine run for the first, a child run named by it for the next. */
+      const attempt = async (script: ScriptRow, scriptInput: RunScriptInput, scriptRunId: string): Promise<ScriptRunResult> => {
+        scriptInput.request = { ...request, runId: scriptRunId };
+        const recordedBy = (script.tactics as Record<string, unknown>)?.recorded_by;
+        if (typeof recordedBy === "string" && recordedBy) scriptInput.recordedBy = recordedBy;
+        let out: ScriptRunResult;
+        try {
+          out = await deps.runScript(scriptInput, { orgId: d.orgId, userId: d.userId, parentRunId: d.callerRunId, headers: { ...vendorHeaders, "x-run-id": scriptRunId } }, {
+            runId: scriptRunId,
+            onWait: async (days) => {
+              await db.insert(engineWaits).values({
+                orgId: d.orgId,
+                campaignId: d.campaignId,
+                outcome: d.outcome,
+                scriptId: script.id,
+                subject: scriptInput.subject ?? null,
+                units: scriptInput.units,
+                dueAt: new Date(Date.now() + days * 86_400_000),
+                fromRunId: scriptRunId,
+              });
+            },
+          });
+        } catch (e) {
+          if (!(e instanceof ScriptRunFailed)) throw e;
+          out = e.result;
+        }
+        deps.noteScriptRun?.(d.outcome);
+        // A script whose work produces no outcome by design states its support function (tactic `support: {kind,
+        // reason}`); the run is marked once it made its Unit. Never fails the run: a refusal is logged loudly.
+        const support = (script.tactics as Record<string, unknown>)?.support as { kind?: unknown; reason?: unknown } | undefined;
+        if (out.status === "made" && support && typeof support.kind === "string" && typeof support.reason === "string" && deps.ledger.markSupport) {
+          await deps.ledger
+            .markSupport(scriptRunId, { kind: support.kind, reason: support.reason, markedBy: `workflow-service engine ${scriptTaskName(script.outcome, script.dynasty)}` })
+            .catch((e) => console.error(`[workflow-service] engine run ${scriptRunId}: SUPPORT MARK FAILED:`, e instanceof Error ? e.message : e));
+        }
+        return out;
+      };
+      result = await attempt(plan.script, input, runId);
+      tried.push(result);
       if (plan.kind === "resume") await db.update(engineWaits).set({ status: "resumed", resumedRunId: runId }).where(eq(engineWaits.id, plan.wait.id));
+      // RATING-UNMADE-FALLTHROUGH-1112: the pick had nothing to make for this campaign: the Rating's next candidate, in
+      // the order of the same draw, each on a child run of this one named by its script (its spend and Unit land there).
+      const next = plan.kind === "pick" ? [...(plan.fallbacks ?? [])] : [];
+      while (fallsThrough(result, answersOccurrence) && next.length > 0 && tried.length < MAX_SCRIPTS_PER_RUN) {
+        const script = next.shift()!;
+        const childRunId = await deps.ledger.createRun({ parentRunId: runId, orgId: d.orgId, userId: d.userId, taskName: scriptTaskName(script.outcome, script.dynasty), headers: vendorHeaders });
+        let childOk = false;
+        try {
+          result = await attempt(script, { outcome: script.outcome, dynasty: script.dynasty, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units }, childRunId);
+          childOk = result.status !== "failed" && result.status !== "stopped";
+        } finally {
+          await deps.ledger.closeRun(childRunId, childOk ? "completed" : "failed", d.orgId).catch((err) => console.error(`[workflow-service] engine run ${runId}: closing child run ${childRunId} failed:`, err));
+        }
+        tried.push(result);
+      }
     }
-    const endBody = endRunBodyOf(result, answersOccurrence);
+    let endBody = endRunBodyOf(result, answersOccurrence);
+    // One script's spent population never stops a campaign another tried script still had an answer for: stop only when
+    // every script this run tried said so.
+    if (endBody.stopCampaign === true && tried.some((t) => endRunBodyOf(t, answersOccurrence).stopCampaign !== true)) {
+      endBody = { success: true, stopCampaign: false, noWorkAvailable: true };
+    }
     await deps.campaign.call("/end-run", headers, endBody);
     const ok = !result || (result.status !== "failed" && result.status !== "stopped");
     await deps.ledger.closeRun(runId, ok ? "completed" : "failed", d.orgId);
@@ -258,11 +305,11 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
       db,
       rowId,
       ok ? "completed" : "failed",
-      { script: result ? result.scriptSlug : null, status: result?.status ?? "no_script", endRun: endBody },
+      { script: result ? result.scriptSlug : null, status: result?.status ?? "no_script", endRun: endBody, ...(tried.length > 1 ? { tried: tried.map((t) => ({ script: t.scriptSlug, runId: t.runId, status: t.status, error: t.error })) } : {}) },
       result?.error ?? null,
     );
     console.log(
-      `[workflow-service] engine ${d.outcome} run=${runId} campaign=${d.campaignId} ${result ? `${result.scriptSlug} ${result.status}` : "no script it can run: idle"}` +
+      `[workflow-service] engine ${d.outcome} run=${runId} campaign=${d.campaignId} ${tried.length > 1 ? `tried ${tried.slice(0, -1).map((t) => `${t.scriptSlug} ${t.status}`).join(", ")}, then ` : ""}${result ? `${result.scriptSlug} ${result.status}` : "no script it can run: idle"}` +
         `${result?.error ? `: ${result.error}` : ""}`,
     );
   } catch (e) {
