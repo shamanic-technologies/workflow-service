@@ -97,6 +97,8 @@ export interface LlmPickUpgrade {
   keepCase?: (c: ReplayCase) => boolean;
   /** What an upgraded version already carries (skipped when present): default `"llm.pick"`. */
   marker?: string;
+  /** Upgraded only while the stored code still carries this (default: always); `marker` then unused. */
+  needs?: string;
   /** A recorded call REPLACED by the pick (the follow-up port's writer pick step). */
   replaceCall?: { name: string; args: Record<string, unknown> };
 }
@@ -312,3 +314,29 @@ export const TEMPLATE_PICK_UPGRADES: LlmPickUpgrade[] = [
   const [outcome, dynasty] = key.split("/") as [string, string];
   return { outcome, dynasty, code: templatePickCode, marker: '"template.pick"' };
 });
+
+// ─── Phase 3: the cold email's writer LLM is picked on its OWN Engine ───────────────────────────────────────────
+// The Rating files the writing calls under the OUTERMOST script (`email_sent/dy_cold_email`), and the templates sit on
+// `email_sent` too: a `message_written` pick saw no history (features montgomery-v3, 2026-11-12).
+
+const OWN_ENGINE_FROM = 'pickLlm(ctx, "writer", "message_written")';
+function writerOwnEngineCode(stored: string): string {
+  return edit(stored, "writer pick on message_written", OWN_ENGINE_FROM, 'pickLlm(ctx, "writer")');
+}
+
+/** A recorded writer pick for `message_written` restated as the same pick on the script's own Engine. */
+export function restateOwnEngineCase(u: LlmPickUpgrade, c: ReplayCase): ReplayCase {
+  return {
+    ...c,
+    calls: c.calls.map((call) => {
+      const a = call.args as Record<string, unknown> | undefined;
+      if (call.name !== "llm.pick" || a?.outcome !== "message_written") return call;
+      const data = { ...((call.answer?.data as Record<string, unknown>) ?? {}), outcome: u.outcome };
+      return { ...call, args: { place: a.place }, answer: { ...call.answer, data } };
+    }),
+  };
+}
+
+export const WRITER_OWN_ENGINE_UPGRADES: LlmPickUpgrade[] = ["dy_cold_email", "dy_cold_email_site", "dy_cold_email_signed_client_person", "dy_cold_email_signed_sender_client_brand"].map(
+  (dynasty) => ({ outcome: "email_sent", dynasty, code: writerOwnEngineCode, needs: OWN_ENGINE_FROM }),
+);
