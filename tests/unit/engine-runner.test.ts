@@ -8,7 +8,7 @@ import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/scri
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { engineState, pickScript, sampleBeta, servesChannel, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
-import { endRunBodyOf, executeEngineRun, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../../src/lib/scripts/engine-runner.js";
+import { MAX_SCRIPTS_PER_RUN, endRunBodyOf, executeEngineRun, fallsThrough, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../../src/lib/scripts/engine-runner.js";
 import { reserveCampaignExecution } from "../../src/lib/execution-admission.js";
 import { engineWaits, scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
 
@@ -390,6 +390,92 @@ describe("the Rating", () => {
     }
     expect(sum / 4000).toBeGreaterThan(0.27);
     expect(sum / 4000).toBeLessThan(0.33);
+  });
+});
+
+describe("the Rating's pick has nothing to make for this campaign (RATING-UNMADE-FALLTHROUGH-1112)", () => {
+  // The top-rated script fleet-wide: it serves people this campaign already contacted, and a brand-new campaign has none.
+  const OWED = `
+export default function run(ctx) {
+  if (ctx.request.campaignId === "camp-owes") return { content: { owed: true }, subject: { service: "lead-service", id: "lead-owed" } };
+  return { unmade: "nobody_owed" };
+}`;
+  const rows = (scriptId: string, status: string, n: number) => Array.from({ length: n }, (_, i) => ({ scriptId, orgId: "org-other", runId: `${scriptId}-${status}-${i}`, parentRunId: "p", status }));
+  async function twoScripts(top = OWED) {
+    const a = await addScript("lead_found", "dy_top", top, { recorded_by: "lead" });
+    const b = await addScript("lead_found", "dy_lower", SERVE, { recorded_by: "lead" });
+    // A makes 97 % fleet-wide, B 30 %: A wins every draw.
+    await db.insert(scriptRuns).values([...rows(a.id, "made", 970), ...rows(a.id, "unmade", 30), ...rows(b.id, "made", 30), ...rows(b.id, "unmade", 70)]);
+    return { a, b };
+  }
+
+  it("the campaign gets the next candidate's Unit in the same run, on a child run named by that script", async () => {
+    await twoScripts();
+    const w = world();
+    const { plan, runId, row } = await runOnce(dispatch(), w);
+    expect(plan.kind === "pick" && plan.script.dynasty).toBe("dy_top");
+    expect(w.runs.map((r) => r.taskName)).toEqual(["script:lead_found/dy_top", "script:lead_found/dy_lower"]);
+    const child = "run-2";
+    expect(w.doors[0]!.headers).toMatchObject({ "x-run-id": child, "x-campaign-id": "camp-1", "x-audience-id": "aud-1" });
+    expect(w.calls.map((c) => c.path)).toEqual(["/gate-check", "/start-run", "/end-run"]);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false });
+    expect(w.closed).toEqual([{ runId: child, status: "completed" }, { runId, status: "completed" }]);
+    const runsByStatus = (await db.select().from(scriptRuns).where(eq(scriptRuns.orgId, ORG))).map((r) => `${r.runId} ${r.status}`).sort();
+    expect(runsByStatus).toEqual([`${runId} unmade`, `${child} made`].sort());
+    expect(row.result).toMatchObject({ script: "lead_found/dy_lower/v1", status: "made", tried: [{ status: "unmade" }, { status: "made" }] });
+  });
+
+  it("the top script keeps winning, alone, for a campaign where it makes", async () => {
+    await twoScripts();
+    for (let i = 0; i < 10; i++) {
+      const w = world();
+      const { runId } = await runOnce(dispatch({ campaignId: "camp-owes" }), w);
+      expect(w.runs.map((r) => r.taskName)).toEqual(["script:lead_found/dy_top"]);
+      expect(w.doors).toEqual([]);
+      expect(w.closed).toEqual([{ runId, status: "completed" }]);
+      await db.delete(workflowRuns);
+    }
+  });
+
+  it("one script's spent population never stops a campaign; every tried script spent does", async () => {
+    await twoScripts();
+    const w = world({ found: false, reason: "audience_exhausted" });
+    await runOnce(dispatch(), w);
+    expect(w.runs.length).toBe(2);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+
+    await db.delete(scripts);
+    await db.delete(workflowRuns);
+    await addScript("lead_found", "dy_a", SERVE, { recorded_by: "lead" });
+    await addScript("lead_found", "dy_b", SERVE, { recorded_by: "lead" });
+    const spent = world({ found: false, reason: "audience_exhausted" });
+    await runOnce(dispatch(), spent);
+    expect(spent.runs.length).toBe(2);
+    expect(spent.calls[2]!.body).toEqual({ success: true, stopCampaign: true });
+  });
+
+  it("a script's own decision, an unfinished look, a failure or an occurrence never fall through", () => {
+    expect(fallsThrough({ status: "unmade" }, false)).toBe(true);
+    expect(fallsThrough({ status: "unmade", decided: "idle" }, false)).toBe(true);
+    expect(fallsThrough({ status: "nothing" }, false)).toBe(true);
+    expect(fallsThrough({ status: "unmade", decided: "done" }, false)).toBe(false);
+    expect(fallsThrough({ status: "unmade", again: true }, false)).toBe(false);
+    expect(fallsThrough({ status: "unmade" }, true)).toBe(false);
+    for (const status of ["made", "waiting", "failed", "stopped"] as const) expect(fallsThrough({ status }, false)).toBe(false);
+    expect(fallsThrough(null, false)).toBe(false);
+  });
+
+  it("tries at most MAX_SCRIPTS_PER_RUN scripts, in the order of one draw", async () => {
+    for (let i = 0; i < MAX_SCRIPTS_PER_RUN + 2; i++) await addScript("lead_found", `dy_${i}`, OWED, { recorded_by: "lead" });
+    const pick = await pickScript(db, { outcome: "lead_found", servable: [], channel: null });
+    const byDraw = [...pick!.draws].sort((x, y) => y.draw - x.draw).map((x) => x.dynasty);
+    expect(pick!.ranked.map((r) => r.dynasty)).toEqual(byDraw);
+    expect(pick!.ranked[0]!.dynasty).toBe(pick!.script.dynasty);
+    const w = world();
+    const { row } = await runOnce(dispatch(), w);
+    expect(w.runs.length).toBe(MAX_SCRIPTS_PER_RUN);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
+    expect(row.status).toBe("completed");
   });
 });
 

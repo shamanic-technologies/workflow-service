@@ -186,6 +186,11 @@ export interface Pick {
   script: ScriptRow;
   /** Every candidate and its draw, for the run's log. */
   draws: Array<{ dynasty: string; version: number; made: number; runs: number; draw: number }>;
+  /**
+   * Every candidate in the order of this same draw (`script` first): when the pick has nothing to make for this
+   * campaign, the run asks the next one (RATING-UNMADE-FALLTHROUGH-1112), so the Rating still decides the order.
+   */
+  ranked: ScriptRow[];
 }
 
 /** The scripts of an Engine this run can run (fed by its materials, its channel, proven when a port). */
@@ -263,9 +268,8 @@ export async function pickScript(db: AnyPgDb, input: PickInput, random: () => nu
     const s = by.get(c.dynasty) ?? { made: 0, runs: 0 };
     return { dynasty: c.dynasty, version: c.version, made: s.made, runs: s.runs, draw: sampleBeta(1 + s.made, 1 + Math.max(0, s.runs - s.made), random) };
   });
-  let best = 0;
-  for (let i = 1; i < draws.length; i++) if (draws[i]!.draw > draws[best]!.draw) best = i;
-  return { script: candidates[best]!, draws };
+  const order = candidates.map((_, i) => i).sort((a, b) => draws[b]!.draw - draws[a]!.draw);
+  return { script: candidates[order[0]!]!, draws, ranked: order.map((i) => candidates[i]!) };
 }
 
 /** The outcomes the candidates' dynasties were upgraded from (their upgrade chain, never across a fork). */
