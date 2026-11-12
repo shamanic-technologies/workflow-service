@@ -8,16 +8,20 @@
 const { db } = await import("../dist/db/index.js");
 const { activeVersion, loadCases, upgradeScript } = await import("../dist/lib/scripts/script-catalogue.js");
 const { replayAll } = await import("../dist/lib/scripts/replay.js");
-const { LLM_PICK_UPGRADES, TEMPLATE_PICK_UPGRADES, restateCase, restateTemplateCase, NAMED_MODEL } = await import("../dist/lib/scripts/llm-pick-upgrade.js");
+const { LLM_PICK_UPGRADES, TEMPLATE_PICK_UPGRADES, WRITER_OWN_ENGINE_UPGRADES, restateCase, restateTemplateCase, restateOwnEngineCase, NAMED_MODEL } = await import("../dist/lib/scripts/llm-pick-upgrade.js");
 // `--templates`: phase 2, the TEMPLATE of each writing call asks the Rating (`template.pick`) instead of the legacy writer pick.
 const templates = process.argv.includes("--templates");
-const UPGRADES = templates ? TEMPLATE_PICK_UPGRADES : LLM_PICK_UPGRADES;
-const restate = templates ? restateTemplateCase : restateCase;
+// `--writer-own-engine`: phase 3, the cold email's writer LLM is picked on its own Engine (where its history is filed).
+const ownEngine = process.argv.includes("--writer-own-engine");
+const UPGRADES = ownEngine ? WRITER_OWN_ENGINE_UPGRADES : templates ? TEMPLATE_PICK_UPGRADES : LLM_PICK_UPGRADES;
+const restate = ownEngine ? restateOwnEngineCase : templates ? restateTemplateCase : restateCase;
 
 const apply = process.argv.includes("--apply");
 const onlyAt = process.argv.indexOf("--only");
 const only = onlyAt >= 0 ? process.argv[onlyAt + 1] : null;
-const SOURCE = process.argv.includes("--templates")
+const SOURCE = ownEngine
+  ? "LLM-RATING-PER-ENGINE-1112 phase 3: production records restated, the writer LLM picked on the script's own Engine (owner 2026-11-12)"
+  : process.argv.includes("--templates")
   ? "LLM-RATING-PER-ENGINE-1112 phase 2: production records restated, the writer pick read as the template pick (owner 2026-11-12)"
   : "LLM-PICK-SCRIPTS-1112: production records restated, one llm.pick before each LLM call (owner 2026-11-12)";
 
@@ -30,7 +34,7 @@ for (const u of UPGRADES) {
     console.log(`${label}: no active version, skipped`);
     continue;
   }
-  if (row.code.includes(u.marker ?? '"llm.pick"')) {
+  if (u.needs ? !row.code.includes(u.needs) : row.code.includes(u.marker ?? '"llm.pick"')) {
     console.log(`${label}: v${row.version} already asks ${u.marker ?? "llm.pick"}, skipped`);
     continue;
   }
