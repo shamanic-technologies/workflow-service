@@ -447,3 +447,34 @@ describe("a service's material may be large (the send selection's whole queue)",
     expect(src.indexOf('express.json({ limit: "32mb" })')).toBeLessThan(src.indexOf('express.json({ limit: "2mb" })'));
   });
 });
+
+describe("a script run states its script to runs-service (MON-SCRIPT-PRICES-2-1111)", () => {
+  it("an org script run posts scriptSlug beside its task; a run with no script posts none", async () => {
+    const { productionLedgerDeps } = await import("../../src/lib/scripts/script-runner.js");
+    process.env.RUNS_SERVICE_URL = "http://runs";
+    process.env.RUNS_SERVICE_API_KEY = "k";
+    const calls: Array<[string, RequestInit]> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ id: "org-run" }), { status: 201 });
+    }) as typeof fetch;
+    try {
+      const ledger = productionLedgerDeps();
+      await ledger.createRun({ parentRunId: "camp-run", orgId: "org-a", userId: "user-a", taskName: "script:email_sent/dy_cold_email", scriptSlug: "email_sent/dy_cold_email/v5", headers: {} });
+      await ledger.createRun({ parentRunId: "camp-run", orgId: "org-a", userId: "user-a", taskName: "engine:email_sent", headers: {} });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(calls.map(([u]) => u)).toEqual(["http://runs/v1/runs", "http://runs/v1/runs"]);
+    expect(JSON.parse(String(calls[0]![1].body))).toEqual({ serviceName: "workflow", taskName: "script:email_sent/dy_cold_email", scriptSlug: "email_sent/dy_cold_email/v5" });
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ serviceName: "workflow", taskName: "engine:email_sent" });
+  });
+
+  it("an Engine run states the planned version, and none when it runs no script", async () => {
+    const { planScriptSlug } = await import("../../src/lib/scripts/engine-runner.js");
+    const script = { outcome: "email_sent", dynasty: "dy_cold_email", version: 5 } as never;
+    expect(planScriptSlug({ kind: "pick", script, draws: [] })).toBe("email_sent/dy_cold_email/v5");
+    expect(planScriptSlug({ kind: "none" })).toBeUndefined();
+  });
+});
