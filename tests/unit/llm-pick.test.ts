@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { callVendor, LLM_COMPLETE, LLM_PICK, TEMPLATE_PICK, type VendorDeps } from "../../src/lib/scripts/vendors.js";
-import { LLM_PICK_UPGRADES, NAMED_MODEL, PICK_LLM_FN, restateCase, restateTemplateCase, TEMPLATE_PICK_UPGRADES, UpgradeEditError } from "../../src/lib/scripts/llm-pick-upgrade.js";
+import { LLM_PICK_UPGRADES, NAMED_MODEL, PICK_LLM_FN, restateCase, restateTemplateCase, restateOwnEngineCase, TEMPLATE_PICK_UPGRADES, WRITER_OWN_ENGINE_UPGRADES, UpgradeEditError } from "../../src/lib/scripts/llm-pick-upgrade.js";
 import { replayCase, type ReplayCase } from "../../src/lib/scripts/replay.js";
 
 // LLM-PICK-SCRIPTS-1112 (owner 2026-11-12): every LLM call of a script asks the Rating's pick for its Engine and that
@@ -173,5 +173,14 @@ const campaignId = "c";
     const r = restateTemplateCase(u, c);
     expect(r.calls[0]).toMatchObject({ name: "template.pick", args: { place: "writer" }, answer: { ok: true, data: { template: { templateDynastySlug: "x-post-shape-rotation" } } } });
     expect(JSON.stringify(r)).not.toContain("fable");
+  });
+});
+
+describe("the cold email's writer LLM on its own Engine", () => {
+  it("picks on email_sent (where its writing calls and templates are filed), never message_written", () => {
+    const u = WRITER_OWN_ENGINE_UPGRADES[0]!;
+    expect(u.code('const m = pickLlm(ctx, "writer", "message_written").model;')).toBe('const m = pickLlm(ctx, "writer").model;');
+    const c: ReplayCase = { id: "c", units: {}, calls: [{ name: "llm.pick", args: { place: "writer", outcome: "message_written" }, answer: { ok: true, data: { provider: "google", model: "gemini-flash-lite", outcome: "message_written" } } }], expect: {} };
+    expect(restateOwnEngineCase(u, c).calls[0]).toMatchObject({ args: { place: "writer" }, answer: { ok: true, data: { model: "gemini-flash-lite", outcome: "email_sent" } } });
   });
 });
