@@ -142,7 +142,7 @@ const WRITER = `
 export default function run(ctx) {
   const lead = ctx.get("lead_identified");
   const voice = ctx.vendor.call("voice.read", {});
-  const answer = ctx.vendor.call("llm.complete", { message: "Write to " + lead.content.name, systemPrompt: "SYS " + voice.data.content });
+  const answer = ctx.vendor.call("llm.complete", { message: "Write to " + lead.content.name, systemPrompt: "SYS " + voice.data.content, ...(ctx.tactics.llm ?? {}) });
   if (!answer.ok) throw new Error("llm.complete failed: " + String(answer.data.error));
   return { content: { subject: answer.data.json.subject, sequence: [] } };
 }`;
@@ -195,7 +195,7 @@ describe("a script run recorded by content-generation", () => {
       { name: "voice.read", args: {}, answer: { ok: true, data: { content: "Short, warm.", version: 4 } } },
       {
         name: "llm.complete",
-        args: { message: "Write to Ana", systemPrompt: "SYS Short, warm." },
+        args: { message: "Write to Ana", systemPrompt: "SYS Short, warm.", provider: "anthropic", model: "sonnet" },
         answer: { ok: true, data: { content: "{}", json: { subject: "Hi Ana" }, model: "claude-sonnet-4-6", tokensInput: 10, tokensOutput: 5 } },
         sent: { message: "Write to Ana", systemPrompt: "SYS Short, warm.", provider: "anthropic", model: "sonnet" },
         raw: { content: "{}", json: { subject: "Hi Ana" }, model: "claude-sonnet-4-6", tokensInput: 10, tokensOutput: 5, extra: "whole answer" },
