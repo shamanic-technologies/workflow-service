@@ -41,7 +41,9 @@ for (const u of LLM_PICK_UPGRADES) {
   const named = [code, JSON.stringify(effective)].flatMap((t) => t.split("\n")).filter((l) => NAMED_MODEL.test(l));
   if (named.length) console.log(`${label}: WARNING still names a model: ${named.map((l) => l.trim().slice(0, 120)).join(" | ")}`);
   const stored = await loadCases(db, u.outcome, u.dynasty);
-  const cases = stored.map((c) => restateCase(u, c));
+  const own = u.keepCase ? stored.filter(u.keepCase) : stored;
+  if (own.length !== stored.length) console.log(`${label}: ${stored.length - own.length} stored case(s) are another dynasty's records, left out`);
+  const cases = own.map((c) => restateCase(u, c));
   let score = "no cases";
   if (cases.length) {
     const summary = await replayAll(code, cases.map((c) => ({ ...c, tactics: { ...effective, ...(c.tactics ?? {}) } })));
