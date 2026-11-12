@@ -39,7 +39,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const lead = ctx.get("lead_identified");
   const template = ctx.get("template_written");
   const prompt = String(template.content.text).replace("{{name}}", String(lead.content.name));
-  const answer = ctx.vendor.call("llm.complete", { message: prompt, responseSchema: "email_sequence" });
+  const answer = ctx.vendor.call("llm.complete", { message: prompt, responseSchema: "email_sequence", ...(ctx.tactics.llm ?? {}) });
   if (!answer.ok) throw new Error("llm.complete failed: " + String(answer.data.error));
   const json = answer.data.json as { subject: string };
   return { content: { subject: json.subject.trim() } };
@@ -329,7 +329,7 @@ describe("vendors", () => {
   });
   it("passes a completion VERBATIM (nothing appended), answers chat's whole answer or its JSON", async () => {
     seen.length = 0;
-    const a = await callVendor("llm.complete", { message: "m", systemPrompt: "You classify.", model: "deepseek-flash", responseFormat: "json", temperature: 0 }, { ...ctx, tactics: { llm: { provider: "deepseek" } } }, deps);
+    const a = await callVendor("llm.complete", { message: "m", systemPrompt: "You classify.", provider: "deepseek", model: "deepseek-flash", responseFormat: "json", temperature: 0 }, ctx, deps);
     expect(seen[0]).toEqual({ message: "m", systemPrompt: "You classify.", provider: "deepseek", model: "deepseek-flash", responseFormat: "json", temperature: 0 });
     expect(a).toEqual({ ok: true, data: { content: "{}", json: { axes: ["size"], segments: [] }, model: "m", tokensInput: 1, tokensOutput: 2 } });
     const c = await callVendor("chat.complete", { message: "m", systemPrompt: "s", provider: "google", model: "pro", disableThinking: true }, ctx, deps);
