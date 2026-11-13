@@ -16,7 +16,7 @@ describe("the meeting path scripts", () => {
     expect(read.vendors).toEqual([]);
     for (const s of [BOOK_MEETING, MEETING_REMINDER]) {
       expect(s.tactics.asks).toEqual(["message_sent"]);
-      expect(s.tactics.channel).toBe("ai-follow-up-email");
+      expect(s.tactics).not.toHaveProperty("channel");
       expect(typeof s.tactics.goal).toBe("string");
       expect(s.tactics).not.toHaveProperty("llm");
       expect(s.tactics).not.toHaveProperty("template");

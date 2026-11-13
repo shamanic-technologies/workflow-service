@@ -22,9 +22,9 @@
 import { PORT_HEAD } from "./port-kit.js";
 
 const COMMON = {
-  // The answerer's channel (Lead event campaigns): a client's own-team campaign on the same Engine (`your-team-*`) is
-  // never served by a script, so it never runs this one.
-  channel: "ai-follow-up-email",
+  // No tactic `channel`: the outcome says WHAT (MIGRATE-1105 S5), so a campaign launched on its Target alone (no channel)
+  // finds the path. A client's own-team channel (`your-team-*`, operated by the customer) is never dispatched to any
+  // script, so it never runs this one.
   asks: ["message_sent"],
 };
 
