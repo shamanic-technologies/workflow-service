@@ -2929,7 +2929,7 @@ export const EngineStateSchema = z
 
 export const EngineSwitchRequestSchema = z
   .object({
-    dynasty: ScriptSlugSchema.describe("The dynasty this switch is proven on: one org = a runnable script (a port must replay 100 % of its cases); every org = a proven port."),
+    dynasty: ScriptSlugSchema.describe("The dynasty this switch is proven on: one org = a runnable script (a port must replay 100 % of its cases); every org = a proven port, or a script created from scratch that carries no recorded case (a fork or an unproven port is refused)."),
     orgId: z.string().min(1).nullable().optional().describe("One org (a client switched alone, on proof); absent = every org."),
   })
   .openapi("EngineSwitchRequest");
