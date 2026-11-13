@@ -4041,7 +4041,7 @@
           "dynasty": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]{1,62}$",
-            "description": "The dynasty this switch is proven on: one org = a runnable script (a port must replay 100 % of its cases); every org = a proven port."
+            "description": "The dynasty this switch is proven on: one org = a runnable script (a port must replay 100 % of its cases); every org = a proven port, or a script created from scratch that carries no recorded case (a fork or an unproven port is refused)."
           },
           "orgId": {
             "type": "string",

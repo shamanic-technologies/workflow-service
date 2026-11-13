@@ -77,6 +77,21 @@ async function provenness(db: AnyPgDb, row: ScriptRow): Promise<{ runnable: bool
   return { runnable: proven, port: proven };
 }
 
+/** A dynasty whose first version was created from scratch (its upgrade chain, re-homes included, never a fork) and holds no case. */
+async function bornFromScratch(db: AnyPgDb, row: ScriptRow): Promise<boolean> {
+  if ((await caseCount(db, row.outcome, row.dynasty)) > 0) return false;
+  let cur: { creationType: string; createdFromScript: string | null; dynasty: string } = row;
+  for (let hops = 0; hops < 200 && cur.creationType === "upgrade" && cur.createdFromScript; hops++) {
+    const [parent] = await db
+      .select({ creationType: scripts.creationType, createdFromScript: scripts.createdFromScript, dynasty: scripts.dynasty })
+      .from(scripts)
+      .where(eq(scripts.id, cur.createdFromScript));
+    if (!parent || parent.dynasty !== row.dynasty) return false;
+    cur = parent;
+  }
+  return cur.creationType === "scratch";
+}
+
 /** Switch an Engine on for campaigns: one org (`orgId`), or every org (a proven port). Idempotent while live. */
 export async function switchEngine(db: AnyPgDb, input: { outcome: string; dynasty: string; orgId?: string | null }) {
   const orgId = input.orgId ?? null;
@@ -84,8 +99,11 @@ export async function switchEngine(db: AnyPgDb, input: { outcome: string; dynast
   if (!row || row.dynastyStatus !== "active") throw new SwitchError(404, `no live version of ${input.outcome}/${input.dynasty}`);
   const proof = await provenness(db, row);
   if (!proof.runnable) throw new SwitchError(409, `${input.outcome}/${input.dynasty}/v${row.version} is a port not proven on all its recorded cases: it cannot run`);
-  if (!orgId && !proof.port) {
-    throw new SwitchError(409, `every client is switched only on a proven port (recorded cases replayed 100 %): ${input.outcome}/${input.dynasty} carries none; switch one org first`);
+  // Every client: a proven PORT (it must reproduce production code case for case), or a script CREATED FROM SCRATCH that
+  // carries no recorded case (no production code to reproduce: the Rating explores it, the roll-back guard watches it;
+  // SCRIPT-VALUE-RATING-1113-WF1, features-service/brussels for the owner). A fork or a port without its proof keeps the rule.
+  if (!orgId && !proof.port && !(await bornFromScratch(db, row))) {
+    throw new SwitchError(409, `every client is switched only on a proven port (recorded cases replayed 100 %) or a script created from scratch: ${input.outcome}/${input.dynasty} is neither; switch one org first`);
   }
   const scope = and(
     eq(scriptSwitches.outcome, input.outcome),

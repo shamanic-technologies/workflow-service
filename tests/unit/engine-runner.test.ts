@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { eq } from "drizzle-orm";
-import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
+import { createScript, forkScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { engineState, pickScript, servesChannel, setScriptPickReader, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
@@ -169,21 +169,30 @@ const noWorkflowSlugAnywhere = (w: ReturnType<typeof world>) => {
 };
 
 describe("an Engine switch", () => {
-  it("lets one org in first, needs a proven port for every org, and an org's own row wins", async () => {
+  it("lets one org in first, needs a proven port (or a script created from scratch) for every org, and an org's own row wins", async () => {
     expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: false, scope: null });
     await addScript("lead_found", "dy_serve", SERVE);
-    await expect(switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve" })).rejects.toThrow(/proven port/);
+    // A port carrying cases it does not prove is refused for every org.
+    await putCases(db, "lead_found", "dy_serve", [{ id: "c1", units: {}, calls: [{ name: "lead.serve", args: {}, answer: { ok: true, data: { found: false, reason: "audience_exhausted" } } }], expect: { fails: "audience_exhausted" } }], "test");
+    await expect(switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve" })).rejects.toThrow(/not proven/);
+    await db.update(scripts).set({ replay: { cases: 1, matches: 1 } }).where(eq(scripts.dynasty, "dy_serve"));
     await switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve", orgId: ORG });
     expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: true, scope: "org", provenOn: "dy_serve" });
     expect(await engineState(db, "lead_found", "org-2")).toMatchObject({ live: false });
 
     // A proven port goes to every org; the first org switched off stays off (its own row wins).
-    await putCases(db, "lead_found", "dy_serve", [{ id: "c1", units: {}, calls: [{ name: "lead.serve", args: {}, answer: { ok: true, data: { found: false, reason: "audience_exhausted" } } }], expect: { fails: "audience_exhausted" } }], "test");
-    await db.update(scripts).set({ replay: { cases: 1, matches: 1 } }).where(eq(scripts.dynasty, "dy_serve"));
     await switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve" });
     await switchEngineOff(db, { outcome: "lead_found", orgId: ORG, reason: "held back for a test" });
     expect(await engineState(db, "lead_found", "org-2")).toMatchObject({ live: true, scope: "fleet" });
     expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: false, scope: "org", rollbackReason: "held back for a test" });
+  });
+
+  it("switches every org on a script created from scratch with no case (SCRIPT-VALUE-RATING-1113-WF1), never on a fork without proof", async () => {
+    await addScript("meeting_booked", "dy_path", SERVE);
+    await switchEngine(db, { outcome: "meeting_booked", dynasty: "dy_path" });
+    expect(await engineState(db, "meeting_booked", "org-2")).toMatchObject({ live: true, scope: "fleet", provenOn: "dy_path" });
+    await forkScript(db, "meeting_booked", "dy_path", { dynasty: "dy_path_fork", description: "x" }, author);
+    await expect(switchEngine(db, { outcome: "meeting_booked", dynasty: "dy_path_fork" })).rejects.toThrow(/created from scratch/);
   });
 
   it("refuses a port that does not replay all its cases", async () => {
