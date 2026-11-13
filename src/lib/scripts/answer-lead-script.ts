@@ -319,11 +319,10 @@ export default function run(ctx) {
     "THE CHANNELS OPEN: " + open.join(", ") + (last ? " (their last message came on " + String(last.channel || last.source || "") + ")" : "") + (open.indexOf("email") >= 0 && n === 0 ? ". Email: " + (replied ? "a reply in the thread they answered" : "a follow-up in their last email thread") : ""),
     "THE THREAD (oldest first):\n" + (threadLines.join("\n") || "(empty)"),
   ].join("\n\n");
-  // The writer's LLM is features-service's pick for this campaign (lowest cost per outcome, within its strategy):
-  // never one the script states, never a default (BEST-TPL-LLM-1022, NO-WRITER-FALLBACK-1030).
-  const writer = must("features.writer_pick", { query: { campaignId: campaignId } });
-  const llm = writer.llm || {};
-  if (!s(llm.provider) || !s(llm.model)) throw new Error("no writer LLM picked for this campaign: " + String(writer.llmUnavailableReason || "none"));
+  // The writer's LLM is the Rating's pick for this Engine and this call (LLM-PICK-SCRIPTS-1112): never one the script
+  // states, never a default; none = the run fails, nothing written.
+  const llm = must("llm.pick", { place: "writer" });
+  if (!s(llm.provider) || !s(llm.model)) throw new Error("llm.pick answered no LLM for the writer: nothing is written");
   // The brand's own tools on every call (BRAND-MCP-1109): the writer looks up what this person already has with the
   // brand, and acts when the brand's team asks, before it decides. No server plugged = today's one-shot call.
   // The schema names this run's own choices: the channels open to them and the labels of the emails they can be
