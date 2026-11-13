@@ -144,6 +144,10 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
       store.set(key, args[2]);
       return { v: null };
     }
+    if (op === "storage.claim") {
+      if (!store.has(key)) store.set(key, args[2] ?? null);
+      return { v: store.get(key) ?? null };
+    }
     if (op === "storage.delete") {
       store.delete(key);
       return { v: null };

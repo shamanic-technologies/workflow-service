@@ -238,7 +238,7 @@ export async function runStoredScript(
       if (input.trace) trace.push({ name, args: args[1] ?? null, answer, ...(exchange ? (exchange as { sent: Record<string, unknown>; raw: Record<string, unknown> }) : {}) });
       return { v: answer };
     }
-    if (op === "storage.get" || op === "storage.set" || op === "storage.delete" || op === "storage.count") {
+    if (op === "storage.get" || op === "storage.set" || op === "storage.delete" || op === "storage.count" || op === "storage.claim") {
       return { v: await storageOp(db, who.orgId, row.outcome, op, args) };
     }
     if (op === "ask") {
@@ -435,6 +435,13 @@ async function storageOp(db: AnyPgDb, orgId: string, outcome: string, op: string
   }
   const value = args[2] ?? null;
   if (JSON.stringify(value).length > 64_000) throw new Error("storage: a note is at most 64 KB of JSON");
+  if (op === "storage.claim") {
+    // Insert-if-absent, atomic (the unique key): the FIRST note written under the key wins and every caller reads the
+    // winner's note back, so two runs racing on one key cannot both believe they own it (SCRIPT-VALUE-RATING-1113-WF1).
+    await db.insert(scriptStorage).values({ orgId, outcome, tableName: table, key, value }).onConflictDoNothing();
+    const [row] = await db.select({ value: scriptStorage.value }).from(scriptStorage).where(where);
+    return row ? row.value : null;
+  }
   await db
     .insert(scriptStorage)
     .values({ orgId, outcome, tableName: table, key, value })
