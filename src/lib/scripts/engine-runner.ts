@@ -119,7 +119,9 @@ export async function planEngineRun(db: AnyPgDb, d: EngineDispatch): Promise<Eng
   }
   const { units } = pushedUnits(d);
   const pick = await pickScript(db, { outcome: d.outcome, servable: Object.keys(units), channel: d.featureSlug, campaignId: d.campaignId });
-  return pick ? { kind: "pick", script: pick.script, draws: pick.draws, fallbacks: pick.ranked.slice(1) } : { kind: "none" };
+  if (!pick) return { kind: "none" };
+  console.log(`[workflow-service] engine ${d.outcome} campaign ${d.campaignId}: features-service picked ${pick.script.dynasty} (${pick.basis}) among ${pick.draws.map((x) => `${x.dynasty}=${x.score ?? "cost"}`).join(", ")}`);
+  return { kind: "pick", script: pick.script, draws: pick.draws, fallbacks: pick.ranked.slice(1) };
 }
 
 /**

@@ -99,7 +99,7 @@ function moduleCode(m: Module, b: Built, runnerSteps: Set<string>, depth: number
   if (service === "features" && method === "GET" && path === "/internal/writer-pick") {
     b.doors.add("llm.pick");
     const skip = it.skip !== undefined ? `, skip: ${exprOf(it.skip)}` : "";
-    return `${pad}results.${m.id} = callStep(ctx, "llm.pick", { service: "features", method: "GET", path: "/internal/llm-pick", query: {"place":"writer"}${skip} }, ${m.retry?.constant?.attempts ?? 0});\n`;
+    return `${pad}results.${m.id} = callStep(ctx, "llm.pick", { service: "script", method: "TACTIC", path: " llm", query: {"place":"writer"}${skip} }, ${m.retry?.constant?.attempts ?? 0});\n`;
   }
   if (service === "campaign" && CHASSIS.has(path)) {
     if (path === "/gate-check") return `${pad}// gate_check: the Engine runner's\n`;

@@ -168,10 +168,11 @@ router.post("/internal/engines/:outcome/pick", requireApiKey, async (req, res) =
       });
       return;
     }
-    res.json({ outcome, dynasty: pick.script.dynasty, version: pick.script.version, scriptId: pick.script.id, draws: pick.draws });
+    res.json({ outcome, dynasty: pick.script.dynasty, version: pick.script.version, scriptId: pick.script.id, basis: pick.basis, draws: pick.draws });
   } catch (err) {
+    // The Rating (features-service) or the strategy could not answer: pick nothing, the caller retries.
     console.error("[workflow-service] engine pick:", err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(502).json({ code: "script_pick_unreadable", error: err instanceof Error ? err.message : String(err) });
   }
 });
 

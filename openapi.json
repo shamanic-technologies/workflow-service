@@ -4071,6 +4071,10 @@
           "scriptId": {
             "type": "string"
           },
+          "basis": {
+            "type": "string",
+            "description": "How features-service's Rating ranked the candidates (value_per_dollar, value_only, cost_only)."
+          },
           "draws": {
             "type": "array",
             "items": {
@@ -4082,24 +4086,22 @@
                 "version": {
                   "type": "integer"
                 },
-                "made": {
-                  "type": "integer"
-                },
                 "runs": {
                   "type": "integer"
                 },
-                "draw": {
-                  "type": "number"
+                "score": {
+                  "type": "number",
+                  "nullable": true
                 }
               },
               "required": [
                 "dynasty",
                 "version",
-                "made",
                 "runs",
-                "draw"
+                "score"
               ]
-            }
+            },
+            "description": "Every candidate in the Rating's order (the pick first), with the runs and score features-service served."
           }
         },
         "required": [
@@ -4107,6 +4109,7 @@
           "dynasty",
           "version",
           "scriptId",
+          "basis",
           "draws"
         ]
       },
