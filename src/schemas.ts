@@ -2492,7 +2492,7 @@ export const RunScriptRequestSchema = z
     tactics: z.record(z.string(), z.unknown()).optional().describe("The run's tactics, on top of the script's own."),
     request: z.record(z.string(), z.unknown()).nullable().optional(),
     recordedBy: z
-      .enum(["content-generation", "instantly", "apollo", "lead", "human", "social", "scraping"])
+      .enum(["content-generation", "instantly", "apollo", "lead", "human", "social", "scraping", "brand"])
       .optional()
       .describe("The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run; the email verification waterfall: apollo's verifier doors store each bronze row and declare email_checked; a candidate decision: lead-service's doors screen, reveal or decline as before). The run then declares nothing itself."),
     trace: z.boolean().optional().describe("Answer every vendor call in order (`trace`: args, answer; a completion's exact request `sent` + chat-service's whole answer `raw`), for the recording service."),
@@ -2953,12 +2953,34 @@ export const EnginePickResponseSchema = z
     dynasty: z.string().describe("The dynasty the Rating picked: pass it to `POST /orgs/scripts/run`."),
     version: z.number().int().describe("Its active version (the one a run of the dynasty executes)."),
     scriptId: z.string(),
+    tactics: z
+      .record(z.string(), z.unknown())
+      .describe("The picked version's own tactics, as stored (e.g. `template`, `llm`, `llms.<place>`): what the picked script writes with (SCRIPT-VALUE-RATING-1113-WF3: a preview writes with the template and LLM its picked script states, never a side pick)."),
     basis: z.string().describe("How features-service's Rating ranked the candidates (value_per_dollar, value_only, cost_only)."),
     draws: z
       .array(z.object({ dynasty: z.string(), version: z.number().int(), runs: z.number().int(), score: z.number().nullable() }))
       .describe("Every candidate in the Rating's order (the pick first), with the runs and score features-service served."),
   })
   .openapi("EnginePickResponse");
+
+export const EngineMakeRequestSchema = z
+  .object({
+    units: z
+      .record(z.string(), z.union([MaterialUnitSchema, z.array(MaterialUnitSchema)]))
+      .describe("The materials, by outcome (as on `POST /internal/scripts/run`). Their keys are what the run can serve: a script asking for another material is not a candidate."),
+    request: z.record(z.string(), z.unknown()).nullable().optional(),
+    keptDynasties: z
+      .array(ScriptSlugSchema)
+      .min(1)
+      .optional()
+      .describe("The dynasties a strategy keeps (features-service `GET /internal/script-strategy`), when the caller has one. Absent = no strategy: every runnable script of the Engine is a candidate."),
+    channel: z.string().min(1).nullable().optional().describe("The channel the work is for: a script stating a tactic `channel` runs only for it. Absent = none."),
+    subject: SubjectRefSchema.optional(),
+    recordedBy: RunScriptRequestSchema.shape.recordedBy,
+    trace: z.boolean().optional(),
+    billing: z.enum(["org", "platform"]).optional().describe("Who pays the chat vendors, as the calling service's own code did (default platform; org needs `x-org-id`)."),
+  })
+  .openapi("EngineMakeRequest");
 
 export const EngineOffRequestSchema = z
   .object({ orgId: z.string().min(1).nullable().optional(), reason: z.string().min(5) })
@@ -3031,6 +3053,23 @@ registry.registerPath({
     200: { description: "The pick", content: { "application/json": { schema: EnginePickResponseSchema } } },
     400: { description: "Not an outcome key, or an invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: { description: "`no_runnable_script`: no kept dynasty can run", content: { "application/json": { schema: z.object({ error: z.string(), code: z.literal("no_runnable_script") }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/engines/{outcome}/make",
+  summary: "Make one Unit of an Engine for a service waiting on it: the Rating picks the script, the script runs (service key only)",
+  description:
+    "SCRIPT-VALUE-RATING-1113-WF3 (owner 2026-11-13 « un pick = toujours un script »). For a service whose client waits on the result (brand-service's offer/brand field drafts): the SAME `pickScript` a campaign run calls (features-service's script pick among the runnable dynasties, narrowed by `keptDynasties` when the caller has a strategy), then that script runs synchronously on its own runs-service run, a child of the caller's run (`x-run-id`, required), as `POST /internal/scripts/run` runs it (`x-org-id` optional: none = a platform run; `billing` as the caller's own code paid). The answer is the run's (`RunScriptResponse`) plus the `pick`. The LLM the script writes with is its tactic: competing LLMs are competing dynasties. 404 `no_runnable_script`; 502 `script_pick_unreadable` (nothing ran); 502 with the run's `details` when the script failed or stopped.",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EngineMakeRequestSchema } } } },
+  responses: {
+    200: { description: "The run's result + the pick", content: { "application/json": { schema: RunScriptResponseSchema.extend({ pick: EnginePickResponseSchema }) } } },
+    400: { description: "Not an outcome key, no `x-run-id`, or an invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "`no_runnable_script`: no candidate can run on these materials", content: { "application/json": { schema: z.object({ error: z.string(), code: z.literal("no_runnable_script") }) } } },
+    502: { description: "`script_pick_unreadable`, or the script failed/stopped (`details` = its run)", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

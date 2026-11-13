@@ -6,6 +6,7 @@
  *   POST /internal/engines/{outcome}/switch     switch it on for one org, or every org (staff / the migration steps)
  *   POST /internal/engines/{outcome}/off        switch it off for one org, or every org
  *   POST /internal/engines/{outcome}/pick       the Rating's pick among kept dynasties, outside a run (a preview)
+ *   POST /internal/engines/{outcome}/make       the Rating's pick, RUN for a service waiting on its Unit (a field draft)
  *
  * Mounted before the identity gate: the execute route checks its own headers (and never needs `x-workflow-slug`).
  */
@@ -15,12 +16,13 @@ import { type WorkflowRun } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
-import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema } from "../schemas.js";
+import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
+import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema, EngineMakeRequestSchema } from "../schemas.js";
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
 import { engineState, pickScript, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
 import { ENGINE_EXECUTION_SCOPE, executeEngineRun, planEngineRun, planScriptSlug, planTaskName, type EngineDispatch, type EngineRunDeps } from "../lib/scripts/engine-runner.js";
-import { productionLedgerDeps, runStoredScript } from "../lib/scripts/script-runner.js";
+import { productionLedgerDeps, runStoredScript, ScriptRunFailed } from "../lib/scripts/script-runner.js";
 import { productionVendorDeps } from "../lib/scripts/vendors.js";
 import { SwitchError } from "../lib/scripts/script-writer-switch.js";
 import { noteScriptRunForGuard } from "../lib/scripts/script-guard.js";
@@ -168,11 +170,96 @@ router.post("/internal/engines/:outcome/pick", requireApiKey, async (req, res) =
       });
       return;
     }
-    res.json({ outcome, dynasty: pick.script.dynasty, version: pick.script.version, scriptId: pick.script.id, basis: pick.basis, draws: pick.draws });
+    res.json(servedPick(outcome, pick));
   } catch (err) {
     // The Rating (features-service) or the strategy could not answer: pick nothing, the caller retries.
     console.error("[workflow-service] engine pick:", err);
     res.status(502).json({ code: "script_pick_unreadable", error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** A pick as the pick and make routes serve it: the picked version's own tactics included (what it writes with). */
+function servedPick(outcome: string, pick: NonNullable<Awaited<ReturnType<typeof pickScript>>>) {
+  return {
+    outcome,
+    dynasty: pick.script.dynasty,
+    version: pick.script.version,
+    scriptId: pick.script.id,
+    tactics: (pick.script.tactics ?? {}) as Record<string, unknown>,
+    basis: pick.basis,
+    draws: pick.draws,
+  };
+}
+
+// SCRIPT-VALUE-RATING-1113-WF3: a service whose client waits on a Unit (brand-service's field drafts) asks the Engine
+// for it instead of calling an LLM it picked itself: the SAME `pickScript` a run calls, then the picked script runs on
+// its own run, a child of the caller's, exactly as `/internal/scripts/run` runs it. One pick, one script, no fall-through
+// (the client is waiting), never a default script.
+router.post("/internal/engines/:outcome/make", requireApiKey, async (req, res) => {
+  const outcome = outcomeOf(req, res);
+  if (!outcome) return;
+  const orgId = header(req, "x-org-id");
+  const parentRunId = header(req, "x-run-id");
+  if (!parentRunId) {
+    res.status(400).json({ error: "x-run-id (the caller's own run) is required" });
+    return;
+  }
+  const parsed = EngineMakeRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  const body = parsed.data;
+  const servable = Object.keys(body.units);
+  let pick;
+  try {
+    pick = await pickScript(db, { outcome, servable, channel: body.channel ?? null, keptDynasties: body.keptDynasties });
+  } catch (err) {
+    console.error(`[workflow-service] engine make ${outcome}: pick unreadable:`, err);
+    res.status(502).json({ code: "script_pick_unreadable", error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  if (!pick) {
+    res.status(404).json({
+      code: "no_runnable_script",
+      error: `no script of Engine ${outcome}${body.keptDynasties ? ` among ${body.keptDynasties.join(", ")}` : ""} can run on ${servable.length ? servable.join(", ") : "no Units"}${body.channel ? ` for channel ${body.channel}` : ""}`,
+    });
+    return;
+  }
+  const served = servedPick(outcome, pick);
+  const started = Date.now();
+  try {
+    const result = await runStoredScript(
+      db,
+      {
+        outcome,
+        dynasty: pick.script.dynasty,
+        version: pick.script.version,
+        units: body.units,
+        ...(body.request !== undefined ? { request: body.request } : {}),
+        ...(body.subject ? { subject: body.subject } : {}),
+        ...(body.recordedBy ? { recordedBy: body.recordedBy } : {}),
+        ...(body.trace ? { trace: true } : {}),
+        billing: orgId && body.billing === "org" ? "org" : "platform",
+      },
+      { orgId, userId: header(req, "x-user-id"), parentRunId, headers: extractDownstreamHeaders(req) },
+      { ledger: productionLedgerDeps(), vendors: productionVendorDeps() },
+    );
+    console.log(
+      `[workflow-service] engine make ${result.scriptSlug} run=${result.runId} parent=${parentRunId} status=${result.status} ms=${Date.now() - started} ` +
+        `vendors=${result.vendorCalls.map((c) => `${c.name}:${c.ok ? "ok" : "refused"}`).join(",") || "none"}`,
+    );
+    res.json({ ...result, pick: served });
+    noteScriptRunForGuard(outcome);
+  } catch (err) {
+    if (err instanceof ScriptRunFailed) {
+      noteScriptRunForGuard(outcome);
+      console.error(`[workflow-service] engine make ${err.result.scriptSlug} run=${err.result.runId} ${err.result.status}: ${err.result.error}`);
+      res.status(502).json({ error: `script ${err.result.scriptSlug} ${err.result.status}: ${err.result.error}`, details: { ...err.result, pick: served } });
+      return;
+    }
+    console.error(`[workflow-service] engine make ${outcome}:`, err);
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
