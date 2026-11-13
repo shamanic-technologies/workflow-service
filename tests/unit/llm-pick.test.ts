@@ -1,92 +1,84 @@
 import { describe, it, expect } from "vitest";
 import { callVendor, LLM_COMPLETE, LLM_PICK, TEMPLATE_PICK, type VendorDeps } from "../../src/lib/scripts/vendors.js";
 
-// LLM-PICK-SCRIPTS-1112 (owner 2026-11-12): every LLM call of a script asks the Rating's pick for its Engine and that
-// call; no script names a model; no LLM in the Engine's universe = the script writes nothing (fails, retried later).
-function vendors(pickStatus = 200) {
-  const asked: Array<{ service: string; path: string; headers: Record<string, string> }> = [];
+// SCRIPT-VALUE-RATING-1113-WF2 (owner 2026-11-13: « un pick = toujours un script », « le LLM et le template sont des
+// tactics du script »): `llm.pick` / `template.pick` read the script's OWN tactics; nothing asks features-service at run
+// time. Another LLM or template is another dynasty, compared by features-service's script pick.
+function vendors() {
+  const asked: string[] = [];
   const completions: Record<string, unknown>[] = [];
-  let n = 0;
   const deps: VendorDeps = {
     async complete(body) { completions.push(body); return { content: "{}", json: {}, model: String(body.model) }; },
     async platformComplete(body) { completions.push(body); return { content: "{}", json: {}, model: String(body.model) }; },
     async judge() { return {}; },
     async platformJudge() { return {}; },
     async readSkill() { return null; },
-    async serviceDoor(service, _method, path, _body, headers) {
-      asked.push({ service, path, headers });
-      if (pickStatus !== 200) return { status: pickStatus, body: { error: "no LLM of the x Engine's universe can be picked now", reason: "no_llm_in_engine_universe" } };
-      n++;
-      return { status: 200, body: { llm: n % 2 ? { llmDynastySlug: "kimi-k3", name: "Kimi K3", provider: "moonshot", model: "kimi-k3" } : { llmDynastySlug: "gemini-flash-lite", name: "Gemini Flash-Lite", provider: "google", model: "gemini-flash-lite" } } };
+    async serviceDoor(service, _method, path) {
+      asked.push(`${service} ${path}`);
+      return { status: 500, body: { error: "no service is asked for a script's LLM or template" } };
     },
   };
   return { asked, completions, deps };
 }
 const HEADERS = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-script-1", "x-campaign-id": "camp-1" };
+const KIMI = { provider: "moonshot", model: "kimi-k3" };
+const FLASH = { provider: "google", model: "gemini-flash-lite" };
 
-describe("llm.pick", () => {
-  it("asks features-service per call: the script's Engine, the call's place, the campaign, on the script's run", async () => {
+describe("llm.pick reads the script's tactics", () => {
+  it("answers tactic llm for every call, llms[place] for a call the script states apart; no service is asked", async () => {
     const v = vendors();
-    const a = await callVendor(LLM_PICK, { place: "angles" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps);
-    const b = await callVendor(LLM_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps);
-    expect(v.asked.map((x) => x.path)).toEqual([
-      "/internal/llm-pick?outcome=x_post_published&place=angles&campaignId=camp-1",
-      "/internal/llm-pick?outcome=x_post_published&place=writer&campaignId=camp-1",
-    ]);
-    expect(v.asked.every((x) => x.service === "features" && x.headers["x-run-id"] === "run-script-1")).toBe(true);
-    expect(a).toMatchObject({ ok: true, data: { provider: "moonshot", model: "kimi-k3", place: "angles", outcome: "x_post_published" } });
-    expect(b).toMatchObject({ ok: true, data: { provider: "google", model: "gemini-flash-lite", llm: { model: "gemini-flash-lite" } } });
+    const tactics = { llm: KIMI, llms: { angles: FLASH } };
+    const a = await callVendor(LLM_PICK, { place: "angles" }, { headers: HEADERS, tactics, outcome: "x_post_published" }, v.deps);
+    const b = await callVendor(LLM_PICK, { place: "writer" }, { headers: HEADERS, tactics, outcome: "x_post_published" }, v.deps);
+    expect(a).toMatchObject({ ok: true, data: { provider: "google", model: "gemini-flash-lite", place: "angles", outcome: "x_post_published" } });
+    expect(b).toMatchObject({ ok: true, data: { provider: "moonshot", model: "kimi-k3", llm: { model: "kimi-k3" } } });
+    // A DAG port states its call as a step (`query.place`; stored ports still carry the old service/path, inert): read the same way.
+    const c = await callVendor(LLM_PICK, { service: "features", method: "GET", path: "/internal/llm-pick", query: { place: "writer" } }, { headers: HEADERS, tactics, outcome: "lead_interested" }, v.deps);
+    expect(c).toMatchObject({ ok: true, data: { model: "kimi-k3" } });
+    expect(v.asked).toEqual([]);
   });
 
-  it("picks for an Engine the script ASKS (the one whose script makes the call), never another", async () => {
+  it("an Engine the script ASKS takes the asking script's LLM; any other Engine is refused", async () => {
     const v = vendors();
-    const ok = await callVendor(LLM_PICK, { place: "writer", outcome: "message_written" }, { headers: HEADERS, tactics: { asks: ["message_written"] }, outcome: "email_sent" }, v.deps);
-    expect(ok.ok).toBe(true);
-    expect(v.asked[0]!.path).toContain("outcome=message_written&place=writer");
-    const no = await callVendor(LLM_PICK, { place: "writer", outcome: "paid_client" }, { headers: HEADERS, tactics: { asks: ["message_written"] }, outcome: "email_sent" }, v.deps);
+    const ok = await callVendor(LLM_PICK, { place: "writer", outcome: "message_written" }, { headers: HEADERS, tactics: { asks: ["message_written"], llm: FLASH }, outcome: "email_sent" }, v.deps);
+    expect(ok).toMatchObject({ ok: true, data: { model: "gemini-flash-lite", outcome: "message_written" } });
+    const no = await callVendor(LLM_PICK, { place: "writer", outcome: "paid_client" }, { headers: HEADERS, tactics: { asks: ["message_written"], llm: FLASH }, outcome: "email_sent" }, v.deps);
     expect(no.ok).toBe(false);
-    expect(v.asked).toHaveLength(1);
   });
 
-  it("no LLM in the Engine's universe = a refusal naming it (never a fallback model)", async () => {
-    const v = vendors(422);
-    const out = await callVendor(LLM_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps);
-    expect(out).toMatchObject({ ok: false, data: { status: 422, code: "no_llm_in_engine_universe" } });
-    expect((await callVendor(LLM_PICK, {}, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps)).data.error).toMatch(/needs a place/);
-  });
-
-  it("a completion never takes its model from a tactic: only the call's own (the pick's) provider and model", async () => {
+  it("no LLM stated = a refusal naming the tactic, never a default model; Haiku 4.5 is refused", async () => {
     const v = vendors();
-    const out = await callVendor(LLM_COMPLETE, { message: "m", systemPrompt: "s" }, { headers: HEADERS, tactics: { llm: { provider: "anthropic", model: "opus" } } }, v.deps);
+    const none = await callVendor(LLM_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps);
+    expect(none).toMatchObject({ ok: false });
+    expect(String(none.data.error)).toMatch(/states no LLM/);
+    expect((await callVendor(LLM_PICK, {}, { headers: HEADERS, tactics: { llm: KIMI }, outcome: "x_post_published" }, v.deps)).data.error).toMatch(/needs a place/);
+    const banned = await callVendor(LLM_PICK, { place: "writer" }, { headers: HEADERS, tactics: { llm: { provider: "anthropic", model: "claude-haiku-4-5" } }, outcome: "x_post_published" }, v.deps);
+    expect(banned.ok).toBe(false);
+    expect(v.asked).toEqual([]);
+  });
+
+  it("a completion still takes only the call's own provider and model (what llm.pick read), never the tactic directly", async () => {
+    const v = vendors();
+    const out = await callVendor(LLM_COMPLETE, { message: "m", systemPrompt: "s" }, { headers: HEADERS, tactics: { llm: { provider: "anthropic", model: "sonnet" } } }, v.deps);
     expect(out.ok).toBe(false);
-    expect(String(out.data.error)).toMatch(/llm\.pick/);
     expect(v.completions).toHaveLength(0);
   });
 });
-// Phase 2 (LLM-RATING-PER-ENGINE-1112): the template of a writing call is the Rating's pick too.
-function templateDoor(status = 200) {
-  const asked: string[] = [];
-  const deps: VendorDeps = {
-    async complete() { return {}; }, async platformComplete() { return {}; }, async judge() { return {}; }, async platformJudge() { return {}; }, async readSkill() { return null; },
-    async serviceDoor(_s, _m, path) {
-      asked.push(path);
-      return status === 200
-        ? { status, body: { template: { templateDynastySlug: "x-post-shape-rotation", name: "X: Shape of the day", head: "x-post-shape-rotation-v2" } } }
-        : { status, body: { error: "no active template dynasty the x Engine may write with", reason: "no_template_for_engine" } };
-    },
-  };
-  return { asked, deps };
-}
 
-describe("template.pick", () => {
-  it("asks the Rating's template pick for the script's Engine and writing call, per call", async () => {
-    const v = templateDoor();
-    const out = await callVendor(TEMPLATE_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, v.deps);
-    expect(v.asked).toEqual(["/internal/template-pick?outcome=x_post_published&place=writer&campaignId=camp-1"]);
+describe("template.pick reads the script's tactics", () => {
+  it("answers tactic template (templates[place] first) in the shape the writers read; no service is asked", async () => {
+    const v = vendors();
+    const tactics = { template: "x-post-shape-rotation", templates: { reply: "x-post-reply" } };
+    const out = await callVendor(TEMPLATE_PICK, { place: "writer" }, { headers: HEADERS, tactics, outcome: "x_post_published" }, v.deps);
     expect(out).toMatchObject({ ok: true, data: { templateDynastySlug: "x-post-shape-rotation", template: { templateDynastySlug: "x-post-shape-rotation" } } });
+    const reply = await callVendor(TEMPLATE_PICK, { place: "reply" }, { headers: HEADERS, tactics, outcome: "x_post_published" }, v.deps);
+    expect(reply).toMatchObject({ ok: true, data: { templateDynastySlug: "x-post-reply" } });
+    expect(v.asked).toEqual([]);
   });
-  it("no template for the Engine = a refusal (never a fixed template)", async () => {
-    const out = await callVendor(TEMPLATE_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, templateDoor(422).deps);
-    expect(out).toMatchObject({ ok: false, data: { status: 422, code: "no_template_for_engine" } });
+
+  it("no template stated = a refusal (never a fixed template)", async () => {
+    const out = await callVendor(TEMPLATE_PICK, { place: "writer" }, { headers: HEADERS, tactics: {}, outcome: "x_post_published" }, vendors().deps);
+    expect(out.ok).toBe(false);
+    expect(String(out.data.error)).toMatch(/states no template/);
   });
 });
