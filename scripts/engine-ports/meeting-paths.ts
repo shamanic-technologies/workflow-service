@@ -26,6 +26,9 @@ const COMMON = {
   // finds the path. A client's own-team channel (`your-team-*`, operated by the customer) is never dispatched to any
   // script, so it never runs this one.
   asks: ["message_sent"],
+  // WHO it answers is the answerer's (it claims `pure_prospect` by default): stated here too, so a campaign strategy keeping
+  // "Leads only" keeps the path (features-service judges the path on its own description and tactics).
+  relationships: "pure_prospect",
 };
 
 export const BOOK_MEETING = {
@@ -39,7 +42,7 @@ export const BOOK_MEETING = {
       "This answer works toward a booked meeting with the brand. When they show interest, propose the meeting: two open times in their timezone, or the booking link when no time fits; when they pick a time, book it and confirm it. Answer what they asked first; a meeting is the next step, never a condition.",
   },
   description:
-    "Works toward a booked meeting: when a lead writes or acts, asks for the one answer that proposes a meeting with open times or the booking link, and books the time they pick.",
+    "Works toward a booked meeting: when a lead writes or acts, asks for the one answer that proposes a meeting with open times or the booking link, and books the time they pick. Leads only.",
 } as const;
 
 export const MEETING_REMINDER = {
@@ -53,7 +56,7 @@ export const MEETING_REMINDER = {
       "This answer works toward the lead attending the meeting they booked. When a meeting is booked, send one short reminder before it starts, in their timezone (the day before, or a few hours before when it is soon), with the time and how to join or move it, and nothing else: no pitch, no question. When the meeting is far off, choose later with the reminder's date. When no meeting is booked, answer them toward booking one.",
   },
   description:
-    "Works toward an attended meeting: when a lead books or acts, asks for the one answer that reminds them of their meeting shortly before it starts, in their timezone.",
+    "Works toward an attended meeting: when a lead books or acts, asks for the one answer that reminds them of their meeting shortly before it starts, in their timezone. Leads only.",
 } as const;
 
 export function buildMeetingPathSource(): string {
@@ -79,36 +82,67 @@ export default function run(ctx: ScriptContext): ScriptResult {
 /**
  * The answerer's two edits (an UPGRADE of `message_sent/dy_answer_lead`, anchored on its STORED code, which is the
  * source of truth; every other byte unchanged, so its recorded cases replay as before):
- *   1. ONE answer per trigger event: right after its person claim, an occurrence run claims the event for its campaign
- *      in the Engine's storage (`ctx.storage.claim`, atomic: the first campaign wins). A second campaign answering the
- *      same event (a Meeting booked path and the Lead event answer of one brand) sends nothing, rings no rep, closes its
- *      own queue row (never the person: the winner leaves their one next date) and ends `decided: done`.
+ *   1. ONE campaign converses with a lead: right after its person claim, the run claims the LEAD for its campaign in the
+ *      Engine's storage (`ctx.storage.claim`, atomic: the first campaign wins), keyed on the lead, never on the event (one
+ *      reply raises several events: the positive reply AND the composite Lead event, each its own id). Another campaign
+ *      answering the same lead within `ANSWER_WINDOW_MINUTES` of the owner's last answer sends nothing, rings no rep,
+ *      stops only its own queue row (never the person: the owner leaves their one next date) and ends `decided: done`;
+ *      past that window the lead is taken over. The owning campaign refreshes its claim on every answer.
  *   2. The asking script's goal, when the Request states one, reaches the writer as one prompt section; none = the
  *      prompt byte for byte.
  */
-export const EVENT_CLAIM_ANCHOR = "  const row = claim.followup;\n";
+export const ANSWER_WINDOW_MINUTES = 30;
+export const CLAIM_ANCHOR = "  const row = claim.followup;\n";
 export const PROMPT_ANCHOR = "const system = [voice.content].concat(personaBlock, K.GAME, mediumLines, [";
 
-export function answererWithGoalAndEventClaim(stored: string): string {
-  if (stored.includes("ctx.storage.claim(")) throw new Error("answerer upgrade: the stored code already claims its event");
-  for (const a of [EVENT_CLAIM_ANCHOR, PROMPT_ANCHOR]) {
-    const n = stored.split(a).length - 1;
-    if (n !== 1) throw new Error(`answerer upgrade: anchor ${JSON.stringify(a.trim())} found ${n} times, want exactly 1: read the stored code again`);
-  }
-  const claim = [
-    EVENT_CLAIM_ANCHOR.trimEnd(),
-    "  // ONE answer per event (SCRIPT-VALUE-RATING-1113-WF1): several campaigns of the brand may answer the same Lead event",
-    "  // (a Meeting booked path and the Lead event answer); the first to claim it answers, the others send nothing.",
-    "  if (s(trigger.eventId)) {",
-    '    const owner = ctx.storage.claim("answered_events", String(trigger.eventId), { campaignId: campaignId });',
-    "    if (owner && owner.campaignId !== campaignId) {",
-    '      must("lead.followup.record", { params: { id: row.id }, body: { kind: "stopped", reason: "answered_by_another_campaign" } });',
-    '      return { unmade: "answered_elsewhere: campaign " + String(owner.campaignId) + " answers this event", decided: "done" };',
-    "    }",
-    "  }",
-    "",
-  ].join("\n");
-  const prompt =
-    'const system = [voice.content].concat(personaBlock, K.GAME, [s(req.goal) ? "WHAT THIS ANSWER WORKS TOWARD (the campaign\'s Target):\\n" + req.goal : ""], mediumLines, [';
-  return stored.replace(EVENT_CLAIM_ANCHOR, claim).replace(PROMPT_ANCHOR, prompt);
+/** v8's event claim (SCRIPT-VALUE-RATING-1113-WF1, first cut), replaced by the lead claim on the stored v8. */
+export const EVENT_CLAIM_BLOCK_V8 = [
+  "  // ONE answer per event (SCRIPT-VALUE-RATING-1113-WF1): several campaigns of the brand may answer the same Lead event",
+  "  // (a Meeting booked path and the Lead event answer); the first to claim it answers, the others send nothing.",
+  "  if (s(trigger.eventId)) {",
+  '    const owner = ctx.storage.claim("answered_events", String(trigger.eventId), { campaignId: campaignId });',
+  "    if (owner && owner.campaignId !== campaignId) {",
+  '      must("lead.followup.record", { params: { id: row.id }, body: { kind: "stopped", reason: "answered_by_another_campaign" } });',
+  '      return { unmade: "answered_elsewhere: campaign " + String(owner.campaignId) + " answers this event", decided: "done" };',
+  "    }",
+  "  }",
+  "",
+].join("\n");
+
+export const LEAD_CLAIM_BLOCK = [
+  "  // ONE campaign converses with a lead (SCRIPT-VALUE-RATING-1113-WF1): several campaigns of the brand may answer the same",
+  "  // lead (a Meeting booked path and the Lead event answer; one reply raises several events). The campaign holding the",
+  "  // lead's claim answers; another one within " + ANSWER_WINDOW_MINUTES + " minutes of its last answer sends nothing.",
+  "  const answerKey = s(row.leadId) || named.leadId || named.email || named.phone;",
+  "  if (answerKey) {",
+  '    const owner = ctx.storage.claim("answering_leads", String(answerKey), { campaignId: campaignId, at: now });',
+  "    if (owner && owner.campaignId !== campaignId && Date.parse(now) - Date.parse(String(owner.at)) < " + ANSWER_WINDOW_MINUTES + " * 60000) {",
+  '      must("lead.followup.record", { params: { id: row.id }, body: { kind: "stopped", reason: "answered_by_another_campaign" } });',
+  '      return { unmade: "answered_elsewhere: campaign " + String(owner.campaignId) + " answers this lead", decided: "done" };',
+  "    }",
+  '    if (!owner || owner.campaignId !== campaignId || owner.at !== now) ctx.storage.set("answering_leads", String(answerKey), { campaignId: campaignId, at: now });',
+  "  }",
+  "",
+].join("\n");
+
+const GOAL_PROMPT =
+  'const system = [voice.content].concat(personaBlock, K.GAME, [s(req.goal) ? "WHAT THIS ANSWER WORKS TOWARD (the campaign\'s Target):\\n" + req.goal : ""], mediumLines, [';
+
+function once(code: string, needle: string): void {
+  const n = code.split(needle).length - 1;
+  if (n !== 1) throw new Error(`answerer upgrade: ${JSON.stringify(needle.trim().slice(0, 80))} found ${n} times, want exactly 1: read the stored code again`);
+}
+
+/** The answerer as of v7 (no claim, no goal) -> with the lead claim and the goal. */
+export function answererWithGoalAndLeadClaim(stored: string): string {
+  if (stored.includes("ctx.storage.claim(")) throw new Error("answerer upgrade: the stored code already claims");
+  once(stored, CLAIM_ANCHOR);
+  once(stored, PROMPT_ANCHOR);
+  return stored.replace(CLAIM_ANCHOR, () => CLAIM_ANCHOR + LEAD_CLAIM_BLOCK).replace(PROMPT_ANCHOR, () => GOAL_PROMPT);
+}
+
+/** The stored v8 (event claim) -> the lead claim; the goal section v8 already reads is kept. */
+export function answererV8ToLeadClaim(stored: string): string {
+  once(stored, EVENT_CLAIM_BLOCK_V8);
+  return stored.replace(EVENT_CLAIM_BLOCK_V8, () => LEAD_CLAIM_BLOCK);
 }
