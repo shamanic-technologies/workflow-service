@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { replayCase, type ReplayCase } from "../../src/lib/scripts/replay.js";
 import { runScript, validateSource } from "../../src/lib/scripts/sandbox.js";
-import { answererWithGoalAndEventClaim, buildMeetingPathSource, BOOK_MEETING, MEETING_REMINDER } from "../../scripts/engine-ports/meeting-paths.js";
+import { answererV8ToLeadClaim, answererWithGoalAndLeadClaim, buildMeetingPathSource, BOOK_MEETING, EVENT_CLAIM_BLOCK_V8, CLAIM_ANCHOR, LEAD_CLAIM_BLOCK, MEETING_REMINDER } from "../../scripts/engine-ports/meeting-paths.js";
 
 // SCRIPT-VALUE-RATING-1113-WF1: the Meeting booked and Meeting attended paths write nothing themselves; they ask the
 // answerer (Message sent) for the ONE answer, handing it the run's Request plus their goal.
@@ -16,7 +16,7 @@ describe("the meeting path scripts", () => {
     expect(read.vendors).toEqual([]);
     for (const s of [BOOK_MEETING, MEETING_REMINDER]) {
       expect(s.tactics.asks).toEqual(["message_sent"]);
-      expect(s.tactics.channel).toBe("ai-follow-up-email");
+      expect(s.tactics).not.toHaveProperty("channel");
       expect(typeof s.tactics.goal).toBe("string");
       expect(s.tactics).not.toHaveProperty("llm");
       expect(s.tactics).not.toHaveProperty("template");
@@ -64,7 +64,9 @@ describe("the answerer upgrade (dy_answer_lead)", () => {
     "  ctx_ = ctx;",
     "  const req = ctx.request || {};",
     "  const trigger = req.trigger;",
+    "  const now = req.now;",
     "  const campaignId = req.campaignId;",
+    "  const named = { email: null, phone: null, leadId: trigger.leadId };",
     "  const claim = must('lead.followup.claim', {});",
     "  const row = claim.followup;",
     "  const voice = { content: 'VOICE' }; const personaBlock = []; const K = { GAME: ['GAME'] }; const mediumLines = ['EMAIL'];",
@@ -72,35 +74,54 @@ describe("the answerer upgrade (dy_answer_lead)", () => {
     "  return { content: { system: system } };",
     "}",
   ].join("\n");
-  const upgraded = answererWithGoalAndEventClaim(stored);
-  const claimed = { found: true, followup: { id: "row-1" } };
+  const upgraded = answererWithGoalAndLeadClaim(stored);
+  const claimed = { found: true, followup: { id: "row-1", leadId: "lead-1" } };
+  const spec = (req: Record<string, unknown>) => ({ subject: null, brand: "b", day: 0, tactics: {}, request: req });
+  const storeBridge = (store: Map<string, unknown>, calls: Array<[string, unknown]>) => (op: string, args: unknown[]) => {
+    const k = `${String(args[0])}|${String(args[1])}`;
+    if (op === "storage.claim") {
+      if (!store.has(k)) store.set(k, args[2]);
+      return { v: store.get(k) };
+    }
+    if (op === "storage.set") {
+      store.set(k, args[2]);
+      return { v: null };
+    }
+    if (op === "vendor") calls.push([String(args[0]), args[1]]);
+    return { v: op === "vendor" ? { ok: true, data: claimed } : null };
+  };
 
-  it("refuses a stored code whose anchors moved, or that already claims", () => {
-    expect(() => answererWithGoalAndEventClaim(stored.replace("const row = claim.followup;", "const row = claim.row;"))).toThrow(/found 0 times/);
-    expect(() => answererWithGoalAndEventClaim(upgraded)).toThrow(/already claims/);
+  it("refuses a stored code whose anchors moved, or that already claims; v8 (event claim) becomes the lead claim", () => {
+    expect(() => answererWithGoalAndLeadClaim(stored.replace("const row = claim.followup;", "const row = claim.row;"))).toThrow(/found 0 times/);
+    expect(() => answererWithGoalAndLeadClaim(upgraded)).toThrow(/already claims/);
+    const v8 = upgraded.replace(LEAD_CLAIM_BLOCK, () => EVENT_CLAIM_BLOCK_V8);
+    expect(v8).toContain('"answered_events"');
+    expect(answererV8ToLeadClaim(v8)).toBe(upgraded);
+    expect(upgraded.indexOf(CLAIM_ANCHOR)).toBeGreaterThan(0);
   });
 
   it("no goal = the prompt byte for byte; a goal = one section after the game", async () => {
-    const same = await runScript(stored, { subject: null, brand: "b", day: 0, tactics: {}, request }, (op) => ({ v: op === "vendor" ? { ok: true, data: claimed } : null }));
-    const without = await runScript(upgraded, { subject: null, brand: "b", day: 0, tactics: {}, request }, (op) => ({ v: op === "vendor" ? { ok: true, data: claimed } : op === "storage.claim" ? { campaignId: "camp-1" } : null }));
+    const same = await runScript(stored, spec(request), storeBridge(new Map(), []));
+    const without = await runScript(upgraded, spec(request), storeBridge(new Map(), []));
     expect(without).toEqual(same);
-    const withGoal = await runScript(upgraded, { subject: null, brand: "b", day: 0, tactics: {}, request: { ...request, goal: "A booked meeting." } }, (op) => ({
-      v: op === "vendor" ? { ok: true, data: claimed } : op === "storage.claim" ? { campaignId: "camp-1" } : null,
-    }));
+    const withGoal = await runScript(upgraded, spec({ ...request, goal: "A booked meeting." }), storeBridge(new Map(), []));
     expect(withGoal).toMatchObject({ kind: "done", result: { content: { system: "VOICE\n\nGAME\n\nWHAT THIS ANSWER WORKS TOWARD (the campaign's Target):\nA booked meeting.\n\nEMAIL" } } });
   });
 
-  it("a second campaign answering the same event sends nothing and closes only its own queue row", async () => {
+  it("one lead, two campaigns, two different events: the second sends nothing and stops only its own row; after the window it takes over", async () => {
+    const store = new Map<string, unknown>();
+    const first = await runScript(upgraded, spec({ ...request, campaignId: "camp-1", trigger: { ...trigger, eventId: "evt-reply" } }), storeBridge(store, []));
+    expect(first).toMatchObject({ kind: "done", result: { content: {} } });
     const calls: Array<[string, unknown]> = [];
-    const out = await runScript(upgraded, { subject: null, brand: "b", day: 0, tactics: {}, request: { ...request, campaignId: "camp-2" } }, (op, args) => {
-      if (op === "storage.claim") return { v: { campaignId: "camp-1" } };
-      if (op === "vendor") calls.push([String(args[0]), args[1]]);
-      return { v: op === "vendor" ? { ok: true, data: claimed } : null };
-    });
-    expect(out).toMatchObject({ kind: "done", result: { unmade: "answered_elsewhere: campaign camp-1 answers this event", decided: "done" } });
+    const second = await runScript(upgraded, spec({ ...request, now: "2026-11-13T10:05:00.000Z", campaignId: "camp-2", trigger: { ...trigger, eventId: "evt-lead-event" } }), storeBridge(store, calls));
+    expect(second).toMatchObject({ kind: "done", result: { unmade: "answered_elsewhere: campaign camp-1 answers this lead", decided: "done" } });
     expect(calls).toEqual([
       ["lead.followup.claim", {}],
       ["lead.followup.record", { params: { id: "row-1" }, body: { kind: "stopped", reason: "answered_by_another_campaign" } }],
     ]);
+    // The owner answering again keeps its claim fresh; another campaign 31 minutes after the last answer takes over.
+    const later = await runScript(upgraded, spec({ ...request, now: "2026-11-13T10:40:00.000Z", campaignId: "camp-2" }), storeBridge(store, []));
+    expect(later).toMatchObject({ kind: "done", result: { content: {} } });
+    expect(store.get("answering_leads|lead-1")).toEqual({ campaignId: "camp-2", at: "2026-11-13T10:40:00.000Z" });
   });
 });
