@@ -148,7 +148,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
     method: "POST",
     path: "/orgs/buffer/next",
     args: [],
-    optional: ["acceptedEmails", "reachableBy", "reachableOn", "relationships", "stepFilter", "excludeEmailedWithin", "population", "namedLead"],
+    optional: ["acceptedEmails", "reachableBy", "reachableOn", "relationships", "stepFilter", "excludeEmailedWithin", "population", "namedLead", "dueFollowupOnly"],
   },
   // Answering a lead (MIGRATE-1105 S1): what the old answering steps called, each the producer's own org route.
   // The person's whole thread, their state, the brand's facts and booking, then one act: reply, WhatsApp, book, call.
