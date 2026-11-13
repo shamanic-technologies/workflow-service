@@ -3640,7 +3640,8 @@
               "lead",
               "human",
               "social",
-              "scraping"
+              "scraping",
+              "brand"
             ],
             "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run; the email verification waterfall: apollo's verifier doors store each bronze row and declare email_checked; a candidate decision: lead-service's doors screen, reveal or decline as before). The run then declares nothing itself."
           },
@@ -4071,6 +4072,13 @@
           "scriptId": {
             "type": "string"
           },
+          "tactics": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "The picked version's own tactics, as stored (e.g. `template`, `llm`, `llms.<place>`): what the picked script writes with (SCRIPT-VALUE-RATING-1113-WF3: a preview writes with the template and LLM its picked script states, never a side pick)."
+          },
           "basis": {
             "type": "string",
             "description": "How features-service's Rating ranked the candidates (value_per_dollar, value_only, cost_only)."
@@ -4109,6 +4117,7 @@
           "dynasty",
           "version",
           "scriptId",
+          "tactics",
           "basis",
           "draws"
         ]
@@ -4143,6 +4152,151 @@
         "required": [
           "keptDynasties",
           "servable"
+        ]
+      },
+      "EngineMakeRequest": {
+        "type": "object",
+        "properties": {
+          "units": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    },
+                    "subject": {
+                      "type": "object",
+                      "properties": {
+                        "service": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "service",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "content"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "content": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      },
+                      "subject": {
+                        "type": "object",
+                        "properties": {
+                          "service": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "service",
+                          "id"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "content"
+                    ]
+                  }
+                }
+              ]
+            },
+            "description": "The materials, by outcome (as on `POST /internal/scripts/run`). Their keys are what the run can serve: a script asking for another material is not a candidate."
+          },
+          "request": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "keptDynasties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "minItems": 1,
+            "description": "The dynasties a strategy keeps (features-service `GET /internal/script-strategy`), when the caller has one. Absent = no strategy: every runnable script of the Engine is a candidate."
+          },
+          "channel": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "description": "The channel the work is for: a script stating a tactic `channel` runs only for it. Absent = none."
+          },
+          "subject": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "service",
+              "id"
+            ]
+          },
+          "recordedBy": {
+            "type": "string",
+            "enum": [
+              "content-generation",
+              "instantly",
+              "apollo",
+              "lead",
+              "human",
+              "social",
+              "scraping",
+              "brand"
+            ],
+            "description": "The service that records the Unit declares its occurrences on this run (FACTORY-P3 fleet writer: content-generation stores the email and declares its ONE message_written on the script's run; the reply judge: instantly records the verdict and declares Positive reply on its own run; the email verification waterfall: apollo's verifier doors store each bronze row and declare email_checked; a candidate decision: lead-service's doors screen, reveal or decline as before). The run then declares nothing itself."
+          },
+          "trace": {
+            "type": "boolean"
+          },
+          "billing": {
+            "type": "string",
+            "enum": [
+              "org",
+              "platform"
+            ],
+            "description": "Who pays the chat vendors, as the calling service's own code did (default platform; org needs `x-org-id`)."
+          }
+        },
+        "required": [
+          "units"
         ]
       },
       "EngineOffRequest": {
@@ -11654,6 +11808,112 @@
                     "error",
                     "code"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}/make": {
+      "post": {
+        "summary": "Make one Unit of an Engine for a service waiting on it: the Rating picks the script, the script runs (service key only)",
+        "description": "SCRIPT-VALUE-RATING-1113-WF3 (owner 2026-11-13 « un pick = toujours un script »). For a service whose client waits on the result (brand-service's offer/brand field drafts): the SAME `pickScript` a campaign run calls (features-service's script pick among the runnable dynasties, narrowed by `keptDynasties` when the caller has a strategy), then that script runs synchronously on its own runs-service run, a child of the caller's run (`x-run-id`, required), as `POST /internal/scripts/run` runs it (`x-org-id` optional: none = a platform run; `billing` as the caller's own code paid). The answer is the run's (`RunScriptResponse`) plus the `pick`. The LLM the script writes with is its tactic: competing LLMs are competing dynasties. 404 `no_runnable_script`; 502 `script_pick_unreadable` (nothing ran); 502 with the run's `details` when the script failed or stopped.",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineMakeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The run's result + the pick",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/RunScriptResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pick": {
+                          "$ref": "#/components/schemas/EnginePickResponse"
+                        }
+                      },
+                      "required": [
+                        "pick"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an outcome key, no `x-run-id`, or an invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`no_runnable_script`: no candidate can run on these materials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "no_runnable_script"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`script_pick_unreadable`, or the script failed/stopped (`details` = its run)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
