@@ -16,8 +16,12 @@
  * (`ctx.storage.claim`), so a Lead event reaching a Meeting booked campaign AND the Lead event answer campaign of the
  * same brand yields ONE message, never two. A hand reply of ours sits in that thread like any message: it never locks it.
  *
+ * A proactive tick (no occurrence) asks the answerer too: it then writes to the next lead the campaign's brand already
+ * holds whose one follow-up date passed (lead-service `dueFollowupOnly`: never a fresh lead, held for this campaign's
+ * claim), so a campaign launched on its Target alone never idles while such a lead waits.
+ *
  * Answers: the answerer's own result (`{content: {answered}}`); its `unmade` (+ `decided`) forwarded word for word, as
- * `dy_answer_lead_pull` does; no occurrence = `unmade no_occurrence`. A missing `goal` throws: no default goal in code.
+ * `dy_answer_lead_pull` does. A missing `goal` throws: no default goal in code.
  */
 import { PORT_HEAD } from "./port-kit.js";
 
@@ -67,7 +71,7 @@ export function buildMeetingPathSource(): string {
     `
 export default function run(ctx: ScriptContext): ScriptResult {
   const R: any = ctx.request;
-  if (!R || !R.trigger) return { unmade: "no_occurrence" };
+  if (!R) return { unmade: "no_request" };
   const goal = typeof (ctx.tactics as any).goal === "string" ? String((ctx.tactics as any).goal).trim() : "";
   if (!goal) throw new Error("meeting path: the script states no goal (tactic goal): nothing is asked");
   ctx.ask({ units: {}, request: Object.assign({}, R, { goal: goal }), recordedBy: "sender" });
@@ -145,4 +149,36 @@ export function answererWithGoalAndLeadClaim(stored: string): string {
 export function answererV8ToLeadClaim(stored: string): string {
   once(stored, EVENT_CLAIM_BLOCK_V8);
   return stored.replace(EVENT_CLAIM_BLOCK_V8, () => LEAD_CLAIM_BLOCK);
+}
+
+/**
+ * v10: a PROACTIVE run (no occurrence) answers the next due lead its campaign's brand holds (SCRIPT-VALUE-RATING-1113-WF1,
+ * owner relayed: « who to write to without an event = the leads the campaign's own Plan already holds below the
+ * Target; no new audience »). lead-service `POST /orgs/buffer/next` `dueFollowupOnly: true` serves ONLY a lead whose one
+ * next follow-up date passed and who is owed now (never a fresh, bought or stocked lead), held one hour for this
+ * campaign; the run then claims them exactly like an occurrence's person and goes on unchanged (the lead claim keeps one
+ * campaign per lead). Nobody due = `nobody_due` idle. An occurrence run is byte for byte as before.
+ */
+export const TRIGGER_ANCHOR = '  const trigger = req.trigger && typeof req.trigger === "object" ? req.trigger : null;\n  if (!trigger) return { unmade: "no_occurrence" };\n';
+export const BRAND_CAMPAIGN_ANCHOR = '  if (!brandId || !campaignId) throw new Error("the run names no brand or campaign");\n';
+export const PROACTIVE_BLOCK = [
+  "  // A proactive tick (no occurrence): the next lead the brand already holds whose one follow-up date passed, served to",
+  "  // this campaign only (never a fresh lead) and held for its claim below (SCRIPT-VALUE-RATING-1113-WF1).",
+  "  if (!trigger) {",
+  '    const served = door("lead.serve", { dueFollowupOnly: true });',
+  '    if (!served.ok) throw new Error("lead.serve failed: " + String(served.data && served.data.error));',
+  '    if (!served.data.found || !served.data.lead) return { unmade: "nobody_due: " + String(served.data.reason || "none"), decided: "idle" };',
+  "    const ld = served.data.lead;",
+  '    trigger = { leadId: s(ld.leadId), person: { email: s(ld.email), phone: s(ld.phone) }, sourceTriggerId: "follow_up_due", item: { kind: "follow_up_due", note: "their follow-up date passed: nothing new happened, this is our next look" } };',
+  "  }",
+  "",
+].join("\n");
+
+export function answererV9ToProactive(stored: string): string {
+  if (stored.includes("dueFollowupOnly")) throw new Error("answerer upgrade: the stored code already serves a proactive tick");
+  once(stored, TRIGGER_ANCHOR);
+  once(stored, BRAND_CAMPAIGN_ANCHOR);
+  return stored
+    .replace(TRIGGER_ANCHOR, () => '  let trigger = req.trigger && typeof req.trigger === "object" ? req.trigger : null;\n')
+    .replace(BRAND_CAMPAIGN_ANCHOR, () => BRAND_CAMPAIGN_ANCHOR + PROACTIVE_BLOCK);
 }
