@@ -6,7 +6,8 @@ import { drizzle } from "drizzle-orm/pglite";
 import { and, eq } from "drizzle-orm";
 import { ScriptCatalogueError, activeVersion, caseCount, createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { rehomeScript } from "../../src/lib/scripts/script-rehome.js";
-import { engineState, pickScript, servesChannel, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { engineState, pickScript, servesChannel, setScriptPickReader, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { fakeScriptPick } from "../helpers/script-pick.js";
 import { engineWaits, scriptRuns, scriptStorage, scriptSwitches } from "../../src/db/schema.js";
 import type { ReplayCase } from "../../src/lib/scripts/replay.js";
 
@@ -42,6 +43,7 @@ let db: AnyPgDb;
 beforeEach(async () => {
   db = await freshDb();
   setScriptStrategyReader(null);
+  setScriptPickReader(fakeScriptPick());
   await putCases(db, "post_published", "dy_thread", [CASE], "test");
   await createScript(db, { outcome: "post_published", dynasty: "dy_thread", code: POSTER, description: "Posts", tactics: { channel: "threads-post", recorded_by: "meta" } }, author, deps);
 });
@@ -107,14 +109,18 @@ describe("re-homing a dynasty onto its fine outcome", () => {
     expect(rows.map((r) => [r.callerTask, r.state, r.scriptVersion])).toEqual(expect.arrayContaining([["inbound-decision", "switched", 2], ["orphan", "shadow", 2]]));
   });
 
-  it("serves any campaign asking the fine Engine (no channel), and the Rating keeps the dynasty's record", async () => {
+  it("serves any campaign asking the fine Engine (no channel), and the Rating is asked about the dynasty under its new home", async () => {
     const family = (await activeVersion(db, "post_published", "dy_thread"))!;
     await db.insert(scriptRuns).values({ scriptId: family.id, orgId: "org-a", runId: "r1", parentRunId: "p1", status: "made" });
     await rehomeScript(db, "post_published", "dy_thread", { toOutcome: "threads_post_published" }, author, deps);
     expect(await servesChannel(db, "threads_post_published", "threads-post")).toBe(true);
     // The family Engine still serves only its channel.
     expect(await servesChannel(db, "post_published", "social-post")).toBe(false);
-    const pick = await pickScript(db, { outcome: "threads_post_published", servable: [], channel: "threads-post" }, () => 0.5);
-    expect(pick!.draws).toEqual([expect.objectContaining({ dynasty: "dy_thread", version: 2, made: 1, runs: 1 })]);
+    const picks = fakeScriptPick();
+    setScriptPickReader(picks);
+    const pick = await pickScript(db, { outcome: "threads_post_published", servable: [], channel: "threads-post" });
+    expect(pick!.draws).toEqual([expect.objectContaining({ dynasty: "dy_thread", version: 2 })]);
+    // features-service pools the dynasty's runs across its homes (it re-homes a name runnable under one outcome).
+    expect(picks.calls).toEqual([{ outcome: "threads_post_published", dynasties: ["threads_post_published/dy_thread"] }]);
   });
 });

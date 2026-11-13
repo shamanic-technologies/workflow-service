@@ -7,7 +7,8 @@ import { eq } from "drizzle-orm";
 import { createScript, putCases, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
-import { engineState, pickScript, sampleBeta, servesChannel, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { engineState, pickScript, servesChannel, setScriptPickReader, setScriptStrategyReader, switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
+import { fakeScriptPick } from "../helpers/script-pick.js";
 import { MAX_SCRIPTS_PER_RUN, endRunBodyOf, executeEngineRun, fallsThrough, planEngineRun, planTaskName, type EngineDispatch, type EngineRunDeps } from "../../src/lib/scripts/engine-runner.js";
 import { reserveCampaignExecution } from "../../src/lib/execution-admission.js";
 import { engineWaits, scriptRuns, scripts, workflowRuns } from "../../src/db/schema.js";
@@ -53,9 +54,13 @@ const ORG = "org-1";
 
 let db: AnyPgDb;
 let strategyAsks: Array<{ campaignId: string; outcome: string }> = [];
+let picks = fakeScriptPick();
 beforeEach(async () => {
   db = await freshDb();
   strategyAsks = [];
+  // features-service's Rating: the candidates in the order asked unless a test scores them.
+  picks = fakeScriptPick();
+  setScriptPickReader(picks);
   // No strategy: the campaign keeps every script of the Engine (features-service's answer for a default play).
   setScriptStrategyReader(async (campaignId, outcome) => {
     strategyAsks.push({ campaignId, outcome });
@@ -370,26 +375,42 @@ describe("the Rating", () => {
     expect(await servesChannel(db, "conversation", "email-sending")).toBe(true);
   });
 
-  it("draws by the share of runs that made a Unit, pooled per dynasty", async () => {
-    const good = await addScript("lead_found", "dy_good", SERVE);
-    const bad = await addScript("lead_found", "dy_bad", SERVE);
-    const rows = (scriptId: string, status: string, n: number) => Array.from({ length: n }, (_, i) => ({ scriptId, orgId: ORG, runId: `${scriptId}-${status}-${i}`, parentRunId: "p", status }));
-    await db.insert(scriptRuns).values([...rows(good.id, "made", 90), ...rows(good.id, "unmade", 10), ...rows(bad.id, "made", 5), ...rows(bad.id, "failed", 95)]);
-    let goodWins = 0;
-    for (let i = 0; i < 50; i++) if ((await pickScript(db, { outcome: "lead_found", servable: [], channel: null }))!.script.dynasty === "dy_good") goodWins++;
-    expect(goodWins).toBe(50);
+  it("runs the script features-service picks, among exactly the candidates the run can feed (SCRIPT-VALUE-RATING-1113-WF2)", async () => {
+    await addScript("lead_found", "dy_good", SERVE);
+    await addScript("lead_found", "dy_bad", SERVE);
+    await addScript("lead_found", "dy_other_channel", SERVE, { channel: "cold-whatsapp-outreach" });
+    for (const [scores, winner] of [[{ dy_bad: 2, dy_good: 1 }, "dy_bad"], [{ dy_good: 3, dy_bad: 1 }, "dy_good"]] as const) {
+      picks = fakeScriptPick(scores);
+      setScriptPickReader(picks);
+      const pick = await pickScript(db, { outcome: "lead_found", servable: [], channel: null });
+      expect(pick!.script.dynasty).toBe(winner);
+      expect(pick!.ranked.map((r) => r.dynasty)).toEqual(pick!.draws.map((d) => d.dynasty));
+      expect(pick!.basis).toBe("value_per_dollar");
+      expect(picks.calls).toEqual([{ outcome: "lead_found", dynasties: ["lead_found/dy_bad", "lead_found/dy_good"] }]);
+    }
   });
 
-  it("samples a Beta draw inside [0, 1] with the right mean", () => {
-    let sum = 0;
-    for (let i = 0; i < 4000; i++) {
-      const x = sampleBeta(3, 7);
-      expect(x).toBeGreaterThanOrEqual(0);
-      expect(x).toBeLessThanOrEqual(1);
-      sum += x;
+  it("an unreadable pick runs nothing: the run is never opened and campaign-service retries", async () => {
+    await addScript("lead_found", "dy_good", SERVE);
+    setScriptPickReader(async () => {
+      throw new Error("the script pick could not be read (features-service 502)");
+    });
+    await expect(pickScript(db, { outcome: "lead_found", servable: [], channel: null })).rejects.toThrow(/502/);
+    await expect(planEngineRun(db, dispatch())).rejects.toThrow(/502/);
+  });
+
+  it("a pick that does not rank exactly the candidates asked is refused, never run on a guess", async () => {
+    await addScript("lead_found", "dy_good", SERVE);
+    await addScript("lead_found", "dy_bad", SERVE);
+    const answers = [
+      { scriptDynasty: "lead_found/dy_ghost", basis: "cost_only", candidates: [{ scriptDynasty: "lead_found/dy_ghost", runs: 0, score: null }] },
+      { scriptDynasty: "lead_found/dy_good", basis: "cost_only", candidates: [{ scriptDynasty: "lead_found/dy_good", runs: 0, score: null }] },
+      { scriptDynasty: null, basis: "no_candidate", candidates: [] },
+    ];
+    for (const a of answers) {
+      setScriptPickReader(async () => a);
+      await expect(pickScript(db, { outcome: "lead_found", servable: [], channel: null })).rejects.toThrow(/does not rank exactly/);
     }
-    expect(sum / 4000).toBeGreaterThan(0.27);
-    expect(sum / 4000).toBeLessThan(0.33);
   });
 });
 
@@ -400,12 +421,12 @@ export default function run(ctx) {
   if (ctx.request.campaignId === "camp-owes") return { content: { owed: true }, subject: { service: "lead-service", id: "lead-owed" } };
   return { unmade: "nobody_owed" };
 }`;
-  const rows = (scriptId: string, status: string, n: number) => Array.from({ length: n }, (_, i) => ({ scriptId, orgId: "org-other", runId: `${scriptId}-${status}-${i}`, parentRunId: "p", status }));
   async function twoScripts(top = OWED) {
     const a = await addScript("lead_found", "dy_top", top, { recorded_by: "lead" });
     const b = await addScript("lead_found", "dy_lower", SERVE, { recorded_by: "lead" });
-    // A makes 97 % fleet-wide, B 30 %: A wins every draw.
-    await db.insert(scriptRuns).values([...rows(a.id, "made", 970), ...rows(a.id, "unmade", 30), ...rows(b.id, "made", 30), ...rows(b.id, "unmade", 70)]);
+    // features-service rates A above B: A wins every pick.
+    picks = fakeScriptPick({ dy_top: 2, dy_lower: 1 });
+    setScriptPickReader(picks);
     return { a, b };
   }
 
@@ -465,11 +486,12 @@ export default function run(ctx) {
     expect(fallsThrough(null, false)).toBe(false);
   });
 
-  it("tries at most MAX_SCRIPTS_PER_RUN scripts, in the order of one draw", async () => {
+  it("tries at most MAX_SCRIPTS_PER_RUN scripts, in the order of one pick", async () => {
     for (let i = 0; i < MAX_SCRIPTS_PER_RUN + 2; i++) await addScript("lead_found", `dy_${i}`, OWED, { recorded_by: "lead" });
+    picks = fakeScriptPick(Object.fromEntries(Array.from({ length: MAX_SCRIPTS_PER_RUN + 2 }, (_, i) => [`dy_${i}`, i])));
+    setScriptPickReader(picks);
     const pick = await pickScript(db, { outcome: "lead_found", servable: [], channel: null });
-    const byDraw = [...pick!.draws].sort((x, y) => y.draw - x.draw).map((x) => x.dynasty);
-    expect(pick!.ranked.map((r) => r.dynasty)).toEqual(byDraw);
+    expect(pick!.ranked.map((r) => r.dynasty)).toEqual(Array.from({ length: MAX_SCRIPTS_PER_RUN + 2 }, (_, i) => `dy_${MAX_SCRIPTS_PER_RUN + 1 - i}`));
     expect(pick!.ranked[0]!.dynasty).toBe(pick!.script.dynasty);
     const w = world();
     const { row } = await runOnce(dispatch(), w);

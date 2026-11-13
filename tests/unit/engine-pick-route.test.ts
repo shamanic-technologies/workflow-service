@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { fakeScriptPick } from "../helpers/script-pick.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import express from "express";
@@ -50,6 +51,7 @@ beforeEach(async () => {
   engine.setScriptStrategyReader(async () => {
     throw new Error("no campaign strategy is read on a pick outside a run");
   });
+  engine.setScriptPickReader(fakeScriptPick({ dy_good: 2, dy_bad: 1 }));
   app = express();
   app.use(express.json());
   app.use(enginesRoutes);
@@ -61,8 +63,6 @@ async function addScript(outcome: string, dynasty: string, tactics: Record<strin
   if (Object.keys(tactics).length) await db.update(scripts).set({ tactics }).where(eq(scripts.id, row.id));
   return row;
 }
-const runs = (scriptId: string, status: string, n: number) =>
-  Array.from({ length: n }, (_, i) => ({ scriptId, orgId: "org-1", runId: `${scriptId}-${status}-${i}`, parentRunId: "p", status }));
 
 const pick = (outcome: string, body: Record<string, unknown>) => request(app).post(`/internal/engines/${outcome}/pick`).set("x-api-key", KEY).send(body);
 
@@ -71,19 +71,30 @@ describe("POST /internal/engines/{outcome}/pick", () => {
     const good = await addScript("message_written", "dy_good");
     const bad = await addScript("message_written", "dy_bad");
     await addScript("message_written", "dy_not_kept");
-    await db.insert(scriptRuns).values([...runs(good.id, "made", 90), ...runs(good.id, "unmade", 10), ...runs(bad.id, "made", 5), ...runs(bad.id, "failed", 95)]);
     for (let i = 0; i < 20; i++) {
       const res = await pick("message_written", { keptDynasties: ["dy_good", "dy_bad"], servable: ["lead_identified"] });
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ outcome: "message_written", dynasty: "dy_good", version: 1, scriptId: good.id });
-      expect(res.body.draws.map((d: { dynasty: string }) => d.dynasty).sort()).toEqual(["dy_bad", "dy_good"]);
+      expect(res.body.draws.map((d: { dynasty: string }) => d.dynasty)).toEqual(["dy_good", "dy_bad"]);
+      expect(res.body.basis).toBe("value_per_dollar");
     }
     // Same function as a run, same candidates: the kept list replaces a campaign's strategy read.
     expect(pickSpy).toHaveBeenCalledWith(db, { outcome: "message_written", servable: ["lead_identified"], channel: null, keptDynasties: ["dy_good", "dy_bad"] });
     // And a run's pickScript with that same kept list answers the same dynasty.
     expect((await engine.pickScript(db, { outcome: "message_written", servable: ["lead_identified"], channel: null, keptDynasties: ["dy_good", "dy_bad"] }))!.script.dynasty).toBe("dy_good");
     // Nothing written.
-    expect((await db.select().from(scriptRuns)).length).toBe(200);
+    expect((await db.select().from(scriptRuns)).length).toBe(0);
+    void bad;
+  });
+
+  it("a Rating features-service cannot serve is a named 502: the caller picks nothing and retries", async () => {
+    await addScript("message_written", "dy_good");
+    engine.setScriptPickReader(async () => {
+      throw new Error("the script pick could not be read (features-service 502)");
+    });
+    const res = await pick("message_written", { keptDynasties: ["dy_good"], servable: ["lead_identified"] });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("script_pick_unreadable");
   });
 
   it("an unknown outcome, or no kept dynasty runnable, is a named refusal, never another Engine's script", async () => {

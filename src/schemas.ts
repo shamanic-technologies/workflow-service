@@ -2953,7 +2953,10 @@ export const EnginePickResponseSchema = z
     dynasty: z.string().describe("The dynasty the Rating picked: pass it to `POST /orgs/scripts/run`."),
     version: z.number().int().describe("Its active version (the one a run of the dynasty executes)."),
     scriptId: z.string(),
-    draws: z.array(z.object({ dynasty: z.string(), version: z.number().int(), made: z.number().int(), runs: z.number().int(), draw: z.number() })),
+    basis: z.string().describe("How features-service's Rating ranked the candidates (value_per_dollar, value_only, cost_only)."),
+    draws: z
+      .array(z.object({ dynasty: z.string(), version: z.number().int(), runs: z.number().int(), score: z.number().nullable() }))
+      .describe("Every candidate in the Rating's order (the pick first), with the runs and score features-service served."),
   })
   .openapi("EnginePickResponse");
 

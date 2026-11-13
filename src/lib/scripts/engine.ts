@@ -13,13 +13,13 @@
  *    is a dynasty and its head runs). Only a script the run can feed is a candidate: every material its code asks for
  *    (`ctx.get(...)`, read from the code) is one the run holds, a tactic `channel` it states is the campaign's, and the
  *    campaign's STRATEGY keeps it (features-service judges each script's tactics, `GET /internal/script-strategy`).
- *    Thompson sampling on the share of a dynasty's runs that made a Unit (Beta(1 + made, 1 + not made), its runs of the
- *    last 30 days pooled across versions, docs/framework.md §8): a dynasty with little data draws wide and gets tried.
- *    Cost per Unit is not yet in the score (runs-service holds it, per task `script:<outcome>/<dynasty>`): the day it
- *    is, this function is the one place that changes.
+ *    WHICH candidate runs is features-service's Rating (SCRIPT-VALUE-RATING-1113-WF2, owner 2026-11-13: « un pick =
+ *    toujours un script »): `GET /internal/script-pick?outcome=&dynasties=` draws once among the candidates on the value
+ *    their runs' chains reached per dollar; its order is the run's fall-through order. Unreadable = throws: the run
+ *    makes nothing and is retried, never a default script. No rating rule lives here.
  */
-import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
-import { scriptRuns, scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
 
@@ -27,7 +27,6 @@ import { SwitchError } from "./script-writer-switch.js";
 export const CAMPAIGN_CALLER = "campaign";
 /** The outcome of a proactive campaign's start: nothing to push, the script finds its own subject. */
 export const START_OUTCOME = "start";
-export const RATING_WINDOW_DAYS = 30;
 
 export interface EngineState {
   outcome: string;
@@ -182,12 +181,46 @@ export function setScriptStrategyReader(r: ScriptStrategyReader | null): void {
   scriptStrategy = r ?? productionScriptStrategy;
 }
 
+/** features-service's answer to one pick (`GET /internal/script-pick`), in its own words. */
+export interface ServedPick {
+  scriptDynasty: string | null;
+  basis: string;
+  /** Every candidate in the order of this draw (the pick first). `score` null = picked on cost alone. */
+  candidates: Array<{ scriptDynasty: string; runs: number; score: number | null }>;
+}
+
+/** Asks features-service which of `dynasties` (`<outcome>/<dynasty>`) runs. Throws when it cannot answer. */
+export type ScriptPickReader = (outcome: string, dynasties: string[]) => Promise<ServedPick>;
+
+export const productionScriptPick: ScriptPickReader = async (outcome, dynasties) => {
+  const base = (process.env.FEATURES_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.FEATURES_SERVICE_API_KEY ?? "";
+  if (!base || !key) throw new Error("FEATURES_SERVICE_URL and FEATURES_SERVICE_API_KEY must be set to read the script pick");
+  const res = await fetch(`${base}/internal/script-pick?outcome=${encodeURIComponent(outcome)}&dynasties=${encodeURIComponent(dynasties.join(","))}`, {
+    headers: { "x-api-key": key },
+    signal: AbortSignal.timeout(600_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`the script pick for ${outcome} among ${dynasties.join(", ")} could not be read (features-service ${res.status}): ${text.slice(0, 300)}`);
+  const body = JSON.parse(text) as Partial<ServedPick>;
+  if (!Array.isArray(body.candidates) || typeof body.basis !== "string") throw new Error(`features-service answered no pick for ${outcome}: ${text.slice(0, 300)}`);
+  return { scriptDynasty: body.scriptDynasty ?? null, basis: body.basis, candidates: body.candidates };
+};
+
+let scriptPick: ScriptPickReader = productionScriptPick;
+/** Tests swap the reader. */
+export function setScriptPickReader(r: ScriptPickReader | null): void {
+  scriptPick = r ?? productionScriptPick;
+}
+
 export interface Pick {
   script: ScriptRow;
-  /** Every candidate and its draw, for the run's log. */
-  draws: Array<{ dynasty: string; version: number; made: number; runs: number; draw: number }>;
+  /** How features-service ranked the candidates (its basis), for the run's log. */
+  basis: string;
+  /** Every candidate and its served score, in the pick's order, for the run's log. */
+  draws: Array<{ dynasty: string; version: number; runs: number; score: number | null }>;
   /**
-   * Every candidate in the order of this same draw (`script` first): when the pick has nothing to make for this
+   * Every candidate in the order of this same pick (`script` first): when the pick has nothing to make for this
    * campaign, the run asks the next one (RATING-UNMADE-FALLTHROUGH-1112), so the Rating still decides the order.
    */
   ranked: ScriptRow[];
@@ -245,78 +278,24 @@ export async function servesChannel(db: AnyPgDb, outcome: string, channel: strin
 }
 
 /** The Rating's pick for one run (null: no script of this Engine can run on what this run holds). */
-export async function pickScript(db: AnyPgDb, input: PickInput, random: () => number = Math.random): Promise<Pick | null> {
-  const candidates = readersOfHanded(await candidatesOf(db, input), input.handed);
+export async function pickScript(db: AnyPgDb, input: PickInput): Promise<Pick | null> {
+  const candidates = readersOfHanded(await candidatesOf(db, input), input.handed).sort((a, b) => a.dynasty.localeCompare(b.dynasty));
   if (candidates.length === 0) return null;
-  const dynasties = candidates.map((c) => c.dynasty);
-  const since = new Date(Date.now() - RATING_WINDOW_DAYS * 86_400_000);
-  // A dynasty's runs pooled across its versions, those it made under the outcome it was re-homed from included
-  // (MIGRATE-1105 S5: an upgrade onto the fine outcome keeps its record).
-  const outcomes = [...new Set([input.outcome, ...(await upgradedFromOutcomes(db, candidates))])];
-  const stats = await db
-    .select({
-      dynasty: scripts.dynasty,
-      made: sql<number>`count(*) filter (where ${scriptRuns.status} = 'made')::int`,
-      runs: sql<number>`count(*) filter (where ${scriptRuns.status} <> 'running')::int`,
-    })
-    .from(scriptRuns)
-    .innerJoin(scripts, eq(scripts.id, scriptRuns.scriptId))
-    .where(and(inArray(scripts.outcome, outcomes), inArray(scripts.dynasty, dynasties), gte(scriptRuns.createdAt, since)))
-    .groupBy(scripts.dynasty);
-  const by = new Map(stats.map((s) => [s.dynasty, { made: Number(s.made), runs: Number(s.runs) }]));
-  const draws = candidates.map((c) => {
-    const s = by.get(c.dynasty) ?? { made: 0, runs: 0 };
-    return { dynasty: c.dynasty, version: c.version, made: s.made, runs: s.runs, draw: sampleBeta(1 + s.made, 1 + Math.max(0, s.runs - s.made), random) };
-  });
-  const order = candidates.map((_, i) => i).sort((a, b) => draws[b]!.draw - draws[a]!.draw);
-  return { script: candidates[order[0]!]!, draws, ranked: order.map((i) => candidates[i]!) };
-}
-
-/** The outcomes the candidates' dynasties were upgraded from (their upgrade chain, never across a fork). */
-async function upgradedFromOutcomes(db: AnyPgDb, candidates: ScriptRow[]): Promise<string[]> {
-  const out = new Set<string>();
-  for (const c of candidates) {
-    let row: { creationType: string; createdFromScript: string | null; dynasty: string } = c;
-    for (let hops = 0; hops < 50 && row.creationType === "upgrade" && row.createdFromScript; hops++) {
-      const [parent] = await db
-        .select({ outcome: scripts.outcome, dynasty: scripts.dynasty, creationType: scripts.creationType, createdFromScript: scripts.createdFromScript })
-        .from(scripts)
-        .where(eq(scripts.id, row.createdFromScript));
-      if (!parent || parent.dynasty !== c.dynasty) break;
-      out.add(parent.outcome);
-      row = parent;
-    }
+  const keyOf = (c: ScriptRow) => `${input.outcome}/${c.dynasty}`;
+  const served = await scriptPick(input.outcome, candidates.map(keyOf));
+  const byKey = new Map(candidates.map((c) => [keyOf(c), c]));
+  const ranked = served.candidates.map((c) => byKey.get(c.scriptDynasty));
+  const picked = served.scriptDynasty ? byKey.get(served.scriptDynasty) : undefined;
+  // The pick must name exactly the candidates asked, its choice first: anything else is not a pick we can run.
+  if (!picked || ranked[0] !== picked || ranked.some((r) => !r) || new Set(ranked).size !== candidates.length) {
+    throw new Error(`features-service's pick for ${input.outcome} does not rank exactly the candidates asked (${[...byKey.keys()].join(", ")}): ${JSON.stringify(served).slice(0, 300)}`);
   }
-  return [...out];
+  const rows = ranked as ScriptRow[];
+  return {
+    script: picked,
+    basis: served.basis,
+    draws: rows.map((r, i) => ({ dynasty: r.dynasty, version: r.version, runs: served.candidates[i]!.runs, score: served.candidates[i]!.score })),
+    ranked: rows,
+  };
 }
 
-/** One draw from Beta(a, b), through two Gamma draws (Marsaglia & Tsang 2000). */
-export function sampleBeta(a: number, b: number, random: () => number = Math.random): number {
-  const x = sampleGamma(a, random);
-  const y = sampleGamma(b, random);
-  return x + y === 0 ? 0.5 : x / (x + y);
-}
-
-function sampleGamma(k: number, random: () => number): number {
-  if (k < 1) return sampleGamma(k + 1, random) * Math.pow(random() || Number.MIN_VALUE, 1 / k);
-  const d = k - 1 / 3;
-  const c = 1 / Math.sqrt(9 * d);
-  for (;;) {
-    let x: number;
-    let v: number;
-    do {
-      x = normal(random);
-      v = 1 + c * x;
-    } while (v <= 0);
-    v = v * v * v;
-    const u = random() || Number.MIN_VALUE;
-    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
-    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
-  }
-}
-
-function normal(random: () => number): number {
-  const u = random() || Number.MIN_VALUE;
-  const v = random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
