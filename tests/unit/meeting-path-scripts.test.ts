@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { replayCase, type ReplayCase } from "../../src/lib/scripts/replay.js";
 import { runScript, validateSource } from "../../src/lib/scripts/sandbox.js";
-import { answererV8ToLeadClaim, answererWithGoalAndLeadClaim, buildMeetingPathSource, BOOK_MEETING, EVENT_CLAIM_BLOCK_V8, CLAIM_ANCHOR, LEAD_CLAIM_BLOCK, MEETING_REMINDER } from "../../scripts/engine-ports/meeting-paths.js";
+import { answererV9ToProactive, answererV8ToLeadClaim, answererWithGoalAndLeadClaim, buildMeetingPathSource, BOOK_MEETING, EVENT_CLAIM_BLOCK_V8, CLAIM_ANCHOR, LEAD_CLAIM_BLOCK, MEETING_REMINDER } from "../../scripts/engine-ports/meeting-paths.js";
 
 // SCRIPT-VALUE-RATING-1113-WF1: the Meeting booked and Meeting attended paths write nothing themselves; they ask the
 // answerer (Message sent) for the ONE answer, handing it the run's Request plus their goal.
@@ -48,8 +48,17 @@ describe("the meeting path scripts", () => {
       op === "get" ? { v: { id: "u", outcome: "message_sent", subject: "", ageDays: 0, content: null, unmade: "later: reminder the day before", decided: "done" } } : { v: null },
     );
     expect(out).toMatchObject({ kind: "done", result: { unmade: "later: reminder the day before", decided: "done" } });
-    const none: ReplayCase = { id: "none", units: {}, request: { now: request.now }, tactics: BOOK_MEETING.tactics, calls: [], asks: [], expect: { fails: "no_occurrence" } };
-    expect((await replayCase(src, none)).diffs).toEqual([]);
+    // A proactive tick (no occurrence) asks the answerer too, with the goal: it serves the brand's next due lead itself.
+    const proactive: ReplayCase = {
+      id: "proactive",
+      units: { message_sent: { decision: "write", channel: "email" } },
+      request: { now: request.now, campaignId: "camp-1" },
+      tactics: BOOK_MEETING.tactics,
+      calls: [],
+      asks: [{ units: {}, request: { now: request.now, campaignId: "camp-1", goal: BOOK_MEETING.tactics.goal }, recordedBy: "sender" }],
+      expect: { content: { answered: { decision: "write", channel: "email" } } },
+    };
+    expect((await replayCase(src, proactive)).diffs).toEqual([]);
     const noGoal: ReplayCase = { id: "nogoal", units: {}, request, tactics: { ...BOOK_MEETING.tactics, goal: "" }, calls: [], expect: { fails: "states no goal" } };
     expect((await replayCase(src, noGoal)).diffs).toEqual([]);
   });
@@ -123,5 +132,56 @@ describe("the answerer upgrade (dy_answer_lead)", () => {
     const later = await runScript(upgraded, spec({ ...request, now: "2026-11-13T10:40:00.000Z", campaignId: "camp-2" }), storeBridge(store, []));
     expect(later).toMatchObject({ kind: "done", result: { content: {} } });
     expect(store.get("answering_leads|lead-1")).toEqual({ campaignId: "camp-2", at: "2026-11-13T10:40:00.000Z" });
+  });
+});
+
+describe("the answerer's proactive tick (dy_answer_lead v10)", () => {
+  const stored = [
+    "let ctx_ = null;",
+    "function door(name, args) { return ctx_.vendor.call(name, args); }",
+    "function must(name, args) { const a = door(name, args); if (!a.ok) throw new Error(name); return a.data; }",
+    "function s(v) { return typeof v === 'string' && v.trim() !== '' ? v.trim() : null; }",
+    "export default function run(ctx) {",
+    "  ctx_ = ctx;",
+    "  const req = ctx.request || {};",
+    '  const trigger = req.trigger && typeof req.trigger === "object" ? req.trigger : null;',
+    '  if (!trigger) return { unmade: "no_occurrence" };',
+    "  const brandId = s(req.brandId);",
+    "  const campaignId = s(req.campaignId);",
+    '  if (!brandId || !campaignId) throw new Error("the run names no brand or campaign");',
+    "  const p = trigger.person || {};",
+    "  const claim = must('lead.followup.claim', { person: { email: s(p.email), phone: s(p.phone), leadId: s(trigger.leadId) } });",
+    "  return { content: { claimed: claim.followup.id, kind: trigger.item && trigger.item.kind } };",
+    "}",
+  ].join("\n");
+  const v10 = answererV9ToProactive(stored);
+  const run = (req: Record<string, unknown>, answers: Record<string, unknown>) => {
+    const calls: Array<[string, unknown]> = [];
+    const out = runScript(v10, { subject: null, brand: "b", day: 0, tactics: {}, request: req }, (op, args) => {
+      if (op !== "vendor") return { v: null };
+      calls.push([String(args[0]), args[1]]);
+      return { v: answers[String(args[0])] };
+    });
+    return out.then((o) => ({ o, calls }));
+  };
+
+  it("serves only a due lead its brand holds, then claims that person like an occurrence's", async () => {
+    const { o, calls } = await run({ brandId: "b1", campaignId: "c1" }, {
+      "lead.serve": { ok: true, data: { found: true, lead: { leadId: "lead-9", email: "kevin+due@hidistribute.com", leadCampaignId: "lc-9" } } },
+      "lead.followup.claim": { ok: true, data: { found: true, followup: { id: "row-9" } } },
+    });
+    expect(o).toMatchObject({ kind: "done", result: { content: { claimed: "row-9", kind: "follow_up_due" } } });
+    expect(calls).toEqual([
+      ["lead.serve", { dueFollowupOnly: true }],
+      ["lead.followup.claim", { person: { email: "kevin+due@hidistribute.com", phone: null, leadId: "lead-9" } }],
+    ]);
+  });
+
+  it("nobody due = idle; an occurrence run never serves", async () => {
+    const none = await run({ brandId: "b1", campaignId: "c1" }, { "lead.serve": { ok: true, data: { found: false, reason: "lead_followup_none_due" } } });
+    expect(none.o).toMatchObject({ kind: "done", result: { unmade: "nobody_due: lead_followup_none_due", decided: "idle" } });
+    const occ = await run({ brandId: "b1", campaignId: "c1", trigger: { leadId: "lead-1", person: { email: "a@b.co" }, item: { kind: "reply" } } }, { "lead.followup.claim": { ok: true, data: { found: true, followup: { id: "row-1" } } } });
+    expect(occ.calls.map((c) => c[0])).toEqual(["lead.followup.claim"]);
+    expect(() => answererV9ToProactive(v10)).toThrow(/already serves/);
   });
 });
