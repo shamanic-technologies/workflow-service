@@ -29,7 +29,7 @@ export const SCRIPT_MEMORY_MB = 64;
 export const SCRIPT_MAX_HOST_CALLS = 500;
 
 /** What a script asks the host for, one call at a time (JSON in, JSON out). */
-export type BridgeOp = "get" | "ask" | "vendor" | "wait" | "accounts" | "storage.get" | "storage.set" | "storage.delete" | "storage.count";
+export type BridgeOp = "get" | "ask" | "vendor" | "wait" | "accounts" | "storage.get" | "storage.set" | "storage.delete" | "storage.count" | "storage.claim";
 /** The host's answer: a value, or a stop (the run cannot go on now: a piece is missing, it waits). */
 export type BridgeAnswer = { v: unknown } | { stop: string };
 export type Bridge = (op: BridgeOp, args: unknown[]) => BridgeAnswer | Promise<BridgeAnswer>;
@@ -121,6 +121,7 @@ var __make = (function (host) {
         set: function (t, k, v) { call("storage.set", [t, k, v === undefined ? null : v]); },
         delete: function (t, k) { call("storage.delete", [t, k]); },
         count: function (t) { return call("storage.count", [t]); },
+        claim: function (t, k, v) { return deep(call("storage.claim", [t, k, v === undefined ? null : v])); },
       }),
       get: function (outcome) { return deep(call("get", [outcome])); },
       ask: function (request) { call("ask", [request === undefined ? null : request]); },
