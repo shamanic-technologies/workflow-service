@@ -85,19 +85,16 @@ export const JEV_CHOICE = "jev.choice";
 /** Our one voice (chat-service skill `client-comms`), for a writer that builds its own system prompt: `{content, version}`. */
 export const VOICE_READ = "voice.read";
 /**
- * The LLM of ONE call (LLM-PICK-SCRIPTS-1112, owner 2026-11-12: « est-ce que tu peux juste upgrade ces scripts pour qu'ils
- * arrêtent de forcer un LLM ? »): `{place, outcome?}` -> the GTM Factory Rating's pick (features-service
- * `GET /internal/llm-pick`) for the script's Engine (or an Engine the script ASKS, tactic `asks`: the one that makes the
- * call) and that call's name, within the Engine's universe of allowed LLMs. Answers `{provider, model, llmDynastySlug,
- * name, place, outcome, llm}`; no LLM in the universe (422 `no_llm_in_engine_universe`) = a refusal the script throws on:
- * nothing is written, the run is retried later, never a fallback model. No script names a model.
+ * The LLM of ONE call, read off the script's own TACTICS (SCRIPT-VALUE-RATING-1113-WF2, owner 2026-11-13: « un pick =
+ * toujours un script », « le LLM et le template sont des tactics du script »): `{place, outcome?}` -> tactic
+ * `llms[place]` else `llm` (`{provider, model}`), answered `{provider, model, llmDynastySlug, name, place, outcome, llm}`.
+ * No run-time pick: another LLM is another dynasty, compared by features-service's script pick. None stated = a refusal.
  */
 export const LLM_PICK = "llm.pick";
 /**
- * The TEMPLATE of one writing call (LLM-RATING-PER-ENGINE-1112 phase 2): `{place, outcome?}` -> the Rating's template
- * pick (features-service `GET /internal/template-pick`) for the script's Engine (or one it asks) and that call, narrowed
- * by the campaign's strategy. Answers `{templateDynastySlug, name, head, place, outcome, template}`; none (422
- * `no_template_for_engine`) = a refusal the script throws on: nothing written, retried later, never a fixed template.
+ * The TEMPLATE of one writing call, read off the script's own tactics (SCRIPT-VALUE-RATING-1113-WF2): `{place, outcome?}`
+ * -> tactic `templates[place]` else `template` (a template dynasty slug), answered `{templateDynastySlug, name, head,
+ * place, outcome, template}`. None stated = a refusal the script throws on: nothing written, never a fixed template.
  */
 export const TEMPLATE_PICK = "template.pick";
 /** The open times of the offer's public booking page (`{bookingUrl, timezone}` -> `{slots, calendarId?, ...}`). */
@@ -270,13 +267,13 @@ const PASSTHROUGH_FIELDS = ["responseFormat", "temperature", "maxTokens", "webSe
 /**
  * The completion body, VERBATIM: nothing is added to the script's prompt (a classifier and a writer differ; a writer
  * that wants our voice reads it with `voice.read`). The system prompt, provider and model are the call's, else the
- * script's tactic `systemPrompt`; the provider and model are always the call's (the `llm.pick` answer); missing =
+ * script's tactic `systemPrompt`; the provider and model are always the call's (what `llm.pick` read off the script's tactics); missing =
  * refused, never a default.
  */
 function completionBody(args: Record<string, unknown>, ctx: VendorCallContext): { body: Record<string, unknown> } | { error: string } {
   const message = str(args.message);
   if (!message) return { error: "needs a message" };
-  // LLM-PICK-SCRIPTS-1112: the LLM is the one `llm.pick` answered for this call, stated on the call; never a tactic.
+  // The LLM is stated on the call (what `llm.pick` read off the script's tactic for this call, SCRIPT-VALUE-RATING-1113-WF2).
   const provider = str(args.provider);
   const model = str(args.model);
   if (!provider || !model) return { error: "needs an LLM: state the provider and model `llm.pick` answered for this call" };
@@ -586,8 +583,8 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
   }
 }
 
-/** Which Engine and call a Rating pick is for: the script's own Engine, or one it asks (tactic `asks`). */
-function pickTarget(name: string, args: Record<string, unknown>, ctx: VendorCallContext): { outcome: string; place: string; query: URLSearchParams; headers: Record<string, string> } | { error: string } {
+/** Which Engine and call a writing choice is for: the script's own Engine, or one it asks (tactic `asks`). */
+function pickTarget(name: string, args: Record<string, unknown>, ctx: VendorCallContext): { outcome: string; place: string } | { error: string } {
   const q = plainRecord(args.query) ? args.query : {};
   const place = str(args.place) ?? str(q.place);
   if (!place) return { error: `${name} needs a place: the name the script gives this call (writer, angles...)` };
@@ -595,80 +592,63 @@ function pickTarget(name: string, args: Record<string, unknown>, ctx: VendorCall
   const named = str(args.outcome) ?? str(q.outcome);
   let outcome = own;
   if (named && named !== own) {
+    // The Engine that makes the call: the script's own, or one it asks for a Unit (the asked Engine's script makes the
+    // call with the asker's LLM, e.g. the cold email hands its writer LLM to message_written).
     const asks = Array.isArray(ctx.tactics.asks) ? (ctx.tactics.asks as unknown[]) : [];
     if (!asks.includes(named)) return { error: `${name}: ${named} is neither this script's Engine nor one it asks (tactic asks)` };
     outcome = named;
   }
   if (!outcome) return { error: `${name}: the run states no Engine outcome` };
-  const query = new URLSearchParams({ outcome, place });
-  const campaignId = str(ctx.headers["x-campaign-id"]);
-  if (campaignId) query.set("campaignId", campaignId);
-  const runId = ctx.headers["x-run-id"];
-  return { outcome, place, query, headers: runId ? { "x-run-id": runId } : {} };
+  return { outcome, place };
 }
 
-/** One `template.pick`: the Rating's template for this Engine and this writing call, read per call. */
-async function templatePick(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
+/**
+ * The value a script's tactics state for one call (SCRIPT-VALUE-RATING-1113-WF2): `<plural>[place]` when the script
+ * states one for that call, else `<singular>` (every call of the script). Absent = undefined (the caller refuses).
+ */
+function tacticFor(tactics: Record<string, unknown>, singular: string, plural: string, place: string): unknown {
+  const byPlace = tactics[plural];
+  if (plainRecord(byPlace) && byPlace[place] !== undefined) return byPlace[place];
+  return tactics[singular];
+}
+
+/**
+ * One `template.pick`: the TEMPLATE dynasty this script writes with, read off its own tactics (SCRIPT-VALUE-RATING-1113-WF2,
+ * owner 2026-11-13 « le LLM et le template sont des tactics du script »): tactic `templates[place]`, else `template`
+ * (a template dynasty slug). Another combination is another dynasty, the Rating (features-service's script pick) compares
+ * them. None stated = a refusal the script throws on: nothing written, never a default template.
+ */
+function templatePick(args: Record<string, unknown>, ctx: VendorCallContext): VendorAnswer {
   const t = pickTarget(TEMPLATE_PICK, args, ctx);
   if ("error" in t) return refuse(t.error);
-  try {
-    const out = await askThroughBoot(() => deps.serviceDoor("features", "GET", `/internal/template-pick?${t.query}`, null, t.headers), deps);
-    const tpl = plainRecord(out.body.template) ? out.body.template : null;
-    if (out.status !== 200 || !tpl) {
-      return { ok: false, data: { error: `template.pick ${t.outcome}|${t.place}: ${String(out.body.error ?? `features-service answered ${out.status}`)}`, status: out.status, code: str(out.body.reason) } };
-    }
-    const slug = str(tpl.templateDynastySlug);
-    if (!slug) return refuse(`template.pick ${t.outcome}|${t.place}: features-service picked ${JSON.stringify(tpl)}, with no template dynasty`);
-    const picked = { templateDynastySlug: slug, name: str(tpl.name), head: str(tpl.head) };
-    return { ok: true, data: { ...picked, place: t.place, outcome: t.outcome, template: picked } };
-  } catch (e) {
-    return refuse(e instanceof Error ? e.message : String(e));
-  }
+  const slug = str(tacticFor(ctx.tactics, "template", "templates", t.place));
+  if (!slug) return refuse(`template.pick ${t.outcome}|${t.place}: this script states no template (tactic template, or templates.${t.place}): nothing is written`);
+  const picked = { templateDynastySlug: slug, name: null, head: null };
+  return { ok: true, data: { ...picked, place: t.place, outcome: t.outcome, template: picked } };
 }
 
-/** One `llm.pick`: the Rating's LLM for this Engine and this call, read per call (LLM-PICK-SCRIPTS-1112). */
-async function llmPick(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
-  const q = plainRecord(args.query) ? args.query : {};
-  const place = str(args.place) ?? str(q.place);
-  if (!place) return refuse("llm.pick needs a place: the name the script gives this LLM call (writer, angles...)");
-  const own = ctx.outcome ?? null;
-  const named = str(args.outcome) ?? str(q.outcome);
-  let outcome = own;
-  if (named && named !== own) {
-    // The Engine that makes the call: the script's own, or one it asks for a Unit (the asked Engine's script makes the
-    // call with the asker's pick, e.g. the cold email hands its writer LLM to message_written).
-    const asks = Array.isArray(ctx.tactics.asks) ? (ctx.tactics.asks as unknown[]) : [];
-    if (!asks.includes(named)) return refuse(`llm.pick: ${named} is neither this script's Engine nor one it asks (tactic asks)`);
-    outcome = named;
-  }
-  if (!outcome) return refuse("llm.pick: the run states no Engine outcome");
-  const query = new URLSearchParams({ outcome, place });
-  const campaignId = str(ctx.headers["x-campaign-id"]);
-  if (campaignId) query.set("campaignId", campaignId);
-  const runId = ctx.headers["x-run-id"];
-  try {
-    const out = await askThroughBoot(() => deps.serviceDoor("features", "GET", `/internal/llm-pick?${query}`, null, runId ? { "x-run-id": runId } : {}), deps);
-    const llm = plainRecord(out.body.llm) ? out.body.llm : null;
-    if (out.status !== 200 || !llm) {
-      const code = str(out.body.reason) ?? null;
-      return { ok: false, data: { error: `llm.pick ${outcome}|${place}: ${String(out.body.error ?? `features-service answered ${out.status}`)}`, status: out.status, code } };
-    }
-    const provider = str(llm.provider);
-    const model = str(llm.model);
-    if (!provider || !model) return refuse(`llm.pick ${outcome}|${place}: features-service picked ${JSON.stringify(llm)}, with no provider or model to call`);
-    if (isBannedModel(model)) return refuse(`llm.pick ${outcome}|${place}: refuses ${model}: nothing goes to Haiku 4.5`);
-    const picked = { provider, model, llmDynastySlug: str(llm.llmDynastySlug) ?? model, name: str(llm.name) };
-    return { ok: true, data: { ...picked, place, outcome, llm: picked } };
-  } catch (e) {
-    return refuse(e instanceof Error ? e.message : String(e));
-  }
+/**
+ * One `llm.pick`: the LLM this script calls with, read off its own tactics (SCRIPT-VALUE-RATING-1113-WF2): tactic
+ * `llms[place]`, else `llm` (`{provider, model}`, model = chat-service's alias). Another LLM is another dynasty, never
+ * a run-time pick. None stated = a refusal the script throws on: nothing written, never a default model.
+ */
+function llmPick(args: Record<string, unknown>, ctx: VendorCallContext): VendorAnswer {
+  const t = pickTarget(LLM_PICK, args, ctx);
+  if ("error" in t) return refuse(t.error);
+  const llm = tacticFor(ctx.tactics, "llm", "llms", t.place);
+  const provider = plainRecord(llm) ? str(llm.provider) : null;
+  const model = plainRecord(llm) ? str(llm.model) : null;
+  if (!provider || !model) return refuse(`llm.pick ${t.outcome}|${t.place}: this script states no LLM (tactic llm {provider, model}, or llms.${t.place}): nothing is written`);
+  if (isBannedModel(model)) return refuse(`llm.pick ${t.outcome}|${t.place}: refuses ${model}: nothing goes to Haiku 4.5`);
+  const picked = { provider, model, llmDynastySlug: model, name: plainRecord(llm) ? str(llm.name) : null };
+  return { ok: true, data: { ...picked, place: t.place, outcome: t.outcome, llm: picked } };
 }
 
 /** Call one vendor for a script. */
 export async function callVendor(name: string, args: Record<string, unknown> | null, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
   if (name === LLM_COMPLETE || name === CHAT_COMPLETE) return complete(name, args ?? {}, ctx, deps);
-  if (name === LLM_PICK) return llmPick(args ?? {}, ctx, deps);
-  if (name === TEMPLATE_PICK) return templatePick(args ?? {}, ctx, deps);
+  if (name === LLM_PICK) return llmPick(args ?? {}, ctx);
+  if (name === TEMPLATE_PICK) return templatePick(args ?? {}, ctx);
   if (name === JEV_NOUL) return jevNoul(args ?? {}, ctx, deps);
   if (name === JEV_CHOICE) return jevChoice(args ?? {}, ctx, deps);
   if (name === VOICE_READ) return voiceRead(deps);
