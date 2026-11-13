@@ -174,8 +174,6 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "brand.offer.fields": { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/user-fields", asRun: true },
   "campaign.detail": { service: "campaign", method: "GET", path: "/campaigns/{id}", asRun: true },
   "campaign.predecessor": { service: "campaign", method: "GET", path: "/internal/campaigns/{campaignId}/predecessor", asRun: true },
-  // The TEMPLATE a writer uses (its `llm` part is read by no script: every LLM call asks `llm.pick`, LLM-PICK-SCRIPTS-1112).
-  "features.writer_pick": { service: "features", method: "GET", path: "/internal/writer-pick", asRun: true },
   "features.trigger": { service: "features", method: "GET", path: "/internal/catalogue/triggers/{triggerId}", asRun: true },
   "content.generations.by_lead": { service: "content-generation", method: "GET", path: "/generations/by-lead/{leadId}", asRun: true },
   "scraping.page": { service: "scraping", method: "POST", path: "/scrape", asRun: true },
@@ -189,7 +187,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "apollo.phone.read": { service: "apollo", method: "GET", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
   "twilio.call.place": { service: "twilio", method: "POST", path: "/calls", asRun: true, runIdInBody: "parentRunId" },
   // The cold email (MIGRATE-1105 S2): what the old cold email steps called, each the producer's own route, as the run.
-  // The brand's extracted facts, the template's live head (the writer pick is `features.writer_pick` above),
+  // The brand's extracted facts, the template's live head (the template is `template.pick`'s, the LLM `llm.pick`'s),
   // the writer's materials, then the email stored (content-generation declares message_written) before `email.send`.
   "brand.extract_fields": { service: "brand", method: "POST", path: "/orgs/brands/extract-fields", asRun: true },
   "content.template_head": { service: "content-generation", method: "GET", path: "/internal/template-dynasties/{slug}/head", asRun: true },

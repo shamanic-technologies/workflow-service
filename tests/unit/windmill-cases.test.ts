@@ -79,7 +79,6 @@ describe("caseFromFlow, a campaign workflow (S2)", () => {
       inline,
       call("brand_profile", "brand", "GET", "/internal/brands/{brandId}", { params: { brandId: "b1" } }, { brand: { name: "Reed" } }),
       call("writer", "workflow", "POST", "/orgs/scripts/run", { body: { outcome: "message_written", dynasty: "dy_w", units: { u: { content: {} } }, recordedBy: "content-generation" } }, { runId: "child", unit: { content: { subject: "S" } } }),
-      call("pick", "features", "GET", "/internal/writer-pick", { query: { campaignId: "c1", workflowSlug: "w-v2" } }, { template: {} }),
       call("end_run", "campaign", "POST", "/end-run", { body: { success: true, stopCampaign: false } }, {}),
     ];
     const out = caseFromFlow({ ...flow, args: { campaignId: "c1" } }, steps, { fromOutcome: "lead_found", endAsRunner: true });
@@ -87,7 +86,6 @@ describe("caseFromFlow, a campaign workflow (S2)", () => {
     expect(out.case.calls.map((c) => [c.name, c.args])).toEqual([
       ["lead.serve", {}],
       ["brand.profile", { params: { id: "b1" } }],
-      ["features.writer_pick", { query: { campaignId: "c1" } }],
     ]);
     expect(out.case.asks).toEqual([{ units: { u: { content: {} } }, recordedBy: "content-generation" }]);
     expect(out.case.units).toEqual({ message_written: { runId: "child", unit: { content: { subject: "S" } } } });

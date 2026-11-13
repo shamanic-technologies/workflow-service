@@ -173,11 +173,6 @@ async function main() {
     const failedCall = lastFailure?.runnablePath.endsWith("nodes/http_call") ? lastFailure : undefined;
     const door = failedCall ? doorFor(String(failedCall.args.service ?? ""), String(failedCall.args.method ?? ""), String(failedCall.args.path ?? "")) : null;
     if (failedCall && door) out.case.calls.push({ name: door, answer: { ok: false, data: { error: flow.error ?? "failed", status: null, code: null, body: {} } } });
-    // A writer pick recorded under a workflow: an Engine run asks by campaign alone (features-service v0.179.508).
-    for (const call of out.case.calls) {
-      const q = (call.args as { query?: Record<string, unknown> } | undefined)?.query;
-      if (call.name === "features.writer_pick" && q && "workflowSlug" in q) delete q.workflowSlug;
-    }
     // A run of the same version under an OLDER step text (a converter injection since changed) proves nothing about
     // the code stored now: excluded with its reason, never matched by bending the port.
     const stale = (port.staleMarkers ?? []).find((m) => JSON.stringify(out.case.calls).includes(m));

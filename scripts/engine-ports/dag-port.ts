@@ -93,6 +93,14 @@ function moduleCode(m: Module, b: Built, runnerSteps: Set<string>, depth: number
   const service = String(s("service") ?? "");
   const method = String(s("method") ?? "");
   const path = String(s("path") ?? "");
+  // A DAG's legacy writer pick (`withLegBestLlm`, features `/internal/writer-pick`) ports to the Rating's LLM pick for the
+  // script's own Engine and its writer call (LLM-PICK-SCRIPTS-1112: the stored follow-ups were upgraded the same way; the
+  // writer pick's door is deleted, WRITER-PICK-LAST-CALLERS-1113).
+  if (service === "features" && method === "GET" && path === "/internal/writer-pick") {
+    b.doors.add("llm.pick");
+    const skip = it.skip !== undefined ? `, skip: ${exprOf(it.skip)}` : "";
+    return `${pad}results.${m.id} = callStep(ctx, "llm.pick", { service: "features", method: "GET", path: "/internal/llm-pick", query: {"place":"writer"}${skip} }, ${m.retry?.constant?.attempts ?? 0});\n`;
+  }
   if (service === "campaign" && CHASSIS.has(path)) {
     if (path === "/gate-check") return `${pad}// gate_check: the Engine runner's\n`;
     if (path === "/start-run") return `${pad}results.${m.id} = START;\n`;
