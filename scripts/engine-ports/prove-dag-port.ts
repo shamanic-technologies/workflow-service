@@ -89,11 +89,6 @@ async function main() {
       continue;
     }
     const c = out.case;
-    // The writer pick recorded under a workflow: an Engine run asks by campaign alone.
-    for (const call of c.calls) {
-      const q = (call.args as { query?: Record<string, unknown> } | undefined)?.query;
-      if (call.name === "features.writer_pick" && q && "workflowSlug" in q) delete q.workflowSlug;
-    }
     // The run's clock: the old `now` step's answer (every step read it there).
     const clock = (steps.find((st) => st.stepId === "now")?.result as { now?: unknown } | null)?.now;
     if (typeof clock === "string") c.request = { ...(c.request ?? {}), now: clock };

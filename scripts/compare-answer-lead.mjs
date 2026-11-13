@@ -82,7 +82,7 @@ for (const r of rows) {
       }
     }
     // The AFTER is written with the Lead event writer's model of today (Opus); live, the campaign's pick decides.
-    if (name === "features.writer_pick") return { v: { ok: true, data: { llm: { provider: "anthropic", model: "opus" } } } };
+    if (name === "llm.pick") return { v: { ok: true, data: { provider: "anthropic", model: "opus" } } };
     // Our one voice, read live when the old run did not (its writer read it itself): no identity, no spend.
     if (name === "voice.read" && !recorded.some((c) => c.name === name)) {
       const skill = await booking.readSkill("client-comms");

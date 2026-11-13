@@ -30,7 +30,7 @@ function world(draft: Record<string, unknown>, over: Answers = {}) {
     "brand.offer.fields": () => ({ ok: true, data: { fields: { urgency: { value: "One clinic per area", provenance: "confirmed" }, neverGive: { value: null, provenance: "suggested" } } } }),
     "voice.read": () => ({ ok: true, data: { content: "OUR VOICE", version: 1 } }),
     "booking.slots": () => ({ ok: true, data: { timezone: "America/Chicago", slots: ["2026-11-05T12:00:00-06:00", SLOT], calendarId: "cal-1" } }),
-    "features.writer_pick": () => ({ ok: true, data: { llm: { provider: "anthropic", model: "opus" } } }),
+    "llm.pick": () => ({ ok: true, data: { provider: "anthropic", model: "opus" } }),
     "llm.complete": () => ({ ok: true, data: { json: draft } }),
     "crm.meeting.book": () => ({ ok: true, data: { status: "booked" } }),
     "instantly.reply.send": () => ({ ok: true, data: { status: "sent" } }),
@@ -84,7 +84,7 @@ describe("the answering script", () => {
     expect(calls.find((c) => c.name === "lead.followup.record")!.args).toEqual({ params: { id: "row-1" }, body: { kind: "stopped", reason: "booking_confirmed" } });
     const llm = calls.find((c) => c.name === "llm.complete")!.args;
     expect(llm).toMatchObject({ provider: "anthropic", model: "opus" });
-    expect(calls.find((c) => c.name === "features.writer_pick")!.args).toEqual({ query: { campaignId: "camp-lead-event" } });
+    expect(calls.find((c) => c.name === "llm.pick")!.args).toEqual({ place: "writer" });
     expect(String(llm.systemPrompt)).toMatch(/^OUR VOICE/);
     expect(String(llm.message)).toContain("(not answered by our client yet)");
     expect(String(llm.message)).not.toContain("PLACEHOLDER");
@@ -109,9 +109,9 @@ describe("the answering script", () => {
     expect(esc.calls.some((c) => c.name === "instantly.reply.send")).toBe(false);
   });
 
-  it("no writer picked for the campaign = nothing written, the run fails loud (never a default model)", async () => {
-    const { calls, bridge } = world(BOOK, { "features.writer_pick": () => ({ ok: true, data: { llm: null, llmUnavailableReason: "writer_ranking_not_computed_yet" } }) });
-    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("writer_ranking_not_computed_yet") });
+  it("no writer LLM picked = nothing written, the run fails loud (never a default model)", async () => {
+    const { calls, bridge } = world(BOOK, { "llm.pick": () => ({ ok: true, data: { provider: null, model: null } }) });
+    expect(await runScript(answerLeadScriptSource(), spec(REQUEST), bridge)).toMatchObject({ kind: "error", message: expect.stringContaining("llm.pick answered no LLM") });
     expect(calls.some((c) => c.name === "llm.complete" || c.name === "instantly.reply.send")).toBe(false);
   });
 
@@ -196,7 +196,7 @@ describe("the answering script", () => {
 
   it("asks for the brand's own tools on its one LLM call (BRAND-MCP-1109), whatever the picked model", async () => {
     for (const llm of [{ provider: "anthropic", model: "opus" }, { provider: "google", model: "flash" }, { provider: "deepseek", model: "v4-flash" }]) {
-      const w = world(BOOK, { "features.writer_pick": () => ({ ok: true, data: { llm } }) });
+      const w = world(BOOK, { "llm.pick": () => ({ ok: true, data: llm }) });
       await runScript(answerLeadScriptSource(), spec(REQUEST), w.bridge);
       const call = w.calls.filter((c) => c.name === "llm.complete");
       expect(call).toHaveLength(1);
