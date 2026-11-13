@@ -182,3 +182,71 @@ describe("sender identity: the cold email scripts that choose the signature", ()
     expect(() => coldEmailSignatureFirstSource(coldEmailSignatureFirstSource(COLD_V1))).toThrow(/exactly once/);
   });
 });
+
+// SENDER-NAME-REGRESS-1113: a client saw "I'm Nag Pusuluri ... I run AscendQE" signed "Kevin Lourd" on 2026-11-13.
+// The email was written 2026-11-09 by the writer BEFORE the fix and waited 4 days in the send queue; the template and
+// LLM picks shipped 2026-11-12 do not touch who sends. This pins it: whatever template and LLM the Rating picks, and
+// whatever signature the cold email script states, the writer's request carries who sends.
+const WRITER_V3_PICKED = WRITER_V3.replace(
+  'const answer = ctx.vendor.call("llm.complete", { message: String(template.content.text), systemPrompt });',
+  "const llm = (ctx.tactics.llm ?? {}) as { provider?: string; model?: string };\n" +
+    '  const answer = ctx.vendor.call("llm.complete", { message: String(template.content.text), systemPrompt, provider: llm.provider, model: llm.model });',
+);
+
+async function writerRequest(source: string, template: string, llm: { provider: string; model: string }, request: Record<string, unknown> | null) {
+  let sent: Record<string, unknown> = {};
+  const out = await runScript(source, { subject: null, brand: "t", day: 0, tactics: { llm }, request }, (op, args) => {
+    if (op === "get") return { v: { id: "u", outcome: args[0], subject: "", ageDays: 0, content: { text: template } } };
+    if (op === "vendor") {
+      if (args[0] === "voice.read") return { v: { ok: true, data: { content: "Plain words." } } };
+      sent = args[1] as Record<string, unknown>;
+      return { v: { ok: true, data: { json: EMAIL } } };
+    }
+    return { v: null };
+  });
+  expect(out.kind).toBe("done");
+  return sent;
+}
+
+describe("sender identity: every template, LLM and signature path (SENDER-NAME-REGRESS-1113)", () => {
+  const templates = [
+    "yc-cold-email-v3: Write to {{leadFirstName}}. The client is AscendQE, founded by Nag Pusuluri.",
+    "blind-discovery-email-v14: Write without naming the client.",
+    "acquisition-questions-email-v1: Ask their per-person price.",
+  ];
+  const llms = [
+    { provider: "zai", model: "glm-flash" },
+    { provider: "anthropic", model: "sonnet" },
+    { provider: "openai", model: "gpt-pro" },
+    { provider: "deepseek", model: "deepseek-flash" },
+  ];
+  const signings: Array<{ signedBy?: string; signature: string | null }> = [
+    { signature: null },
+    { signedBy: "sender_with_client_brand", signature: "{full_name}\nBeyond Logic" },
+  ];
+
+  it("the writer's system prompt always says who sends; the stated signature rides to it word for word", async () => {
+    const writer = senderIdentitySource(WRITER_V3_PICKED);
+    const cold = coldEmailSignatureFirstSource(COLD_V1);
+    let paths = 0;
+    for (const signing of signings) {
+      const { asked } = await coldRun(cold, signing.signedBy ? { signedBy: signing.signedBy } : {});
+      expect(asked).toHaveLength(1);
+      const request = ((asked[0] as { request?: Record<string, unknown> }).request ?? null) as Record<string, unknown> | null;
+      for (const template of templates) {
+        for (const llm of llms) {
+          const sent = await writerRequest(writer, template, llm, request);
+          expect(sent).toMatchObject({ provider: llm.provider, model: llm.model, message: template });
+          const prompt = String(sent.systemPrompt);
+          expect(prompt).toContain(WHO_SENDS_LINE);
+          expect(prompt).toContain(PLACEHOLDERS_LINE);
+          expect(prompt).not.toContain("The sending service appends the sender's name, title, and organization");
+          if (signing.signature) expect(prompt).toContain(`<<<\n${signing.signature}\n>>>`);
+          else expect(prompt).not.toContain("THE SIGNATURE appended");
+          paths++;
+        }
+      }
+    }
+    expect(paths).toBe(signings.length * templates.length * llms.length);
+  });
+});
