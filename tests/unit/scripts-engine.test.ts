@@ -296,6 +296,25 @@ describe("a script run as a step: isolation and ledger declaration", () => {
     expect((stopped as ScriptRunFailed).result).toMatchObject({ status: "stopped", error: expect.stringContaining("email_found, which this step was not handed") });
   });
 
+  it("storage.claim: the first note under a key wins, every later claim reads the winner's note back (SCRIPT-VALUE-RATING-1113-WF1)", async () => {
+    const claiming = `export default function run(ctx) {
+      var owner = ctx.storage.claim("answered_events", "evt-1", { campaignId: ctx.tactics.campaign });
+      return { content: { owner: owner } };
+    }`;
+    await createScript(db, { outcome: "message_written", dynasty: "dy_claim", code: claiming, description: "x" }, author, deps);
+    const run = (orgId: string, campaign: string) =>
+      runStoredScript(db, { ...input, dynasty: "dy_claim", tactics: { campaign } }, { ...who, orgId }, { ledger: ledger().deps, vendors: vendors().deps });
+    const [a, b] = await Promise.all([run("org-a", "c1"), run("org-a", "c2")]);
+    const owners = [a.unit!.content, b.unit!.content].map((c) => (c as { owner: { campaignId: string } }).owner.campaignId);
+    expect(owners[0]).toBe(owners[1]);
+    expect((await run("org-a", "c3")).unit!.content).toEqual({ owner: { campaignId: owners[0] } });
+    // Another org never sees it.
+    expect((await run("org-b", "c9")).unit!.content).toEqual({ owner: { campaignId: "c9" } });
+    // The replay answers claim from its in-memory store: a case's first claim wins, as the first live run does.
+    const replayed = await replayAll(claiming, [{ id: "r", units: {}, tactics: { campaign: "c1" }, calls: [], expect: { content: { owner: { campaignId: "c1" } } } }]);
+    expect(replayed.matches).toBe(1);
+  });
+
   it("refuses a retired dynasty (410) and a port not proven on cases loaded after it (409)", async () => {
     await createScript(db, { outcome: "message_written", dynasty: "dy_writer", code: WRITER_V1, description: "x" }, author, deps);
     await putCases(db, "message_written", "dy_writer", [CASE], "fictional");
