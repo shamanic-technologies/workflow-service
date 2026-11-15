@@ -68,6 +68,7 @@ describe("call sites", () => {
     // platform doors with ITS run as x-run-id, always (pinned in script-service-switch.test.ts).
     // scripts/compare-answer-lead.mjs: a staff before/after run by hand (MIGRATE-1105 S1), through the client, stating
     // support `staff_experiment` (no run stands behind it, nothing is produced).
-    expect(hits).toEqual(["scripts/compare-answer-lead.mjs", "src/lib/chat-service-client.ts", "src/lib/scripts/vendors.ts", "src/lib/sibling-line-refresher.ts"]);
+    // scripts/dry-run-intro*.mjs: staff dry runs of the intro scripts (INTRO-BOARDY-1114), same shape, nothing sent.
+    expect(hits).toEqual(["scripts/compare-answer-lead.mjs", "scripts/dry-run-intro-conversation.mjs", "scripts/dry-run-intro.mjs", "src/lib/chat-service-client.ts", "src/lib/scripts/vendors.ts", "src/lib/sibling-line-refresher.ts"]);
   });
 });

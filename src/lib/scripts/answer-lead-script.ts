@@ -17,7 +17,7 @@ import { COMPETITOR_FIRST_STRATEGY, NEW_FACT_STRATEGY, TEAM_DECIDES_STRATEGY } f
 import { WHY_NOW_STRATEGY } from "../occurrence-fact.js";
 import { PERSON_RELATIONSHIP_STRATEGY } from "../person-relationship.js";
 import { SENDER_PERSONA_FN } from "../sender-persona.js";
-import { EMAIL_MEDIUM, WHATSAPP_MEDIUM, localTimeStrategy, nextDateStrategy, rightMomentStrategy, MAX_NEXT_FOLLOW_UP_DAYS } from "../right-moment.js";
+import { EMAIL_MEDIUM, WHATSAPP_MEDIUM, LOCAL_TIME_FN, localTimeStrategy, nextDateStrategy, rightMomentStrategy, MAX_NEXT_FOLLOW_UP_DAYS } from "../right-moment.js";
 
 /**
  * The Unit this script makes: a message we sent one person (each follow-up one more; a booking is its own
@@ -44,6 +44,37 @@ export const ANSWER_LEAD_CALL_CONSUMES: Record<(typeof ANSWER_LEAD_CALL_ON)[numb
 /** The Engine the call is asked of (its scripts: `scripts/engine-ports/ai-instant-call.ts`), literal in the source. */
 export const ANSWER_LEAD_CALL_OUTCOME = "booking_call";
 
+/**
+ * LOCAL-TIME-ANSWERER-1115 (prod 2026-11-15: all 17 follow-ups of the day went out on a SUNDAY where the lead lives,
+ * from every LLM): the game says « THEIR LOCAL TIME below says what time it is where they are », and the message
+ * carried only « NOW: <ISO> (UTC) » + « THEIR TIMEZONE: America/Denver »: no such block, the model was left to compute
+ * the weekday and the hour itself, and none did. The fix gives the FACTS (their weekday, date, hour, zone and offset,
+ * computed by `localTimeLines`; an unknown zone is said in words beside every clue held), never a send window or a
+ * weekday rule in code: the writer still decides. Each pair is an anchored edit of the STORED code (every
+ * `dy_answer_lead*` dynasty is upgraded with them: `scripts/engine-ports/answer-lead-local-time-store.ts`); the
+ * generator below already carries every `to`.
+ */
+export const ANSWER_CC_DESCRIPTION =
+  "Email only: the addresses copied, never the address it goes to. Empty = the usual copy: nobody when the person never wrote to us, our team and the brand's sales rep once they did.";
+export const ANSWER_BCC_DESCRIPTION = "Email only: the addresses copied without the others seeing it, never the address it goes to. Usually empty.";
+
+export const ANSWER_LOCAL_TIME_EDITS: ReadonlyArray<{ why: string; from: string; to: string }> = [
+  { why: "the writer reads THEIR LOCAL TIME, the block its instructions name", from: `    "NOW: " + now + " (UTC).",
+    "THEIR TIMEZONE: " + (s(lead.timezone) || "not stated") + ". Clues: " + [lead.city, lead.state, lead.country, phone].filter(Boolean).join(", "),
+`, to: `    "THEIR LOCAL TIME:\\n" + localTimeLines(now, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: phone, places: s(lead.state) ? [{ label: "their state or region", value: lead.state }] : [] }).join("\\n"),
+` },
+  { why: "the cc description says what the sender does when it is empty", from: "Email only: the addresses copied. Empty = our usual copy (our team).", to: ANSWER_CC_DESCRIPTION },
+  { why: "the bcc description: never the address it goes to", from: "Email only: the addresses copied without the others seeing it. Usually empty.", to: ANSWER_BCC_DESCRIPTION },
+  { why: "the address it goes to is never also copied (2026-11-13: a lead copied to himself)", from: `  const cc = uniq(addrs(d.cc)).filter(function (a) { return to.indexOf(a) < 0; });
+  const bcc = uniq(addrs(d.bcc)).filter(function (a) { return to.indexOf(a) < 0 && cc.indexOf(a) < 0; });
+`, to: `  // The address it goes to is never also copied: the writer's own To, else the person (the sender's default To).
+  const sentTo = to.length > 0 ? to : email ? [email] : [];
+  const cc = uniq(addrs(d.cc)).filter(function (a) { return sentTo.indexOf(a) < 0; });
+  const bcc = uniq(addrs(d.bcc)).filter(function (a) { return sentTo.indexOf(a) < 0 && cc.indexOf(a) < 0; });
+` },
+  { why: "the local time helpers, appended (function declarations hoist)", from: "\nconst K = {", to: "\n" + LOCAL_TIME_FN + "\nconst K = {" },
+];
+
 /** What the writer answers, strict (Anthropic needs every property required, no extra one). */
 export const ANSWER_SCHEMA = {
   type: "object",
@@ -54,8 +85,8 @@ export const ANSWER_SCHEMA = {
     channel: { type: "string", enum: ["email", "whatsapp"], description: "When decision is write: one of THE CHANNELS OPEN. Otherwise the channel you would use." },
     replyTo: { type: "string", description: "Email only: the LABEL of the email you answer, exactly as THE THREAD shows it after \"email\" (for example M2): never its subject or an address. Empty = a new email thread (give it a subject)." },
     to: { type: "array", items: { type: "string" }, description: "Email only: the addresses it goes to. Empty = the person named in THE PERSON." },
-    cc: { type: "array", items: { type: "string" }, description: "Email only: the addresses copied. Empty = our usual copy (our team)." },
-    bcc: { type: "array", items: { type: "string" }, description: "Email only: the addresses copied without the others seeing it. Usually empty." },
+    cc: { type: "array", items: { type: "string" }, description: ANSWER_CC_DESCRIPTION },
+    bcc: { type: "array", items: { type: "string" }, description: ANSWER_BCC_DESCRIPTION },
     message: { type: "string", description: "The message to send when decision is write: plain text on WhatsApp (bubbles split by one empty line), simple HTML <p> paragraphs on email. Empty otherwise." },
     subject: { type: "string", description: "Email only, when there is no thread to answer in: a short plain subject. Empty otherwise." },
     bookSlot: { type: "string", description: "When their last message picks one of the OPEN TIMES below: that time copied exactly as listed. Empty otherwise." },
@@ -124,7 +155,7 @@ export function answerLeadScriptSource(): string {
     CALL_CONSUMES: ANSWER_LEAD_CALL_CONSUMES,
   };
   // Who speaks on WhatsApp = the persona of the line that sends (SOPHIE-WA-1016), the owner's own text, word for word.
-  return `${SCRIPT_BODY}\n${SENDER_PERSONA_FN}\nconst K = ${JSON.stringify(consts)};\n`;
+  return `${SCRIPT_BODY}\n${SENDER_PERSONA_FN}\n${LOCAL_TIME_FN}\nconst K = ${JSON.stringify(consts)};\n`;
 }
 
 const SCRIPT_BODY = String.raw`
@@ -308,8 +339,7 @@ export default function run(ctx) {
   const personaBlock = persona ? (both ? ["WHEN YOU WRITE ON WHATSAPP:"] : []).concat(personaLines(persona, String(brand.name || ""))) : [];
   const system = [voice.content].concat(personaBlock, K.GAME, mediumLines, [s(req.brief) ? "THE CAMPAIGN'S BRIEF (from the client):\n" + req.brief : ""]).filter(Boolean).join("\n\n");
   const message = [
-    "NOW: " + now + " (UTC).",
-    "THEIR TIMEZONE: " + (s(lead.timezone) || "not stated") + ". Clues: " + [lead.city, lead.state, lead.country, phone].filter(Boolean).join(", "),
+    "THEIR LOCAL TIME:\n" + localTimeLines(now, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: phone, places: s(lead.state) ? [{ label: "their state or region", value: lead.state }] : [] }).join("\n"),
     "THE PERSON: " + [lead.firstName, lead.lastName].filter(Boolean).join(" ") + (s(lead.headline) ? ", " + lead.headline : "") + (email ? ", " + email : ""),
     "THE BRAND: " + String(brand.name || "") + (s(economics.name) ? ". What we sell: " + economics.name : ""),
     "THE FACTS:\n" + (factLines.join("\n") || "(none stated)"),
@@ -362,8 +392,10 @@ export default function run(ctx) {
   if (!medium || open.indexOf(medium) < 0) throw new Error("the writer chose a channel that is not open: " + JSON.stringify(d.channel) + " (open: " + open.join(", ") + ")");
   // Who it goes to, as the writer chose (email). Addresses are cleaned (trimmed, lowercased, deduped), never added.
   const to = uniq(addrs(d.to));
-  const cc = uniq(addrs(d.cc)).filter(function (a) { return to.indexOf(a) < 0; });
-  const bcc = uniq(addrs(d.bcc)).filter(function (a) { return to.indexOf(a) < 0 && cc.indexOf(a) < 0; });
+  // The address it goes to is never also copied: the writer's own To, else the person (the sender's default To).
+  const sentTo = to.length > 0 ? to : email ? [email] : [];
+  const cc = uniq(addrs(d.cc)).filter(function (a) { return sentTo.indexOf(a) < 0; });
+  const bcc = uniq(addrs(d.bcc)).filter(function (a) { return sentTo.indexOf(a) < 0 && cc.indexOf(a) < 0; });
   const chosen = { ...(to.length > 0 ? { to: to } : {}), ...(cc.length > 0 ? { cc: cc } : {}), ...(bcc.length > 0 ? { bcc: bcc } : {}) };
   const label = medium === "email" ? s(d.replyTo) : null;
   const target = label ? labels[label] : null;
