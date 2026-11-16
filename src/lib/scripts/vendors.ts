@@ -205,6 +205,11 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // under the Engine's outcome), and the kept items any script reads back (one watch, never a second scan).
   "social.news.scan": { service: "social", method: "POST", path: "/orgs/social/industry-news/scans", asRun: true, outcomeInBody: "outcomeKey" },
   "social.news.items": { service: "social", method: "GET", path: "/orgs/social/industry-news", asRun: true },
+  // x_account_found (social-service, X-QUOTE-INDUSTRY-1117): the X accounts that matter for the run's brand (a purpose
+  // the script states: its industry, later its clients...), searched on X from the handles and phrases the script names,
+  // verified, each new one kept and declared as one Unit under the Engine's outcome; and the accounts kept, read back.
+  "social.x.accounts.find": { service: "social", method: "POST", path: "/orgs/social/x-accounts-found/searches", asRun: true, outcomeInBody: "outcomeKey" },
+  "social.x.accounts.found": { service: "social", method: "GET", path: "/orgs/social/x-accounts-found", asRun: true },
   // backlink_earned (scraping-service, BACKLINK-ENGINE-1109): one check of the links to the run's brand site (treg held +
   // actualized on scraping-service's run under the script's; each new link verified live and declared as one Unit under
   // the Engine's outcome), the brand's kept links read back, and its link gap (domains linking to its competitors, not to
