@@ -18,8 +18,10 @@
  *    call the record does not hold is refused (the case does not fit this code: it is skipped, never counted), after it
  *    an unrecorded act is acknowledged. A case is USABLE when the script read the answer without failing AND every field
  *    a person would read (`TO_PERSON_DOORS`) of what it would send is judged a usable value for that field by Jev
- *    (P(yes) >= 0.5), never a regex. The first unusable case ends the proof `failed` (no more spend on it); all
- *    `PROOF_SAMPLE` usable = `passed`; the spend is bounded from the tokens chat-service answers, priced at the
+ *    (P(yes) >= 0.5), never a regex. Only a case where it WROTE (sent a person something) or broke counts: one where it
+ *    decided to send nothing (later, stop: every night-time case) proves nothing about its writing and is passed over.
+ *    The first unusable case ends the proof `failed` (no more spend on it); `PROOF_SAMPLE` written usable cases =
+ *    `passed`; the spend is bounded from the tokens chat-service answers, priced at the
  *    priciest list rates we buy (`PRICE_BOUND_*`, so the bound is never below the real spend), and the proof stops
  *    `error` at `PROOF_CEILING_CENTS`. Fewer fitting cases = `no_cases` (nothing proven, nothing refused).
  *
@@ -40,8 +42,11 @@ import type { AnyPgDb } from "./script-catalogue.js";
 
 /** Cases one proof answers (owner: « maîtriser les dépenses »: a fixed, small sample). */
 export const PROOF_SAMPLE = 5;
-/** Cases one proof may look at to find `PROOF_SAMPLE` that fit the code (a case that does not fit costs no LLM call). */
-export const PROOF_MAX_TRIES = 12;
+/**
+ * Cases one proof may look at to find `PROOF_SAMPLE` it wrote on (a case that does not fit costs no LLM call; one where
+ * it decided to send nothing costs one, bounded by this and the ceiling).
+ */
+export const PROOF_MAX_TRIES = 15;
 /**
  * The most one proof spends, in US cents: $4, as an upper bound of its LLM spend at Opus list prices, checked after
  * each case (a 5-case proof of the lead answerer bounds at about $2; its real spend on a cheaper LLM is a fraction).
@@ -163,6 +168,11 @@ export interface SentField {
 export interface CaseVerdict {
   caseId: string;
   recordedFrom: string;
+  /**
+   * The case exercised its writing: it sent something a person reads, or broke. A case where it decided to send nothing
+   * (later, stop) proves nothing about what it writes: kept on the proof, never counted in its sample.
+   */
+  exercised: boolean;
   usable: boolean;
   /** Why it is not usable (the script's failure, the LLM's refusal, or the fields Jev judged unusable). */
   reasons: string[];
@@ -330,7 +340,8 @@ function verdictOf(caseId: string, recordedFrom: string, live: LiveReplay, judge
   for (const e of live.completionErrors) reasons.push(`the LLM call failed: ${e}`);
   if (live.failure) reasons.push(`its script could not use the answer: ${live.failure.slice(0, 300)}`);
   for (const f of judged) if (f.probability < USABLE_PROBABILITY) reasons.push(`${f.door} ${f.path} is not usable (P=${f.probability.toFixed(2)}): ${JSON.stringify(f.value.slice(0, 120))}`);
-  return { caseId, recordedFrom, usable: reasons.length === 0, reasons, fields: judged.map((f) => ({ door: f.door, path: f.path, value: f.value.slice(0, 300), probability: f.probability })) };
+  const exercised = reasons.length > 0 || live.sent.length > 0;
+  return { caseId, recordedFrom, exercised, usable: reasons.length === 0, reasons, fields: judged.map((f) => ({ door: f.door, path: f.path, value: f.value.slice(0, 300), probability: f.probability })) };
 }
 
 /** The version a proof is about: the dynasty's active one, else (a retired dynasty) its latest. */
@@ -376,18 +387,19 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
         state = "failed";
         break;
       }
-      if (verdicts.length >= PROOF_SAMPLE) {
+      if (verdicts.filter((v) => v.exercised).length >= PROOF_SAMPLE) {
         state = "passed";
         break;
       }
       if (spend >= PROOF_CEILING_CENTS) {
         state = "error";
-        error = `stopped at the ceiling: ${spend.toFixed(2)} cents spent after ${verdicts.length} of ${PROOF_SAMPLE} cases`;
+        error = `stopped at the ceiling: ${spend.toFixed(2)} cents spent after ${verdicts.filter((v) => v.exercised).length} of ${PROOF_SAMPLE} written cases`;
         break;
       }
     }
     await deps.closeRun(runId, "completed");
-    return await finish({ state, error, sample: verdicts.length, usable: verdicts.filter((v) => v.usable).length, casesAvailable: candidates.length, cases: verdicts, spendCents: spend.toFixed(4) });
+    const counted = verdicts.filter((v) => v.exercised);
+    return await finish({ state, error, sample: counted.length, usable: counted.filter((v) => v.usable).length, casesAvailable: candidates.length, cases: verdicts, spendCents: spend.toFixed(4) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(`[workflow-service] writer proof of ${row.outcome}/${row.dynasty}/v${row.version} FAILED to run: ${message}`);
