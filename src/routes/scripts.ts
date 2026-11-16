@@ -1,4 +1,5 @@
 import { Router, type Response } from "express";
+import { listMerges, mergeScript, unmergeScript, type MergePlace, type ScriptRef } from "../lib/scripts/script-merges.js";
 import { db } from "../db/index.js";
 import { scripts } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -454,6 +455,65 @@ internalScriptsRouter.get("/internal/scripts/switches", requireApiKey, async (re
     res.json(await guardView(db, outcome));
   } catch (err) {
     fail(res, err, "read script switches");
+  }
+});
+
+// ONE-WRITER-N-MODELS-1116: a per-model copy merged into what it now runs as, at each place (features-service pools its
+// history there). Staff, service key.
+const SCRIPT_REF_RE = /^([a-z0-9_]+)\/([a-z0-9_]+)$/;
+function refOf(v: unknown): ScriptRef | null {
+  const m = typeof v === "string" ? SCRIPT_REF_RE.exec(v.trim()) : null;
+  return m ? { outcome: m[1]!, dynasty: m[2]! } : null;
+}
+
+internalScriptsRouter.get("/internal/scripts/merges", requireApiKey, async (_req, res) => {
+  try {
+    res.json({ merges: await listMerges(db) });
+  } catch (err) {
+    fail(res, err, "read script merges");
+  }
+});
+
+internalScriptsRouter.post("/internal/scripts/merges", requireApiKey, async (req, res) => {
+  const absorbed = refOf(req.body?.absorbed);
+  const rawPlaces = Array.isArray(req.body?.places) ? (req.body.places as unknown[]) : [];
+  const places: MergePlace[] = [];
+  for (const p of rawPlaces) {
+    const survivor = refOf((p as { survivor?: unknown })?.survivor);
+    const askedByRaw = (p as { askedBy?: unknown })?.askedBy;
+    const askedBy = askedByRaw === null || askedByRaw === undefined ? null : refOf(askedByRaw);
+    if (!survivor || (askedByRaw !== null && askedByRaw !== undefined && !askedBy)) {
+      res.status(400).json({ error: "each place is {survivor: <outcome>/<dynasty>, askedBy: <outcome>/<dynasty> | null}" });
+      return;
+    }
+    places.push({ survivor, askedBy: askedBy ? `${askedBy.outcome}/${askedBy.dynasty}` : null });
+  }
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
+  if (!absorbed || places.length === 0 || reason.trim().length < 5) {
+    res.status(400).json({ error: "absorbed (<outcome>/<dynasty>), places and a reason (5+ characters) are required" });
+    return;
+  }
+  try {
+    const mergedBy = typeof req.headers["x-email"] === "string" && req.headers["x-email"] ? req.headers["x-email"] : "workflow-service (staff merge)";
+    const merges = await mergeScript(db, { absorbed, places, reason, mergedBy });
+    console.log(`[workflow-service] script merged ${absorbed.outcome}/${absorbed.dynasty} -> ${merges.map((m) => m.survivor).join(", ")} by ${mergedBy}`);
+    res.status(201).json({ merges });
+  } catch (err) {
+    fail(res, err, "merge script");
+  }
+});
+
+internalScriptsRouter.post("/internal/scripts/merges/unmerge", requireApiKey, async (req, res) => {
+  const absorbed = refOf(req.body?.absorbed);
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
+  if (!absorbed || reason.trim().length < 5) {
+    res.status(400).json({ error: "absorbed (<outcome>/<dynasty>) and a reason (5+ characters) are required" });
+    return;
+  }
+  try {
+    res.json(await unmergeScript(db, absorbed, reason));
+  } catch (err) {
+    fail(res, err, "unmerge script");
   }
 });
 

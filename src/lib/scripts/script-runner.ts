@@ -199,6 +199,9 @@ export async function runStoredScript(
   const vendorHeaders = { ...who.headers, "x-org-id": who.orgId, "x-user-id": who.userId, "x-run-id": runId };
   const gotten = new Map<string, number>();
   const consumed: OccurrenceInput[] = [];
+  // ONE-WRITER-N-MODELS-1116: the Units asked children made, consumed by this run even when its own Unit is declared
+  // by the owning service (`recordedBy`): only this run knows it asked them.
+  const askedConsumed: OccurrenceInput[] = [];
   const vendorCalls: ScriptRunResult["vendorCalls"] = [];
   const trace: NonNullable<ScriptRunResult["trace"]> = [];
 
@@ -215,8 +218,18 @@ export async function runStoredScript(
       if (held === undefined && asked) {
         const request = asked;
         asked = null;
-        const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, headers: who.headers }, deps);
-        if ("v" in provided) askedUnits[outcome] = provided.v;
+        const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
+        if ("v" in provided) {
+          askedUnits[outcome] = provided.v;
+          // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
+          // writer, a written message by its sender), so the ledger's chain links them and the child is credited with
+          // what the asker's work led to.
+          const made = provided.v as { content?: unknown; run?: { unit?: { subject?: SubjectRef | null } | null } | null };
+          const sub = made.content ? made.run?.unit?.subject : null;
+          if (sub && !askedConsumed.some((c) => c.outcomeKey === outcome && c.subjectService === sub.service && c.subjectId === sub.id)) {
+            askedConsumed.push({ outcomeKey: outcome, subjectService: sub.service, subjectId: sub.id });
+          }
+        }
         return provided;
       }
       if (held === undefined) return { stop: `the script asked for ${outcome}, which this step was not handed (materials: ${Object.keys(input.units).join(", ") || "none"})` };
@@ -290,6 +303,9 @@ export async function runStoredScript(
     }
   }
   if (input.recordedBy) consumed.length = 0;
+  for (const c of askedConsumed) {
+    if (!consumed.some((x) => x.outcomeKey === c.outcomeKey && x.subjectService === c.subjectService && x.subjectId === c.subjectId)) consumed.push(c);
+  }
 
   let declaredOk = true;
   if (produced.length > 0 || consumed.length > 0) {
@@ -366,7 +382,20 @@ async function provide(
   db: AnyPgDb,
   outcome: string,
   request: Record<string, unknown>,
-  parent: { orgId: string; userId: string; runId: string; headers: Record<string, string> },
+  parent: {
+    orgId: string;
+    userId: string;
+    runId: string;
+    headers: Record<string, string>;
+    askedBy: string;
+    billing?: RunScriptInput["billing"];
+    /**
+     * The asking run's trace, when it is traced: the child is traced too and its calls land in it, in order, so a
+     * reader of the asker's trace (content-generation reads the writer's one completion) sees the completion its
+     * asked model made (ONE-WRITER-N-MODELS-1116: the writer asks a completion, it calls no LLM itself).
+     */
+    trace?: NonNullable<ScriptRunResult["trace"]>;
+  },
   deps: { ledger: LedgerDeps; vendors: VendorDeps },
 ): Promise<{ v: unknown } | { stop: string }> {
   const rawUnits = request.units;
@@ -379,7 +408,7 @@ async function provide(
     }
     units[k] = v as MaterialUnit | MaterialUnit[];
   }
-  const pick = await pickScript(db, { outcome, servable: Object.keys(units), handed: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null, orgId: parent.headers["x-org-id"] ?? null });
+  const pick = await pickScript(db, { outcome, servable: Object.keys(units), handed: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null, orgId: parent.headers["x-org-id"] ?? null, askedBy: parent.askedBy });
   // No script of that Engine this campaign may run (none live, or its strategy keeps none): an ANSWER the asking script
   // reads (`unmade: "no_script: ..."`, no content, no child run), never a fallback script and never a stop: the asker
   // decides (MIGRATE-1105 S1b: the answering script asks for a rep call, and a campaign whose strategy keeps no call
@@ -401,16 +430,22 @@ async function provide(
         ...(request.request && typeof request.request === "object" ? { request: request.request as Record<string, unknown> } : {}),
         ...(request.tactics && typeof request.tactics === "object" ? { tactics: request.tactics as Record<string, unknown> } : {}),
         ...(typeof request.recordedBy === "string" ? { recordedBy: request.recordedBy } : {}),
-        ...(request.trace === true ? { trace: true } : {}),
+        ...(request.trace === true || parent.trace ? { trace: true } : {}),
         consumesHanded: true,
+        // A child bills as its asker does (a platform-billed run's asked completion is platform-billed too).
+        ...(parent.billing ? { billing: parent.billing } : {}),
       },
       { orgId: parent.orgId, userId: parent.userId, parentRunId: parent.runId, headers },
       deps,
     );
   } catch (e) {
-    if (e instanceof ScriptRunFailed) return { stop: `${e.result.scriptSlug} (asked for ${outcome}) ${e.result.status}: ${e.result.error ?? ""}` };
+    if (e instanceof ScriptRunFailed) {
+      if (parent.trace && e.result.trace) parent.trace.push(...e.result.trace);
+      return { stop: `${e.result.scriptSlug} (asked for ${outcome}) ${e.result.status}: ${e.result.error ?? ""}` };
+    }
     return { stop: `ctx.get(${outcome}): ${e instanceof Error ? e.message : String(e)}` };
   }
+  if (parent.trace && child.trace) parent.trace.push(...child.trace);
   // A child that made no Unit for a reason the world gave (`unmade`, or nothing) is an ANSWER the asking script reads
   // (`{outcome, unmade, run}`, no content) and decides on, e.g. by returning `{unmade}` itself: a stop would fail the
   // asking run and the campaign would redeliver its occurrence, re-running the child for the same verdict.

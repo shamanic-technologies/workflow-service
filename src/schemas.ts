@@ -3012,6 +3012,64 @@ registry.registerPath({
   },
 });
 
+// ONE-WRITER-N-MODELS-1116: per-model copies merged into what they now run as (src/lib/scripts/script-merges.ts).
+const ScriptMergeSchema = z.object({
+  absorbed: z.string().openapi({ description: "The merged dynasty, `<outcome>/<dynasty>` (retired; its runs keep their names)." }),
+  survivor: z.string().openapi({ description: "What it now runs as at this place, `<outcome>/<dynasty>`." }),
+  askedBy: z.string().nullable().openapi({ description: "The script that asks the survivor at this place (`<outcome>/<dynasty>`); null = a campaign's own run." }),
+  reason: z.string(),
+  mergedBy: z.string(),
+  mergedAt: z.string(),
+});
+registry.registerPath({
+  method: "get",
+  path: "/internal/scripts/merges",
+  summary: "Every open script merge: an absorbed dynasty and each place it now counts at (service key only)",
+  description: "ONE-WRITER-N-MODELS-1116: features-service pools an absorbed dynasty's past decisions into each survivor at its place. One absorbed dynasty can appear on several rows. `{merges: []}` until the first merge.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  responses: { 200: { description: "Open merges, oldest first", content: { "application/json": { schema: z.object({ merges: z.array(ScriptMergeSchema) }) } } } },
+});
+registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/merges",
+  summary: "Merge a dynasty into what it now runs as (staff, service key only)",
+  description: "Retires the absorbed dynasty (every version, reason `Merged into ...`) and records one row per place. Refused: a survivor with no runnable version (409 `survivor_not_runnable`), an absorbed dynasty already merged (409 `already_merged`), a merge into itself (400).",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: {
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: z.object({
+            absorbed: z.string(),
+            places: z.array(z.object({ survivor: z.string(), askedBy: z.string().nullable() })).min(1),
+            reason: z.string().min(5),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    201: { description: "Merged", content: { "application/json": { schema: z.object({ merges: z.array(ScriptMergeSchema) }) } } },
+    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Survivor not runnable, or already merged", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/merges/unmerge",
+  summary: "Undo a merge: the dynasty runs again, its merge rows are closed (staff, service key only)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ absorbed: z.string(), reason: z.string().min(5) }) } } } },
+  responses: {
+    200: { description: "Unmerged", content: { "application/json": { schema: z.object({ closed: z.number().int() }) } } },
+    404: { description: "Not merged", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // MIGRATE-1105 S0: a campaign run executes its Engine's stored script, with no workflow (src/routes/engines.ts).
 export const EngineExecuteRequestSchema = z
   .object({

@@ -164,6 +164,12 @@ export interface PickInput {
    * for that org (chat-service decides; an org on local Claude runs a non-Claude LLM as Claude). Absent = not asked.
    */
   orgId?: string | null;
+  /**
+   * ONE-WRITER-N-MODELS-1116: the ASKING script (`<outcome>/<dynasty>`) when a script asks another Engine (`ctx.ask`):
+   * the Rating keeps a note per (asking script, candidate) and falls back to the asking Engine, then the candidate
+   * alone (features-service). Absent = the pick of a campaign's own run.
+   */
+  askedBy?: string | null;
 }
 
 /** One LLM as a script's tactics state it (`llm` / `llms[place]`): provider + chat-service LLM dynasty slug. */
@@ -289,14 +295,17 @@ export interface ServedPick {
   candidates: Array<{ scriptDynasty: string; runs: number; score: number | null }>;
 }
 
-/** Asks features-service which of `dynasties` (`<outcome>/<dynasty>`) runs. Throws when it cannot answer. */
-export type ScriptPickReader = (outcome: string, dynasties: string[]) => Promise<ServedPick>;
+/**
+ * Asks features-service which of `dynasties` (`<outcome>/<dynasty>`) runs, for `askedBy` (the asking script, when a
+ * script asks another Engine). Throws when it cannot answer.
+ */
+export type ScriptPickReader = (outcome: string, dynasties: string[], askedBy?: string | null) => Promise<ServedPick>;
 
-export const productionScriptPick: ScriptPickReader = async (outcome, dynasties) => {
+export const productionScriptPick: ScriptPickReader = async (outcome, dynasties, askedBy) => {
   const base = (process.env.FEATURES_SERVICE_URL ?? "").replace(/\/$/, "");
   const key = process.env.FEATURES_SERVICE_API_KEY ?? "";
   if (!base || !key) throw new Error("FEATURES_SERVICE_URL and FEATURES_SERVICE_API_KEY must be set to read the script pick");
-  const res = await fetch(`${base}/internal/script-pick?outcome=${encodeURIComponent(outcome)}&dynasties=${encodeURIComponent(dynasties.join(","))}`, {
+  const res = await fetch(`${base}/internal/script-pick?outcome=${encodeURIComponent(outcome)}&dynasties=${encodeURIComponent(dynasties.join(","))}${askedBy ? `&askedBy=${encodeURIComponent(askedBy)}` : ""}`, {
     headers: { "x-api-key": key },
     signal: AbortSignal.timeout(600_000),
   });
@@ -389,7 +398,7 @@ export async function pickScript(db: AnyPgDb, input: PickInput): Promise<Pick | 
   const candidates = readersOfHanded(await candidatesOf(db, input), input.handed).sort((a, b) => a.dynasty.localeCompare(b.dynasty));
   if (candidates.length === 0) return null;
   const keyOf = (c: ScriptRow) => `${input.outcome}/${c.dynasty}`;
-  const served = await scriptPick(input.outcome, candidates.map(keyOf));
+  const served = input.askedBy ? await scriptPick(input.outcome, candidates.map(keyOf), input.askedBy) : await scriptPick(input.outcome, candidates.map(keyOf));
   const byKey = new Map(candidates.map((c) => [keyOf(c), c]));
   const ranked = served.candidates.map((c) => byKey.get(c.scriptDynasty));
   const picked = served.scriptDynasty ? byKey.get(served.scriptDynasty) : undefined;
