@@ -4,10 +4,10 @@ import type { ScriptPickReader, ServedPick } from "../../src/lib/scripts/engine.
  * A stand-in for features-service's Rating (`GET /internal/script-pick`) in tests: it ranks the candidates in the order
  * they were asked, or by `scores` (highest first) when given. Every call is recorded so a test can read what was asked.
  */
-export function fakeScriptPick(scores: Record<string, number> = {}): ScriptPickReader & { calls: Array<{ outcome: string; dynasties: string[] }> } {
-  const calls: Array<{ outcome: string; dynasties: string[] }> = [];
-  const reader = async (outcome: string, dynasties: string[]): Promise<ServedPick> => {
-    calls.push({ outcome, dynasties });
+export function fakeScriptPick(scores: Record<string, number> = {}): ScriptPickReader & { calls: Array<{ outcome: string; dynasties: string[]; askedBy?: string | null }> } {
+  const calls: Array<{ outcome: string; dynasties: string[]; askedBy?: string | null }> = [];
+  const reader = async (outcome: string, dynasties: string[], askedBy?: string | null): Promise<ServedPick> => {
+    calls.push({ outcome, dynasties, ...(askedBy ? { askedBy } : {}) });
     const order = dynasties
       .map((d, i) => ({ d, i, s: scores[d.slice(d.indexOf("/") + 1)] ?? 0 }))
       .sort((a, b) => b.s - a.s || a.i - b.i);

@@ -227,6 +227,24 @@ export const scriptStorage = pgTable(
   (table) => [primaryKey({ columns: [table.orgId, table.outcome, table.tableName, table.key] })]
 );
 
+/** ONE-WRITER-N-MODELS-1116: a dynasty merged into what it now runs as, at a place (`asked_by`); migration 0055. */
+export const scriptMerges = pgTable(
+  "script_merges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    absorbedOutcome: text("absorbed_outcome").notNull(),
+    absorbedDynasty: text("absorbed_dynasty").notNull(),
+    survivorOutcome: text("survivor_outcome").notNull(),
+    survivorDynasty: text("survivor_dynasty").notNull(),
+    askedBy: text("asked_by"),
+    reason: text("reason").notNull(),
+    mergedBy: text("merged_by").notNull(),
+    mergedAt: timestamp("merged_at", { withTimezone: true }).notNull().defaultNow(),
+    unmergedAt: timestamp("unmerged_at", { withTimezone: true }),
+  },
+  (table) => [index("idx_script_merges_absorbed").on(table.absorbedOutcome, table.absorbedDynasty)]
+);
+
 export const scriptRuns = pgTable(
   "script_runs",
   {
