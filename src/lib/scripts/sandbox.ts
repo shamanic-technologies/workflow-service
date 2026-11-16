@@ -64,6 +64,11 @@ export type ScriptResult = {
    * the campaign may ask again. Absent = a refusal the world gave (a sender 409, no channel), stated as such.
    */
   decided?: "done" | "idle";
+  /**
+   * With `unmade`, for the script that ASKED this one (ONE-WRITER-N-MODELS-1116-ANSWERER): what it decided, so its asker
+   * acts on it (a writer that decided to write later hands back the date; the sender sets it). Never a Unit.
+   */
+  answer?: Record<string, unknown>;
   /** Who the Unit is about, when the run was handed no subject (an Engine run that found its own: MIGRATE-1105 S0). */
   subject?: { service: string; id: string };
 } | null;

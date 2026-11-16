@@ -393,6 +393,13 @@
       "when": 1793800002000,
       "tag": "0055_script_merges",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1793800003000,
+      "tag": "0056_writer_proof_pairs",
+      "breakpoints": true
     }
   ]
 }

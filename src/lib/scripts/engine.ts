@@ -22,7 +22,7 @@ import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
-import { writerProofAllows } from "./writer-proof.js";
+import { LLM_COMPLETION_OUTCOME, pairProofAllows, writerProofAllows } from "./writer-proof.js";
 
 /** The caller a campaign Engine switch is recorded under. */
 export const CAMPAIGN_CALLER = "campaign";
@@ -347,6 +347,15 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     : input.campaignId && rows.length > 0
       ? new Set(await scriptStrategy(input.campaignId, input.outcome))
       : null;
+  // ONE-WRITER-N-MODELS-1116-ANSWERER: the writer asking for its model; a pair (writer, model) of an enforced Engine
+  // is drawn only once proven. Read once per pick.
+  let asker: ScriptRow | null | undefined;
+  const askingWriter = async (): Promise<ScriptRow | null> => {
+    if (asker !== undefined) return asker;
+    const at = input.askedBy ? input.askedBy.indexOf("/") : -1;
+    asker = at > 0 ? await activeVersion(db, input.askedBy!.slice(0, at), input.askedBy!.slice(at + 1)) : null;
+    return asker;
+  };
   const out: ScriptRow[] = [];
   for (const row of rows) {
     if (kept && !kept.has(row.dynasty)) continue;
@@ -360,6 +369,10 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     if (!(await provenness(db, row)).runnable) continue;
     // PROVEN-BEFORE-PEOPLE-1116: a writer of an enforced Engine is drawn only once proven on recorded cases.
     if (!(await writerProofAllows(db, row))) continue;
+    if (input.outcome === LLM_COMPLETION_OUTCOME && input.askedBy) {
+      const writer = await askingWriter();
+      if (writer && !(await pairProofAllows(db, writer, row))) continue;
+    }
     out.push(row);
   }
   // LOCAL-CLAUDE-RATING-1116: only where its stated LLM runs as stated for this org (one read per pick).

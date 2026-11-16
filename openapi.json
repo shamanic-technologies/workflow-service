@@ -3788,6 +3788,11 @@
           "dynasty": {
             "type": "string",
             "minLength": 1
+          },
+          "completionDynasty": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A writer that asks its model is proven WITH one LLM completion script (`llm_completion/<completionDynasty>`, its active version): the pair a person reads."
           }
         },
         "required": [
@@ -3849,7 +3854,12 @@
           "llm": {
             "type": "string",
             "nullable": true,
-            "description": "The LLM its tactics state."
+            "description": "The LLM its tactics state, or the one of the completion script it is paired with."
+          },
+          "completion": {
+            "type": "string",
+            "nullable": true,
+            "description": "ONE-WRITER-N-MODELS-1116-ANSWERER: the LLM completion script (`llm_completion/<dynasty>`) this writer, which asks its model, is proven with; null = a version proven alone."
           },
           "live": {
             "type": "boolean",
@@ -3891,6 +3901,7 @@
           "dynasty",
           "version",
           "llm",
+          "completion",
           "live",
           "state",
           "usable",
