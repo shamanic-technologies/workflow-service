@@ -90,14 +90,27 @@ export function callsCompletion(code: string): boolean {
   return [...COMPLETIONS].some((name) => code.includes(`"${name}"`) || code.includes(`'${name}'`));
 }
 
-/** The person-facing paths a writer that asks its model states (tactic `personFields`); null = not such a writer. */
+/** A script that asks the LLM completion Engine for its model (tactic `asks`). */
+export function asksCompletion(row: Pick<ScriptRow, "tactics">): boolean {
+  const asks = ((row.tactics ?? {}) as Record<string, unknown>).asks;
+  return Array.isArray(asks) && asks.includes(LLM_COMPLETION_OUTCOME);
+}
+
+/** The person-facing paths of its Unit a writer that asks its model states (tactic `personFields`); null = none stated. */
 export function pairWriterFields(row: Pick<ScriptRow, "tactics">): string[] | null {
-  const t = (row.tactics ?? {}) as Record<string, unknown>;
-  const asks = Array.isArray(t.asks) ? t.asks : [];
-  const fields = t[PERSON_FIELDS_TACTIC];
-  if (!asks.includes(LLM_COMPLETION_OUTCOME) || !Array.isArray(fields)) return null;
+  const fields = ((row.tactics ?? {}) as Record<string, unknown>)[PERSON_FIELDS_TACTIC];
+  if (!asksCompletion(row) || !Array.isArray(fields)) return null;
   const paths = fields.filter((f): f is string => typeof f === "string" && f.trim() !== "");
   return paths.length > 0 ? paths : null;
+}
+
+/**
+ * A writer whose model is asked (ONE-WRITER-N-MODELS-1116-ANSWERER / -OTHERS): it asks `llm_completion` and a person
+ * reads what it makes, either its Unit's `personFields` (it hands the message to a sender) or what it sends itself
+ * (`TO_PERSON_DOORS`, e.g. the founder hello). Proven per (version, completion script).
+ */
+export function isPairWriter(row: Pick<ScriptRow, "tactics" | "code">): boolean {
+  return asksCompletion(row) && (pairWriterFields(row) !== null || writesToPerson(row.code));
 }
 /** Tactics that name the combination (its LLM and template): a case's run never overrides the combination proven. */
 const COMBINATION_TACTICS = ["llm", "llms", "template", "templates"];
@@ -129,10 +142,10 @@ export const codeMd5 = (code: string) => createHash("md5").update(code).digest("
  */
 export async function recordWriterCase(db: AnyPgDb, row: ScriptRow, input: { runId: string; orgId: string; body: WriterCaseBody; made?: boolean }): Promise<boolean> {
   let wrote: boolean;
-  if (pairWriterFields(row)) {
-    // A writer that asks its model: a case once it asked one; it wrote when it made its Unit.
+  if (isPairWriter(row)) {
+    // A writer that asks its model: a case once it asked one; it wrote when it made its Unit for a sender, or sent.
     if (!(LLM_COMPLETION_OUTCOME in (input.body.asked ?? {}))) return false;
-    wrote = input.made === true;
+    wrote = (pairWriterFields(row) !== null && input.made === true) || input.body.calls.some((c) => c.name in TO_PERSON_DOORS);
   } else {
     if (!writesToPerson(row.code)) return false;
     const firstLlm = input.body.calls.findIndex((c) => COMPLETIONS.has(c.name));
@@ -438,10 +451,10 @@ const pairKey = (scriptId: string, completionId: string | null) => (completionId
 export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "auto" | "staff", completion: ScriptRow | null = null): Promise<WriterProofRow> {
   const name = `${row.outcome}/${row.dynasty}/v${row.version}${completion ? ` x ${completion.outcome}/${completion.dynasty}/v${completion.version}` : ""}`;
   if (completion) {
-    if (!pairWriterFields(row)) throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} asks no model or states no personFields: it is not a writer whose model is asked`);
+    if (!isPairWriter(row)) throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} asks no model, or nothing it makes reaches a person (no personFields, no send): it is not a writer whose model is asked`);
     if (completion.outcome !== LLM_COMPLETION_OUTCOME) throw new ProofError(422, `${completion.outcome}/${completion.dynasty} is not an LLM completion script`);
   } else if (!writesToPerson(row.code) || !callsCompletion(row.code)) {
-    throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} writes nothing to a person with an LLM of its own: there is no writer to prove${pairWriterFields(row) ? " (it asks its model: prove it with a completion script)" : ""}`);
+    throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} writes nothing to a person with an LLM of its own: there is no writer to prove${isPairWriter(row) ? " (it asks its model: prove it with a completion script)" : ""}`);
   }
   const key = pairKey(row.id, completion?.id ?? null);
   if (inFlight.has(key)) throw new ProofError(409, `a proof of ${name} is already running`);
@@ -566,7 +579,7 @@ export async function writerProofAllows(db: AnyPgDb, row: ScriptRow): Promise<bo
  * Any other asker, or a writer of an Engine not enforced, always may. An unproven pair is proven in the background, once.
  */
 export async function pairProofAllows(db: AnyPgDb, writer: ScriptRow, completion: ScriptRow): Promise<boolean> {
-  if (completion.outcome !== LLM_COMPLETION_OUTCOME || !pairWriterFields(writer)) return true;
+  if (completion.outcome !== LLM_COMPLETION_OUTCOME || !isPairWriter(writer)) return true;
   if (!(await engineEnforced(db, writer.outcome))) return true;
   return gateAndProve(db, writer, completion);
 }
@@ -673,7 +686,7 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
 
 /** One line per live (writer that asks its model) x live completion script, with that pair's latest proof. */
 async function pairViews(db: AnyPgDb, active: ScriptRow[], latest: Map<string, WriterProofRow>): Promise<ProofView[]> {
-  const writers = active.filter((r) => r.dynastyStatus === "active" && pairWriterFields(r));
+  const writers = active.filter((r) => r.dynastyStatus === "active" && isPairWriter(r));
   const completions = active.filter((r) => r.dynastyStatus === "active" && r.outcome === LLM_COMPLETION_OUTCOME);
   const out: ProofView[] = [];
   for (const w of writers) {
