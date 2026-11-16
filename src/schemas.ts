@@ -2399,6 +2399,12 @@ export const ScriptSchema = z
     dynasty: z.string().describe("The lineage: every version of one idea. A fork is a new dynasty."),
     version: z.number().int(),
     scriptSlug: z.string().describe("`<outcome>/<dynasty>/v<version>`"),
+    name: z
+      .string()
+      .nullable()
+      .describe(
+        "The dynasty's short client-readable name (e.g. `Brand team assistant`): plain English, a few words, the same on every version, unique within its outcome. Null only for a dynasty stored before names, until the naming sweep a minute after boot names it.",
+      ),
     description: z.string(),
     materials: z.array(z.string()).describe("The outcomes the code asks its Providers for (`ctx.get(\"...\")`), read from the code."),
     vendors: z.array(z.string()).describe("The vendors the code calls by name (`ctx.vendor.call(\"...\")`), read from the code."),
@@ -2432,6 +2438,12 @@ export const CreateScriptRequestSchema = z
       ),
     description: z.string().min(1).max(2000),
     tactics: z.record(z.string(), z.unknown()).optional(),
+    name: z
+      .string()
+      .min(2)
+      .max(40)
+      .optional()
+      .describe("The client-readable name (plain English, a few words, unique within the outcome; no slug, version, em dash or the word agency). Absent: written from the description and tactics."),
   })
   .openapi("CreateScriptRequest");
 
@@ -2458,12 +2470,22 @@ export const ForkScriptRequestSchema = z
     description: z.string().min(1).max(2000),
     code: z.string().min(1).max(500_000).optional().describe("Absent: the source's active code (a copy whose tactics differ)."),
     tactics: z.record(z.string(), z.unknown()).optional(),
+    name: z
+      .string()
+      .min(2)
+      .max(40)
+      .optional()
+      .describe("The client-readable name (plain English, a few words, unique within the outcome; no slug, version, em dash or the word agency). Absent: written from the description and tactics."),
   })
   .openapi("ForkScriptRequest");
 
 export const ScriptDynastyStatusRequestSchema = z
   .object({ status: z.enum(["active", "deprecated"]), reason: z.string().min(1).max(500) })
   .openapi("ScriptDynastyStatusRequest");
+
+export const ScriptDynastyNameRequestSchema = z
+  .object({ name: z.string().min(2).max(40).describe("The new client-readable name of every version of the dynasty.") })
+  .openapi("ScriptDynastyNameRequest");
 
 export const ReplayScriptRequestSchema = z
   .object({ code: z.string().min(1).max(500_000).optional().describe("Absent: the dynasty's active code.") })
@@ -2658,6 +2680,21 @@ registry.registerPath({
   responses: {
     200: { description: "Versions after the change", content: { "application/json": { schema: z.object({ versions: z.array(ScriptSchema) }) } } },
     404: { description: "Unknown", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/name",
+  summary: "Rename a script dynasty (the line a client reads on their campaign page)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { headers: IdentityHeaders, params: scriptDynastyParams, body: { required: true, content: { "application/json": { schema: ScriptDynastyNameRequestSchema } } } },
+  responses: {
+    200: { description: "Versions after the rename", content: { "application/json": { schema: z.object({ versions: z.array(ScriptSchema) }) } } },
+    400: { description: "Name refused (`invalid_name`)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Unknown", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Another script of the outcome holds the name (`name_taken`)", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

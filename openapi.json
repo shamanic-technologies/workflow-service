@@ -2981,6 +2981,11 @@
             "type": "string",
             "description": "`<outcome>/<dynasty>/v<version>`"
           },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "The dynasty's short client-readable name (e.g. `Brand team assistant`): plain English, a few words, the same on every version, unique within its outcome. Null only for a dynasty stored before names, until the naming sweep a minute after boot names it."
+          },
           "description": {
             "type": "string"
           },
@@ -3078,6 +3083,7 @@
           "dynasty",
           "version",
           "scriptSlug",
+          "name",
           "description",
           "materials",
           "vendors",
@@ -3142,6 +3148,12 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 40,
+            "description": "The client-readable name (plain English, a few words, unique within the outcome; no slug, version, em dash or the word agency). Absent: written from the description and tactics."
           }
         },
         "required": [
@@ -3230,6 +3242,12 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 40,
+            "description": "The client-readable name (plain English, a few words, unique within the outcome; no slug, version, em dash or the word agency). Absent: written from the description and tactics."
           }
         },
         "required": [
@@ -3256,6 +3274,20 @@
         "required": [
           "status",
           "reason"
+        ]
+      },
+      "ScriptDynastyNameRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 40,
+            "description": "The new client-readable name of every version of the dynasty."
+          }
+        },
+        "required": [
+          "name"
         ]
       },
       "ReplayScriptResponse": {
@@ -10631,6 +10663,172 @@
           },
           "404": {
             "description": "Unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scripts/dynasty/{outcome}/{dynasty}/name": {
+      "put": {
+        "summary": "Rename a script dynasty (the line a client reads on their campaign page)",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "dynasty",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal org UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal org UUID (from client-service). Required.",
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Internal user UUID (from client-service). Required."
+            },
+            "required": true,
+            "description": "Internal user UUID (from client-service). Required.",
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Run ID for tracing across services. Required."
+            },
+            "required": true,
+            "description": "Run ID for tracing across services. Required.",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Campaign ID for tracking. Optional on non-execute endpoints.",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Brand ID(s) as CSV (e.g. 'uuid1,uuid2'). Optional on non-execute endpoints.",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug for tracking. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Workflow slug for tracking. Optional on non-execute endpoints.",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug from features-service. Optional on non-execute endpoints."
+            },
+            "required": false,
+            "description": "Feature slug from features-service. Optional on non-execute endpoints.",
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScriptDynastyNameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Versions after the rename",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "versions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Script"
+                      }
+                    }
+                  },
+                  "required": [
+                    "versions"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Name refused (`invalid_name`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another script of the outcome holds the name (`name_taken`)",
             "content": {
               "application/json": {
                 "schema": {

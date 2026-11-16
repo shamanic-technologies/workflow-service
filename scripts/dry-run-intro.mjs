@@ -27,6 +27,8 @@ const source = readFileSync(String(args.source), "utf8");
 const tactics = JSON.parse(readFileSync(String(args.tactics), "utf8"));
 const readers = Number(args.readers ?? 3);
 tactics.freshCandidates = Number(args.candidates ?? 6);
+// `--fixture <file>`: answers for reads the dry run cannot make live, by door name (e.g. brand.sales_rep, brand.extract_fields).
+const fixture = typeof args.fixture === "string" ? JSON.parse(readFileSync(args.fixture, "utf8")) : {};
 const brief = typeof args.brief === "string" ? readFileSync(args.brief, "utf8").trim() : "";
 
 const seen = new Set();
@@ -53,6 +55,7 @@ for (let r = 0; r < readers && r < people.length; r++) {
     if (op !== "vendor") return { stop: `no ${op} in a dry run` };
     const [name, callArgs] = a;
     calls.push(name);
+    if (fixture[name]) return { v: { ok: true, data: fixture[name] } };
     if (name === "brand.profile") return { v: { ok: true, data: { brand: { name: "Distribute.you", url: "https://distribute.you" } } } };
     if (name === "lead.serve") return { v: { ok: true, data: served < queue.length ? { found: true, lead: queue[served++] } : { found: false, reason: "audience_exhausted" } } };
     if (name === "crm.person.thread") return { v: { ok: false, data: { status: 404, error: "dry run: not read" } } };

@@ -32,6 +32,7 @@ import figuresRoutes from "./routes/figures.js";
 import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
 import enginesRoutes, { productionEngineRunDeps } from "./routes/engines.js";
 import { closeOrphanEngineRuns } from "./lib/scripts/engine-runner.js";
+import { nameUnnamedScripts, productionNamer } from "./lib/scripts/script-names.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
 import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, setEngineMonitoringContext } from "./lib/scripts/engine-monitoring.js";
 import { abandonRunningProofs, productionProofDeps, setProofContext } from "./lib/scripts/writer-proof.js";
@@ -175,6 +176,11 @@ async function boot(): Promise<void> {
     const siblingLines = new SiblingLineRefresher(db, 10 * 60 * 1000);
     setSiblingLineRefresher(siblingLines);
     setTimeout(() => siblingLines.maybeRun(), 60_000).unref();
+  }
+
+  // CAMPAIGN-SCRIPTS-1113-NAMES: name every script dynasty stored before names (a no-op once all are named).
+  if (process.env.CHAT_SERVICE_URL) {
+    setTimeout(() => void nameUnnamedScripts(db, productionNamer()).catch((err) => console.error(`[workflow-service] script names sweep FAILED: ${err instanceof Error ? err.message : String(err)}`)), 75_000).unref();
   }
 
   // FACTORY-P3: the scripts' Monitoring series, stored daily (a minute after boot, then riding workflow traffic).

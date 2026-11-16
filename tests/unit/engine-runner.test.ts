@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -49,7 +50,7 @@ export default function run(ctx) {
 }`;
 
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const known = { isKnownOutcome: async () => true };
+const known = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 const ORG = "org-1";
 
 let db: AnyPgDb;
@@ -191,7 +192,7 @@ describe("an Engine switch", () => {
     await addScript("meeting_booked", "dy_path", SERVE);
     await switchEngine(db, { outcome: "meeting_booked", dynasty: "dy_path" });
     expect(await engineState(db, "meeting_booked", "org-2")).toMatchObject({ live: true, scope: "fleet", provenOn: "dy_path" });
-    await forkScript(db, "meeting_booked", "dy_path", { dynasty: "dy_path_fork", description: "x" }, author);
+    await forkScript(db, "meeting_booked", "dy_path", { dynasty: "dy_path_fork", description: "x" }, author, known);
     await expect(switchEngine(db, { outcome: "meeting_booked", dynasty: "dy_path_fork" })).rejects.toThrow(/created from scratch/);
   });
 

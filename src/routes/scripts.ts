@@ -14,6 +14,7 @@ import {
   ReplayScriptRequestSchema,
   RunScriptRequestSchema,
   ScriptDynastyStatusRequestSchema,
+  ScriptDynastyNameRequestSchema,
   UpgradeScriptRequestSchema,
 } from "../schemas.js";
 import {
@@ -46,6 +47,7 @@ import { productionRollbackDeps } from "../lib/scripts/script-guard-deps.js";
 import { serviceSwitchState, switchService } from "../lib/scripts/script-service-switch.js";
 import { ProofError, productionProofDeps, proofTarget, proveScript, readWriterProofs, setEngineEnforced } from "../lib/scripts/writer-proof.js";
 import { WriterProofEngineRequestSchema, WriterProofRequestSchema } from "../schemas.js";
+import { renameDynasty } from "../lib/scripts/script-names.js";
 
 /**
  * FACTORY-P2-ENGINES: scripts as data (src/lib/scripts/*). Identity-gated (mounted after `requireIdentity`), except
@@ -185,7 +187,7 @@ router.post("/scripts/dynasty/:outcome/:dynasty/fork", requireApiKey, async (req
     return;
   }
   try {
-    const row = await forkScript(db, req.params.outcome, req.params.dynasty, parsed.data, author(res, req));
+    const row = await forkScript(db, req.params.outcome, req.params.dynasty, parsed.data, author(res, req), productionCatalogueDeps());
     console.log(`[workflow-service] script forked ${req.params.outcome}/${req.params.dynasty} -> ${row.outcome}/${row.dynasty}/v1 by ${row.createdBy}`);
     res.status(201).json(serveScript(row, await caseCount(db, row.outcome, row.dynasty)));
   } catch (err) {
@@ -205,6 +207,22 @@ router.put("/scripts/dynasty/:outcome/:dynasty/status", requireApiKey, async (re
     res.json({ versions: await served(versions) });
   } catch (err) {
     fail(res, err, "set script dynasty status");
+  }
+});
+
+// CAMPAIGN-SCRIPTS-1113-NAMES: rename a whole dynasty (every version), checked like a name stated at creation.
+router.put("/scripts/dynasty/:outcome/:dynasty/name", requireApiKey, async (req, res) => {
+  const parsed = ScriptDynastyNameRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const name = await renameDynasty(db, req.params.outcome, req.params.dynasty, parsed.data.name);
+    console.log(`[workflow-service] script dynasty ${req.params.outcome}/${req.params.dynasty} named "${name}"`);
+    res.json({ versions: await served(await dynastyVersions(db, req.params.outcome, req.params.dynasty)) });
+  } catch (err) {
+    fail(res, err, "rename script dynasty");
   }
 });
 

@@ -27,6 +27,7 @@ import {
   type CatalogueDeps,
 } from "./script-catalogue.js";
 import { validateSource } from "./sandbox.js";
+import { nameNewDynasty, sameName, takenNames } from "./script-names.js";
 import { CAMPAIGN_CALLER } from "./engine.js";
 
 export interface RehomeInput {
@@ -85,6 +86,12 @@ export async function rehomeScript(db: AnyPgDb, outcome: string, dynasty: string
     );
   }
   const replay = summary ? { cases: summary.cases, matches: summary.matches } : null;
+  // The dynasty keeps its name, unless another dynasty of the new outcome already serves it (then the namer writes one).
+  const takenThere = await takenNames(db, toOutcome);
+  const name =
+    current.name && !takenThere.some((t) => sameName(t, current.name!))
+      ? current.name
+      : await nameNewDynasty(db, toOutcome, { dynasty, description: input.description ?? current.description, tactics }, undefined, deps.nameDynasties);
   const cases = await db.select().from(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
 
   return db.transaction(async (tx) => {
@@ -99,6 +106,7 @@ export async function rehomeScript(db: AnyPgDb, outcome: string, dynasty: string
         vendors: read.vendors,
         tactics,
         description: input.description ?? current.description,
+        name,
         creationType: "upgrade",
         createdFromScript: current.id,
         orgId: author.orgId,

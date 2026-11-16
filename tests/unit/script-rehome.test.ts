@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -37,7 +38,7 @@ const CASE: ReplayCase = {
   expect: { content: { id: "p1" } },
 };
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const deps = { isKnownOutcome: async (o: string) => ["post_published", "threads_post_published"].includes(o) };
+const deps = { isKnownOutcome: async (o: string) => ["post_published", "threads_post_published"].includes(o), nameDynasties: testNamer() };
 
 let db: AnyPgDb;
 beforeEach(async () => {

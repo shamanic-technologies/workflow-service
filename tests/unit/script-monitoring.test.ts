@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -67,7 +68,7 @@ describe("script monitoring series", () => {
     const CODE = `export default function run(ctx) { return { content: { ok: true } }; }`;
     async function switched() {
       await putCases(db, "lead_interested", "dy_judge", [{ id: "c1", units: {}, calls: [], expect: { content: { ok: true } } }], "test");
-      const s = await createScript(db, { outcome: "lead_interested", dynasty: "dy_judge", code: CODE, description: "x" }, { orgId: "o", createdBy: "t" }, { isKnownOutcome: async () => true });
+      const s = await createScript(db, { outcome: "lead_interested", dynasty: "dy_judge", code: CODE, description: "x" }, { orgId: "o", createdBy: "t" }, { isKnownOutcome: async () => true, nameDynasties: testNamer() });
       await switchService(db, { outcome: "lead_interested", dynasty: "dy_judge", callerService: "instantly" });
       return s;
     }

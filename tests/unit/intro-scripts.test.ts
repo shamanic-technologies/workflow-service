@@ -173,6 +173,9 @@ describe("the intro scripts", () => {
       expect(writer.systemPrompt).toContain(brief);
       expect(writer.message).toContain("THE OTHER PERSON");
       expect(writer.message).toContain("https://lonestar.com/news");
+      // How we found them is the truth, never a referral the writer could retell (first live email, 2026-11-16).
+      expect(writer.message).toContain("Nobody recommended or pointed us to either of them.");
+      expect(writer.systemPrompt).toContain("never a referral");
       // The proposed person leaves the candidates; the unpicked one is kept.
       const pool = h.store.get("intro_pool\u0000people") as any[];
       expect(pool.map((p) => p.email)).toEqual(["ann@acme.com"]);
