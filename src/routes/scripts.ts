@@ -46,7 +46,7 @@ import { noteScriptRunForGuard, rollBackSwitches, guardView } from "../lib/scrip
 import { SwitchError, recordSwitch } from "../lib/scripts/script-writer-switch.js";
 import { productionRollbackDeps } from "../lib/scripts/script-guard-deps.js";
 import { serviceSwitchState, switchService } from "../lib/scripts/script-service-switch.js";
-import { ProofError, productionProofDeps, proofTarget, proveScript, readWriterProofs, setEngineEnforced } from "../lib/scripts/writer-proof.js";
+import { LLM_COMPLETION_OUTCOME, ProofError, productionProofDeps, proofTarget, proveScript, readWriterProofs, setEngineEnforced } from "../lib/scripts/writer-proof.js";
 import { WriterProofEngineRequestSchema, WriterProofRequestSchema } from "../schemas.js";
 import { renameDynasty } from "../lib/scripts/script-names.js";
 
@@ -563,7 +563,15 @@ internalScriptsRouter.post("/internal/scripts/writer-proofs", requireApiKey, asy
       res.status(404).json({ error: `no ${parsed.data.outcome}/${parsed.data.dynasty}` });
       return;
     }
-    res.json(await proveScript(db, productionProofDeps(productionVendorDeps()), row, "staff"));
+    let completion = null;
+    if (parsed.data.completionDynasty) {
+      completion = await activeVersion(db, LLM_COMPLETION_OUTCOME, parsed.data.completionDynasty);
+      if (!completion) {
+        res.status(404).json({ error: `no active ${LLM_COMPLETION_OUTCOME}/${parsed.data.completionDynasty}` });
+        return;
+      }
+    }
+    res.json(await proveScript(db, productionProofDeps(productionVendorDeps()), row, "staff", completion));
   } catch (err) {
     if (err instanceof ProofError) {
       res.status(err.status).json({ error: err.message });

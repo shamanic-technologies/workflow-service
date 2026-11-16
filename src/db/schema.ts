@@ -384,6 +384,9 @@ export const writerProofs = pgTable(
     outcome: text("outcome").notNull(),
     dynasty: text("dynasty").notNull(),
     version: integer("version").notNull(),
+    /** The LLM completion script this writer version is proven WITH (a writer that asks its model, migration 0056); null = the version alone. */
+    completionScriptId: uuid("completion_script_id"),
+    completionDynasty: text("completion_dynasty"),
     /** running | passed | failed | error | no_cases | abandoned */
     state: text("state").notNull(),
     /** auto (the Rating met an unproven combination) | staff */

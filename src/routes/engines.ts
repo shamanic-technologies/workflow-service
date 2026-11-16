@@ -163,6 +163,7 @@ router.post("/internal/engines/:outcome/pick", requireApiKey, async (req, res) =
       channel: parsed.data.channel ?? null,
       keptDynasties: parsed.data.keptDynasties,
       orgId: header(req, "x-org-id") || null,
+      ...(parsed.data.askedBy ? { askedBy: parsed.data.askedBy, handed: parsed.data.servable } : {}),
     });
     if (!pick) {
       res.status(404).json({

@@ -31,9 +31,19 @@
  *    cases). An unproven version is proven ONCE in the background the first time the Rating meets it (`auto`); a failed
  *    one stays out until staff re-prove it; an interrupted one is retried at most `AUTO_ATTEMPTS` times. Never a
  *    validator, retry or rewrite on a live send: the proof happens before.
+ *
+ * 4. A WRITER THAT ASKS ITS MODEL (ONE-WRITER-N-MODELS-1116-ANSWERER): a script that names no model asks the LLM
+ *    completion Engine (tactic `asks` holds `llm_completion`) and hands its Unit to a sender, so neither half alone is
+ *    the combination a person reads: the pair (writer version, completion script) is. Such a writer states the fields
+ *    of its Unit a person reads (tactic `personFields`, dotted paths on its `content`, data, never a branch). Its runs
+ *    are kept as cases of ITS Engine (`wrote` = it made its Unit); a pair's proof replays the writer on them with the
+ *    completion answered LIVE by that completion script's own code and tactics, and Jev judges the Unit's person
+ *    fields. The gate sits on the completion pick asked by such a writer of an enforced Engine: a model is drawn for
+ *    that writer only once the pair passed (or cannot be proven yet). A sender that calls no LLM itself is not a
+ *    writer combination: it is never gated, its writer's pairs are.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { scripts, writerCases, writerProofEngines, writerProofs, type ScriptRow, type WriterProofRow } from "../../db/schema.js";
 import { runScript, type Bridge } from "./sandbox.js";
 import { CHAT_COMPLETE, JEV_NOUL, LLM_COMPLETE, LLM_PICK, TEMPLATE_PICK, TO_PERSON_DOORS, callVendor, writesToPerson, type VendorDeps } from "./vendors.js";
@@ -70,6 +80,25 @@ export const PROOF_STALE_MS = 30 * 60_000;
 export const USABLE_PROBABILITY = 0.5;
 
 const COMPLETIONS = new Set([LLM_COMPLETE, CHAT_COMPLETE]);
+/** The Engine a writer asks for its model (ONE-WRITER-N-MODELS-1116). */
+export const LLM_COMPLETION_OUTCOME = "llm_completion";
+/** The writer tactic naming the fields of its Unit's content a person reads. */
+export const PERSON_FIELDS_TACTIC = "personFields";
+
+/** A script whose code calls an LLM door itself. */
+export function callsCompletion(code: string): boolean {
+  return [...COMPLETIONS].some((name) => code.includes(`"${name}"`) || code.includes(`'${name}'`));
+}
+
+/** The person-facing paths a writer that asks its model states (tactic `personFields`); null = not such a writer. */
+export function pairWriterFields(row: Pick<ScriptRow, "tactics">): string[] | null {
+  const t = (row.tactics ?? {}) as Record<string, unknown>;
+  const asks = Array.isArray(t.asks) ? t.asks : [];
+  const fields = t[PERSON_FIELDS_TACTIC];
+  if (!asks.includes(LLM_COMPLETION_OUTCOME) || !Array.isArray(fields)) return null;
+  const paths = fields.filter((f): f is string => typeof f === "string" && f.trim() !== "");
+  return paths.length > 0 ? paths : null;
+}
 /** Tactics that name the combination (its LLM and template): a case's run never overrides the combination proven. */
 const COMBINATION_TACTICS = ["llm", "llms", "template", "templates"];
 
@@ -98,11 +127,18 @@ export const codeMd5 = (code: string) => createHash("md5").update(code).digest("
  * Keep one production run as a case of its Engine, when its script writes to a person and the run reached an LLM.
  * Returns whether it was kept. Never throws into the run: the caller logs a failure loudly.
  */
-export async function recordWriterCase(db: AnyPgDb, row: ScriptRow, input: { runId: string; orgId: string; body: WriterCaseBody }): Promise<boolean> {
-  if (!writesToPerson(row.code)) return false;
-  const firstLlm = input.body.calls.findIndex((c) => COMPLETIONS.has(c.name));
-  if (firstLlm < 0) return false;
-  const wrote = input.body.calls.slice(firstLlm + 1).some((c) => c.name in TO_PERSON_DOORS);
+export async function recordWriterCase(db: AnyPgDb, row: ScriptRow, input: { runId: string; orgId: string; body: WriterCaseBody; made?: boolean }): Promise<boolean> {
+  let wrote: boolean;
+  if (pairWriterFields(row)) {
+    // A writer that asks its model: a case once it asked one; it wrote when it made its Unit.
+    if (!(LLM_COMPLETION_OUTCOME in (input.body.asked ?? {}))) return false;
+    wrote = input.made === true;
+  } else {
+    if (!writesToPerson(row.code)) return false;
+    const firstLlm = input.body.calls.findIndex((c) => COMPLETIONS.has(c.name));
+    if (firstLlm < 0) return false;
+    wrote = input.body.calls.slice(firstLlm + 1).some((c) => c.name in TO_PERSON_DOORS);
+  }
   const inserted = await db
     .insert(writerCases)
     .values({ outcome: row.outcome, runId: input.runId, recordedFrom: `${row.outcome}/${row.dynasty}/v${row.version}`, codeMd5: codeMd5(row.code), wrote, orgId: input.orgId, body: input.body })
@@ -224,13 +260,14 @@ export function personFields(door: string, args: unknown): SentField[] {
 }
 
 /** Run one version on one case: its LLM live (its own tactics), everything else from the record, nothing sent. */
-async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps: ProofDeps): Promise<LiveReplay> {
+async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps: ProofDeps, completion: ScriptRow | null = null): Promise<LiveReplay> {
   const caseTactics = Object.fromEntries(Object.entries(c.tactics ?? {}).filter(([k]) => !COMBINATION_TACTICS.includes(k)));
   const tactics = { ...row.tactics, ...caseTactics };
   const used = new Set<number>();
   const store = new Map<string, unknown>();
   const gotten = new Map<string, number>();
   let asked = false;
+  let askedRequest: Record<string, unknown> | null = null;
   let reachedWriter = false;
   const completionErrors: string[] = [];
   const sent: SentField[] = [];
@@ -255,6 +292,13 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       const outcome = String(args[0]);
       const held = c.units[outcome] as Record<string, unknown> | Array<Record<string, unknown>> | undefined;
       if (held === undefined) {
+        if (completion && askedRequest && outcome === LLM_COMPLETION_OUTCOME) {
+          // The pair's model answers LIVE: the completion script's own code and tactics, on the proof's run.
+          const request = askedRequest;
+          askedRequest = null;
+          asked = false;
+          return await completeLive(request);
+        }
         if (asked && outcome in (c.asked ?? {})) {
           asked = false;
           return { v: c.asked[outcome] };
@@ -271,6 +315,8 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
     }
     if (op === "ask") {
       asked = true;
+      const r = args[0];
+      askedRequest = r && typeof r === "object" && !Array.isArray(r) ? (r as Record<string, unknown>) : null;
       return { v: null };
     }
     if (op === "vendor") {
@@ -311,8 +357,40 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
     return { stop: `${String(op)} is not served in a proof` };
   };
 
+  /** The completion script of the pair, run in its own sandbox: its LLM call live, anything else refused. */
+  const completeLive = async (ask: Record<string, unknown>): Promise<{ v: unknown } | { stop: string }> => {
+    const c2 = completion!;
+    reachedWriter = true;
+    const inner: Bridge = async (op, a) => {
+      if (op !== "vendor") return { stop: `${String(op)} is not served to a completion in a proof` };
+      const name = String(a[0]);
+      if (!COMPLETIONS.has(name)) return { v: { ok: false, data: { error: `${name} is not served to a completion in a proof` } } };
+      const callArgs = (a[1] ?? null) as Record<string, unknown> | null;
+      const answer = await callVendor(name, { ...(callArgs ?? {}), brandTools: false }, { headers: { "x-run-id": runId }, tactics: c2.tactics as Record<string, unknown>, billing: "platform", outcome: c2.outcome, onCompletion: count }, deps.vendors);
+      if (!answer.ok) completionErrors.push(String(answer.data.error ?? "refused").slice(0, 300));
+      return { v: answer };
+    };
+    const request = ask.request && typeof ask.request === "object" ? (ask.request as Record<string, unknown>) : null;
+    const done = await runScript(c2.code, { subject: null, brand: c.brand ?? "", day: c.day ?? 0, tactics: c2.tactics as Record<string, unknown>, request }, inner);
+    if (done.kind !== "done" || !done.result || !done.result.content) {
+      const why = done.kind === "error" ? done.message : done.kind === "stopped" ? done.reason : "it made no completion";
+      return { stop: `${c2.outcome}/${c2.dynasty} (asked for ${LLM_COMPLETION_OUTCOME}): ${why}` };
+    }
+    return { v: { id: `proof:${LLM_COMPLETION_OUTCOME}`, outcome: LLM_COMPLETION_OUTCOME, subject: "", ageDays: 0, content: done.result.content } };
+  };
+
   const out = await runScript(row.code, { subject: c.subject ?? null, brand: c.brand ?? "", day: c.day ?? 0, tactics, request: c.request ?? null }, bridge);
   const failure = out.kind === "error" ? out.message : out.kind === "stopped" ? out.reason : null;
+  // A writer that asks its model hands its Unit on: what a person reads is its content's person fields.
+  const fields = completion ? pairWriterFields(row) : null;
+  if (fields && out.kind === "done" && out.result && out.result.content) {
+    for (const path of fields) {
+      for (const v of valuesAt(out.result.content, path)) {
+        if (v === undefined || v === null || v === "") continue;
+        sent.push({ door: row.outcome, path, value: typeof v === "string" ? v : JSON.stringify(v) });
+      }
+    }
+  }
   return { reachedWriter, failure, completionErrors, sent, boundCents };
 }
 
@@ -323,7 +401,7 @@ async function judgeFields(fields: SentField[], row: ScriptRow, runId: string, d
   const state: string[] = [];
   fields.forEach((f, i) => {
     const key = `f${i}`;
-    state.push(`${key} = field "${f.path}" of a "${f.door}" call (sent to a person as written):\n${f.value.slice(0, 8000)}`);
+    state.push(`${key} = field "${f.path}" of a "${f.door}" (sent to a person as written):\n${f.value.slice(0, 8000)}`);
     questions[key] = {
       instructions:
         `Field ${key} is what a person will read once this call is sent. Is it a usable value for that field: real words ` +
@@ -354,15 +432,23 @@ export async function proofTarget(db: AnyPgDb, outcome: string, dynasty: string)
 }
 
 const inFlight = new Set<string>();
+const pairKey = (scriptId: string, completionId: string | null) => (completionId ? `${scriptId}:${completionId}` : scriptId);
 
 /** Prove one version on its Engine's cases. Returns the stored proof. */
-export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "auto" | "staff"): Promise<WriterProofRow> {
-  if (!writesToPerson(row.code)) throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} sends nothing to a person: there is no writer to prove`);
-  if (inFlight.has(row.id)) throw new ProofError(409, `a proof of ${row.outcome}/${row.dynasty}/v${row.version} is already running`);
-  inFlight.add(row.id);
+export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "auto" | "staff", completion: ScriptRow | null = null): Promise<WriterProofRow> {
+  const name = `${row.outcome}/${row.dynasty}/v${row.version}${completion ? ` x ${completion.outcome}/${completion.dynasty}/v${completion.version}` : ""}`;
+  if (completion) {
+    if (!pairWriterFields(row)) throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} asks no model or states no personFields: it is not a writer whose model is asked`);
+    if (completion.outcome !== LLM_COMPLETION_OUTCOME) throw new ProofError(422, `${completion.outcome}/${completion.dynasty} is not an LLM completion script`);
+  } else if (!writesToPerson(row.code) || !callsCompletion(row.code)) {
+    throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} writes nothing to a person with an LLM of its own: there is no writer to prove${pairWriterFields(row) ? " (it asks its model: prove it with a completion script)" : ""}`);
+  }
+  const key = pairKey(row.id, completion?.id ?? null);
+  if (inFlight.has(key)) throw new ProofError(409, `a proof of ${name} is already running`);
+  inFlight.add(key);
   const [proof] = await db
     .insert(writerProofs)
-    .values({ scriptId: row.id, outcome: row.outcome, dynasty: row.dynasty, version: row.version, state: "running", trigger, ceilingCents: String(PROOF_CEILING_CENTS) })
+    .values({ scriptId: row.id, outcome: row.outcome, dynasty: row.dynasty, version: row.version, ...(completion ? { completionScriptId: completion.id, completionDynasty: completion.dynasty } : {}), state: "running", trigger, ceilingCents: String(PROOF_CEILING_CENTS) })
     .returning();
   const finish = async (set: Partial<typeof writerProofs.$inferInsert>) => {
     const [done] = await db.update(writerProofs).set({ ...set, finishedAt: new Date() }).where(eq(writerProofs.id, proof!.id)).returning();
@@ -373,14 +459,14 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
     const candidates = await sampleCases(db, row);
     const available = await fedCaseCount(db, row);
     if (candidates.length < PROOF_SAMPLE) return await finish({ state: "no_cases", casesAvailable: available });
-    runId = await deps.openRun(`script-proof:${row.outcome}/${row.dynasty}`, `writer proof of ${row.outcome}/${row.dynasty}/v${row.version} on recorded cases (PROVEN-BEFORE-PEOPLE-1116)`);
+    runId = await deps.openRun(`script-proof:${row.outcome}/${row.dynasty}`, `writer proof of ${name} on recorded cases (PROVEN-BEFORE-PEOPLE-1116)`);
     await db.update(writerProofs).set({ runId }).where(eq(writerProofs.id, proof!.id));
     const verdicts: CaseVerdict[] = [];
     let spend = 0;
     let state: "passed" | "failed" | "no_cases" | "error" = "no_cases";
     let error: string | null = null;
     for (const c of candidates.slice(0, PROOF_MAX_TRIES)) {
-      const live = await replayLive(row, c.body, runId, deps);
+      const live = await replayLive(row, c.body, runId, deps, completion);
       spend += live.boundCents;
       if (live.reachedWriter) {
         const judged = live.failure || live.completionErrors.length > 0 ? [] : await judgeFields(live.sent, row, runId, deps);
@@ -406,11 +492,11 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
     return await finish({ state, error, sample: counted.length, usable: counted.filter((v) => v.usable).length, casesAvailable: available, cases: verdicts, spendCents: spend.toFixed(4) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    console.error(`[workflow-service] writer proof of ${row.outcome}/${row.dynasty}/v${row.version} FAILED to run: ${message}`);
+    console.error(`[workflow-service] writer proof of ${name} FAILED to run: ${message}`);
     if (runId) await deps.closeRun(runId, "failed").catch((c) => console.error(`[workflow-service] writer proof run ${runId} could not be closed: ${String(c)}`));
     return await finish({ state: "error", error: message.slice(0, 1000) });
   } finally {
-    inFlight.delete(row.id);
+    inFlight.delete(key);
   }
 }
 
@@ -433,9 +519,13 @@ export async function setEngineEnforced(db: AnyPgDb, outcome: string, enforced: 
     .onConflictDoUpdate({ target: writerProofEngines.outcome, set: { enforced, decidedBy, updatedAt: new Date() } });
 }
 
-/** The proofs of one version, newest first. */
-async function proofsOf(db: AnyPgDb, scriptId: string): Promise<WriterProofRow[]> {
-  return db.select().from(writerProofs).where(eq(writerProofs.scriptId, scriptId)).orderBy(desc(writerProofs.createdAt));
+/** The proofs of one version (alone, or paired with one completion script), newest first. */
+async function proofsOf(db: AnyPgDb, scriptId: string, completionId: string | null = null): Promise<WriterProofRow[]> {
+  return db
+    .select()
+    .from(writerProofs)
+    .where(and(eq(writerProofs.scriptId, scriptId), completionId ? eq(writerProofs.completionScriptId, completionId) : isNull(writerProofs.completionScriptId)))
+    .orderBy(desc(writerProofs.createdAt));
 }
 
 export type GateVerdict = { draws: boolean; prove: boolean; why: string };
@@ -464,13 +554,30 @@ export function setProofContext(c: { db: AnyPgDb; deps: ProofDeps } | null): voi
  * An unproven one is proven in the background, once (never awaited by the run).
  */
 export async function writerProofAllows(db: AnyPgDb, row: ScriptRow): Promise<boolean> {
-  if (!writesToPerson(row.code)) return true;
+  // A script that sends but calls no LLM itself (a sender whose writer asks its model) is no combination: its
+  // writer's pairs are gated, at the completion pick.
+  if (!writesToPerson(row.code) || !callsCompletion(row.code)) return true;
   if (!(await engineEnforced(db, row.outcome))) return true;
-  const verdict = gateFor(await proofsOf(db, row.id), await fedCaseCount(db, row), Date.now());
-  if (verdict.prove && proofContext && !inFlight.has(row.id)) {
+  return gateAndProve(db, row, null);
+}
+
+/**
+ * Whether the Rating may draw `completion` for the writer `writer` that asks it (ONE-WRITER-N-MODELS-1116-ANSWERER).
+ * Any other asker, or a writer of an Engine not enforced, always may. An unproven pair is proven in the background, once.
+ */
+export async function pairProofAllows(db: AnyPgDb, writer: ScriptRow, completion: ScriptRow): Promise<boolean> {
+  if (completion.outcome !== LLM_COMPLETION_OUTCOME || !pairWriterFields(writer)) return true;
+  if (!(await engineEnforced(db, writer.outcome))) return true;
+  return gateAndProve(db, writer, completion);
+}
+
+async function gateAndProve(db: AnyPgDb, row: ScriptRow, completion: ScriptRow | null): Promise<boolean> {
+  const verdict = gateFor(await proofsOf(db, row.id, completion?.id ?? null), await fedCaseCount(db, row), Date.now());
+  const name = `${row.outcome}/${row.dynasty}/v${row.version}${completion ? ` x ${completion.dynasty}` : ""}`;
+  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.id ?? null))) {
     const ctx = proofContext;
-    console.log(`[workflow-service] writer proof of ${row.outcome}/${row.dynasty}/v${row.version} starts (${verdict.why})`);
-    void proveScript(ctx.db, ctx.deps, row, "auto").catch((e) => console.error(`[workflow-service] writer proof of ${row.outcome}/${row.dynasty}/v${row.version} FAILED to start: ${String(e)}`));
+    console.log(`[workflow-service] writer proof of ${name} starts (${verdict.why})`);
+    void proveScript(ctx.db, ctx.deps, row, "auto", completion).catch((e) => console.error(`[workflow-service] writer proof of ${name} FAILED to start: ${String(e)}`));
   }
   return verdict.draws;
 }
@@ -485,8 +592,10 @@ export interface ProofView {
   outcome: string;
   dynasty: string;
   version: number;
-  /** The LLM its tactics state (name), for the chart. */
+  /** The LLM its tactics state (name), or the completion script's it is paired with, for the chart. */
   llm: string | null;
+  /** The LLM completion script this writer is proven with (a writer that asks its model), else null. */
+  completion: string | null;
   /** Runnable now (version and dynasty active). */
   live: boolean;
   /** passed | failed | running | error | no_cases | abandoned | unproven */
@@ -514,11 +623,17 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
   const enforced = new Map(enforcedRows.map((r) => [r.outcome, r.enforced]));
   const proofRows = await db.select().from(writerProofs).orderBy(desc(writerProofs.createdAt));
   const latestByScript = new Map<string, WriterProofRow>();
-  for (const p of proofRows) if (!latestByScript.has(p.scriptId)) latestByScript.set(p.scriptId, p);
+  const latestByPair = new Map<string, WriterProofRow>();
+  for (const p of proofRows) {
+    if (p.completionScriptId) {
+      const k = pairKey(p.scriptId, p.completionScriptId);
+      if (!latestByPair.has(k)) latestByPair.set(k, p);
+    } else if (!latestByScript.has(p.scriptId)) latestByScript.set(p.scriptId, p);
+  }
   const active = await db.select().from(scripts).where(eq(scripts.status, "active"));
   const proven = latestByScript.size > 0 ? await db.select().from(scripts).where(inArray(scripts.id, [...latestByScript.keys()])) : [];
   const rows = new Map<string, ScriptRow>();
-  for (const r of [...active, ...proven]) if (writesToPerson(r.code)) rows.set(r.id, r);
+  for (const r of [...active, ...proven]) if (writesToPerson(r.code) && callsCompletion(r.code)) rows.set(r.id, r);
   // One line per dynasty: its active version, else the latest proven one.
   const byDynasty = new Map<string, ScriptRow>();
   for (const r of rows.values()) {
@@ -527,7 +642,7 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
     if (!cur || (r.status === "active" && cur.status !== "active") || (r.status === cur.status && r.version > cur.version)) byDynasty.set(key, r);
   }
   const combinations: ProofView[] = [...byDynasty.values()]
-    .map((r) => {
+    .map((r): ProofView => {
       const p = latestByScript.get(r.id);
       const live = r.status === "active" && r.dynastyStatus === "active";
       const state = p?.state ?? "unproven";
@@ -536,6 +651,7 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
         dynasty: r.dynasty,
         version: r.version,
         llm: llmName(r.tactics as Record<string, unknown>),
+        completion: null,
         live,
         state,
         usable: p?.usable ?? 0,
@@ -546,12 +662,42 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
         red: live && state === "failed",
       };
     })
-    .sort((a, b) => Number(b.red) - Number(a.red) || a.outcome.localeCompare(b.outcome) || a.dynasty.localeCompare(b.dynasty));
+    .concat(await pairViews(db, active, latestByPair))
+    .sort((a, b) => Number(b.red) - Number(a.red) || a.outcome.localeCompare(b.outcome) || a.dynasty.localeCompare(b.dynasty) || String(a.completion).localeCompare(String(b.completion)));
   const outcomes = new Set([...caseCounts.map((c) => c.outcome), ...enforcedRows.map((r) => r.outcome)]);
   return {
     engines: [...outcomes].sort().map((o) => ({ outcome: o, enforced: enforced.get(o) === true, cases: Number(caseCounts.find((c) => c.outcome === o)?.n ?? 0) })),
     combinations,
   };
+}
+
+/** One line per live (writer that asks its model) x live completion script, with that pair's latest proof. */
+async function pairViews(db: AnyPgDb, active: ScriptRow[], latest: Map<string, WriterProofRow>): Promise<ProofView[]> {
+  const writers = active.filter((r) => r.dynastyStatus === "active" && pairWriterFields(r));
+  const completions = active.filter((r) => r.dynastyStatus === "active" && r.outcome === LLM_COMPLETION_OUTCOME);
+  const out: ProofView[] = [];
+  for (const w of writers) {
+    for (const c of completions) {
+      const p = latest.get(pairKey(w.id, c.id));
+      const state = p?.state ?? "unproven";
+      out.push({
+        outcome: w.outcome,
+        dynasty: w.dynasty,
+        version: w.version,
+        llm: llmName(c.tactics as Record<string, unknown>),
+        completion: `${c.outcome}/${c.dynasty}`,
+        live: true,
+        state,
+        usable: p?.usable ?? 0,
+        sample: p?.sample ?? 0,
+        spendAtMostUsd: p?.spendCents != null ? Number(p.spendCents) / 100 : null,
+        provedAt: p?.finishedAt?.toISOString() ?? null,
+        failures: ((p?.cases ?? []) as CaseVerdict[]).filter((v) => !v.usable).flatMap((v) => v.reasons).slice(0, 5),
+        red: state === "failed",
+      });
+    }
+  }
+  return out;
 }
 
 /** The production deps: chat-service vendors + one runs-service platform run per proof. */
