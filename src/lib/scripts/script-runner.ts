@@ -481,7 +481,7 @@ export function productionLedgerDeps(): LedgerDeps {
         const res = await fetch(`${base}/v1/platform-runs`, {
           method: "POST",
           headers: { "content-type": "application/json", "x-api-key": key, "x-service-name": "workflow" },
-          body: JSON.stringify({ serviceName: "workflow", taskName: opts.taskName, parentRunId: opts.parentRunId }),
+          body: JSON.stringify({ serviceName: "workflow", taskName: opts.taskName, parentRunId: opts.parentRunId, ...(opts.scriptSlug ? { scriptSlug: opts.scriptSlug } : {}) }),
           signal: AbortSignal.timeout(600_000),
         });
         const text = await res.text();
