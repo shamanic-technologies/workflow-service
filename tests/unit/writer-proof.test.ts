@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
+import { testNamer } from "../helpers/script-names.js";
 import { drizzle } from "drizzle-orm/pglite";
 import { createScript, forkScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
@@ -57,7 +58,7 @@ export default function run(ctx) {
 }`;
 
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const catalogueDeps = { isKnownOutcome: async () => true };
+const catalogueDeps = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 const who = { orgId: "org-1", userId: "user-1", parentRunId: "run-parent", headers: { "x-brand-id": "brand-1", "x-campaign-id": "camp-1" } };
 
 let runCount = 0;
@@ -260,7 +261,7 @@ describe("a proof: the combination's LLM live on recorded cases, nothing sent", 
 describe("the gate: an enforced Engine's Rating draws only proven writers", () => {
   it("draws every writer while the Engine is not enforced; then only the proven one", async () => {
     const glm = await seedWriter();
-    const haiku = await forkScript(db, "message_sent", "dy_answer", { dynasty: "dy_answer__claude_haiku", description: "Answers a lead with Claude Haiku.", tactics: { llm: { provider: "anthropic", model: "claude-haiku" } } }, author);
+    const haiku = await forkScript(db, "message_sent", "dy_answer", { dynasty: "dy_answer__claude_haiku", description: "Answers a lead with Claude Haiku.", tactics: { llm: { provider: "anthropic", model: "claude-haiku" } } }, author, catalogueDeps);
     await recordProductionRuns(PROOF_SAMPLE);
     const pick = async () => (await candidatesOf(db, { outcome: "message_sent", servable: [], channel: null })).map((r) => r.dynasty).sort();
 
