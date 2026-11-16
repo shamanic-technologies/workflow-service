@@ -55,14 +55,14 @@ beforeEach(async () => {
 
 function world(serve: Record<string, unknown> = { found: true, lead: { leadId: "lead-9", email: "a@staff.test" } }) {
   const calls: Array<{ path: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
-  const runs: Array<{ taskName: string; headers: Record<string, string> }> = [];
+  const runs: Array<{ id: string; taskName: string; scriptSlug?: string; parentRunId: string; headers: Record<string, string> }> = [];
   const closed: Array<{ runId: string; status: string }> = [];
   const declared: Array<{ runId: string; body: unknown }> = [];
   const doors: Array<{ path: string; headers: Record<string, string>; body: unknown }> = [];
   let gateAllowed = true;
   const ledger: LedgerDeps = {
     async createRun(opts) {
-      runs.push({ taskName: opts.taskName, headers: opts.headers });
+      runs.push({ id: `run-${runs.length + 1}`, taskName: opts.taskName, ...(opts.scriptSlug ? { scriptSlug: opts.scriptSlug } : {}), parentRunId: opts.parentRunId, headers: opts.headers });
       return `run-${runs.length}`;
     },
     async declareOutcomes(runId, _org, body) {
@@ -223,6 +223,34 @@ describe("a script asks another Engine for a Unit (MIGRATE-1105 S2)", () => {
     // The child recorded by its service declares nothing itself.
     expect(w.declared.find((d) => d.runId === childRow.runId)).toBeUndefined();
     noWorkflowSlugAnywhere(w);
+  });
+
+  // SERVED-MODEL-1116-NESTED: the asked script's run names THAT script to runs-service (its own decision there), never
+  // the asking script, and every vendor call it makes is filed under that run.
+  it("a run asked by meeting_booked/dy_book_meeting states the answer_lead script it executes, and its vendor calls ride it", async () => {
+    const BOOK = `
+export default function run(ctx) {
+  ctx.ask({ units: { brand_context: { content: { name: "Reed" } } } });
+  const sent = ctx.get("message_sent");
+  return { content: { sent: sent.content.sent }, subject: { service: "lead-service", id: "lead-9" } };
+}`;
+    const ANSWER_LEAD = `
+export default function run(ctx) {
+  ctx.get("brand_context");
+  const r = ctx.vendor.call("lead.serve", {});
+  return { content: { sent: r.ok === true }, subject: { service: "lead-service", id: "lead-9" } };
+}`;
+    await addScript("meeting_booked", "dy_book_meeting", BOOK, { asks: ["message_sent"] });
+    await addScript("message_sent", "dy_answer_lead__glm", ANSWER_LEAD);
+    const w = world();
+    const { runId, row } = await runOnce(dispatch({ outcome: "meeting_booked", featureSlug: "sales-cold-email-outreach" }), w);
+    expect(row.status).toBe("completed");
+    const asked = w.runs.find((r) => r.taskName === "script:message_sent/dy_answer_lead__glm")!;
+    expect(asked.scriptSlug).toBe("message_sent/dy_answer_lead__glm/v1");
+    expect(asked.parentRunId).toBe(runId);
+    expect(w.runs.some((r) => r.id !== runId && r.scriptSlug?.startsWith("meeting_booked/"))).toBe(false);
+    const serve = w.doors.find((d) => d.path === "/orgs/buffer/next")!;
+    expect(serve.headers["x-run-id"]).toBe(asked.id);
   });
 
   it("a script that does not state the ask is never picked for a run that does not hold the outcome", async () => {
