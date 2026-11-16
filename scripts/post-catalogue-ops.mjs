@@ -5,8 +5,11 @@
  * `--apply` writes. Run inside the workflow-service container with a real staff identity (who decided):
  *   docker exec -i -e ORG_ID=… -e USER_ID=… -e STAFF_EMAIL=… distribute-workflow-service-1 node scripts/post-catalogue-ops.mjs [--apply]
  * Ops: `create` {body} (409 = already stored, skipped); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
- * (UPGRADE of every active dynasty of that prefix whose code holds `from` exactly once); `tag` {outcome, dynastyPrefix,
- * tactics} (UPGRADE with the same code and the tactics merged in; skipped when already carried).
+ * (UPGRADE of every active dynasty of that prefix whose code holds `from` exactly once; `edits` [{from, to}] instead of
+ * one pair = every anchor found exactly once, applied in order, in ONE upgrade); `tag` {outcome, dynastyPrefix,
+ * tactics} (UPGRADE with the same code and the tactics merged in; skipped when already carried). `includeRetired: true`
+ * also takes a RETIRED dynasty's highest version (LOCAL-TIME-ANSWERER-1115: the catalogue stores its upgrade retired
+ * too, so nothing runs until someone restores the dynasty).
  */
 import { readFileSync } from "node:fs";
 
@@ -39,11 +42,18 @@ async function call(method, path, body) {
   return { status: res.status, json };
 }
 
-async function activeOf(outcome, prefix) {
-  const r = await call("GET", `/scripts?outcome=${encodeURIComponent(outcome)}`);
+async function activeOf(outcome, prefix, includeRetired) {
+  const r = await call("GET", `/scripts?outcome=${encodeURIComponent(outcome)}${includeRetired ? "&status=all" : ""}`);
   if (r.status !== 200) throw new Error(`list ${outcome}: ${r.status} ${JSON.stringify(r.json).slice(0, 300)}`);
-  const list = Array.isArray(r.json) ? r.json : r.json.scripts ?? r.json.items ?? [];
-  return list.filter((s) => s.outcome === outcome && String(s.dynasty).startsWith(prefix) && s.status === "active" && s.dynastyStatus !== "deprecated");
+  const list = (Array.isArray(r.json) ? r.json : r.json.scripts ?? r.json.items ?? []).filter((s) => s.outcome === outcome && String(s.dynasty).startsWith(prefix));
+  if (!includeRetired) return list.filter((s) => s.status === "active" && s.dynastyStatus !== "deprecated");
+  // Per dynasty: its active version, else (a retired dynasty) its highest one, as the catalogue's upgrade reads it.
+  const head = new Map();
+  for (const s of list) {
+    const h = head.get(s.dynasty);
+    if (!h || s.version > h.version) head.set(s.dynasty, s);
+  }
+  return [...head.values()].filter((s) => s.status === "active" || s.dynastyStatus === "deprecated");
 }
 
 let failed = 0;
@@ -60,7 +70,7 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
     if (r.status !== 201 && r.status !== 409) failed++;
     continue;
   }
-  for (const s of await activeOf(op.outcome, op.dynastyPrefix)) {
+  for (const s of await activeOf(op.outcome, op.dynastyPrefix, op.includeRetired === true)) {
     const full = await call("GET", `/scripts/${s.id}`);
     if (full.status !== 200) throw new Error(`read ${s.dynasty}: ${full.status}`);
     const code = full.json.code;
@@ -70,13 +80,20 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
         console.log(`replace ${op.outcome}/${s.dynasty} v${s.version}: already done, skipped`);
         continue;
       }
-      const n = code.split(op.from).length - 1;
-      if (n !== 1) {
-        console.log(`replace ${op.outcome}/${s.dynasty} v${s.version}: anchor found ${n} times, NOT upgraded`);
+      const edits = Array.isArray(op.edits) ? op.edits : [{ from: op.from, to: op.to }];
+      let edited = code;
+      const missed = [];
+      for (const [i, e] of edits.entries()) {
+        const n = edited.split(e.from).length - 1;
+        if (n !== 1) missed.push(`edit ${i} found ${n} times`);
+        else edited = edited.replace(e.from, () => e.to);
+      }
+      if (missed.length > 0) {
+        console.log(`replace ${op.outcome}/${s.dynasty} v${s.version}: ${missed.join(", ")}, NOT upgraded`);
         failed++;
         continue;
       }
-      next = { code: code.replace(op.from, () => op.to) };
+      next = { code: edited };
     } else if (op.op === "tag") {
       const tactics = full.json.tactics ?? {};
       if (Object.entries(op.tactics).every(([k, v]) => JSON.stringify(tactics[k]) === JSON.stringify(v))) {
@@ -86,7 +103,7 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       next = { code, tactics: { ...tactics, ...op.tactics } };
     } else throw new Error(`unknown op ${op.op}`);
     if (!apply) {
-      console.log(`${op.op} ${op.outcome}/${s.dynasty} v${s.version} -> v${s.version + 1} (dry run)`);
+      console.log(`${op.op} ${op.outcome}/${s.dynasty} v${s.version} -> v${s.version + 1}${s.dynastyStatus === "deprecated" ? " (retired, stays retired)" : ""} (dry run)`);
       continue;
     }
     const r = await call("POST", `/scripts/dynasty/${op.outcome}/${s.dynasty}/upgrade`, next);
