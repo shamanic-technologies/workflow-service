@@ -11,6 +11,7 @@ import {
   date,
   bigint,
   numeric,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -337,3 +338,54 @@ export const engineWaits = pgTable(
   (table) => [index("idx_engine_waits_due").on(table.orgId, table.campaignId, table.outcome, table.status, table.dueAt)]
 );
 export type EngineWaitRow = typeof engineWaits.$inferSelect;
+
+// PROVEN-BEFORE-PEOPLE-1116: writer proofs (src/lib/scripts/writer-proof.ts). Migration 0052.
+export const writerCases = pgTable(
+  "writer_cases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: text("outcome").notNull(),
+    runId: text("run_id").notNull(),
+    /** `<outcome>/<dynasty>/v<version>` of the production run that saw it. */
+    recordedFrom: text("recorded_from").notNull(),
+    codeMd5: text("code_md5").notNull(),
+    orgId: text("org_id").notNull(),
+    body: jsonb("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("idx_writer_cases_run").on(table.outcome, table.runId), index("idx_writer_cases_outcome").on(table.outcome, table.createdAt)]
+);
+
+export const writerProofs = pgTable(
+  "writer_proofs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scriptId: uuid("script_id").notNull(),
+    outcome: text("outcome").notNull(),
+    dynasty: text("dynasty").notNull(),
+    version: integer("version").notNull(),
+    /** running | passed | failed | error | no_cases | abandoned */
+    state: text("state").notNull(),
+    /** auto (the Rating met an unproven combination) | staff */
+    trigger: text("trigger").notNull(),
+    sample: integer("sample").notNull().default(0),
+    usable: integer("usable").notNull().default(0),
+    casesAvailable: integer("cases_available").notNull().default(0),
+    cases: jsonb("cases").$type<unknown[]>().notNull().default([]),
+    runId: text("run_id"),
+    spendCents: numeric("spend_cents"),
+    ceilingCents: numeric("ceiling_cents").notNull(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [index("idx_writer_proofs_script").on(table.scriptId, table.createdAt)]
+);
+export type WriterProofRow = typeof writerProofs.$inferSelect;
+
+export const writerProofEngines = pgTable("writer_proof_engines", {
+  outcome: text("outcome").primaryKey(),
+  enforced: boolean("enforced").notNull(),
+  decidedBy: text("decided_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});

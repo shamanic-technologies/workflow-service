@@ -2858,6 +2858,76 @@ const EngineMonitoringSchema = z
   })
   .describe("MIGRATE-1105 S2b: campaign Engines, per UTC day x outcome, runs by stored script (no workflow) vs by workflow, from this service's own run rows; spend from a runs-service cost sample.");
 
+// PROVEN-BEFORE-PEOPLE-1116: writer combinations proven on recorded cases before they write to real people.
+export const WriterProofCombinationSchema = z
+  .object({
+    outcome: z.string(),
+    dynasty: z.string(),
+    version: z.number().int(),
+    llm: z.string().nullable().describe("The LLM its tactics state."),
+    live: z.boolean().describe("Version and dynasty active (the Rating may draw it, when its proof allows)."),
+    state: z.string().describe("Its latest proof: passed | failed | running | error | no_cases | abandoned, or unproven."),
+    usable: z.number().int(),
+    sample: z.number().int(),
+    spendAtMostUsd: z.number().nullable().describe("Upper bound of the proof's LLM spend (Opus list prices); the real spend is on its runs-service run."),
+    provedAt: z.string().nullable(),
+    failures: z.array(z.string()).describe("Why the cases it failed are not usable."),
+    red: z.boolean().describe("A live combination that failed its proof."),
+  })
+  .openapi("WriterProofCombination");
+
+export const WriterProofsSchema = z
+  .object({
+    engines: z.array(z.object({ outcome: z.string(), enforced: z.boolean().describe("Its Rating draws only proven writers."), cases: z.number().int().describe("Recorded production cases kept.") })),
+    combinations: z.array(WriterProofCombinationSchema),
+  })
+  .openapi("WriterProofs");
+
+export const WriterProofRequestSchema = z
+  .object({
+    outcome: z.string().min(1),
+    dynasty: z.string().min(1),
+  })
+  .openapi("WriterProofRequest");
+
+export const WriterProofEngineRequestSchema = z.object({ enforced: z.boolean() }).openapi("WriterProofEngineRequest");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/scripts/writer-proofs",
+  summary: "Prove one writer combination on its Engine's recorded cases (service key only)",
+  description:
+    "PROVEN-BEFORE-PEOPLE-1116. Runs the dynasty's active version (else its latest, a retired dynasty included) on up to 5 recorded production cases: its LLM live with its own tactics (platform run, support product_feature), every other call from the record, nothing sent. Usable = its script reads the answer and Jev judges every field a person would read usable. Spend bound: $4 at Opus list prices.",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: WriterProofRequestSchema } } } },
+  responses: {
+    200: { description: "The stored proof", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+    404: { description: "Unknown dynasty", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Already being proven", content: { "application/json": { schema: ErrorResponseSchema } } },
+    422: { description: "Sends nothing to a person", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/scripts/writer-proofs",
+  summary: "Every Engine's recorded cases and every writer combination's latest proof (service key only)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  responses: { 200: { description: "The proofs", content: { "application/json": { schema: WriterProofsSchema } } } },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/internal/scripts/writer-proofs/engines/{outcome}",
+  summary: "Enforce writer proofs on one Engine's Rating, or stop (service key only)",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: WriterProofEngineRequestSchema } } } },
+  responses: { 200: { description: "Stored", content: { "application/json": { schema: z.object({ outcome: z.string(), enforced: z.boolean() }) } } } },
+});
+
 export const ScriptMonitoringResponseSchema = z
   .object({
     since: z.string(),
@@ -2873,6 +2943,7 @@ export const ScriptMonitoringResponseSchema = z
       }),
     ),
     engines: EngineMonitoringSchema,
+    writerProofs: WriterProofsSchema,
   })
   .openapi("ScriptMonitoringResponse");
 
