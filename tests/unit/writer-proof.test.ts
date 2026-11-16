@@ -214,17 +214,20 @@ describe("a proof: the combination's LLM live on recorded cases, nothing sent", 
     expect(Number(proof.spendCents)).toBeGreaterThan(0);
   });
 
-  it("a decision that sends nothing (later) is usable when the script reads it", async () => {
+  it("a case where it decides to send nothing (later) proves nothing: never counted, so no pass on such cases alone", async () => {
     const row = await seedWriter();
     await recordProductionRuns(PROOF_SAMPLE);
-    const proof = await proveScript(db, proofDeps({ decision: "later" }).deps, row, "staff");
-    expect(proof.state).toBe("passed");
+    const p = proofDeps({ decision: "later" });
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect([proof.state, proof.sample]).toEqual(["no_cases", 0]);
+    expect(p.llmCalls).toHaveLength(PROOF_SAMPLE); // each case was asked once, never more
+    expect((proof.cases as Array<{ exercised: boolean; usable: boolean }>).every((c) => !c.exercised && c.usable)).toBe(true);
   });
 
   it("stops at its spend ceiling", async () => {
     const row = await seedWriter();
     await recordProductionRuns(PROOF_SAMPLE);
-    const proof = await proveScript(db, proofDeps({ decision: "later" }, { tokensInput: 200_000, tokensOutput: 30_000 }).deps, row, "staff");
+    const proof = await proveScript(db, proofDeps({ decision: "write", message: "<p>Tuesday 10am works.</p>" }, { tokensInput: 200_000, tokensOutput: 30_000 }).deps, row, "staff");
     expect(proof.state).toBe("error");
     expect(proof.error).toMatch(/stopped at the ceiling/);
     expect(proof.sample).toBeLessThan(PROOF_SAMPLE);
@@ -251,7 +254,7 @@ describe("a proof: the combination's LLM live on recorded cases, nothing sent", 
       orgId: "org-1",
       body: { units: {}, request: { email: "x@example.test" }, tactics: {}, subject: null, brand: "", day: 0, calls: [{ name: "llm.complete", args: {}, answer: { ok: true, data: {} } }], asked: {} },
     });
-    const p = proofDeps({ decision: "later" });
+    const p = proofDeps({ decision: "write", message: "<p>Tuesday 10am works.</p>" });
     const proof = await proveScript(db, p.deps, row, "staff");
     expect([proof.state, proof.sample]).toEqual(["passed", PROOF_SAMPLE]);
     expect(p.llmCalls).toHaveLength(PROOF_SAMPLE);
@@ -283,7 +286,7 @@ describe("the gate: an enforced Engine's Rating draws only proven writers", () =
     await seedWriter();
     await recordProductionRuns(PROOF_SAMPLE);
     await setEngineEnforced(db, "message_sent", true, "staff@example.com");
-    const p = proofDeps({ decision: "later" });
+    const p = proofDeps({ decision: "write", message: "<p>Tuesday 10am works.</p>" });
     setProofContext({ db, deps: p.deps });
     expect(await candidatesOf(db, { outcome: "message_sent", servable: [], channel: null })).toEqual([]);
     for (let i = 0; i < 50 && (await db.select().from(writerProofs)).every((r) => r.state === "running"); i++) await new Promise((r) => setTimeout(r, 20));
