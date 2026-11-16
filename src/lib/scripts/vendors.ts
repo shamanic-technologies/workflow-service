@@ -223,6 +223,24 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // The follow-ups (MIGRATE-1105 S4b): the figures a campaign's brief asks for, read for the person (figure-reader.ts).
   "workflow.figures.read": { service: "workflow", method: "POST", path: "/orgs/figures/read", asRun: true },
 };
+/**
+ * PROVEN-BEFORE-PEOPLE-1116: the doors that SEND what a person reads, and the fields of their request that person reads
+ * (dotted paths into the call's args; a list field is every item). A writer proof judges exactly these fields of what a
+ * combination would send (src/lib/scripts/writer-proof.ts); a script whose code calls none of them writes to nobody.
+ * A new sending door = one entry here.
+ */
+export const TO_PERSON_DOORS: Record<string, string[]> = {
+  "instantly.reply.send": ["body.body_html", "body.new_thread_subject"],
+  "instantly.reply.escalate": ["body.handoff_text"],
+  "email.send": ["body.subject", "body.sequence.*.bodyHtml"],
+  "crm.whatsapp.send": ["body.text", "body.messages.*"],
+};
+
+/** Whether a script's code calls a door that sends to a person (read from the code, like its materials). */
+export function writesToPerson(code: string): boolean {
+  return Object.keys(TO_PERSON_DOORS).some((name) => code.includes(`"${name}"`) || code.includes(`'${name}'`));
+}
+
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
 export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, JEV_CHOICE, LLM_PICK, TEMPLATE_PICK, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;
