@@ -429,14 +429,15 @@ describe("a run with no org (fleet work): a platform run", () => {
     }) as typeof fetch;
     try {
       const ledger = productionLedgerDeps();
-      expect(await ledger.createRun({ parentRunId: "sel-run", orgId: "", userId: "", taskName: "script:message_sent/dy", headers: {} })).toBe("plat-run");
+      expect(await ledger.createRun({ parentRunId: "sel-run", orgId: "", userId: "", taskName: "script:message_sent/dy", scriptSlug: "message_sent/dy/v3", headers: {} })).toBe("plat-run");
       await ledger.closeRun("plat-run", "completed", "");
       await expect(ledger.declareOutcomes("plat-run", "", { produced: [], consumed: [] })).rejects.toThrow(/declares nothing/);
     } finally {
       globalThis.fetch = realFetch;
     }
     expect(calls.map(([u, i]) => [u, i.method])).toEqual([["http://runs/v1/platform-runs", "POST"], ["http://runs/v1/platform-runs/plat-run", "PATCH"]]);
-    expect(JSON.parse(String(calls[0]![1].body))).toEqual({ serviceName: "workflow", taskName: "script:message_sent/dy", parentRunId: "sel-run" });
+    expect(JSON.parse(String(calls[0]![1].body))).toEqual({ serviceName: "workflow", taskName: "script:message_sent/dy", parentRunId: "sel-run", scriptSlug: "message_sent/dy/v3" });
+    // SERVED-MODEL-1116-NESTED: a fleet script run names its script too, so it is its own decision.
   });
 });
 
