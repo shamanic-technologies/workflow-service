@@ -3110,6 +3110,11 @@ export const EnginePickRequestSchema = z
       .array(ScriptSlugSchema)
       .describe("The outcomes the caller will hand the script as Units (`units` keys of the run): a script asking for another material is not a candidate."),
     channel: z.string().min(1).nullable().optional().describe("The channel the script would run for: a script stating a tactic `channel` runs only for it. Absent = none."),
+    askedBy: z
+      .string()
+      .regex(/^[a-z0-9_]+\/[a-z0-9_]+$/)
+      .optional()
+      .describe("ONE-WRITER-N-MODELS-1116: the script that would ASK this Engine (`<outcome>/<dynasty>`), e.g. a sender asking Message written, a writer asking LLM completion: the Rating picks for that asker (its note, else its Engine's, else the candidate's alone). Absent = a campaign's own pick."),
   })
   .openapi("EnginePickRequest");
 

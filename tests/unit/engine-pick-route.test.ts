@@ -123,3 +123,18 @@ describe("POST /internal/engines/{outcome}/pick", () => {
     expect((await request(app).post("/internal/engines/message_written/pick").send({ keptDynasties: ["dy_x"], servable: [] })).status).toBe(401);
   });
 });
+
+// ONE-WRITER-N-MODELS-1116: a preview picks the writer for a sender, then the model for that writer.
+describe("POST /internal/engines/{outcome}/pick with askedBy", () => {
+  it("tells the Rating who asks; without it the pick is a campaign's own", async () => {
+    const reader = fakeScriptPick({ dy_good: 2 });
+    engine.setScriptPickReader(reader);
+    await addScript("message_written", "dy_good");
+    const asked = await pick("message_written", { keptDynasties: ["dy_good"], servable: ["lead_identified"], askedBy: "email_sent/dy_cold_email" });
+    expect(asked.status).toBe(200);
+    expect(reader.calls.at(-1)).toMatchObject({ outcome: "message_written", askedBy: "email_sent/dy_cold_email" });
+    await pick("message_written", { keptDynasties: ["dy_good"], servable: ["lead_identified"] });
+    expect(reader.calls.at(-1)).not.toHaveProperty("askedBy");
+    expect((await pick("message_written", { keptDynasties: ["dy_good"], servable: [], askedBy: "not a slug" })).status).toBe(400);
+  });
+});

@@ -4313,6 +4313,11 @@
             "nullable": true,
             "minLength": 1,
             "description": "The channel the script would run for: a script stating a tactic `channel` runs only for it. Absent = none."
+          },
+          "askedBy": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+\\/[a-z0-9_]+$",
+            "description": "ONE-WRITER-N-MODELS-1116: the script that would ASK this Engine (`<outcome>/<dynasty>`), e.g. a sender asking Message written, a writer asking LLM completion: the Rating picks for that asker (its note, else its Engine's, else the candidate's alone). Absent = a campaign's own pick."
           }
         },
         "required": [

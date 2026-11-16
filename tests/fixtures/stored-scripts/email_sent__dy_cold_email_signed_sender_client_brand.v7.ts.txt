@@ -1,0 +1,310 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+
+/**
+ * Conversation · distribute.you cold email (one served person gets one written email sequence, sent).
+ *
+ * The cold email campaign run, as the old workflow ran it step for step (sales-cold-email-outreach Ballad v13, its
+ * deployed flow read 2026-11-05, conversion-time additions included), with no workflow:
+ *   1. lead-service serves ONE person for this campaign (`lead.serve`; a pushed lead is served by name). Nobody:
+ *      `audience_exhausted` ends the campaign's audience, an unfinished look asks again soon, anything else is idle;
+ *      a named person refused for good is a refused delivery.
+ *   2. who they are to the brand: crm-service's whole thread (waits while its facts settle) + lead-service's
+ *      relationship block, the same lines and game every writer reads (`leadRelationship`).
+ *   3. the brand (name, extracted facts for the campaign's offer), the writer features-service ranks best for this
+ *      campaign (template dynasty + LLM; none = the run fails, nothing written), the template's live head.
+ *   4. content-generation builds the writer's materials; the email is WRITTEN by Engine message_written's own script
+ *      (`ctx.ask` then `ctx.get`: a child run, never a copy of its code); content-generation stores it and declares it.
+ *   5. email-gateway sends it. A refusal about this person (the sender's 409, whatever its reason: recent brand
+ *      contact, opted out, not verified, dead thread mailbox...; any named refusal on a pushed lead) is a normal run
+ *      and the next person is served at once (a refused delivery on a pushed lead); anything else fails.
+ * Declares nothing itself (tactic recorded_by): lead-service, content-generation and instantly-service declare the
+ * person found, the email written, the email sent and, later, the reply.
+ *
+ * Tactics: `serve` (extra lead serve fields), `brandFields` (the facts asked of brand-service), `variables` (extra
+ * fixed writer variables), `brandVariables` (writer variables read off the brand, e.g. its link), `sendTag`,
+ * `signedBy` (SIGNATURE-TACTIC-1107, who signs the email: absent = the sender's default; `sender_with_client_brand` =
+ * the sending mailbox's name + the client's brand; `client_person_with_client_brand` = a person of the client, written
+ * by the run's LLM from what it knows of the brand and the campaign brief, + the client's brand). The client's own
+ * brand signature still wins (the sender's rule).
+ */
+export default function run(ctx: ScriptContext): ScriptResult {
+  const req = (ctx.request ?? {}) as Record<string, any>;
+  if (typeof req.now !== "string") throw new Error("the run states no clock (ctx.request.now)");
+  const tactics = ctx.tactics as Record<string, any>;
+  const trigger = req.trigger && typeof req.trigger === "object" ? req.trigger : null;
+  const named = trigger && typeof trigger.leadId === "string" && trigger.leadId ? { leadId: trigger.leadId, triggerEventId: trigger.eventId } : null;
+
+  // 1. One person.
+  const serve = ctx.vendor.call("lead.serve", { ...(tactics.serve ?? {}), ...(named ? { namedLead: named } : {}) });
+  if (!serve.ok) throw new Error("lead.serve: " + String(serve.data.error));
+  const served = serve.data as Record<string, any>;
+  if (served.found !== true) {
+    const reason = typeof served.reason === "string" ? served.reason : "nobody";
+    if (reason === "audience_exhausted") return { unmade: reason };
+    if (served.final === true) return { unmade: reason };
+    if (reason === "serve_timed_out" && served.final !== false) return { unmade: reason, again: true };
+    return { unmade: reason };
+  }
+  const lead = served.lead as Record<string, any>;
+  const data = (lead.data ?? {}) as Record<string, any>;
+  const org = (data.organization ?? {}) as Record<string, any>;
+  const brandId = Array.isArray(req.brandIds) && req.brandIds[0] ? req.brandIds[0] : Array.isArray(lead.brandIds) ? lead.brandIds[0] : null;
+
+  // 2. Who they are to the brand.
+  const address = typeof lead.email === "string" ? lead.email.trim() : "";
+  if (!address) throw new Error("person-thread-query: the person carries no email to find their thread by");
+  if (!brandId) throw new Error("person-thread-query: the person carries no brand");
+  const t = ctx.vendor.call("crm.person.thread", {
+    query: { brandId, personKey: "email:" + address.toLowerCase() },
+    pollWhile: { field: "factFeed.settled", equals: false, intervalSeconds: 10, timeoutSeconds: 180, throwWhenTimedOut: true },
+  });
+  const timeline = t.ok ? t.data : { ok: false, status: t.data.status, error: t.data.error };
+  const who = whoTheyAre(served, timeline);
+
+  // 3. The brand, the writer, the template.
+  const brand = ctx.vendor.call("brand.profile", { params: { id: req.brandIds?.[0] } });
+  if (!brand.ok) throw new Error("brand.profile: " + String(brand.data.error));
+  const fields = ctx.vendor.call("brand.extract_fields", { body: { fields: tactics.brandFields, offerId: req.offerId } });
+  if (!fields.ok) throw new Error("brand.extract_fields: " + String(fields.data.error));
+  const pickAns = ctx.vendor.call("template.pick", { place: "writer" });
+  if (!pickAns.ok) throw new Error("template.pick: " + String(pickAns.data.error));
+  const plan = writerPlan(pickAns.data as Record<string, any>);
+  const head = ctx.vendor.call("content.template_head", { params: { slug: plan.templateDynastySlug } });
+  if (!head.ok) throw new Error("content.template_head: " + String(head.data.error));
+
+  const variables: Record<string, unknown> = {
+    ...(tactics.variables ?? {}),
+    leadCity: data.city ?? "",
+    leadState: data.state ?? "",
+    leadTitle: data.currentTitle ?? "",
+    clientName: (brand.data as any).brand?.name ?? "",
+    currentDate: String(req.now).split("T")[0],
+    leadCountry: data.country ?? "",
+    leadHeadline: data.headline ?? "",
+    leadLastName: data.lastName ?? "",
+    leadTimezone: data.timezone ?? "",
+    leadFirstName: data.firstName ?? "",
+    leadFunctions: data.functions ?? "",
+    leadSeniority: data.seniority ?? "",
+    leadCompanyCity: org.city ?? "",
+    leadCompanyName: org.name ?? "",
+    leadCompanySize: org.estimatedNumEmployees ?? "",
+    leadDepartments: data.departments ?? "",
+    leadLinkedinUrl: data.linkedinUrl ?? "",
+    leadCompanyState: org.state ?? "",
+    leadCompanyCountry: org.country ?? "",
+    leadSubdepartments: data.subdepartments ?? "",
+    leadCompanyIndustry: org.industry ?? "",
+    leadCompanyKeywords: org.keywords ?? "",
+    brandExtractedFields: (fields.data as any).fields ?? "",
+    leadCompanyTechStack: org.technologyNames ?? "",
+    leadBusinessLanguages: data.businessLanguages ?? "",
+    leadCompanyIndustries: org.industries ?? "",
+    leadCompanyWebsiteUrl: org.websiteUrl ?? "",
+    leadEmploymentHistory: data.employmentHistory ?? "",
+    leadCompanyDescription: org.shortDescription ?? "",
+    leadCompanyFoundedYear: org.foundedYear ?? "",
+    leadCompanyLinkedinUrl: org.linkedinUrl ?? "",
+    leadCompanyFundingStage: org.latestFundingStage ?? "",
+    leadCompanyTotalFunding: org.totalFunding ?? "",
+    leadCompanyAnnualRevenue: org.annualRevenue ?? "",
+    leadCompanyFundingEvents: org.fundingEvents ?? "",
+    leadCompanySeoDescription: org.seoDescription ?? "",
+    leadCompanySecondaryIndustries: org.secondaryIndustries ?? "",
+    leadCompanyLatestFundingRoundDate: org.latestFundingRoundDate ?? "",
+    leadBuyingSignal: lead.buyingSignal ?? undefined,
+    leadQualification: lead.qualification && Array.isArray(lead.qualification.checks) && lead.qualification.checks.length > 0 ? lead.qualification : undefined,
+    leadRelationship: who ?? undefined,
+  };
+  // Brand facts a dynasty adds to the writer's variables (tactic `brandVariables`: {variable: brand field}).
+  for (const [variable, field] of Object.entries((tactics.brandVariables ?? {}) as Record<string, string>)) {
+    variables[variable] = (brand.data as any).brand?.[field] ?? "";
+  }
+  const genBody: Record<string, unknown> = {
+    type: (head.data as any).template?.type,
+    model: pickLlm(ctx, "writer").model,
+    leadId: lead.leadId,
+    offerId: req.offerId,
+    brief: req.brief ?? undefined,
+    variables,
+  };
+
+  // 4. Who signs (tactic `signedBy`), decided BEFORE the email is written so the writer reads it word for word
+  // (SENDER-NAME-BODY-1111): no name known = the brand alone, never a refusal.
+  const brandName = String((brand.data as any).brand?.name ?? "").trim();
+  let signature: unknown = undefined;
+  if (tactics.signedBy === "sender_with_client_brand") {
+    signature = { text: "{full_name}" + (brandName ? "\n" + brandName : "") };
+  } else if (tactics.signedBy === "client_person_with_client_brand") {
+    const llm = pickLlm(ctx, "signature");
+    const sig = ctx.vendor.call("llm.complete", {
+      provider: llm.provider,
+      model: llm.model,
+      systemPrompt: SIGNER_SYSTEM_PROMPT,
+      message: "Brand: " + (brandName || "(no name)") + "\n\nBrand facts:\n" + JSON.stringify((fields.data as any).fields ?? {}) + "\n\nCampaign brief:\n" + (typeof req.brief === "string" ? req.brief : JSON.stringify(req.brief ?? "")),
+      responseSchema: { type: "object", additionalProperties: false, required: ["signature"], properties: { signature: { type: "string" } } },
+    });
+    if (!sig.ok) throw new Error("llm.complete (signature): " + String(sig.data.error));
+    const text = String(((sig.data as any).json ?? {}).signature ?? "").trim();
+    signature = { text: text || brandName };
+  }
+  const statedSignature = signature !== undefined && typeof (signature as any).text === "string" ? String((signature as any).text) : "";
+
+  // 5. The email: materials, written by Engine message_written's script, stored by content-generation.
+  const materials = ctx.vendor.call("content.materials", { body: genBody });
+  if (!materials.ok) throw new Error("content.materials: " + String(materials.data.error));
+  const m = materials.data as Record<string, any>;
+  // Already written for this person (content-generation's idempotency): nothing is asked, content-generation answers
+  // the stored email (the old run handed it the materials answer as `written`, kept as is).
+  let written: unknown = m;
+  if (m.existing == null) {
+    ctx.ask({ units: m.units, subject: m.subject, tactics: m.tactics, recordedBy: "content-generation", trace: true, ...(statedSignature ? { request: { signature: statedSignature } } : {}) });
+    // Live: the child run's whole answer rides `run`; in a replay of an old run the Unit IS that recorded answer.
+    const got = ctx.get("message_written") as any;
+    written = got.run ?? got.content;
+  }
+  const gen = ctx.vendor.call("content.generate", { body: { ...genBody, units: m.units, written } });
+  if (!gen.ok) throw new Error("content.generate: " + String(gen.data.error));
+  const email = gen.data as Record<string, any>;
+
+  // 6. Sent.
+  const send = ctx.vendor.call("email.send", {
+    body: {
+      tag: tactics.sendTag ?? "sales-sequence-email",
+      type: "broadcast",
+      to: lead.email,
+      leadId: lead.leadId,
+      subject: email.subject,
+      sequence: email.sequence,
+      timezone: data.timezone,
+      campaignId: req.campaignId,
+      recipientCompany: org.name,
+      recipientLastName: data.lastName,
+      recipientFirstName: data.firstName,
+      metadata: { source: "mcpfactory-campaign-service", emailGenerationId: email.id },
+      ...(signature !== undefined ? { signature } : {}),
+    },
+  });
+  if (!send.ok) {
+    const code = typeof send.data.code === "string" ? send.data.code : typeof send.data.body?.code === "string" ? send.data.body.code : typeof send.data.body?.details?.code === "string" ? send.data.body.details.code : null;
+    const status = Number(send.data.status);
+    if (code && (status === 409 || (named && status >= 400 && status < 500))) {
+      // The sender refused THIS send (409, any reason): a normal run, the next person is served at once; one person
+      // never blocks the campaign. Pushed lead: refused. 402 (the org cannot pay), 5xx (infra) still fail the run.
+      return named ? { unmade: code } : { unmade: code, again: true };
+    }
+    throw new Error("email.send: " + String(send.data.error));
+  }
+  if ((send.data as any).success !== true) throw new Error("email.send answered without success: true");
+  return { content: { leadId: lead.leadId, emailGenerationId: email.id, sent: true }, subject: { service: "lead-service", id: lead.leadId } };
+}
+
+const SIGNER_SYSTEM_PROMPT = [
+  "You write the signature block of a cold email sent on behalf of a brand, signed by a real person of that brand.",
+  "Line 1: the first name (and last name if known) of the person of the brand who would naturally sign a first email to a prospect, usually the founder or the head of sales, taken ONLY from the brand facts or the campaign brief.",
+  "Line 2 (optional): their role, only if stated.",
+  "Last line: the brand name.",
+  "If no person of the brand is named anywhere, write only the brand name. Never invent a name, never a placeholder, never a dash.",
+  "Answer as JSON: {\"signature\": \"<lines separated by \\n>\"}.",
+].join("\n");
+
+function writerPlan(pick: Record<string, any>) {
+  const leg = pick && pick.legKey ? pick.legKey : "unknown leg";
+  const templateDynastySlug = pick && pick.template ? pick.template.templateDynastySlug : null;
+  if (typeof templateDynastySlug !== "string" || templateDynastySlug.length === 0) {
+    throw new Error("[writer-plan] no template to write with on " + leg + ": " + ((pick && pick.templateUnavailableReason) || "features-service served none") + ". Nothing is written.");
+  }
+  return { templateDynastySlug };
+}
+
+function whoTheyAre(served: any, timeline: any): Record<string, unknown> | null {
+  const KNOWN = ["personal", "customer", "team", "investor", "advisor", "partner", "supplier"];
+  const LABEL: Record<string, string> = {
+    personal: "a personal contact of the owner (a friend, someone he knows outside work)",
+    customer: "a customer",
+    prospect: "a prospect (signed up, or showed interest)",
+    team: "on the brand's team",
+    investor: "an investor",
+    advisor: "an advisor",
+    supplier: "a supplier",
+    partner: "a partner",
+    other_professional: "someone the owner knows professionally",
+    journalist: "a journalist the brand pitches for press coverage (never a buyer)",
+  };
+  const fromServe = served && served.found === true && served.lead ? served.lead : null;
+  if (!fromServe) return null;
+  const rel = fromServe?.data?.relationship ?? null;
+  const tags = Array.isArray(rel?.tags) ? rel.tags.filter((t: unknown) => typeof t === "string") : [];
+  const unsureTags = Array.isArray(rel?.unsureTags) ? rel.unsureTags.filter((t: unknown) => typeof t === "string") : [];
+  const judged = typeof rel?.judgedAt === "string" && rel.judgedAt !== "";
+  let items: any[] = [];
+  let threadState = "none";
+  if (timeline && timeline.ok === false) {
+    if (timeline.notCalled === true) threadState = "not_read";
+    else if (timeline.status !== 404) {
+      throw new Error("who-they-are: the person's thread could not be read (" + String(timeline.status ?? "no status") + " " + String(timeline.error ?? "").slice(0, 200) + "); nothing is written blind");
+    }
+  } else if (timeline) {
+    if (!Array.isArray(timeline.items)) throw new Error("who-they-are: the person's thread came back without items");
+    const failed = (timeline.sources ?? []).filter((x: any) => ["gmail", "matrix", "instantly", "copilot"].includes(x?.source) && x?.status === "failed");
+    if (failed.length) {
+      throw new Error("who-they-are: the person's thread is unreadable (" + failed.map((x: any) => x.source + ": " + (x.error ?? "failed")).join("; ") + "); nothing is written blind");
+    }
+    items = timeline.items;
+    threadState = "read";
+  }
+  const clip = (t: unknown, n: number) => { const s = String(t ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "..." : s; };
+  const day = (at: unknown) => (typeof at === "string" ? at.slice(0, 16).replace("T", " ") : "date unknown");
+  const whoSaid = (i: any) => {
+    if (i.direction === "inbound") return "THEM";
+    if (i.source === "instantly") return "US [automated cold email]";
+    if (i.source === "copilot") return "US [AI Copilot]";
+    return "US";
+  };
+  const messages = items.filter((i) => i?.kind === "message" && i.source !== "api" && clip(i.text, 10));
+  const threadLines = messages.slice(-40).map((i) =>
+    day(i.at) + " | " + i.channel + " | " + whoSaid(i) + ": " + (i.subject && i.channel === "email" ? "[" + clip(i.subject, 80) + "] " : "") + clip(i.text, 400));
+  const eventLines = items.filter((i) => i?.kind === "event").slice(-30).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (clip(i.text, 300) || (i.event?.step ?? "event")) + " (" + i.source + ")");
+  const talked = messages.length > 0;
+  const knownTags = tags.filter((t: string) => KNOWN.includes(t));
+  const state = knownTags.length > 0 ? "known" : !judged || unsureTags.some((t: string) => KNOWN.includes(t)) || talked ? "possibly_known" : "not_known";
+  const lines: string[] = [];
+  if (state === "known") lines.push("The brand ALREADY KNOWS this person. They are " + knownTags.map((t: string) => LABEL[t] ?? t).join(", ") + ".");
+  else if (state === "possibly_known") lines.push(judged
+    ? "This person MAY be known to the brand: read the thread before assuming anything."
+    : "Nobody judged yet whether the brand knows this person: treat them as possibly known, and read the thread before assuming anything.");
+  else lines.push("Judged: nothing shows the brand knows this person yet.");
+  const other = tags.filter((t: string) => !KNOWN.includes(t));
+  if (other.length) lines.push("Also: " + other.map((t: string) => LABEL[t] ?? t).join(", ") + ".");
+  if (unsureTags.length) lines.push("Possibly (not confirmed): " + unsureTags.map((t: string) => LABEL[t] ?? t).join(", ") + ".");
+  const company = rel?.company?.name ?? rel?.company?.domain ?? null;
+  if (company) lines.push("Their company: " + clip(company, 120) + ".");
+  const evidence = (Array.isArray(rel?.details) ? rel.details : [])
+    .filter((d: any) => d?.state === "yes" && typeof d.evidence === "string" && d.evidence.trim())
+    .slice(0, 6)
+    .map((d: any) => "Why " + (LABEL[d.tag] ?? d.tag) + ": " + clip(d.evidence, 240));
+  lines.push(...evidence);
+  if (threadState === "read" && !talked) lines.push("No message was ever exchanged with them on record.");
+  return {
+    state,
+    known: state === "known",
+    judged,
+    tags,
+    unsureTags,
+    lines,
+    hasThread: talked,
+    threadLines,
+    olderMessagesOmitted: Math.max(0, messages.length - threadLines.length),
+    eventLines,
+    strategy: "WHO THIS PERSON IS TO US decides how you write, before anything else. Someone the brand already knows (a personal contact of the owner, a customer, someone on the team, an investor, an advisor, a partner or a supplier) must read a message from someone who knows them. Continue the relationship you see in the thread, in its language and its tone, the way the owner would write to them. Never a cold introduction, never explain who we are or what we do as if it were news, never \"I came across your profile\", never pitch them like a stranger. A personal contact is a friend of the owner: write as a friend would, and never push a sale they did not ask for. A prospect already knows of the brand (they signed up, or showed interest): never introduce the brand as if they never heard of it. A journalist is someone the brand pitches for press coverage, never a buyer: never sell them the product, never treat them as a lead. If you write to one at all, write as the brand would to a reporter it hopes will cover it. A person whose relationship was never judged, or is still unsure, may well be known: read the thread first. If anything in it shows they know us, write as someone who knows them. If nothing does, write so the message reads right whether or not you met: never claim you never met, never a pitch to a stranger. Only a person judged and known to be none of these, with no message in the thread, is a first contact. Never mention these tags, and never say that anyone classified them.",
+  };
+}
+
+
+/** The LLM of one call: the Rating's pick for this Engine and this call (LLM-PICK-SCRIPTS-1112). No LLM in the Engine's universe = nothing is written: the run fails and is retried later, never a fallback model. */
+function pickLlm(ctx: any, place: string, outcome?: string): { provider: string; model: string } {
+  const p = ctx.vendor.call("llm.pick", outcome ? { place, outcome } : { place });
+  if (!p.ok) throw new Error("llm.pick " + place + ": " + String(p.data && p.data.error) + ". Nothing is written: the run is retried later.");
+  return { provider: p.data.provider, model: p.data.model };
+}
+
