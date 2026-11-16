@@ -171,6 +171,22 @@ describe("cases: what production runs of a writer saw", () => {
     expect(body.calls[0]!.args).toEqual({ query: { personKey: expect.stringMatching(/^email:p\d@example.test$/) } });
     expect(body.request).toMatchObject({ now: "2026-11-15T10:00:00Z" });
     expect(rows[0]!.recordedFrom).toBe("message_sent/dy_answer/v1");
+    expect(rows.every((r) => r.wrote)).toBe(true);
+  });
+
+  it("a proof tries the cases where production wrote to a person first, whatever newer cases sent nothing", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    // Newer cases of runs that sent nothing (night: later), recorded by the same code.
+    const nothingSent = await db.select().from(writerCases);
+    for (const [i, c] of nothingSent.entries()) {
+      const body = c.body as { calls: Array<{ name: string }> };
+      await db.insert(writerCases).values({ ...c, id: undefined, runId: `later-${i}`, wrote: false, createdAt: new Date(Date.now() + 60_000), body: { ...body, calls: body.calls.filter((x) => x.name !== "instantly.reply.send") } });
+    }
+    const p = proofDeps({ decision: "write", message: "<p>Tuesday 10am works.</p>" });
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect([proof.state, proof.sample, proof.casesAvailable]).toEqual(["passed", PROOF_SAMPLE, 2 * PROOF_SAMPLE]);
+    expect((proof.cases as Array<{ caseId: string }>).every((c) => !c.caseId.startsWith("later-"))).toBe(true);
   });
 
   it("never keeps a script that sends nothing to a person", async () => {
