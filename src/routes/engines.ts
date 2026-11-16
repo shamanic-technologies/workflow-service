@@ -162,6 +162,7 @@ router.post("/internal/engines/:outcome/pick", requireApiKey, async (req, res) =
       servable: parsed.data.servable,
       channel: parsed.data.channel ?? null,
       keptDynasties: parsed.data.keptDynasties,
+      orgId: header(req, "x-org-id") || null,
     });
     if (!pick) {
       res.status(404).json({
@@ -213,7 +214,7 @@ router.post("/internal/engines/:outcome/make", requireApiKey, async (req, res) =
   const servable = Object.keys(body.units);
   let pick;
   try {
-    pick = await pickScript(db, { outcome, servable, channel: body.channel ?? null, keptDynasties: body.keptDynasties });
+    pick = await pickScript(db, { outcome, servable, channel: body.channel ?? null, keptDynasties: body.keptDynasties, orgId });
   } catch (err) {
     console.error(`[workflow-service] engine make ${outcome}: pick unreadable:`, err);
     res.status(502).json({ code: "script_pick_unreadable", error: err instanceof Error ? err.message : String(err) });
