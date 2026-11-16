@@ -36,6 +36,8 @@ export interface CompletionLlm {
 export const COMPLETION_LLMS: CompletionLlm[] = [
   { provider: "anthropic", model: "claude-haiku", name: "Claude Haiku" },
   { provider: "anthropic", model: "claude-sonnet", name: "Claude Sonnet" },
+  // ONE-WRITER-N-MODELS-1116-OTHERS: the intro scripts wrote with Opus (their tactic `llms`).
+  { provider: "anthropic", model: "claude-opus", name: "Claude Opus" },
   { provider: "deepseek", model: "deepseek-flash", name: "DeepSeek Flash" },
   { provider: "google", model: "gemini-argon", name: "Gemini Argon" },
   { provider: "google", model: "gemini-flash", name: "Gemini Flash" },
