@@ -4,6 +4,7 @@
  * service's own script routes on localhost (INTRO-BOARDY-1114). Dry run by default (prints what it would do);
  * `--apply` writes. Run inside the workflow-service container with a real staff identity (who decided):
  *   docker exec -i -e ORG_ID=… -e USER_ID=… -e STAFF_EMAIL=… distribute-workflow-service-1 node scripts/post-catalogue-ops.mjs [--apply]
+ * `merge` {absorbed, places, reason} (ONE-WRITER-N-MODELS-1116: POST /internal/scripts/merges; already merged = skipped).
  * Ops: `create` {body} (409 = already stored: UPGRADED to the generator's code/tactics/description unless the active version already is); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
  * (UPGRADE of every active dynasty of that prefix whose code holds `from` exactly once; `edits` [{from, to}] instead of
  * one pair = every anchor found exactly once, applied in order, in ONE upgrade); `tag` {outcome, dynastyPrefix,
@@ -79,6 +80,20 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       console.log(`  upgrade ${b.outcome}/${b.dynasty}: ${u.status} ${u.status === 201 ? `v${u.json.version}` : JSON.stringify(u.json).slice(0, 300)}`);
       if (u.status !== 201) failed++;
     } else if (r.status !== 201) failed++;
+    continue;
+  }
+  if (op.op === "merge") {
+    // ONE-WRITER-N-MODELS-1116: retire a per-model copy, its history placed on each survivor (already merged = skipped).
+    if (!apply) {
+      console.log(`merge ${op.absorbed} -> ${op.places.map((p) => p.survivor + (p.askedBy ? " (asked by " + p.askedBy + ")" : "")).join(", ")} (dry run)`);
+      continue;
+    }
+    const r = await call("POST", "/internal/scripts/merges", { absorbed: op.absorbed, places: op.places, reason: op.reason });
+    if (r.status === 409 && r.json.code === "already_merged") console.log(`merge ${op.absorbed}: already merged, skipped`);
+    else {
+      console.log(`merge ${op.absorbed}: ${r.status} ${r.status === 201 ? "merged" : JSON.stringify(r.json).slice(0, 300)}`);
+      if (r.status !== 201) failed++;
+    }
     continue;
   }
   for (const s of await activeOf(op.outcome, op.dynastyPrefix, op.includeRetired === true)) {

@@ -1,0 +1,564 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+
+/**
+ * Message written · distribute.you template writer.
+ *
+ * Writes the cold email sequence of one person from the brand's stored template
+ * (a prompt with {{variables}}), the person's facts and who they already are to
+ * the brand, then reads the model's JSON answer into a subject and its steps.
+ *
+ * Provenance (ported verbatim, business logic only; content-generation-service @ c30a90d):
+ *  - src/lib/chat-service-client.ts: generateFromTemplate (user prompt assembly),
+ *    coerceToString, renderObjectAsMarkdown, substituteVariables, parseSequenceFromJson
+ *  - src/lib/lead-context-block.ts: buildLeadContextBlock
+ *  - src/lib/lead-context-variables.ts: LEAD_CONTEXT_GROUPS, formatBuyingSignal,
+ *    formatQualificationChecks, withoutUnquotableBuyingSignal
+ *  - src/lib/lead-relationship.ts: normalizeLeadRelationship, buildLeadRelationshipBlock
+ *  - src/lib/template-vars.ts, dashes.ts, escaped-line-breaks.ts, text-to-html.ts, sequence-delays.ts
+ * FULL WRITER (FACTORY-P3, workflow-service): also builds the SYSTEM prompt, ported from
+ * content-generation-service @ origin/main 2026-10-29: chat-service-client.ts GLOBAL_SYSTEM_PROMPT,
+ * GENERATE_RESPONSE_SCHEMA(_STRICT), buildLanguageDirective; client-comms-voice.ts
+ * buildClientCommsVoiceDirective (the voice itself read through `voice.read`); offer-give-lists.ts
+ * buildGiveListsDirective; campaign-instruction.ts buildCampaignInstructionDirective;
+ * lead-relationship.ts buildLeadRelationshipDirective (+ `strategy`). The LLM is the run's tactic `llm`
+ * ({provider, model}: the leg's pick). Left to the host: model routing, billing. No retry on the
+ * model's answer (the writer is trusted).
+ *
+ * Materials: `lead_identified` (the person and their company, as lead-service serves
+ * them, and their relationship to the brand), `brand_context` (the brand's fields and
+ * today's date), `template_written` (the template text).
+ */
+export default function run(ctx: ScriptContext): ScriptResult {
+  const lead = ctx.get("lead_identified");
+  const brand = ctx.get("brand_context");
+  const template = ctx.get("template_written");
+  const promptTemplate = String(template.content.text ?? "");
+  const variables = withoutUnquotableBuyingSignal({ ...(lead.content.variables as Record<string, unknown>), ...(brand.content.variables as Record<string, unknown>) });
+
+  let prompt = substituteVariables(promptTemplate, variables);
+  const leadContext = buildLeadContextBlock(promptTemplate, variables);
+  if (leadContext) prompt = `${leadContext}\n\n${prompt}`;
+  const relationship = normalizeLeadRelationship(variables.leadRelationship);
+  const consumed = extractTemplateVariableNames(promptTemplate).includes("leadRelationship");
+  const relationshipBlock = consumed ? "" : buildLeadRelationshipBlock(relationship);
+  if (relationshipBlock) prompt = `${relationshipBlock}\n\n${prompt}`;
+  const campaignContext = brand.content.campaignContext as Record<string, unknown> | undefined;
+  if (campaignContext && Object.keys(campaignContext).length > 0) prompt = `${formatCampaignContext(campaignContext)}\n\n${prompt}`;
+
+  const voiceRead = ctx.vendor.call("voice.read", {});
+  if (!voiceRead.ok) throw new Error(`voice.read failed: ${String(voiceRead.data.error ?? "no answer")}`);
+  const voice = String(voiceRead.data.content ?? "").trim();
+  if (!voice) throw new Error("chat-service skill client-comms has no content");
+  let systemPrompt = `${GLOBAL_SYSTEM_PROMPT}\n${buildClientCommsVoiceDirective(voice)}`;
+  // SENDER-NAME-BODY-1111: the signature the asking script will have appended, word for word, when it states one.
+  const statedSignature = typeof (ctx.request as Record<string, unknown> | null)?.signature === "string" ? String((ctx.request as Record<string, unknown>).signature).trim() : "";
+  if (statedSignature) systemPrompt = `${systemPrompt}\n${buildSignatureDirective(statedSignature)}`;
+  const language = typeof lead.content.language === "string" && lead.content.language ? lead.content.language : null;
+  if (language) systemPrompt = `${systemPrompt}\n${buildLanguageDirective(language)}`;
+  const giveListsDirective = buildGiveListsDirective(brand.content.giveLists as GiveLists | null | undefined);
+  if (giveListsDirective) systemPrompt = `${systemPrompt}\n${giveListsDirective}`;
+  const instructionDirective = buildCampaignInstructionDirective(brand.content.instruction);
+  if (instructionDirective) systemPrompt = `${systemPrompt}\n${instructionDirective}`;
+  const relationshipDirective = buildLeadRelationshipDirective(relationship);
+  if (relationshipDirective) systemPrompt = `${systemPrompt}\n${relationshipDirective}`;
+
+  const llm = (ctx.tactics.llm ?? {}) as { provider?: string; model?: string };
+  if (!llm.provider || !llm.model) throw new Error("the run states no LLM (tactic llm: {provider, model})");
+  const responseSchema = llm.provider === "anthropic" ? GENERATE_RESPONSE_SCHEMA_STRICT : GENERATE_RESPONSE_SCHEMA;
+  const answer = ctx.vendor.call("llm.complete", { message: prompt, systemPrompt, responseSchema, provider: llm.provider, model: llm.model });
+  if (!answer.ok) throw new Error(`llm.complete failed: ${String(answer.data.error ?? "no answer")}`);
+  const parsed = parseSequenceFromJson(answer.data.json as { subject: string; emails: Array<{ body: string; daysSinceLastStep?: unknown }> });
+  return { content: { subject: parsed.subject, sequence: parsed.sequence } };
+}
+
+// ─── Values into prompt text (chat-service-client.ts) ───────────────────────
+
+function coerceToString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (value.every((v) => typeof v === "string")) return value.join(", ");
+    if (value.every((v) => v !== null && typeof v === "object" && !Array.isArray(v))) {
+      return value.map((item, i) => `${i + 1}.\n${renderObjectAsMarkdown(item as Record<string, unknown>, "   ")}`).join("\n");
+    }
+    return JSON.stringify(value);
+  }
+  return renderObjectAsMarkdown(value as Record<string, unknown>, "");
+}
+
+function humanizeKey(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").replace(/[_-]+/g, " ").trim().toLowerCase();
+}
+
+function renderObjectAsMarkdown(obj: Record<string, unknown>, indent: string): string {
+  const lines: string[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined) continue;
+    const label = humanizeKey(k);
+    if (typeof v === "object" && !Array.isArray(v)) {
+      lines.push(`${indent}- ${label}:`);
+      lines.push(renderObjectAsMarkdown(v as Record<string, unknown>, indent + "  "));
+    } else if (Array.isArray(v) && v.every((x) => typeof x === "string")) {
+      lines.push(`${indent}- ${label}: ${v.join(", ")}`);
+    } else if (Array.isArray(v) && v.every((x) => x !== null && typeof x === "object" && !Array.isArray(x))) {
+      lines.push(`${indent}- ${label}:`);
+      v.forEach((item, i) => {
+        lines.push(`${indent}  ${i + 1}.`);
+        lines.push(renderObjectAsMarkdown(item as Record<string, unknown>, indent + "     "));
+      });
+    } else {
+      lines.push(`${indent}- ${label}: ${coerceToString(v)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function substituteVariables(template: string, variables: Record<string, unknown>): string {
+  let result = template;
+  for (const [key, value] of Object.entries(variables)) result = result.replaceAll(`{{${key}}}`, coerceToString(value));
+  return result;
+}
+
+function formatCampaignContext(featureInputs: Record<string, unknown>): string {
+  const lines: string[] = ["## Campaign Context"];
+  for (const [key, value] of Object.entries(featureInputs)) {
+    if (value == null) continue;
+    const label = key.replace(/([A-Z])/g, " $1").replace(/[_-]/g, " ").trim();
+    lines.push(`- ${label}: ${coerceToString(value)}`);
+  }
+  return lines.join("\n");
+}
+
+function extractTemplateVariableNames(text: string): string[] {
+  const matches = text.match(/\{\{(\w+)\}\}/g);
+  if (!matches) return [];
+  return [...new Set(matches.map((m) => m.slice(2, -2)))];
+}
+
+// ─── Recipient context (lead-context-variables.ts, lead-context-block.ts) ───
+
+interface ContextVariable {
+  name: string;
+  label: string;
+  format?: (value: unknown) => string[] | null;
+}
+
+const PERSON: ContextVariable[] = [
+  { name: "leadFirstName", label: "first name" },
+  { name: "leadLastName", label: "last name" },
+  { name: "leadTitle", label: "job title" },
+  { name: "leadHeadline", label: "headline" },
+  { name: "leadSeniority", label: "seniority" },
+  { name: "leadDepartments", label: "departments" },
+  { name: "leadSubdepartments", label: "sub-departments" },
+  { name: "leadFunctions", label: "functions" },
+  { name: "leadCity", label: "city" },
+  { name: "leadState", label: "state or region" },
+  { name: "leadCountry", label: "country" },
+  { name: "leadTimezone", label: "timezone" },
+  { name: "leadBusinessLanguages", label: "business languages" },
+  { name: "leadLinkedinUrl", label: "LinkedIn profile" },
+  { name: "leadEmploymentHistory", label: "employment history" },
+];
+
+const ORGANIZATION: ContextVariable[] = [
+  { name: "leadCompanyName", label: "name" },
+  { name: "leadCompanyDescription", label: "description" },
+  { name: "leadCompanySeoDescription", label: "short description" },
+  { name: "leadCompanyIndustry", label: "industry" },
+  { name: "leadCompanyIndustries", label: "industries" },
+  { name: "leadCompanySecondaryIndustries", label: "secondary industries" },
+  { name: "leadCompanyKeywords", label: "keywords" },
+  { name: "leadCompanyTechStack", label: "tech stack" },
+  { name: "leadCompanySize", label: "headcount" },
+  { name: "leadCompanyFoundedYear", label: "founded year" },
+  { name: "leadCompanyAnnualRevenue", label: "annual revenue" },
+  { name: "leadCompanyFundingStage", label: "funding stage" },
+  { name: "leadCompanyLatestFundingRoundDate", label: "latest funding round date" },
+  { name: "leadCompanyTotalFunding", label: "total funding raised" },
+  { name: "leadCompanyFundingEvents", label: "funding events" },
+  { name: "leadCompanyWebsiteUrl", label: "website" },
+  { name: "leadCompanyLinkedinUrl", label: "LinkedIn page" },
+  { name: "leadCompanyCity", label: "city" },
+  { name: "leadCompanyState", label: "state or region" },
+  { name: "leadCompanyCountry", label: "country" },
+];
+
+function formatBuyingSignal(value: unknown): string[] | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const signal = value as Record<string, unknown>;
+  const fact = typeof signal.fact === "string" ? signal.fact.trim() : "";
+  if (!fact) return null;
+  const lines = [`- what happened: ${fact}`];
+  if (typeof signal.type === "string" && signal.type.trim()) lines.push(`- kind: ${signal.type.trim().replace(/_/g, " ")}`);
+  if (typeof signal.occurredOn === "string" && signal.occurredOn.trim()) lines.push(`- date: ${signal.occurredOn.trim()}`);
+  return lines;
+}
+
+const QUOTABLE_BUYING_SIGNAL_TYPES = new Set(["hiring", "job_change", "funding"]);
+
+function withoutUnquotableBuyingSignal(variables: Record<string, unknown>): Record<string, unknown> {
+  const signal = variables.leadBuyingSignal;
+  if (signal === null || typeof signal !== "object" || Array.isArray(signal)) return variables;
+  const type = (signal as Record<string, unknown>).type;
+  if (typeof type === "string" && QUOTABLE_BUYING_SIGNAL_TYPES.has(type.trim())) return variables;
+  const { leadBuyingSignal: _dropped, ...rest } = variables;
+  return rest;
+}
+
+const QUALIFICATION_OUTCOMES: Record<string, string> = { yes: "pass", no: "fail", unavailable: "could not check", not_checked: "not checked yet" };
+const QUALIFICATION_ROLES: Record<string, string> = { must_pass: "Hard filter", mention: "Bonus" };
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatQualificationChecks(value: unknown): string[] | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const qualification = value as Record<string, unknown>;
+  if (!Array.isArray(qualification.checks)) return null;
+  const lines: string[] = [];
+  const domain = nonEmptyString(qualification.domain);
+  if (domain && qualification.checks.length > 0) lines.push(`- company checked: ${domain}`);
+  let n = 0;
+  for (const raw of qualification.checks) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const check = raw as Record<string, unknown>;
+    const question = nonEmptyString(check.question);
+    if (!question) continue;
+    n += 1;
+    lines.push(`${n}. ${question}`);
+    const mode = nonEmptyString(check.mode);
+    if (mode) lines.push(`   role: ${QUALIFICATION_ROLES[mode] ?? mode}`);
+    const verdict = nonEmptyString(check.verdict);
+    if (verdict) lines.push(`   outcome: ${QUALIFICATION_OUTCOMES[verdict] ?? verdict}`);
+    const evidence = nonEmptyString(check.evidence);
+    if (evidence) lines.push(`   evidence: ${evidence}`);
+    const reason = nonEmptyString(check.reason);
+    if (reason && verdict !== "yes" && verdict !== "no") lines.push(`   reason: ${reason}`);
+    const screenshotUrl = nonEmptyString(check.screenshotUrl);
+    if (screenshotUrl) lines.push(`   screenshot: ${screenshotUrl}`);
+  }
+  if (qualification.checks.length > 0 && n === 0) return null;
+  return lines;
+}
+
+const GROUPS: Array<{ heading: string; variables: ContextVariable[] }> = [
+  { heading: "Person", variables: PERSON },
+  { heading: "Organization", variables: ORGANIZATION },
+  {
+    heading: "Recent buying signal (an event we observed; you may reference it as the reason for writing now, stated as given and without embellishment)",
+    variables: [{ name: "leadBuyingSignal", label: "buying signal", format: formatBuyingSignal }],
+  },
+  {
+    heading: "Checks we ran on their company (what we measured, passed or failed; use it only where it makes the email more relevant)",
+    variables: [{ name: "leadQualification", label: "company checks", format: formatQualificationChecks }],
+  },
+];
+
+function hasValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as object).length > 0;
+  return true;
+}
+
+const HEADER = [
+  "## Recipient context",
+  "Facts about the person receiving this email and the organization they work for.",
+  "Use the ones that make the email more relevant and ignore the rest. Do not restate a fact just because it is listed, and never state anything that is not here.",
+];
+
+function buildLeadContextBlock(promptTemplate: string, variables: Record<string, unknown>): string {
+  const consumedByTemplate = new Set(extractTemplateVariableNames(promptTemplate));
+  const sections: string[] = [];
+  for (const group of GROUPS) {
+    const lines: string[] = [];
+    for (const variable of group.variables) {
+      if (consumedByTemplate.has(variable.name)) continue;
+      const value = variables[variable.name];
+      if (!hasValue(value)) continue;
+      if (variable.format) {
+        const formatted = variable.format(value);
+        if (formatted === null) continue;
+        lines.push(...formatted);
+        continue;
+      }
+      const rendered = coerceToString(value);
+      lines.push(rendered.includes("\n") ? `- ${variable.label}:\n${rendered}` : `- ${variable.label}: ${rendered}`);
+    }
+    if (lines.length > 0) sections.push([`${group.heading}:`, ...lines].join("\n"));
+  }
+  if (sections.length === 0) return "";
+  return [...HEADER, "", sections.join("\n\n")].join("\n");
+}
+
+// ─── Who they already are to us (lead-relationship.ts) ──────────────────────
+
+interface Relationship {
+  state: "known" | "possibly_known" | "not_known";
+  judged: boolean;
+  lines: string[];
+  hasThread: boolean;
+  threadLines: string[];
+  olderMessagesOmitted: number;
+  eventLines: string[];
+  strategy: string | null;
+}
+
+function strings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter((v) => v.length > 0);
+}
+
+function normalizeLeadRelationship(raw: unknown): Relationship | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (!["known", "possibly_known", "not_known"].includes(r.state as string)) return null;
+  const threadLines = strings(r.threadLines);
+  const omitted = typeof r.olderMessagesOmitted === "number" && r.olderMessagesOmitted > 0 ? Math.floor(r.olderMessagesOmitted) : 0;
+  return {
+    state: r.state as Relationship["state"],
+    judged: r.judged === true,
+    lines: strings(r.lines),
+    hasThread: r.hasThread === true || threadLines.length > 0,
+    threadLines,
+    olderMessagesOmitted: omitted,
+    eventLines: strings(r.eventLines),
+    strategy: typeof r.strategy === "string" && r.strategy.trim().length > 0 ? r.strategy.trim() : null,
+  };
+}
+
+function stateSentence(rel: Relationship): string {
+  if (rel.state === "known") return "We ALREADY KNOW this person.";
+  if (rel.state === "possibly_known") return "We may already know this person: treat them as someone we know until the thread says otherwise.";
+  if (!rel.judged) return "Nobody has judged yet whether we know this person: read the thread before assuming a first contact.";
+  if (rel.hasThread) return "This person was judged none of the known relationships, but we have already exchanged messages: continue that exchange.";
+  return "This person was judged none of the known relationships and we have never exchanged a message with them.";
+}
+
+function buildLeadRelationshipBlock(rel: Relationship | null): string {
+  if (!rel) return "";
+  const out: string[] = ["## Who this person already is to us", stateSentence(rel), ...rel.lines.map((l) => `- ${l}`)];
+  out.push("");
+  if (rel.threadLines.length > 0) {
+    out.push("### Our conversation with them so far (oldest first)");
+    if (rel.olderMessagesOmitted > 0) out.push(`(${rel.olderMessagesOmitted} older messages not shown)`);
+    out.push(...rel.threadLines);
+  } else {
+    out.push("### Our conversation with them so far", "No message between us and this person is on record.");
+  }
+  if (rel.eventLines.length > 0) out.push("", "### Recent events", ...rel.eventLines.map((l) => `- ${l}`));
+  return out.join("\n");
+}
+
+// ─── The model's answer into a sequence (parseSequenceFromJson and its helpers) ─
+
+function withSequenceDelays<T extends { daysSinceLastStep?: unknown }>(sequence: T[]): Array<T & { daysSinceLastStep: number }> {
+  const missing: number[] = [];
+  const out = sequence.map((step, i) => {
+    const delay = step.daysSinceLastStep;
+    if (i === 0 && (delay === undefined || delay === null)) return { ...step, daysSinceLastStep: 0 };
+    if (!(typeof delay === "number" && Number.isFinite(delay) && delay >= 0)) missing.push(i + 1);
+    return step as T & { daysSinceLastStep: number };
+  });
+  if (missing.length > 0) throw new Error(`Sequence has no numeric daysSinceLastStep on step(s) ${missing.join(", ")}`);
+  return out;
+}
+
+const DASH_ENTITY = /&(?:mdash|ndash|#8212|#8211|#x2014|#x2013);/gi;
+const EN_DASH_ENTITY = /^&(?:ndash|#8211|#x2013);$/i;
+const HAS_DASH = /[–—]|&(?:mdash|ndash|#8212|#8211|#x2014|#x2013);/i;
+
+function stripDashes(text: string): string {
+  if (!HAS_DASH.test(text)) return text;
+  return text
+    .replace(DASH_ENTITY, (m) => (EN_DASH_ENTITY.test(m) ? "–" : "—"))
+    .replace(/(\d)[ \t]*[–—]+[ \t]*(?=\d)/g, "$1-")
+    .replace(/^([ \t]*)[–—]+[ \t]*/gm, "$1- ")
+    .replace(/[ \t]*[–—]+[ \t]*(?=$|[.,;:!?)\]"”'’])/gm, "")
+    .replace(/[ \t]*,?[ \t]*[–—]+[ \t]*/g, ", ");
+}
+
+function unescapeLineBreaks(text: string): string {
+  return text.replace(/\\+r\\+n|\\+[rn]/g, "\n");
+}
+
+function collapseEscapedLineBreaks(text: string): string {
+  const collapsed = text.replace(/(?:\\+r\\+n|\\+[rn])+/g, " ");
+  return collapsed === text ? text : collapsed.replace(/ {2,}/g, " ").trim();
+}
+
+function textToHtml(text: string): string {
+  return text
+    .split("\n\n")
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function parseSequenceFromJson(json: { subject: string; emails: Array<{ body: string; daysSinceLastStep?: unknown }> }) {
+  // FOLLOWUP-JIT-1107: one email per generation, the first; a step an older template still asked for is dropped.
+  const emails = withSequenceDelays(json.emails.slice(0, 1));
+  const sequence = emails.map((email, i) => {
+    const bodyText = stripDashes(unescapeLineBreaks(email.body)).trim();
+    return { step: i + 1, bodyHtml: textToHtml(bodyText), bodyText, daysSinceLastStep: email.daysSinceLastStep };
+  });
+  return { subject: stripDashes(collapseEscapedLineBreaks(json.subject)), sequence };
+}
+
+// ─── The system prompt (content-generation-service, ported verbatim) ────────
+
+const GENERATE_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    subject: { type: "string" },
+    emails: {
+      type: "array",
+      minItems: 1,
+      maxItems: 1,
+      items: {
+        type: "object",
+        properties: {
+          body: { type: "string" },
+          daysSinceLastStep: { type: "number" },
+        },
+        required: ["body", "daysSinceLastStep"],
+      },
+    },
+  },
+  required: ["subject", "emails"],
+};
+
+const GENERATE_RESPONSE_SCHEMA_STRICT = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    subject: { type: "string" },
+    emails: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          body: { type: "string" },
+          daysSinceLastStep: { type: "number" },
+        },
+        required: ["body", "daysSinceLastStep"],
+      },
+    },
+  },
+  required: ["subject", "emails"],
+};
+
+const GLOBAL_SYSTEM_PROMPT = [
+  "You are generating email content for an automated sending pipeline.",
+  "",
+  "Universal rules (always apply, regardless of the prompt):",
+  "- WHO SENDS THIS EMAIL: it goes out from one of several sending mailboxes, picked after you write, each with its own person, so you know neither the sender's name nor their role. Their name reaches the email only through four placeholders, filled per email at send from the mailbox that sends it, in the subject and the body alike: {first_name}, {last_name}, {full_name}, {sender_email} (single braces, written exactly so). That same person is the From of the email, and a signature block naming them is appended after your text by the sending service. Anyone else you name, the client's founder or team included, is a different person. Decide who speaks in this email and keep it true from the first line to the signature: whoever writes in the first person is the sender; anyone else is named in the third person. Your output ends with the last sentence of the email body, the signature follows it.",
+  "- The four sender placeholders are the only placeholders: never [Your name], [Company], [Insert X] or any other. Every other piece of text you produce must be ready to send as-is.",
+  "- Template inputs may arrive as strings, arrays, or objects (this platform is multibrand by default — brand-related inputs frequently describe several brands at once). Read whatever shape is provided and weave it naturally; never invent a single primary brand when multiple are given.",
+  "",
+  "You must respond with a JSON object matching this exact schema:",
+  '{"subject": "<email subject line>", "emails": [{"body": "<plain text email body>", "daysSinceLastStep": 0}]}',
+  "- subject: the email subject line (string)",
+  "- emails: an array holding exactly ONE item, the first email. Write only that first email, even when the prompt below describes follow-up emails or a multi-step sequence: each follow-up is written later, on the day it is due. The item has:",
+  "  - body: plain text email body (string)",
+  "  - daysSinceLastStep: 0 (number)",
+  "Return ONLY the JSON object, no additional text or markdown.",
+].join("\n");
+
+function buildLanguageDirective(language: string): string {
+  return [
+    "",
+    "Language:",
+    `- Write the ENTIRE email in ${language} — subject line and body. The recipient does not read English.`,
+    "- The instructions and any examples above are written in English purely because that is the language of this prompt. They are NOT a model for the language of your output.",
+    `- Keep proper nouns (people, companies, products) as they are given. Everything you write yourself must be natural, idiomatic ${language} as used in business correspondence — not a literal translation of an English sentence.`,
+  ].join("\n");
+}
+
+function buildClientCommsVoiceDirective(voice: string): string {
+  return [
+    "",
+    "OUR VOICE (how every message a person reads from us is written; follow it for HOW you write. WHAT you write, its facts and its ask, stays what the prompt, the instructions and the inputs say. Lines about tools or actions you do not have here do not apply to you):",
+    "<<<",
+    voice,
+    ">>>",
+  ].join("\n");
+}
+
+interface GiveLists {
+  giveForFree?: string[];
+  neverGive?: string[];
+}
+
+function buildGiveListsDirective(raw: GiveLists | null | undefined): string {
+  const giveForFree = Array.isArray(raw?.giveForFree) ? raw!.giveForFree : [];
+  const neverGive = Array.isArray(raw?.neverGive) ? raw!.neverGive : [];
+  if (giveForFree.length === 0 && neverGive.length === 0) return "";
+  const lines = ["", "What the sender offers (stated by the sender; these rules override the prompt above):"];
+  if (giveForFree.length > 0) {
+    lines.push(
+      "- The sender gives the following for free to a prospect who replies:",
+      ...giveForFree.map((item) => `  - ${item}`),
+      "- Make ONE of these the ask of the first email: the concrete thing the prospect gets by replying. Pick the one that fits this prospect best, name it plainly, and make replying the way to get it. It replaces a generic call to action (\"worth a chat?\", \"open to a call?\"). Follow-up steps may come back to it.",
+      "- Describe it exactly as stated. Do not enlarge it, attach conditions, or add anything the sender did not list."
+    );
+  }
+  if (neverGive.length > 0) {
+    lines.push(
+      "- The sender will NEVER give the following. Do not offer, promise, suggest or hint at any of them, in any step of the sequence, not even as a possibility:",
+      ...neverGive.map((item) => `  - ${item}`)
+    );
+  }
+  return lines.join("\n");
+}
+
+function buildCampaignInstructionDirective(raw: unknown): string {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) return "";
+  return [
+    "",
+    "The campaign's own INSTRUCTION (written by the sender for this campaign; it overrides the prompt above, every rule above about what to offer or ask, and the template's angle, pitch, structure, length and number of steps):",
+    "<<<",
+    text,
+    ">>>",
+    "- Follow it. Write exactly the email it asks for, to this recipient, and nothing it does not ask for.",
+    "- If it asks for a single email, return a single step in `emails`.",
+    "- State only what the instruction or the inputs above say. Never invent a figure, a price, a promise, a result or a customer.",
+    "- It never changes the JSON format above, and never the universal rules (no sign-off, no placeholder but the four sender ones).",
+  ].join("\n");
+}
+
+function buildLeadRelationshipDirective(rel: Relationship | null): string {
+  if (!rel) return "";
+  const out = [
+    "",
+    "WHO THE RECIPIENT ALREADY IS TO US (see the section \"Who this person already is to us\" in the message). This wins over the prompt above, the template's angle and framing, and any instruction above that assumes a first contact. It never changes the JSON format above, and never the universal rules (no sign-off, no placeholder but the four sender ones).",
+  ];
+  if (rel.strategy) {
+    out.push("The strategy, word for word:", "<<<", rel.strategy, ">>>");
+  }
+  out.push(
+    "- A template written as a cold first contact gives you only the PURPOSE of this email, never its framing. To someone we know, write as someone who knows them, continuing the relationship and the conversation shown, in the language and tone of that conversation.",
+    "- Never a cold introduction, never \"I came across your profile\", never a pitch written to a stranger, never a claim that we have never met unless the section says we never exchanged a message and they were judged none of the known relationships.",
+    "- Never mention how we classify them (no tag, no label).",
+  );
+  return out.join("\n");
+}
+
+// SENDER-NAME-BODY-1111: the signature appended after the text, as the asking script chose it (placeholders filled at send).
+function buildSignatureDirective(signature: string): string {
+  return [
+    "",
+    "THE SIGNATURE appended after your text for this email (the sender placeholders in it are filled at send):",
+    "<<<",
+    signature,
+    ">>>",
+  ].join("\n");
+}
+
