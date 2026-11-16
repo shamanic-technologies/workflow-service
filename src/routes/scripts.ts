@@ -45,6 +45,8 @@ import { noteScriptRunForGuard, rollBackSwitches, guardView } from "../lib/scrip
 import { SwitchError, recordSwitch } from "../lib/scripts/script-writer-switch.js";
 import { productionRollbackDeps } from "../lib/scripts/script-guard-deps.js";
 import { serviceSwitchState, switchService } from "../lib/scripts/script-service-switch.js";
+import { ProofError, productionProofDeps, proofTarget, proveScript, readWriterProofs, setEngineEnforced } from "../lib/scripts/writer-proof.js";
+import { WriterProofEngineRequestSchema, WriterProofRequestSchema } from "../schemas.js";
 import { renameDynasty } from "../lib/scripts/script-names.js";
 
 /**
@@ -482,9 +484,55 @@ internalScriptsRouter.get("/internal/scripts/monitoring", requireApiKey, async (
     await maybeRefreshMonitoring(db, productionMonitoringDeps());
     // Campaign Engines (MIGRATE-1105 S2b): served from the stored rows; a stale series refreshes in the background.
     void maybeRefreshEngineMonitoring(db, productionEngineMonitoringDeps());
-    res.json({ ...(await readMonitoring(db, days)), engines: await readEngineMonitoring(db, days) });
+    res.json({ ...(await readMonitoring(db, days)), engines: await readEngineMonitoring(db, days), writerProofs: await readWriterProofs(db) });
   } catch (err) {
     fail(res, err, "read script monitoring");
+  }
+});
+
+// PROVEN-BEFORE-PEOPLE-1116: prove one writer combination (synchronous: a few LLM calls, bounded spend).
+internalScriptsRouter.post("/internal/scripts/writer-proofs", requireApiKey, async (req, res) => {
+  const parsed = WriterProofRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const row = await proofTarget(db, parsed.data.outcome, parsed.data.dynasty);
+    if (!row) {
+      res.status(404).json({ error: `no ${parsed.data.outcome}/${parsed.data.dynasty}` });
+      return;
+    }
+    res.json(await proveScript(db, productionProofDeps(productionVendorDeps()), row, "staff"));
+  } catch (err) {
+    if (err instanceof ProofError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    fail(res, err, "prove a writer");
+  }
+});
+
+internalScriptsRouter.get("/internal/scripts/writer-proofs", requireApiKey, async (_req, res) => {
+  try {
+    res.json(await readWriterProofs(db));
+  } catch (err) {
+    fail(res, err, "read writer proofs");
+  }
+});
+
+internalScriptsRouter.put("/internal/scripts/writer-proofs/engines/:outcome", requireApiKey, async (req, res) => {
+  const parsed = WriterProofEngineRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  try {
+    const decidedBy = typeof req.headers["x-email"] === "string" && req.headers["x-email"] ? req.headers["x-email"] : "workflow-service staff key";
+    await setEngineEnforced(db, String(req.params.outcome), parsed.data.enforced, decidedBy);
+    res.json({ outcome: String(req.params.outcome), enforced: parsed.data.enforced });
+  } catch (err) {
+    fail(res, err, "enforce writer proofs");
   }
 });
 

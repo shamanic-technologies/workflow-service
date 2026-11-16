@@ -22,6 +22,7 @@ import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
+import { writerProofAllows } from "./writer-proof.js";
 
 /** The caller a campaign Engine switch is recorded under. */
 export const CAMPAIGN_CALLER = "campaign";
@@ -267,6 +268,8 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
     if (!(await provenness(db, row)).runnable) continue;
+    // PROVEN-BEFORE-PEOPLE-1116: a writer of an enforced Engine is drawn only once proven on recorded cases.
+    if (!(await writerProofAllows(db, row))) continue;
     out.push(row);
   }
   return out;

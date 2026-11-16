@@ -20,6 +20,7 @@ import { runScript, type Bridge, type ScriptResult } from "./sandbox.js";
 import { callVendor, type VendorDeps } from "./vendors.js";
 import { ScriptCatalogueError, activeVersion, caseCount, dynastyVersions, type AnyPgDb } from "./script-catalogue.js";
 import { pickScript } from "./engine.js";
+import { recordWriterCase, type RecordedCall } from "./writer-proof.js";
 
 export interface SubjectRef {
   service: string;
@@ -203,6 +204,9 @@ export async function runStoredScript(
 
   // The Request this run hands the next piece it orders (`ctx.ask`), consumed by that `ctx.get`.
   let asked: Record<string, unknown> | null = null;
+  // PROVEN-BEFORE-PEOPLE-1116: what this run saw, kept as a case of its Engine when its script writes to a person.
+  const recorded: RecordedCall[] = [];
+  const askedUnits: Record<string, unknown> = {};
 
   const bridge: Bridge = async (op, args) => {
     if (op === "get") {
@@ -211,7 +215,9 @@ export async function runStoredScript(
       if (held === undefined && asked) {
         const request = asked;
         asked = null;
-        return provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, headers: who.headers }, deps);
+        const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, headers: who.headers }, deps);
+        if ("v" in provided) askedUnits[outcome] = provided.v;
+        return provided;
       }
       if (held === undefined) return { stop: `the script asked for ${outcome}, which this step was not handed (materials: ${Object.keys(input.units).join(", ") || "none"})` };
       const n = gotten.get(outcome) ?? 0;
@@ -235,6 +241,7 @@ export async function runStoredScript(
       // BRAND-TOOLS-EVERY-SCRIPT-1109: how many brand tool calls a completion made, on the run's record (any vendor that serves it).
       const brandToolCalls = answer.ok && typeof answer.data.brandToolCalls === "number" ? answer.data.brandToolCalls : undefined;
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }), ...(brandToolCalls !== undefined ? { brandToolCalls } : {}) });
+      recorded.push({ name, args: args[1] ?? null, answer });
       if (input.trace) trace.push({ name, args: args[1] ?? null, answer, ...(exchange ? (exchange as { sent: Record<string, unknown>; raw: Record<string, unknown> }) : {}) });
       return { v: answer };
     }
@@ -258,7 +265,8 @@ export async function runStoredScript(
     return { stop: `${String(op)} is not a script context call` };
   };
 
-  const out = await runScript(row.code, { subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day: Math.floor(Date.now() / 86_400_000), tactics, request: input.request ?? null }, bridge);
+  const day = Math.floor(Date.now() / 86_400_000);
+  const out = await runScript(row.code, { subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day, tactics, request: input.request ?? null }, bridge);
   const made = out.kind === "done" && out.result !== null && typeof out.result === "object" ? (out.result as NonNullable<ScriptResult>) : null;
   const waited = out.kind === "stopped" && out.reason.startsWith(WAIT_STOP);
   let status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : waited ? "waiting" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
@@ -324,6 +332,15 @@ export async function runStoredScript(
       finishedAt: new Date(),
     })
     .where(eq(scriptRuns.id, record!.id));
+  try {
+    await recordWriterCase(db, row, {
+      runId,
+      orgId: who.orgId,
+      body: { units: input.units, request: input.request ?? null, tactics: input.tactics ?? {}, subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day, calls: recorded, asked: askedUnits },
+    });
+  } catch (e) {
+    console.error(`[workflow-service] ${scriptSlug} run ${runId}: its writer case could NOT be kept: ${e instanceof Error ? e.message : String(e)}`);
+  }
   if (finalStatus === "failed" || finalStatus === "stopped") throw new ScriptRunFailed(result);
   return result;
 }

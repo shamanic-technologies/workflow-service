@@ -35,6 +35,8 @@ import { closeOrphanEngineRuns } from "./lib/scripts/engine-runner.js";
 import { nameUnnamedScripts, productionNamer } from "./lib/scripts/script-names.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
 import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, setEngineMonitoringContext } from "./lib/scripts/engine-monitoring.js";
+import { abandonRunningProofs, productionProofDeps, setProofContext } from "./lib/scripts/writer-proof.js";
+import { productionVendorDeps } from "./lib/scripts/vendors.js";
 import { setGuardContext } from "./lib/scripts/script-guard.js";
 import { productionRollbackDeps } from "./lib/scripts/script-guard-deps.js";
 
@@ -187,6 +189,12 @@ async function boot(): Promise<void> {
     setMonitoringContext(monitoring);
     // The fleet writer's roll-back guard: checked after script runs, at most once a minute (script-guard.ts).
     setGuardContext({ db, deps: productionRollbackDeps() });
+    // PROVEN-BEFORE-PEOPLE-1116: a proof a dead process left running holds nothing out; unproven writers of an
+    // enforced Engine are proven in the background the first time the Rating meets them.
+    void abandonRunningProofs(db)
+      .then((n) => n > 0 && console.log(`[workflow-service] ${n} writer proof(s) left running by the previous process marked abandoned`))
+      .catch((e) => console.error(`[workflow-service] writer proofs left running could NOT be marked abandoned: ${String(e)}`));
+    setProofContext({ db, deps: productionProofDeps(productionVendorDeps()) });
     setTimeout(() => void maybeRefreshMonitoring(monitoring.db, monitoring.deps), 60_000).unref();
     // Campaign Engines, script vs workflow (MIGRATE-1105 S2b): every 15 min at most, riding the same traffic.
     if (process.env.FEATURES_SERVICE_URL && process.env.FEATURES_SERVICE_API_KEY) {

@@ -3778,6 +3778,140 @@
           "orgId"
         ]
       },
+      "WriterProofRequest": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "minLength": 1
+          },
+          "dynasty": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "outcome",
+          "dynasty"
+        ]
+      },
+      "WriterProofs": {
+        "type": "object",
+        "properties": {
+          "engines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string"
+                },
+                "enforced": {
+                  "type": "boolean",
+                  "description": "Its Rating draws only proven writers."
+                },
+                "cases": {
+                  "type": "integer",
+                  "description": "Recorded production cases kept."
+                }
+              },
+              "required": [
+                "outcome",
+                "enforced",
+                "cases"
+              ]
+            }
+          },
+          "combinations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WriterProofCombination"
+            }
+          }
+        },
+        "required": [
+          "engines",
+          "combinations"
+        ]
+      },
+      "WriterProofCombination": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string"
+          },
+          "dynasty": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "llm": {
+            "type": "string",
+            "nullable": true,
+            "description": "The LLM its tactics state."
+          },
+          "live": {
+            "type": "boolean",
+            "description": "Version and dynasty active (the Rating may draw it, when its proof allows)."
+          },
+          "state": {
+            "type": "string",
+            "description": "Its latest proof: passed | failed | running | error | no_cases | abandoned, or unproven."
+          },
+          "usable": {
+            "type": "integer"
+          },
+          "sample": {
+            "type": "integer"
+          },
+          "spendAtMostUsd": {
+            "type": "number",
+            "nullable": true,
+            "description": "Upper bound of the proof's LLM spend (Opus list prices); the real spend is on its runs-service run."
+          },
+          "provedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why the cases it failed are not usable."
+          },
+          "red": {
+            "type": "boolean",
+            "description": "A live combination that failed its proof."
+          }
+        },
+        "required": [
+          "outcome",
+          "dynasty",
+          "version",
+          "llm",
+          "live",
+          "state",
+          "usable",
+          "sample",
+          "spendAtMostUsd",
+          "provedAt",
+          "failures",
+          "red"
+        ]
+      },
+      "WriterProofEngineRequest": {
+        "type": "object",
+        "properties": {
+          "enforced": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enforced"
+        ]
+      },
       "ScriptGuard": {
         "type": "object",
         "properties": {
@@ -4945,12 +5079,16 @@
               "outcomes"
             ],
             "description": "MIGRATE-1105 S2b: campaign Engines, per UTC day x outcome, runs by stored script (no workflow) vs by workflow, from this service's own run rows; spend from a runs-service cost sample."
+          },
+          "writerProofs": {
+            "$ref": "#/components/schemas/WriterProofs"
           }
         },
         "required": [
           "since",
           "outcomes",
-          "engines"
+          "engines",
+          "writerProofs"
         ]
       }
     },
@@ -11309,6 +11447,155 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/scripts/writer-proofs": {
+      "post": {
+        "summary": "Prove one writer combination on its Engine's recorded cases (service key only)",
+        "description": "PROVEN-BEFORE-PEOPLE-1116. Runs the dynasty's active version (else its latest, a retired dynasty included) on up to 5 recorded production cases: its LLM live with its own tactics (platform run, support product_feature), every other call from the record, nothing sent. Usable = its script reads the answer and Jev judges every field a person would read usable. Spend bound: $4 at Opus list prices.",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriterProofRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown dynasty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already being proven",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Sends nothing to a person",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Every Engine's recorded cases and every writer combination's latest proof (service key only)",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The proofs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriterProofs"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/scripts/writer-proofs/engines/{outcome}": {
+      "put": {
+        "summary": "Enforce writer proofs on one Engine's Rating, or stop (service key only)",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriterProofEngineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string"
+                    },
+                    "enforced": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "enforced"
+                  ]
                 }
               }
             }
