@@ -159,6 +159,57 @@ export interface PickInput {
    * only those reading the most of them serve the ask (`readersOfHanded`); absent / none read = every candidate.
    */
   handed?: string[];
+  /**
+   * The org the run acts for (LOCAL-CLAUDE-RATING-1116): a script is drawn only where the LLM it states runs AS STATED
+   * for that org (chat-service decides; an org on local Claude runs a non-Claude LLM as Claude). Absent = not asked.
+   */
+  orgId?: string | null;
+}
+
+/** One LLM as a script's tactics state it (`llm` / `llms[place]`): provider + chat-service LLM dynasty slug. */
+export interface StatedLlm {
+  provider: string;
+  model: string;
+}
+
+/** PURE: every LLM a script's tactics state (`llm`, every `llms[place]`), deduped; none = the script states none. */
+export function statedLlmsOf(tactics: unknown): StatedLlm[] {
+  const t = (tactics ?? {}) as Record<string, unknown>;
+  const raw: unknown[] = [t.llm, ...(t.llms && typeof t.llms === "object" && !Array.isArray(t.llms) ? Object.values(t.llms as Record<string, unknown>) : [])];
+  const out = new Map<string, StatedLlm>();
+  for (const l of raw) {
+    if (!l || typeof l !== "object") continue;
+    const { provider, model } = l as Record<string, unknown>;
+    if (typeof provider === "string" && typeof model === "string") out.set(`${provider}/${model}`, { provider, model });
+  }
+  return [...out.values()];
+}
+
+/**
+ * For one org, which of `llms` it runs AS STATED (key `<provider>/<model>`; false = chat-service would run another model
+ * in its place, e.g. an org on local Claude). Throws when it cannot be read (fail closed: the run picks nothing, retried).
+ */
+export type LlmServingReader = (orgId: string, llms: StatedLlm[]) => Promise<Map<string, boolean>>;
+
+let llmServing: LlmServingReader | null = null;
+/** Production wires chat-service's read; tests swap it. Unset = every LLM runs as stated (no org filter). */
+export function setLlmServingReader(r: LlmServingReader | null): void {
+  llmServing = r;
+}
+
+/**
+ * PURE (LOCAL-CLAUDE-RATING-1116, owner 2026-11-16 « par design sans avoir besoin de changer les briefs »): keep the
+ * scripts every stated LLM of which runs as stated. A script stating none is kept. Nothing is keyed on a client, a model
+ * or an outcome: the serving answer is chat-service's.
+ */
+export function runsAsStated<T extends { tactics: unknown }>(rows: T[], served: ReadonlyMap<string, boolean>): T[] {
+  return rows.filter((r) =>
+    statedLlmsOf(r.tactics).every((l) => {
+      const v = served.get(`${l.provider}/${l.model}`);
+      if (v === undefined) throw new Error(`no answer on whether ${l.provider}/${l.model} runs as stated`);
+      return v;
+    }),
+  );
 }
 
 /**
@@ -272,7 +323,12 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     if (!(await writerProofAllows(db, row))) continue;
     out.push(row);
   }
-  return out;
+  // LOCAL-CLAUDE-RATING-1116: only where its stated LLM runs as stated for this org (one read per pick).
+  if (!input.orgId || !llmServing) return out;
+  const stated = new Map<string, StatedLlm>();
+  for (const r of out) for (const l of statedLlmsOf(r.tactics)) stated.set(`${l.provider}/${l.model}`, l);
+  if (stated.size === 0) return out;
+  return runsAsStated(out, await llmServing(input.orgId, [...stated.values()]));
 }
 
 /**
