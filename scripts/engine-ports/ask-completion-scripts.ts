@@ -242,3 +242,30 @@ ASKING_SCRIPTS.push(
   },
   { outcome: "whatsapp_message_sent", dynasty: "dy_founder_hello", edits: FOUNDER_HELLO_EDITS, append: ASKED_WRITER_HELPER },
 );
+
+/**
+ * A DAG port (dag-port.ts): its writer step called the "llm.complete" door through `callStep` with the model a
+ * features-service pick + plan step read; the step now asks the completion (door name `llm_completion`), the pick and
+ * plan steps are gone.
+ */
+const DAG_PORT_EDITS: Edit[] = [
+  { from: `  if (door === "llm.complete") args = sent(s.body ?? {});`, to: `  if (door === "llm_completion") args = sent(s.body ?? {});` },
+  {
+    from: `  for (let attempt = 0; ; attempt++) {
+    const r: { ok: boolean; data: any } = ctx.vendor.call(door, args);`,
+    to: `  // ONE-WRITER-N-MODELS-1116-OTHERS: the writer's completion is asked of the LLM completion Engine.
+  if (door === "llm_completion") return askCompletionData(ctx, args);
+  for (let attempt = 0; ; attempt++) {
+    const r: { ok: boolean; data: any } = ctx.vendor.call(door, args);`,
+  },
+  {
+    from: `  results.llm_pick = callStep(ctx, "llm.pick", { service: "features", method: "GET", path: "/internal/llm-pick", query: {"place":"writer"}, skip: (results.compose?.skip) }, 2);
+  results.llm_plan = step_llm_plan((results.llm_pick), (results.compose?.skip));
+`,
+    to: ``,
+  },
+  { from: `  results.draft = callStep(ctx, "llm.complete", {`, to: `  results.draft = callStep(ctx, "llm_completion", {` },
+  { from: `, provider: results.llm_plan?.provider, model: results.llm_plan?.model}`, to: `}` },
+];
+
+ASKING_SCRIPTS.push({ outcome: "lead_interested", dynasty: "dy_follow_up_due", edits: DAG_PORT_EDITS });
