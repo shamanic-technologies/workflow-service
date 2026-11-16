@@ -16,6 +16,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { scriptCases, scripts, type ScriptRow } from "../../db/schema.js";
 import { replayAll, type ReplayCase, type ReplaySummary } from "./replay.js";
 import { ScriptSourceError, validateSource } from "./sandbox.js";
+import { nameNewDynasty, productionNamer, type NameDynasties } from "./script-names.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPgDb = PgDatabase<PgQueryResultHKT, any, any>;
@@ -36,6 +37,8 @@ export class ScriptCatalogueError extends Error {
 export interface CatalogueDeps {
   /** True when the outcome is a features-service catalogue step (the ledger refuses any other key). */
   isKnownOutcome(outcome: string): Promise<boolean>;
+  /** Names a new dynasty that states none (CAMPAIGN-SCRIPTS-1113-NAMES, src/lib/scripts/script-names.ts). */
+  nameDynasties: NameDynasties;
 }
 
 export interface Author {
@@ -52,6 +55,7 @@ export function summarizeScript(row: ScriptRow, caseCount: number) {
     dynasty: row.dynasty,
     version: row.version,
     scriptSlug: `${row.outcome}/${row.dynasty}/v${row.version}`,
+    name: row.name ?? null,
     description: row.description,
     materials: row.materials,
     vendors: row.vendors,
@@ -193,6 +197,8 @@ export interface CreateInput {
   code: string;
   description: string;
   tactics?: Record<string, unknown>;
+  /** The client-readable name; absent = written by the namer from the description and tactics. */
+  name?: string;
 }
 
 /** A new idea: a new dynasty, version 1. */
@@ -207,6 +213,7 @@ export async function createScript(db: AnyPgDb, input: CreateInput, author: Auth
   if (taken) throw new ScriptCatalogueError(409, "dynasty_exists", `${input.outcome}/${input.dynasty} exists: upgrade it, or fork it under a new dynasty name`);
   const read = await readSource(input.code);
   const replay = await requireProven(db, input.outcome, input.dynasty, input.code, input.tactics ?? {});
+  const name = await nameNewDynasty(db, input.outcome, { dynasty: input.dynasty, description: input.description, tactics: input.tactics ?? {} }, input.name, deps.nameDynasties);
   const [row] = await db
     .insert(scripts)
     .values({
@@ -218,6 +225,7 @@ export async function createScript(db: AnyPgDb, input: CreateInput, author: Auth
       vendors: read.vendors,
       tactics: input.tactics ?? {},
       description: input.description,
+      name,
       creationType: "scratch",
       orgId: author.orgId,
       createdBy: author.createdBy,
@@ -284,6 +292,7 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
         vendors: read.vendors,
         tactics: input.tactics ?? current.tactics,
         description: input.description ?? current.description,
+        name: current.name,
         dynastyStatus: current.dynastyStatus,
         ...(retired ? { status: "deprecated" as const, deprecationReason: current.deprecationReason ?? "Retired dynasty" } : {}),
         creationType: "upgrade",
@@ -302,10 +311,12 @@ export interface ForkInput {
   description: string;
   code?: string;
   tactics?: Record<string, unknown>;
+  /** The new dynasty's client-readable name; absent = written by the namer (a fork is a new idea, never its source's name). */
+  name?: string;
 }
 
 /** A different idea: a new dynasty (version 1) from a source version; the source is never written. */
-export async function forkScript(db: AnyPgDb, outcome: string, sourceDynasty: string, input: ForkInput, author: Author): Promise<ScriptRow> {
+export async function forkScript(db: AnyPgDb, outcome: string, sourceDynasty: string, input: ForkInput, author: Author, deps: Pick<CatalogueDeps, "nameDynasties">): Promise<ScriptRow> {
   const source = await activeVersion(db, outcome, sourceDynasty);
   if (!source) throw new ScriptCatalogueError(404, "not_found", `no active version of ${outcome}/${sourceDynasty} to fork`);
   checkSlug("dynasty", input.dynasty);
@@ -317,6 +328,9 @@ export async function forkScript(db: AnyPgDb, outcome: string, sourceDynasty: st
   if (taken) throw new ScriptCatalogueError(409, "dynasty_exists", `${outcome}/${input.dynasty} exists: pick a new dynasty name`);
   const code = input.code ?? source.code;
   const read = await readSource(code);
+  const tactics = input.tactics ?? (source.tactics as Record<string, unknown>);
+  const replay = await requireProven(db, outcome, input.dynasty, code, tactics ?? {});
+  const name = await nameNewDynasty(db, outcome, { dynasty: input.dynasty, description: input.description, tactics: tactics ?? {} }, input.name, deps.nameDynasties);
   const [row] = await db
     .insert(scripts)
     .values({
@@ -328,11 +342,12 @@ export async function forkScript(db: AnyPgDb, outcome: string, sourceDynasty: st
       vendors: read.vendors,
       tactics: input.tactics ?? source.tactics,
       description: input.description,
+      name,
       creationType: "fork",
       createdFromScript: source.id,
       orgId: author.orgId,
       createdBy: author.createdBy,
-      replay: await requireProven(db, outcome, input.dynasty, code, input.tactics ?? (source.tactics as Record<string, unknown>) ?? {}),
+      replay,
     })
     .returning();
   return row!;
@@ -409,5 +424,6 @@ export function productionCatalogueDeps(): CatalogueDeps {
       const body = (await res.json()) as { rows?: Array<{ key?: unknown }> };
       return (body.rows ?? []).some((r) => r.key === outcome);
     },
+    nameDynasties: productionNamer(),
   };
 }

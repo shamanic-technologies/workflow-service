@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -51,7 +52,7 @@ beforeEach(async () => {
   db = await freshDb();
 }, 60_000);
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const known = { isKnownOutcome: async () => true };
+const known = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 
 async function provenJudge() {
   await putCases(db, "lead_interested", "dy_reply_judge", [CASE], "test");

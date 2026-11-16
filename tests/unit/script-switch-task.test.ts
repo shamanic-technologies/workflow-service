@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -24,7 +25,7 @@ async function freshDb() {
 const PURE = `export default function run(ctx) { return { content: { kind: ctx.get("message_sent").content.kind } }; }`;
 const CASE: ReplayCase = { id: "c1", units: { message_sent: { kind: "reply" } }, calls: [], expect: { content: { kind: "reply" } } };
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const known = { isKnownOutcome: async () => true };
+const known = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 
 let db: AnyPgDb;
 beforeEach(async () => {

@@ -39,7 +39,7 @@ if (process.argv.includes("--print-sql")) {
 }
 const { db } = await import("../dist/db/index.js");
 const { scripts } = await import("../dist/db/schema.js");
-const { activeVersion, upgradeScript, forkScript } = await import("../dist/lib/scripts/script-catalogue.js");
+const { activeVersion, upgradeScript, forkScript, productionCatalogueDeps } = await import("../dist/lib/scripts/script-catalogue.js");
 const { and, eq } = await import("drizzle-orm");
 
 const apply = process.argv.includes("--apply");
@@ -146,7 +146,7 @@ for (const row of targets) {
   console.log(`${label}: ${combos.length} combination(s) from ${source}: ${combos.map(what).join(", ")}`);
   try {
     if (apply) {
-      const up = await upgradeScript(db, row.outcome, row.dynasty, { code: row.code, tactics: tacticsFor(row.tactics, head) }, { orgId: row.orgId, createdBy: AUTHOR });
+      const up = await upgradeScript(db, row.outcome, row.dynasty, { code: row.code, tactics: tacticsFor(row.tactics, head) }, { orgId: row.orgId, createdBy: AUTHOR }, productionCatalogueDeps());
       report.push(`${label} | UPGRADE | v${row.version} -> v${up.version} | ${what(head)}`);
     } else report.push(`${label} | UPGRADE | v${row.version} -> v${row.version + 1} | ${what(head)}`);
   } catch (e) {
@@ -163,7 +163,7 @@ for (const row of targets) {
     const description = `${row.description} Writes with ${llms.get(c.llm).name ?? c.llm}${writesWithTemplate ? ` on the template ${c.template}` : ""}.`;
     try {
       if (apply) {
-        const f = await forkScript(db, row.outcome, row.dynasty, { dynasty: name, description, code: row.code, tactics: tacticsFor(row.tactics, c) }, { orgId: row.orgId, createdBy: AUTHOR });
+        const f = await forkScript(db, row.outcome, row.dynasty, { dynasty: name, description, code: row.code, tactics: tacticsFor(row.tactics, c) }, { orgId: row.orgId, createdBy: AUTHOR }, productionCatalogueDeps());
         report.push(`${row.outcome}/${name} | NEW DYNASTY (fork of ${row.dynasty}) | v${f.version} | ${what(c)}`);
       } else report.push(`${row.outcome}/${name} | NEW DYNASTY (fork of ${row.dynasty}) | v1 | ${what(c)}`);
     } catch (e) {
