@@ -54,8 +54,16 @@ export const ANSWER_LEAD_CALL_OUTCOME = "booking_call";
  * `dy_answer_lead*` dynasty is upgraded with them: `scripts/engine-ports/answer-lead-local-time-store.ts`); the
  * generator below already carries every `to`.
  */
-export const ANSWER_CC_DESCRIPTION =
+/** The cc description LOCAL-TIME-ANSWERER-1115 stored (it described instantly-service's default copy, deleted by NO-DEFAULT-COPY-1116). */
+export const ANSWER_CC_DESCRIPTION_1115 =
   "Email only: the addresses copied, never the address it goes to. Empty = the usual copy: nobody when the person never wrote to us, our team and the brand's sales rep once they did.";
+/**
+ * COPY-BY-WRITER-1116 (prod 2026-11-16: a follow-up to a lead left with our agency inbox and the client's sales rep in
+ * Cc, the writer having left cc empty; owner: who is copied is the script's decision, never a rule in the sender).
+ * The sender sends exactly the To / Cc / Bcc it is handed, so empty means nobody; WHO to copy stays the game's one
+ * principle ("Copy the people a person would copy..."), never a rule per case here.
+ */
+export const ANSWER_CC_DESCRIPTION = "Email only: the addresses copied, never the address it goes to. Empty = nobody is copied.";
 export const ANSWER_BCC_DESCRIPTION = "Email only: the addresses copied without the others seeing it, never the address it goes to. Usually empty.";
 
 export const ANSWER_LOCAL_TIME_EDITS: ReadonlyArray<{ why: string; from: string; to: string }> = [
@@ -63,7 +71,7 @@ export const ANSWER_LOCAL_TIME_EDITS: ReadonlyArray<{ why: string; from: string;
     "THEIR TIMEZONE: " + (s(lead.timezone) || "not stated") + ". Clues: " + [lead.city, lead.state, lead.country, phone].filter(Boolean).join(", "),
 `, to: `    "THEIR LOCAL TIME:\\n" + localTimeLines(now, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: phone, places: s(lead.state) ? [{ label: "their state or region", value: lead.state }] : [] }).join("\\n"),
 ` },
-  { why: "the cc description says what the sender does when it is empty", from: "Email only: the addresses copied. Empty = our usual copy (our team).", to: ANSWER_CC_DESCRIPTION },
+  { why: "the cc description says what the sender does when it is empty", from: "Email only: the addresses copied. Empty = our usual copy (our team).", to: ANSWER_CC_DESCRIPTION_1115 },
   { why: "the bcc description: never the address it goes to", from: "Email only: the addresses copied without the others seeing it. Usually empty.", to: ANSWER_BCC_DESCRIPTION },
   { why: "the address it goes to is never also copied (2026-11-13: a lead copied to himself)", from: `  const cc = uniq(addrs(d.cc)).filter(function (a) { return to.indexOf(a) < 0; });
   const bcc = uniq(addrs(d.bcc)).filter(function (a) { return to.indexOf(a) < 0 && cc.indexOf(a) < 0; });
@@ -73,6 +81,11 @@ export const ANSWER_LOCAL_TIME_EDITS: ReadonlyArray<{ why: string; from: string;
   const bcc = uniq(addrs(d.bcc)).filter(function (a) { return sentTo.indexOf(a) < 0 && cc.indexOf(a) < 0; });
 ` },
   { why: "the local time helpers, appended (function declarations hoist)", from: "\nconst K = {", to: "\n" + LOCAL_TIME_FN + "\nconst K = {" },
+];
+
+/** COPY-BY-WRITER-1116: the anchored edit of the STORED code (`scripts/engine-ports/answer-lead-copy-by-writer-store.ts`). */
+export const ANSWER_COPY_BY_WRITER_EDITS: ReadonlyArray<{ why: string; from: string; to: string }> = [
+  { why: "empty cc = nobody: the sender sends exactly what the writer hands it", from: ANSWER_CC_DESCRIPTION_1115, to: ANSWER_CC_DESCRIPTION },
 ];
 
 /** What the writer answers, strict (Anthropic needs every property required, no extra one). */
