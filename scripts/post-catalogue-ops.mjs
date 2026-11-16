@@ -4,7 +4,7 @@
  * service's own script routes on localhost (INTRO-BOARDY-1114). Dry run by default (prints what it would do);
  * `--apply` writes. Run inside the workflow-service container with a real staff identity (who decided):
  *   docker exec -i -e ORG_ID=… -e USER_ID=… -e STAFF_EMAIL=… distribute-workflow-service-1 node scripts/post-catalogue-ops.mjs [--apply]
- * Ops: `create` {body} (409 = already stored, skipped); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
+ * Ops: `create` {body} (409 = already stored: UPGRADED to the generator's code/tactics/description unless the active version already is); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
  * (UPGRADE of every active dynasty of that prefix whose code holds `from` exactly once; `edits` [{from, to}] instead of
  * one pair = every anchor found exactly once, applied in order, in ONE upgrade); `tag` {outcome, dynastyPrefix,
  * tactics} (UPGRADE with the same code and the tactics merged in; skipped when already carried). `includeRetired: true`
@@ -67,7 +67,18 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
     }
     const r = await call("POST", "/scripts", b);
     console.log(`create ${b.outcome}/${b.dynasty}: ${r.status} ${r.status === 201 ? `v${r.json.version}` : JSON.stringify(r.json).slice(0, 300)}`);
-    if (r.status !== 201 && r.status !== 409) failed++;
+    if (r.status === 409) {
+      // Already stored: the generator's code is the next version unless it is already the active one.
+      const active = (await activeOf(b.outcome, b.dynasty)).find((s) => s.dynasty === b.dynasty);
+      const current = active ? (await call("GET", `/scripts/${active.id}`)).json : null;
+      if (current && current.dynasty === b.dynasty && current.code === b.code && JSON.stringify(current.tactics) === JSON.stringify(b.tactics) && current.description === b.description) {
+        console.log(`  ${b.outcome}/${b.dynasty}: the active version is the generator's, skipped`);
+        continue;
+      }
+      const u = await call("POST", `/scripts/dynasty/${b.outcome}/${b.dynasty}/upgrade`, { code: b.code, description: b.description, tactics: b.tactics });
+      console.log(`  upgrade ${b.outcome}/${b.dynasty}: ${u.status} ${u.status === 201 ? `v${u.json.version}` : JSON.stringify(u.json).slice(0, 300)}`);
+      if (u.status !== 201) failed++;
+    } else if (r.status !== 201) failed++;
     continue;
   }
   for (const s of await activeOf(op.outcome, op.dynastyPrefix, op.includeRetired === true)) {

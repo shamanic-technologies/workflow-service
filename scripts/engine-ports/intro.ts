@@ -175,6 +175,7 @@ export const FIRST_EMAIL_PROMPT = [
   "- Every sentence carries a fact from the material below, true and checkable. What we know about the reader comes first, said in terms of what matters to them: one precise thing they did, in their own words when quoted.",
   "- Appreciation is that one precise fact, stated plainly. Never a superlative, never a compliment adjective, never \"I read your post\", \"I came across\" or \"I noticed\" as an opener.",
   "- When the material holds no checkable fact on someone, write less: never fill with generic words.",
+  "- How we found them is said exactly as HOW WE FOUND THEM states it: never a referral, a recommendation or someone who pointed you to them unless it says so.",
   "",
   "NO MONEY, NO PITCH",
   "- No price, no cost, no budget, no free, no discount, nothing about what anything costs.",
@@ -581,7 +582,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
       keepPool();
       return { unmade: "no_fit: no candidate is good for both sides (" + candidates.length + " looked at)", again: true };
     }
-    howFound = "a person of our lead search, among the founders and teams our AI follows";
+    howFound = "Both of them are people our lead search found (Apollo-sourced prospects our AI researched). Nobody recommended or pointed us to either of them.";
   } else if (kind === "client_to_lead") {
     const fields = must(ctx, "brand.extract_fields", { body: { fields: [
       { key: "leadership", description: "Company leadership and key team members, with their roles" },
@@ -616,7 +617,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
       keepPool();
       return { unmade: "no_fit: the brand's person is not good for this reader", again: true };
     }
-    howFound = "a person of " + (brandName || "the brand") + "'s own team";
+    howFound = "The reader is a person our lead search found (an Apollo-sourced prospect our AI researched); nobody recommended or pointed us to them. The other person is " + (brandName || "the brand") + "'s own " + (s(rep?.salesRepRole) || "team member") + ".";
   }
 
   // 3. THE EMAIL, in our voice, from the campaign brief.

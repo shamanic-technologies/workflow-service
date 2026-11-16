@@ -365,6 +365,13 @@
       "when": 1793700000000,
       "tag": "0051_engine_monitoring_unanswered",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1793700001000,
+      "tag": "0052_script_names",
+      "breakpoints": true
     }
   ]
 }

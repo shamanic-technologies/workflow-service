@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { fakeScriptPick } from "../helpers/script-pick.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -38,7 +39,7 @@ async function freshDb() {
 }
 
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const known = { isKnownOutcome: async () => true };
+const known = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 const KEY = "test-key";
 const OUTCOME = "offer_fields_drafted";
 
