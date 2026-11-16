@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { runScript, validateSource } from "../../src/lib/scripts/sandbox.js";
-import { answerLeadScriptSource, ANSWER_LOCAL_TIME_EDITS, ANSWER_SCHEMA } from "../../src/lib/scripts/answer-lead-script.js";
+import { answerLeadScriptSource, ANSWER_COPY_BY_WRITER_EDITS, ANSWER_LOCAL_TIME_EDITS, ANSWER_SCHEMA } from "../../src/lib/scripts/answer-lead-script.js";
 
 // LOCAL-TIME-ANSWERER-1115 (prod 2026-11-15): every follow-up of the day went out on a SUNDAY where the lead lives.
 // The game tells the writer to read THEIR LOCAL TIME; the message now carries it, computed, never a send rule in code.
@@ -61,9 +61,14 @@ describe("the answerer reads their local time (LOCAL-TIME-ANSWERER-1115)", () =>
     expect(message).toContain("their city: Lyon, France");
   });
 
-  it("the cc description says what the sender does by default", () => {
-    expect(ANSWER_SCHEMA.properties.cc.description).toContain("nobody when the person never wrote to us, our team and the brand's sales rep once they did");
-    expect(ANSWER_SCHEMA.properties.cc.description).not.toContain("our usual copy (our team)");
+  it("the cc description: empty = nobody is copied, no rule per case (COPY-BY-WRITER-1116)", () => {
+    expect(ANSWER_SCHEMA.properties.cc.description).toBe("Email only: the addresses copied, never the address it goes to. Empty = nobody is copied.");
+    expect(answerLeadScriptSource()).not.toContain("the usual copy");
+    expect(answerLeadScriptSource()).not.toContain("our usual copy (our team)");
+  });
+
+  it("the game's copy principle stays word for word", () => {
+    expect(answerLeadScriptSource()).toContain("Copy the people a person would copy: the others already on that conversation who should read the answer. Bcc only someone who must see it without the others knowing.");
   });
 
   it("the address it goes to is never also copied (default To included)", async () => {
@@ -85,7 +90,19 @@ describe("the answerer reads their local time (LOCAL-TIME-ANSWERER-1115)", () =>
   it("the stored-code edits: each anchor is in the old code exactly once and the edited code is the generator's", async () => {
     const generated = answerLeadScriptSource();
     // The code stored before this fix = the generator with every edit undone.
-    let old = generated;
+    // COPY-BY-WRITER-1116 came after: undo it first, then check the 1115 edits on the code as it stood then.
+    let v1115 = generated;
+    for (const e of ANSWER_COPY_BY_WRITER_EDITS) {
+      expect(v1115.split(e.to).length - 1).toBe(1);
+      v1115 = v1115.replace(e.to, () => e.from);
+    }
+    let reapplied = v1115;
+    for (const e of ANSWER_COPY_BY_WRITER_EDITS) {
+      expect(reapplied.split(e.from).length - 1).toBe(1);
+      reapplied = reapplied.replace(e.from, () => e.to);
+    }
+    expect(reapplied).toBe(generated);
+    let old = v1115;
     for (const e of [...ANSWER_LOCAL_TIME_EDITS].reverse()) {
       expect(old.split(e.to).length - 1).toBe(1);
       old = old.replace(e.to, () => e.from);
@@ -95,7 +112,7 @@ describe("the answerer reads their local time (LOCAL-TIME-ANSWERER-1115)", () =>
       expect(edited.split(e.from).length - 1).toBe(1);
       edited = edited.replace(e.from, () => e.to);
     }
-    expect(edited).toBe(generated);
+    expect(edited).toBe(v1115);
     await expect(validateSource(edited)).resolves.toBeTruthy();
   });
 });
