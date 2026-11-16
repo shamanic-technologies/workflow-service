@@ -53,6 +53,8 @@ beforeEach(async () => {
     throw new Error("no campaign strategy is read on a pick outside a run");
   });
   engine.setScriptPickReader(fakeScriptPick({ dy_good: 2, dy_bad: 1 }));
+  // LOCAL-CLAUDE-RATING-1116: chat-service answers every stated LLM runs as stated (a vendor-backed org).
+  engine.setLlmServingReader(async (_org, llms) => new Map(llms.map((l) => [`${l.provider}/${l.model}`, true])));
   app = express();
   app.use(express.json());
   app.use(enginesRoutes);
@@ -80,7 +82,7 @@ describe("POST /internal/engines/{outcome}/pick", () => {
       expect(res.body.basis).toBe("value_per_dollar");
     }
     // Same function as a run, same candidates: the kept list replaces a campaign's strategy read.
-    expect(pickSpy).toHaveBeenCalledWith(db, { outcome: "message_written", servable: ["lead_identified"], channel: null, keptDynasties: ["dy_good", "dy_bad"] });
+    expect(pickSpy).toHaveBeenCalledWith(db, { outcome: "message_written", servable: ["lead_identified"], channel: null, keptDynasties: ["dy_good", "dy_bad"], orgId: null });
     // And a run's pickScript with that same kept list answers the same dynasty.
     expect((await engine.pickScript(db, { outcome: "message_written", servable: ["lead_identified"], channel: null, keptDynasties: ["dy_good", "dy_bad"] }))!.script.dynasty).toBe("dy_good");
     // Nothing written.

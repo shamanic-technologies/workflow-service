@@ -100,16 +100,20 @@ export const codeMd5 = (code: string) => createHash("md5").update(code).digest("
  */
 export async function recordWriterCase(db: AnyPgDb, row: ScriptRow, input: { runId: string; orgId: string; body: WriterCaseBody }): Promise<boolean> {
   if (!writesToPerson(row.code)) return false;
-  if (!input.body.calls.some((c) => COMPLETIONS.has(c.name))) return false;
+  const firstLlm = input.body.calls.findIndex((c) => COMPLETIONS.has(c.name));
+  if (firstLlm < 0) return false;
+  const wrote = input.body.calls.slice(firstLlm + 1).some((c) => c.name in TO_PERSON_DOORS);
   const inserted = await db
     .insert(writerCases)
-    .values({ outcome: row.outcome, runId: input.runId, recordedFrom: `${row.outcome}/${row.dynasty}/v${row.version}`, codeMd5: codeMd5(row.code), orgId: input.orgId, body: input.body })
+    .values({ outcome: row.outcome, runId: input.runId, recordedFrom: `${row.outcome}/${row.dynasty}/v${row.version}`, codeMd5: codeMd5(row.code), wrote, orgId: input.orgId, body: input.body })
     .onConflictDoNothing()
     .returning({ id: writerCases.id });
   if (inserted.length === 0) return false;
+  // Newest kept per Engine, written and unwritten cases apart: a burst of runs that sent nothing never prunes the
+  // cases where a person was written to, the only ones that exercise a writer.
   await db.execute(sql`
-    DELETE FROM writer_cases WHERE outcome = ${row.outcome} AND id NOT IN (
-      SELECT id FROM writer_cases WHERE outcome = ${row.outcome} ORDER BY created_at DESC LIMIT ${CASES_KEPT_PER_ENGINE}
+    DELETE FROM writer_cases WHERE outcome = ${row.outcome} AND wrote = ${wrote} AND id NOT IN (
+      SELECT id FROM writer_cases WHERE outcome = ${row.outcome} AND wrote = ${wrote} ORDER BY created_at DESC LIMIT ${CASES_KEPT_PER_ENGINE}
     )`);
   return true;
 }
@@ -134,18 +138,17 @@ export async function fedCaseCount(db: AnyPgDb, row: ScriptRow): Promise<number>
   return Number(r?.n ?? 0);
 }
 
-/** The cases a proof tries, in order: those its own code recorded first, then the newest. */
+/** The cases a proof tries, in order: those where production wrote to a person first, its own code's first, newest first. */
 async function sampleCases(db: AnyPgDb, row: ScriptRow): Promise<Array<{ id: string; runId: string; recordedFrom: string; body: WriterCaseBody }>> {
   const md5 = codeMd5(row.code);
   const rows = await db
-    .select({ id: writerCases.id, runId: writerCases.runId, recordedFrom: writerCases.recordedFrom, codeMd5: writerCases.codeMd5, body: writerCases.body, createdAt: writerCases.createdAt })
+    .select({ id: writerCases.id, runId: writerCases.runId, recordedFrom: writerCases.recordedFrom, codeMd5: writerCases.codeMd5, wrote: writerCases.wrote, body: writerCases.body, createdAt: writerCases.createdAt })
     .from(writerCases)
     .where(fedClause(row))
-    .orderBy(desc(writerCases.createdAt))
-    .limit(CASES_KEPT_PER_ENGINE);
-  const own = rows.filter((r) => r.codeMd5 === md5);
-  const others = rows.filter((r) => r.codeMd5 !== md5);
-  return [...own, ...others].map((r) => ({ id: r.id, runId: r.runId, recordedFrom: r.recordedFrom, body: r.body as WriterCaseBody }));
+    .orderBy(desc(writerCases.wrote), desc(writerCases.createdAt))
+    .limit(PROOF_MAX_TRIES * 4);
+  const rank = (r: { wrote: boolean; codeMd5: string }) => (r.wrote ? 0 : 2) + (r.codeMd5 === md5 ? 0 : 1);
+  return [...rows].sort((a, b) => rank(a) - rank(b) || b.createdAt.getTime() - a.createdAt.getTime()).map((r) => ({ id: r.id, runId: r.runId, recordedFrom: r.recordedFrom, body: r.body as WriterCaseBody }));
 }
 
 /** Everything a proof needs from the outside: the vendors (platform-billed), and its one platform run. */
@@ -368,7 +371,8 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
   let runId: string | null = null;
   try {
     const candidates = await sampleCases(db, row);
-    if (candidates.length < PROOF_SAMPLE) return await finish({ state: "no_cases", casesAvailable: candidates.length });
+    const available = await fedCaseCount(db, row);
+    if (candidates.length < PROOF_SAMPLE) return await finish({ state: "no_cases", casesAvailable: available });
     runId = await deps.openRun(`script-proof:${row.outcome}/${row.dynasty}`, `writer proof of ${row.outcome}/${row.dynasty}/v${row.version} on recorded cases (PROVEN-BEFORE-PEOPLE-1116)`);
     await db.update(writerProofs).set({ runId }).where(eq(writerProofs.id, proof!.id));
     const verdicts: CaseVerdict[] = [];
@@ -399,7 +403,7 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
     }
     await deps.closeRun(runId, "completed");
     const counted = verdicts.filter((v) => v.exercised);
-    return await finish({ state, error, sample: counted.length, usable: counted.filter((v) => v.usable).length, casesAvailable: candidates.length, cases: verdicts, spendCents: spend.toFixed(4) });
+    return await finish({ state, error, sample: counted.length, usable: counted.filter((v) => v.usable).length, casesAvailable: available, cases: verdicts, spendCents: spend.toFixed(4) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(`[workflow-service] writer proof of ${row.outcome}/${row.dynasty}/v${row.version} FAILED to run: ${message}`);
