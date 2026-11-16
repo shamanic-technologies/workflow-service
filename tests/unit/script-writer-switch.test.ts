@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -180,7 +181,7 @@ beforeEach(async () => {
   db = await freshDb();
 }, 60_000);
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const known = { isKnownOutcome: async () => true };
+const known = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 
 describe("a script run recorded by content-generation", () => {
   it("declares nothing (content-generation declares the ONE message_written) and traces the exact request + whole answer", async () => {

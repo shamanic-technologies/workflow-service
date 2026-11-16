@@ -179,6 +179,8 @@ export const scripts = pgTable(
     vendors: jsonb("vendors").$type<string[]>().notNull().default([]),
     tactics: jsonb("tactics").$type<Record<string, unknown>>().notNull().default({}),
     description: text("description").notNull(),
+    // CAMPAIGN-SCRIPTS-1113-NAMES: the dynasty's short client-readable name, the same on every version (migration 0052).
+    name: text("name"),
     status: text("status").notNull().default("active"),
     dynastyStatus: text("dynasty_status").notNull().default("active"),
     creationType: text("creation_type").notNull(),

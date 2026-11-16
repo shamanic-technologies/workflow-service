@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { testNamer } from "../helpers/script-names.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -55,7 +56,7 @@ const CASE: ReplayCase = {
 };
 
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const deps = { isKnownOutcome: async (o: string) => ["message_written", "lead_identified"].includes(o) };
+const deps = { isKnownOutcome: async (o: string) => ["message_written", "lead_identified"].includes(o), nameDynasties: testNamer() };
 
 let db: AnyPgDb;
 beforeEach(async () => {
@@ -99,7 +100,7 @@ describe("script catalogue (dynasties)", () => {
     expect(versions[1]!.deprecationReason).toBe("Upgraded: replaced by version 2");
     expect(await code(upgradeScript(db, "message_written", "dy_writer", { code: WRITER_DIFFERENT }, author))).toBe("400 no_change");
 
-    const fork = await forkScript(db, "message_written", "dy_writer", { dynasty: "dy_writer_upper", description: "Shouts" }, author);
+    const fork = await forkScript(db, "message_written", "dy_writer", { dynasty: "dy_writer_upper", description: "Shouts" }, author, deps);
     expect(fork).toMatchObject({ dynasty: "dy_writer_upper", version: 1, creationType: "fork", createdFromScript: v2.id, code: WRITER_DIFFERENT });
     expect((await activeVersion(db, "message_written", "dy_writer"))!.id).toBe(v2.id);
     expect((await listScripts(db, { status: "active" })).map((s) => `${s.dynasty}/v${s.version}`)).toEqual(["dy_writer/v2", "dy_writer_upper/v1"]);
@@ -144,7 +145,7 @@ describe("script catalogue (dynasties)", () => {
     expect(v1.replay).toEqual({ cases: 1, matches: 1 });
     expect((await upgradeScript(db, "message_written", "dy_port", { code: WRITER_V2_SAME }, author)).replay).toEqual({ cases: 1, matches: 1 });
     expect(await code(upgradeScript(db, "message_written", "dy_port", { code: WRITER_DIFFERENT }, author))).toBe("422 replay_failed");
-    const fork = await forkScript(db, "message_written", "dy_port", { dynasty: "dy_port_upper", code: WRITER_DIFFERENT, description: "New idea" }, author);
+    const fork = await forkScript(db, "message_written", "dy_port", { dynasty: "dy_port_upper", code: WRITER_DIFFERENT, description: "New idea" }, author, deps);
     expect(fork.replay).toBeNull();
   });
 

@@ -1,4 +1,5 @@
 import { buildAiInstantCallSource } from "../../scripts/engine-ports/ai-instant-call.js";
+import { testNamer } from "../helpers/script-names.js";
 import { describe, it, expect, beforeEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -41,7 +42,7 @@ export default function run(ctx) {
 }`;
 
 const author = { orgId: "org-staff", createdBy: "staff@example.com" };
-const known = { isKnownOutcome: async () => true };
+const known = { isKnownOutcome: async () => true, nameDynasties: testNamer() };
 const ORG = "org-1";
 
 let db: AnyPgDb;
