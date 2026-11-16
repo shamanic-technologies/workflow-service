@@ -349,6 +349,8 @@ export const writerCases = pgTable(
     /** `<outcome>/<dynasty>/v<version>` of the production run that saw it. */
     recordedFrom: text("recorded_from").notNull(),
     codeMd5: text("code_md5").notNull(),
+    /** The production run sent something a person reads after its LLM call (migration 0054). */
+    wrote: boolean("wrote").notNull().default(false),
     orgId: text("org_id").notNull(),
     body: jsonb("body").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
