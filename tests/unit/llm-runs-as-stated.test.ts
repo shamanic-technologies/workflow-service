@@ -1,5 +1,5 @@
 import { testNamer } from "../helpers/script-names.js";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { createScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import {
   pickScript,
+  productionLlmServing,
   runsAsStated,
   setLlmServingReader,
   setScriptPickReader,
@@ -133,5 +134,51 @@ describe("statedLlmsOf / runsAsStated (pure)", () => {
 
   it("an LLM the answer does not name throws (never read as served)", () => {
     expect(() => runsAsStated([{ tactics: { llm: SONNET } }], new Map())).toThrow("anthropic/claude-sonnet");
+  });
+});
+
+describe("productionLlmServing (chat-service GET /internal/local-llm/served-llms)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const setEnv = () => {
+    process.env.CHAT_SERVICE_URL = "http://chat.test/";
+    process.env.CHAT_SERVICE_API_KEY = "chat-key";
+  };
+
+  it("asks once for the org and every stated LLM, reads runsAsStated (null = not served = not drawn)", async () => {
+    setEnv();
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
+      urls.push(url);
+      expect(init.headers["x-api-key"]).toBe("chat-key");
+      return new Response(
+        JSON.stringify({
+          orgId: LOCAL_ORG,
+          local: true,
+          llms: [
+            { llm: "anthropic/claude-sonnet", runsAsStated: true },
+            { llm: "deepseek/deepseek-flash", runsAsStated: false },
+            { llm: "nope/x", runsAsStated: null, error: "unknown" },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+    const m = await productionLlmServing(LOCAL_ORG, [
+      { provider: "anthropic", model: "claude-sonnet" },
+      { provider: "deepseek", model: "deepseek-flash" },
+      { provider: "nope", model: "x" },
+    ]);
+    expect(urls).toEqual([`http://chat.test/internal/local-llm/served-llms?orgId=${LOCAL_ORG}&llms=${encodeURIComponent("anthropic/claude-sonnet,deepseek/deepseek-flash,nope/x")}`]);
+    expect([...m.entries()]).toEqual([
+      ["anthropic/claude-sonnet", true],
+      ["deepseek/deepseek-flash", false],
+      ["nope/x", false],
+    ]);
+  });
+
+  it("a non-2xx throws (fail closed)", async () => {
+    setEnv();
+    vi.stubGlobal("fetch", async () => new Response("down", { status: 502 }));
+    await expect(productionLlmServing(LOCAL_ORG, [{ provider: "anthropic", model: "claude-sonnet" }])).rejects.toThrow("chat-service 502");
   });
 });

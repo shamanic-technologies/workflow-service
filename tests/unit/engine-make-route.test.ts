@@ -55,6 +55,8 @@ beforeEach(async () => {
     throw new Error("no campaign strategy is read: a make names no campaign");
   });
   engine.setScriptPickReader(fakeScriptPick({ dy_fields_draft: 2, dy_fields_draft__glm: 1 }));
+  // LOCAL-CLAUDE-RATING-1116: chat-service answers every stated LLM runs as stated (a vendor-backed org).
+  engine.setLlmServingReader(async (_org, llms) => new Map(llms.map((l) => [`${l.provider}/${l.model}`, true])));
   ledgerCalls = [];
   chat = [];
   const ledger: LedgerDeps = {
@@ -96,7 +98,7 @@ describe("POST /internal/engines/{outcome}/make", () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: "made", runId: "run-script-1", unit: { outcome: OUTCOME, content: { answers: [{ place: "draft", json: { offerName: "Coaching" } }] } } });
     expect(res.body.pick).toMatchObject({ outcome: OUTCOME, dynasty: "dy_fields_draft", version: 1, tactics: { llm: { model: "deepseek-flash" }, recorded_by: "brand" } });
-    expect(pickSpy).toHaveBeenCalledWith(db, { outcome: OUTCOME, servable: [DRAFT_REQUEST], channel: null, keptDynasties: undefined });
+    expect(pickSpy).toHaveBeenCalledWith(db, { outcome: OUTCOME, servable: [DRAFT_REQUEST], channel: null, keptDynasties: undefined, orgId: "org-a" });
     // The picked script's LLM, org-billed on the script's run.
     expect(chat).toHaveLength(1);
     expect(chat[0]![0]).toBe("complete");

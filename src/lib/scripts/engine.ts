@@ -191,10 +191,40 @@ export function statedLlmsOf(tactics: unknown): StatedLlm[] {
  */
 export type LlmServingReader = (orgId: string, llms: StatedLlm[]) => Promise<Map<string, boolean>>;
 
-let llmServing: LlmServingReader | null = null;
-/** Production wires chat-service's read; tests swap it. Unset = every LLM runs as stated (no org filter). */
+/**
+ * chat-service `GET /internal/local-llm/served-llms` (the one owner of which model serves which LLM for an org). A row
+ * answering `runsAsStated: null` names an LLM chat-service does not serve at all: the script cannot run as stated
+ * anywhere, so it is not drawn (false), logged. Unreadable = throws.
+ */
+export const productionLlmServing: LlmServingReader = async (orgId, llms) => {
+  const base = (process.env.CHAT_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.CHAT_SERVICE_API_KEY ?? "";
+  if (!base || !key) throw new Error("CHAT_SERVICE_URL and CHAT_SERVICE_API_KEY must be set to read which LLMs an org runs as stated");
+  const out = new Map<string, boolean>();
+  for (let i = 0; i < llms.length; i += 50) {
+    const asked = llms.slice(i, i + 50).map((l) => `${l.provider}/${l.model}`);
+    const res = await fetch(`${base}/internal/local-llm/served-llms?orgId=${encodeURIComponent(orgId)}&llms=${encodeURIComponent(asked.join(","))}`, {
+      headers: { "x-api-key": key },
+      signal: AbortSignal.timeout(600_000),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`which LLMs org ${orgId} runs as stated could not be read (chat-service ${res.status}): ${text.slice(0, 300)}`);
+    const rows = (JSON.parse(text) as { llms?: unknown }).llms;
+    if (!Array.isArray(rows)) throw new Error(`chat-service answered no llms for org ${orgId}: ${text.slice(0, 300)}`);
+    for (const r of rows as Array<{ llm?: unknown; runsAsStated?: unknown; error?: unknown }>) {
+      if (typeof r.llm !== "string") continue;
+      if (r.runsAsStated === null) console.warn(`[workflow-service] chat-service serves no ${r.llm}: a script stating it is not drawn (${String(r.error ?? "")})`);
+      else if (typeof r.runsAsStated !== "boolean") throw new Error(`chat-service answered ${JSON.stringify(r.runsAsStated)} for ${r.llm} (org ${orgId})`);
+      out.set(r.llm, r.runsAsStated === true);
+    }
+  }
+  return out;
+};
+
+let llmServing: LlmServingReader = productionLlmServing;
+/** Tests swap the reader (null = production). */
 export function setLlmServingReader(r: LlmServingReader | null): void {
-  llmServing = r;
+  llmServing = r ?? productionLlmServing;
 }
 
 /**
@@ -324,7 +354,7 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     out.push(row);
   }
   // LOCAL-CLAUDE-RATING-1116: only where its stated LLM runs as stated for this org (one read per pick).
-  if (!input.orgId || !llmServing) return out;
+  if (!input.orgId) return out;
   const stated = new Map<string, StatedLlm>();
   for (const r of out) for (const l of statedLlmsOf(r.tactics)) stated.set(`${l.provider}/${l.model}`, l);
   if (stated.size === 0) return out;
