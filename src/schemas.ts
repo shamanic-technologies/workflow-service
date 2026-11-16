@@ -2864,7 +2864,8 @@ export const WriterProofCombinationSchema = z
     outcome: z.string(),
     dynasty: z.string(),
     version: z.number().int(),
-    llm: z.string().nullable().describe("The LLM its tactics state."),
+    llm: z.string().nullable().describe("The LLM its tactics state, or the one of the completion script it is paired with."),
+    completion: z.string().nullable().describe("ONE-WRITER-N-MODELS-1116-ANSWERER: the LLM completion script (`llm_completion/<dynasty>`) this writer, which asks its model, is proven with; null = a version proven alone."),
     live: z.boolean().describe("Version and dynasty active (the Rating may draw it, when its proof allows)."),
     state: z.string().describe("Its latest proof: passed | failed | running | error | no_cases | abandoned, or unproven."),
     usable: z.number().int(),
@@ -2887,6 +2888,11 @@ export const WriterProofRequestSchema = z
   .object({
     outcome: z.string().min(1),
     dynasty: z.string().min(1),
+    completionDynasty: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("A writer that asks its model is proven WITH one LLM completion script (`llm_completion/<completionDynasty>`, its active version): the pair a person reads."),
   })
   .openapi("WriterProofRequest");
 

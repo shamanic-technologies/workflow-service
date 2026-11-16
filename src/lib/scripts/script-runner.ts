@@ -112,6 +112,8 @@ export interface ScriptRunResult {
   again?: boolean;
   /** On `unmade`: the script's own decision (`done` = completed look, `idle` = nothing to do now), never a refusal. */
   decided?: "done" | "idle";
+  /** On `unmade`: what the script decided, handed back to the script that asked it (never a Unit). */
+  answer?: Record<string, unknown>;
   vendorCalls: Array<{ name: string; ok: boolean; error?: string; ms: number; brandToolCalls?: number }>;
   declared: { produced: OccurrenceInput[]; consumed: OccurrenceInput[] };
   /** Who declares this run's occurrences when not the run itself. */
@@ -330,6 +332,7 @@ export async function runStoredScript(
     error,
     ...(finalStatus === "unmade" && made?.again === true ? { again: true } : {}),
     ...(finalStatus === "unmade" && (made?.decided === "done" || made?.decided === "idle") ? { decided: made.decided } : {}),
+    ...(finalStatus === "unmade" && made?.answer && typeof made.answer === "object" && !Array.isArray(made.answer) ? { answer: made.answer } : {}),
     vendorCalls,
     declared: { produced: declaredOk ? produced : [], consumed: declaredOk ? consumed : [] },
     ...(input.recordedBy ? { recordedBy: input.recordedBy } : {}),
@@ -353,6 +356,7 @@ export async function runStoredScript(
       runId,
       orgId: who.orgId,
       body: { units: input.units, request: input.request ?? null, tactics: input.tactics ?? {}, subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day, calls: recorded, asked: askedUnits },
+      made: finalStatus === "made",
     });
   } catch (e) {
     console.error(`[workflow-service] ${scriptSlug} run ${runId}: its writer case could NOT be kept: ${e instanceof Error ? e.message : String(e)}`);
@@ -453,7 +457,7 @@ async function provide(
     // `decided`: the child's own decision (a child that made nothing at all = nothing to do now), so an asking script
     // that forwards the answer states it as such, never as a refusal (MON-UNSENT-RED-1111).
     const decided = child.status === "nothing" ? "idle" : child.decided;
-    return { v: { id: `${child.runId}:${outcome}`, outcome, subject: "", ageDays: 0, content: null, unmade: child.error ?? "nothing", ...(decided ? { decided } : {}), run: child } };
+    return { v: { id: `${child.runId}:${outcome}`, outcome, subject: "", ageDays: 0, content: null, unmade: child.error ?? "nothing", ...(decided ? { decided } : {}), ...(child.answer ? { answer: child.answer } : {}), run: child } };
   }
   if (child.status !== "made" || !child.unit) return { stop: `${child.scriptSlug} (asked for ${outcome}) made no Unit: ${child.status}${child.error ? ` (${child.error})` : ""}` };
   return { v: { id: `${child.runId}:${outcome}`, outcome, subject: child.unit.subject?.id ?? "", ageDays: 0, content: child.unit.content, run: child } };
