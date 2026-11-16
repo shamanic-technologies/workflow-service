@@ -393,11 +393,11 @@ internalScriptsRouter.post("/internal/scripts/dynasty/:outcome/:dynasty/upgrade-
   }
   try {
     const { outcome, dynasty } = req.params;
-    const { code, description, source, createdBy, orgId, dryRun } = parsed.data;
+    const { code, description, tactics: newTactics, source, createdBy, orgId, dryRun } = parsed.data;
     const cases = parsed.data.cases as unknown as ReplayCase[];
     if (dryRun) {
       const active = await activeVersion(db, outcome, dynasty);
-      const tactics = (active?.tactics as Record<string, unknown>) ?? {};
+      const tactics = newTactics ?? (active?.tactics as Record<string, unknown>) ?? {};
       const summary = await replayAll(code, cases.map((c) => ({ ...c, tactics: { ...tactics, ...(c.tactics ?? {}) } })));
       res.json({
         cases: summary.cases,
@@ -406,7 +406,7 @@ internalScriptsRouter.post("/internal/scripts/dynasty/:outcome/:dynasty/upgrade-
       });
       return;
     }
-    const row = await upgradeScript(db, outcome, dynasty, { code, ...(description ? { description } : {}), replaceCases: { cases, source } }, { orgId, createdBy });
+    const row = await upgradeScript(db, outcome, dynasty, { code, ...(description ? { description } : {}), ...(newTactics ? { tactics: newTactics } : {}), replaceCases: { cases, source } }, { orgId, createdBy });
     console.log(`[workflow-service] script upgraded with ${cases.length} replacement cases ${row.outcome}/${row.dynasty}/v${row.version} by ${row.createdBy} replay=${JSON.stringify(row.replay)} (${source})`);
     res.status(201).json(serveScript(row, await caseCount(db, row.outcome, row.dynasty)));
   } catch (err) {
