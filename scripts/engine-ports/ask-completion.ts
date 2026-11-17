@@ -92,7 +92,7 @@ export function namesAModelCall(code: string): boolean {
  * The upgrade of one script's stored code: its own edits first (anchors found exactly once), then the mechanical
  * routing, then the helpers. `what` names it in an error.
  */
-export function askCompletionSource(stored: string, edits: Edit[], what: string): string {
+export function askCompletionSource(stored: string, edits: Edit[], what: string, append = ""): string {
   if (stored.includes("function askCompletion(")) throw new Error(`${what}: already asks its completions`);
   let code = applyEdits(stored, edits, what);
   code = dropPickLlmSpreads(code).code;
@@ -104,7 +104,7 @@ export function askCompletionSource(stored: string, edits: Edit[], what: string)
   code = withoutUnusedFunction(code, "llmFor");
   if (namesAModelCall(code)) throw new Error(`${what}: still names a model call after the rewrite (an anchor is missing: re-read the stored code)`);
   if (/pickLlm\(|llmFor\(/.test(code)) throw new Error(`${what}: still reads a model (pickLlm)`);
-  return code.trimEnd() + "\n" + COMPLETION_HELPERS;
+  return code.trimEnd() + "\n" + append + COMPLETION_HELPERS;
 }
 
 /** The script's tactics without the model, plus what it asks. */

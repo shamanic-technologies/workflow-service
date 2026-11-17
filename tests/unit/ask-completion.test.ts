@@ -77,9 +77,9 @@ const who = { orgId: "org-1", userId: "user-1", parentRunId: "caller", headers: 
 describe("every listed script, upgraded from its stored code", () => {
   for (const def of ASKING_SCRIPTS) {
     it(`${def.outcome}/${def.dynasty}: names no model, reads the same materials, asks llm_completion`, async () => {
-      const before = stored(def.outcome, def.dynasty);
+      const before = stored(def.outcome, def.from ?? def.dynasty);
       expect(namesAModelCall(before)).toBe(true);
-      const code = askCompletionSource(before, def.edits, def.dynasty);
+      const code = askCompletionSource(before, def.edits, def.dynasty, def.append ?? "");
       expect(namesAModelCall(code)).toBe(false);
       expect(code).not.toMatch(/pickLlm\(|tactics\.llm|\.llms\b/);
       expect((await validateSource(code)).materials).toEqual([...(await validateSource(before)).materials, LLM_COMPLETION]);
@@ -175,5 +175,43 @@ function pickLlm(ctx: any, place: string): { provider: string; model: string } {
     const code = askCompletionSource(before.replace(`const p = pickLlm(ctx, "judge"); `, ""), [], "t");
     const reordered = (restateCase({ ...recorded, calls: [recorded.calls[0]!, recorded.calls[2]!, recorded.calls[1]!] }, null) as { case: any }).case;
     expect(await replayCase(code, reordered)).toEqual({ id: "c1", match: true, diffs: [] });
+  });
+});
+
+describe("a template writer of content-generation (posts, WhatsApp) brings its completion", () => {
+  it("asks the writer request, asks the completion, hands it back with the model that wrote and the run that asked", async () => {
+    const { ASKED_WRITER_HELPER } = await import("../../scripts/engine-ports/ask-completion-scripts.js");
+    const code = `function must(ctx, name, args) { const r = ctx.vendor.call(name, args); if (!r.ok) throw new Error(name + " failed"); return r.data; }
+${ASKED_WRITER_HELPER}
+export default function run(ctx) { return { content: askedWriter(ctx, "content.thread", { type: "t-v1", variables: { a: 1 } }, { dryRun: false }) }; }`;
+    const request = { message: "m", systemPrompt: "s", responseFormat: "json", responseSchema: { type: "object" }, strictResponseSchema: { type: "object", additionalProperties: false }, maxTokens: 16000 };
+    const answer = { content: "{}", json: { post: "P" }, model: "claude-sonnet-5-5" };
+    const r = await replayCase(code, {
+      id: "w",
+      units: { llm_completion: { answer, llm: { provider: "anthropic", model: "claude-sonnet", name: "Claude Sonnet" } } },
+      request: { runId: "run-9" },
+      asks: [{ units: {}, request }],
+      calls: [
+        { name: "content.thread.request", args: { body: { type: "t-v1", variables: { a: 1 } } }, answer: { ok: true, data: { request } } },
+        {
+          name: "content.thread.generate",
+          args: {
+            body: {
+              type: "t-v1",
+              variables: { a: 1 },
+              dryRun: false,
+              completion: {
+                request: { message: "m", systemPrompt: "s", responseFormat: "json", responseSchema: { type: "object", additionalProperties: false }, maxTokens: 16000, provider: "anthropic", model: "claude-sonnet" },
+                answer,
+                runId: "run-9",
+              },
+            },
+          },
+          answer: { ok: true, data: { post: "P", replies: [] } },
+        },
+      ],
+      expect: { content: { post: "P", replies: [] } },
+    });
+    expect(r.diffs).toEqual([]);
   });
 });

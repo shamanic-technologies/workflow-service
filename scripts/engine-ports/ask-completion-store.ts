@@ -24,20 +24,21 @@ interface Stored {
 
 const onlyAt = process.argv.indexOf("--only");
 const only = onlyAt >= 0 ? new Set(String(process.argv[onlyAt + 1] ?? "").split(",")) : null;
-const input = JSON.parse(readFileSync(0, "utf8")) as { scripts: Stored[]; cases?: Record<string, ReplayCase[]>; copies?: Record<string, Record<string, unknown>> };
+const input = JSON.parse(readFileSync("/dev/stdin", "utf8")) as { scripts: Stored[]; cases?: Record<string, ReplayCase[]>; copies?: Record<string, Record<string, unknown>> };
 const out = (o: unknown) => console.log(JSON.stringify(o));
 const day = new Date().toISOString().slice(0, 10);
 
 for (const def of ASKING_SCRIPTS) {
   const slug = `${def.outcome}/${def.dynasty}`;
   if (only && !only.has(slug)) continue;
-  const stored = input.scripts.find((s) => s.outcome === def.outcome && s.dynasty === def.dynasty);
+  const stored = input.scripts.find((s) => s.outcome === def.outcome && s.dynasty === (def.from ?? def.dynasty));
   if (!stored) throw new Error(`stdin holds no active ${slug}`);
-  const code = askCompletionSource(stored.code, def.edits, slug);
+  const code = askCompletionSource(stored.code, def.edits, slug, def.append ?? "");
   const tactics = { ...askCompletionTactics(stored.tactics), ...(def.addTactics ?? {}) };
   const description = def.description ?? stored.description;
   const cases = input.cases?.[slug] ?? [];
-  if (cases.length > 0) {
+  // A new dynasty (`from` a per-model copy) carries no case: it is created, never upgraded with cases.
+  if (cases.length > 0 && !def.from) {
     const asRecorded = await replayAll(stored.code, cases.map((c) => ({ ...c, tactics: { ...stored.tactics, ...(c.tactics ?? {}) } })));
     const unreplayable = new Set(asRecorded.failures.map((f) => f.id));
     const excluded: Record<string, string> = {};
@@ -67,7 +68,7 @@ for (const def of ASKING_SCRIPTS) {
       excluded,
     });
   } else {
-    out({ op: "create", body: { outcome: def.outcome, dynasty: def.dynasty, code, description, tactics } });
+    out({ op: "create", body: { outcome: def.outcome, dynasty: def.dynasty, ...(def.name ? { name: def.name } : {}), code, description, tactics } });
   }
   for (const copy of def.merged ?? []) {
     const copyTactics = input.copies?.[`${def.outcome}/${copy}`];
