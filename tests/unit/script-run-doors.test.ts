@@ -30,7 +30,7 @@ describe("run doors (answering a lead)", () => {
     expect(out).toEqual({ ok: true, data: { messages: [{ text: "Friday 3:30?" }] } });
     const d = door([{ status: 200, body: { nextFollowupAt: null } }]);
     await callVendor("lead.followup_date.set", { params: { id: "lead 1" }, query: { brandId: "b" }, body: { stop: { reason: "booked" } } }, ctx, d.deps);
-    expect(seen[0]!.slice(0, 4)).toEqual(["crm", "GET", "/orgs/people/timeline?personKey=email%3Ajy%40w.com", null]);
+    expect(seen[0]!.slice(0, 4)).toEqual(["crm", "GET", "/orgs/people/timeline?excludeSources=api&personKey=email%3Ajy%40w.com", null]);
     expect(d.seen[0]!.slice(0, 4)).toEqual(["lead", "PUT", "/orgs/leads/lead%201/followup-date?brandId=b", { stop: { reason: "booked" } }]);
   });
 
