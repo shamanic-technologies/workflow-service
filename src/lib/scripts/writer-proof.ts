@@ -445,7 +445,12 @@ export async function proofTarget(db: AnyPgDb, outcome: string, dynasty: string)
 }
 
 const inFlight = new Set<string>();
-const pairKey = (scriptId: string, completionId: string | null) => (completionId ? `${scriptId}:${completionId}` : scriptId);
+/**
+ * A pair is (writer VERSION, completion DYNASTY): a model is one completion dynasty (a new model is a new dynasty), so an
+ * upgrade of the completion script's code (byte-identical re-stores included) never orphans a pair's proof; an upgrade
+ * of the writer is a new version to prove.
+ */
+const pairKey = (scriptId: string, completionDynasty: string | null) => (completionDynasty ? `${scriptId}:${completionDynasty}` : scriptId);
 
 /** Prove one version on its Engine's cases. Returns the stored proof. */
 export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "auto" | "staff", completion: ScriptRow | null = null): Promise<WriterProofRow> {
@@ -456,7 +461,7 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
   } else if (!writesToPerson(row.code) || !callsCompletion(row.code)) {
     throw new ProofError(422, `${row.outcome}/${row.dynasty}/v${row.version} writes nothing to a person with an LLM of its own: there is no writer to prove${isPairWriter(row) ? " (it asks its model: prove it with a completion script)" : ""}`);
   }
-  const key = pairKey(row.id, completion?.id ?? null);
+  const key = pairKey(row.id, completion?.dynasty ?? null);
   if (inFlight.has(key)) throw new ProofError(409, `a proof of ${name} is already running`);
   inFlight.add(key);
   const [proof] = await db
@@ -532,12 +537,12 @@ export async function setEngineEnforced(db: AnyPgDb, outcome: string, enforced: 
     .onConflictDoUpdate({ target: writerProofEngines.outcome, set: { enforced, decidedBy, updatedAt: new Date() } });
 }
 
-/** The proofs of one version (alone, or paired with one completion script), newest first. */
-async function proofsOf(db: AnyPgDb, scriptId: string, completionId: string | null = null): Promise<WriterProofRow[]> {
+/** The proofs of one version (alone, or paired with one completion dynasty), newest first. */
+async function proofsOf(db: AnyPgDb, scriptId: string, completionDynasty: string | null = null): Promise<WriterProofRow[]> {
   return db
     .select()
     .from(writerProofs)
-    .where(and(eq(writerProofs.scriptId, scriptId), completionId ? eq(writerProofs.completionScriptId, completionId) : isNull(writerProofs.completionScriptId)))
+    .where(and(eq(writerProofs.scriptId, scriptId), completionDynasty ? eq(writerProofs.completionDynasty, completionDynasty) : isNull(writerProofs.completionDynasty)))
     .orderBy(desc(writerProofs.createdAt));
 }
 
@@ -585,9 +590,9 @@ export async function pairProofAllows(db: AnyPgDb, writer: ScriptRow, completion
 }
 
 async function gateAndProve(db: AnyPgDb, row: ScriptRow, completion: ScriptRow | null): Promise<boolean> {
-  const verdict = gateFor(await proofsOf(db, row.id, completion?.id ?? null), await fedCaseCount(db, row), Date.now());
+  const verdict = gateFor(await proofsOf(db, row.id, completion?.dynasty ?? null), await fedCaseCount(db, row), Date.now());
   const name = `${row.outcome}/${row.dynasty}/v${row.version}${completion ? ` x ${completion.dynasty}` : ""}`;
-  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.id ?? null))) {
+  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.dynasty ?? null))) {
     const ctx = proofContext;
     console.log(`[workflow-service] writer proof of ${name} starts (${verdict.why})`);
     void proveScript(ctx.db, ctx.deps, row, "auto", completion).catch((e) => console.error(`[workflow-service] writer proof of ${name} FAILED to start: ${String(e)}`));
@@ -638,8 +643,8 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
   const latestByScript = new Map<string, WriterProofRow>();
   const latestByPair = new Map<string, WriterProofRow>();
   for (const p of proofRows) {
-    if (p.completionScriptId) {
-      const k = pairKey(p.scriptId, p.completionScriptId);
+    if (p.completionDynasty) {
+      const k = pairKey(p.scriptId, p.completionDynasty);
       if (!latestByPair.has(k)) latestByPair.set(k, p);
     } else if (!latestByScript.has(p.scriptId)) latestByScript.set(p.scriptId, p);
   }
@@ -691,7 +696,7 @@ async function pairViews(db: AnyPgDb, active: ScriptRow[], latest: Map<string, W
   const out: ProofView[] = [];
   for (const w of writers) {
     for (const c of completions) {
-      const p = latest.get(pairKey(w.id, c.id));
+      const p = latest.get(pairKey(w.id, c.dynasty));
       const state = p?.state ?? "unproven";
       out.push({
         outcome: w.outcome,

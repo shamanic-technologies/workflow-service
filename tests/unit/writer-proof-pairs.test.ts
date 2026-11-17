@@ -281,4 +281,16 @@ export default function run(ctx) {
     await setEngineEnforced(db, "whatsapp_message_sent", true, "staff");
     expect((await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "whatsapp_message_sent/dy_hello" })).map((r) => r.dynasty)).toEqual(["dy_glm_flash"]);
   });
+
+  it("a pair's proof survives an upgrade of the completion script (a pair = writer version x completion DYNASTY)", async () => {
+    const { writer, haiku } = await seed();
+    await produce(PROOF_SAMPLE);
+    await proveScript(db, proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps, writer, "staff", haiku);
+    await db.update(scripts).set({ status: "deprecated", dynastyStatus: "deprecated" }).where(eq(scripts.dynasty, "dy_glm_flash"));
+    // A byte-identical re-store of the completion script: new version row, same dynasty.
+    await db.update(scripts).set({ status: "deprecated" }).where(eq(scripts.id, haiku.id));
+    await db.insert(scripts).values({ ...haiku, id: undefined, version: 2, status: "active", createdAt: new Date() });
+    await setEngineEnforced(db, "message_written", true, "staff");
+    expect((await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "message_written/dy_answer_lead" })).map((r) => [r.dynasty, r.version])).toEqual([["dy_claude_haiku", 2]]);
+  });
 });
