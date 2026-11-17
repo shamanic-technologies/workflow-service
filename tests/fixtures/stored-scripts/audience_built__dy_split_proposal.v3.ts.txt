@@ -1,0 +1,201 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+
+/**
+ * Audience built · distribute.you split proposal, on human-service's own doors.
+ *
+ * The client states who it sells to; one writing call splits that target into at most six
+ * non-overlapping segments a people search can filter on, one judgment picks each card's icon.
+ * The answer is the proposal the client reads (axes + segments with icon and size guess).
+ *
+ * Provenance: human-service src/services/audience-split.ts (buildSplitSystemPrompt,
+ * SPLIT_RESPONSE_SCHEMA, parseSplit, iconQuestions, proposeHere) as of COMPETITOR-EXCLUDE-1102.
+ * Each call is human-service's own door (`human.split.complete` = its exact completeJson with
+ * retries, `human.split.judge` = its icon judgment), spend on this script's run.
+ * A door refusal or a model answer the parse refuses makes no proposal for a reason the world
+ * gave (`unmade`): human-service then answers its own error, exactly as its own code did.
+ *
+ * Material: `offer_described` ({proposal, targetAudience, allowEmpty, icons}).
+ */
+
+const SPLIT_AXES = ["geography", "company_size", "industry", "seniority_role"];
+const MAX_SPLIT_SEGMENTS = 6;
+
+const SPLIT_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    axes: { type: "array", items: { type: "string", enum: [...SPLIT_AXES] } },
+    segments: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: { type: "string" }, description: { type: "string" }, estimatedLeadCount: { type: "integer" } },
+        required: ["name", "description", "estimatedLeadCount"],
+      },
+    },
+  },
+  required: ["axes", "segments"],
+};
+
+function buildSplitSystemPrompt(): string {
+  return [
+    "A company tells you who it sells to. You split that target into AT MOST",
+    `${MAX_SPLIT_SEGMENTS} segments so a cold email campaign can test them against each`,
+    "other. Each segment becomes a card the customer reads, and later a people",
+    "search. Emit the split the target naturally supports, and no more.",
+    "",
+    "THE INVARIANT -- the segments PARTITION the target, they never redefine it:",
+    "  - Mutually exclusive: no person can belong to two segments. Otherwise an",
+    "    A/B result means nothing.",
+    "  - Collectively exhaustive: every person in the target lands in exactly one",
+    "    segment. You do not add people the target excludes, and you do not leave",
+    "    out people it includes.",
+    "  - WHO the customer sells to travels into EVERY segment unchanged. Only the",
+    "    partition value differs between segments.",
+    "",
+    "SPLIT ONLY ALONG AXES A PEOPLE SEARCH CAN FILTER ON:",
+    '  - "geography": where the person or company is (continents, countries,',
+    "    states, regions, cantons).",
+    '  - "company_size": employee headcount bands (e.g. 1-10, 11-50, 51-200,',
+    "    201-1000, 1000+).",
+    '  - "industry": the sector of the company.',
+    '  - "seniority_role": the level or role of the person (e.g. founders and',
+    "    CEOs vs heads of marketing).",
+    "Never split on anything else: not buying intent, not the product, not",
+    "revenue guesses, not company culture, not technology stack.",
+    "",
+    "HOW TO SPLIT:",
+    "  - Prefer ONE axis. Use two axes only by CROSSING them (every combination",
+    "    of a value of axis A with a value of axis B is one segment), and only when",
+    "    the crossing stays within the segment limit. Never mix axes across",
+    '    segments (never one segment "in France" beside another "with 50+',
+    '    employees": those overlap).',
+    "  - Pick the axis the target itself suggests. When the target names several",
+    '    values of an axis ("in the US and Europe", "founders and CMOs"), that is',
+    "    the natural split. Otherwise pick the axis that makes the most business",
+    "    sense for the target.",
+    "  - Bands of one axis must be contiguous and non-overlapping, and together",
+    "    cover everything the target covers on that axis.",
+    "  - State every partition value POSITIVELY and by name. Never \"other\",",
+    '    "rest of", "outside X": list the members. A search cannot look for the',
+    "    absence of something.",
+    "  - A NARROW target that offers no meaningful split is ONE segment. One is a",
+    "    correct answer. Never invent a split to fill cards.",
+    `  - Never more than ${MAX_SPLIT_SEGMENTS} segments. If a natural axis has more`,
+    "    values than that, group neighbouring values into named groups.",
+    "",
+    "WRITING EACH SEGMENT:",
+    '  - "name": a short label, MAX 4 words, distinct from every other name.',
+    '  - "description": ONE plain, reassuring sentence a non-expert understands,',
+    "    that is ALSO a complete specification of the segment on its own: it",
+    "    restates everything the target says (who, where, what kind of company)",
+    "    plus this segment's partition value. Someone reading only this sentence,",
+    "    without the target or the other segments, must know exactly who is in it.",
+    "  - Describe ONE population, never a union. Bind generic role words",
+    '    ("owner", "manager") to the sector the target names.',
+    "  - Never name the customer's own product as a targeting attribute.",
+    "  - Plain words, no jargon, no em dashes, no hype.",
+    '  - "axes": the axes you split along (empty when you return one segment).',
+    "",
+    "NOT YOUR JOB: any search tool's filter vocabulary (never write field names),",
+    "and size as a reason to split. Never estimate size to decide the split: never",
+    "merge, drop, widen or invent a segment because of how many people it holds.",
+    "",
+    "ONLY ONCE THE SPLIT IS FINAL, size each segment for the customer's card:",
+    '  - "estimatedLeadCount": your best rough estimate, as one whole number, of',
+    "    how many people matching this segment's description (the people the",
+    "    customer would email: decision-makers in the companies described) are",
+    "    listed in a large B2B contact database such as Apollo or LinkedIn. The",
+    "    right order of magnitude is enough. Always give your best guess, never 0.",
+    "",
+    "Respond with ONLY valid JSON (no prose, no markdown):",
+    '{"axes":["geography"],"segments":[{"name":"<=4 words","description":"one sentence","estimatedLeadCount":12000}]}'
+  ].join("\n");
+}
+
+class Unmade extends Error {}
+
+function parseEstimatedLeadCount(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  const n = Math.round(v);
+  return n > 0 ? n : null;
+}
+
+function parseSplit(obj: Record<string, unknown>, allowEmpty: boolean) {
+  const rawAxes = obj.axes;
+  const rawSegments = obj.segments;
+  if (!Array.isArray(rawAxes) || !Array.isArray(rawSegments)) throw new Unmade("LLM split missing `axes` or `segments` array");
+  const axes = rawAxes.map((a) => {
+    if (!SPLIT_AXES.includes(a as string)) throw new Unmade(`LLM split used an unfilterable axis: ${String(a)}`);
+    return a as string;
+  });
+  if (axes.length > 2) throw new Unmade(`LLM split crossed ${axes.length} axes (max 2)`);
+  if ((rawSegments.length < 1 && !allowEmpty) || rawSegments.length > MAX_SPLIT_SEGMENTS) {
+    throw new Unmade(`LLM split returned ${rawSegments.length} segments (expected 1-${MAX_SPLIT_SEGMENTS})`);
+  }
+  const seen = new Set<string>();
+  const segments = rawSegments.map((s, i) => {
+    const o = (s ?? {}) as Record<string, unknown>;
+    const name = typeof o.name === "string" ? o.name.trim() : "";
+    const description = typeof o.description === "string" ? o.description.trim() : "";
+    if (!name || !description) throw new Unmade(`LLM split segment ${i} missing name or description`);
+    const k = name.toLowerCase();
+    if (seen.has(k)) throw new Unmade(`LLM split returned duplicate segment name "${name}"`);
+    seen.add(k);
+    return { name, description, estimatedLeadCount: parseEstimatedLeadCount(o.estimatedLeadCount) };
+  });
+  return { axes, segments };
+}
+
+function door(ctx: ScriptContext, name: string, args: Record<string, unknown>): Record<string, unknown> {
+  const a = ctx.vendor.call(name, args);
+  if (!a.ok) throw new Unmade(`${name}: ${String(a.data.error ?? "refused")}`);
+  return a.data;
+}
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const offer = ctx.get("offer_described").content;
+  const proposal = String(offer.proposal ?? "");
+  const targetAudience = String(offer.targetAudience ?? "");
+  const allowEmpty = offer.allowEmpty === true;
+  const icons = (offer.icons ?? {}) as Record<string, string>;
+  try {
+    const written = door(ctx, "human.split.complete", {
+      proposal,
+      message: targetAudience,
+      systemPrompt: buildSplitSystemPrompt(),
+      ...pickLlm(ctx, "split"),
+      responseSchema: SPLIT_RESPONSE_SCHEMA,
+      disableThinking: true,
+    });
+    const { axes, segments } = parseSplit(written, allowEmpty);
+    if (segments.length === 0) return { content: { axes: [], segments: [] } };
+    const state = { target: targetAudience, segments: segments.map(({ name, description }) => ({ name, description })) };
+    const questions = Object.fromEntries(
+      segments.map((s, i) => [
+        `segment_${i + 1}`,
+        {
+          instructions: `Which icon best represents segment ${i + 1} ("${s.name}": ${s.description}) for a customer glancing at it? Prefer the icon for what makes THIS segment different from the others.`,
+          criteria: icons,
+        },
+      ]),
+    );
+    const judged = door(ctx, "human.split.judge", { proposal, state, questions }) as Record<string, { choice: string; confidence: number }>;
+    return {
+      content: {
+        axes: segments.length === 1 ? [] : axes,
+        segments: segments.map((s, i) => ({ ...s, icon: judged[`segment_${i + 1}`].choice, iconConfidence: judged[`segment_${i + 1}`].confidence })),
+      },
+    };
+  } catch (e) {
+    if (e instanceof Unmade) return { unmade: e.message };
+    throw e;
+  }
+}
+
+
+/** The LLM of one call: the Rating's pick for this Engine and this call (LLM-PICK-SCRIPTS-1112). No LLM in the Engine's universe = nothing is written: the run fails and is retried later, never a fallback model. */
+function pickLlm(ctx: any, place: string, outcome?: string): { provider: string; model: string } {
+  const p = ctx.vendor.call("llm.pick", outcome ? { place, outcome } : { place });
+  if (!p.ok) throw new Error("llm.pick " + place + ": " + String(p.data && p.data.error) + ". Nothing is written: the run is retried later.");
+  return { provider: p.data.provider, model: p.data.model };
+}
