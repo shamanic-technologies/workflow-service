@@ -411,16 +411,22 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
 async function judgeFields(fields: SentField[], row: ScriptRow, runId: string, deps: ProofDeps): Promise<Array<SentField & { probability: number }>> {
   if (fields.length === 0) return [];
   const questions: Record<string, { instructions: string }> = {};
-  const state: string[] = [];
+  // ONE-WRITER-N-MODELS-1116: each field is judged inside the WHOLE message it belongs to (the fields of one send, or
+  // of one written Unit). Judged alone, a short subject line read as "a subject line where a message body goes" and
+  // failed 24 of 24 cold writer cases whose bodies were fine (2026-11-17); seen with its body, 24 of 24 pass and
+  // labels / codes / empty values still fail.
+  const message = fields.map((f) => `[${f.door} ${f.path}]\n${f.value.slice(0, 8000)}`).join("\n\n");
+  const state: string[] = [`The whole of what a person will read once this is sent, field by field:\n${message}`];
   fields.forEach((f, i) => {
     const key = `f${i}`;
-    state.push(`${key} = field "${f.path}" of a "${f.door}" (sent to a person as written):\n${f.value.slice(0, 8000)}`);
+    state.push(`${key} = its field "${f.path}" of "${f.door}"`);
     questions[key] = {
       instructions:
-        `Field ${key} is what a person will read once this call is sent. Is it a usable value for that field: real words ` +
-        `written for that person, of the kind the field holds (a message body is a message, a subject is a subject line), ` +
-        `whole and readable? It is NOT usable when it is empty, a label or a code, the name of a field or of a template, ` +
-        `a subject line or a quoted email where a message body goes, another field's content, or cut off.`,
+        `Field ${key} is the "${f.path}" of what a person will read once it is sent (its name says what it holds: a subject is a ` +
+        `subject line, a body is the message itself). Is it a usable value for THAT field: real words written for that person, ` +
+        `whole and readable? It is NOT usable when it is empty, a label or a code, the name of a field or of a template, content ` +
+        `of another kind than its field holds (a subject line or a quoted email where a body goes, a whole message where a ` +
+        `subject goes), or cut off.`,
     };
   });
   const answer = await callVendor(JEV_NOUL, { state: state.join("\n\n"), questions }, { headers: { "x-run-id": runId }, tactics: {}, billing: "platform", outcome: row.outcome }, deps.vendors);
