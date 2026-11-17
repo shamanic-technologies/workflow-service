@@ -10,6 +10,7 @@ import {
 } from "./person-relationship.js";
 import { getScriptPath, isNativeNode } from "./node-type-registry.js";
 import { STATED_NOT_TO_BRAND_CODE } from "./stated-not-to-brand.js";
+import { PERSON_THREAD_DEFAULT_QUERY } from "./person-thread-query.js";
 import { buildInputTransforms, type InputTransform } from "./input-mapping.js";
 
 /** Global timeout applied to every script module (in seconds). 1 hour. */
@@ -967,6 +968,11 @@ export const SETTLED_THREAD_WAIT = {
   throwWhenTimedOut: true,
 } as const;
 
+/** The read's own query, with PERSON_THREAD_DEFAULT_QUERY's keys added where it states none. ONE expression. */
+export function personThreadQueryExpr(queryExpr: string): string {
+  return `((q, d) => (q && typeof q === "object" && !Array.isArray(q) ? { ...d, ...q } : d))(${queryExpr}, ${JSON.stringify(PERSON_THREAD_DEFAULT_QUERY)})`;
+}
+
 export function readsPersonThread(node: DAGNode): boolean {
   return (
     node.type === "http.call" &&
@@ -1417,6 +1423,12 @@ function nodeToModule(
     !(resolvedInputMapping && "pollWhile" in resolvedInputMapping)
   ) {
     inputTransforms.pollWhile = { type: "static", value: { ...SETTLED_THREAD_WAIT } };
+  }
+  // Every person-thread read leaves out the API/MCP call logs (UNIBOX-API-LOGS-1117), unless its query states the key.
+  if (readsPersonThread(node)) {
+    const q = inputTransforms.query;
+    const queryExpr = !q ? "undefined" : q.type === "javascript" ? q.expr! : JSON.stringify(q.value);
+    inputTransforms.query = { type: "javascript", expr: personThreadQueryExpr(queryExpr) };
   }
 
   // A send the sender refuses for this one lead ends the run as a normal run.

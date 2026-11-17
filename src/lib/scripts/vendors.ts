@@ -10,6 +10,7 @@
  */
 import type { VendorAnswer } from "./replay.js";
 import { longRequest } from "./long-request.js";
+import { PERSON_THREAD_DEFAULT_QUERY } from "../person-thread-query.js";
 
 export interface VendorDeps {
   /** chat-service `POST /complete` on the run (its own key + the given headers). */
@@ -119,8 +120,12 @@ export type ServiceDoor =
    * from a BODY field (meta-service's `outcomeKey`): the door fills it with the outcome of the script's Engine, so a
    * script re-homed onto its fine outcome (Threads post published) has its Units declared under it, and a script never
    * names its own outcome.
+   * `defaultQuery`: query fields the door adds when the call does not state them (a call stating the key keeps its own
+   * value). crm's person thread leaves out the `api` source (UNIBOX-API-LOGS-1117): the logs of calls an org makes to
+   * our API and MCP are not messages, and an org that calls us a lot has a thread past the sandbox's 64 MB (Kevin's
+   * own: 28,952 call logs of 34,655 items, 26 MB, every brand-team run crashed reading it).
    */
-  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true; runIdInBody?: string; outcomeInBody?: string };
+  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true; runIdInBody?: string; outcomeInBody?: string; defaultQuery?: Record<string, string> };
 
 export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // email_found (apollo-service): one verifier call -> {verificationId, verifier, verdict, error}; BounceVerify asked now.
@@ -149,7 +154,7 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   },
   // Answering a lead (MIGRATE-1105 S1): what the old answering steps called, each the producer's own org route.
   // The person's whole thread, their state, the brand's facts and booking, then one act: reply, WhatsApp, book, call.
-  "crm.person.thread": { service: "crm", method: "GET", path: "/orgs/people/timeline", asRun: true },
+  "crm.person.thread": { service: "crm", method: "GET", path: "/orgs/people/timeline", asRun: true, defaultQuery: { ...PERSON_THREAD_DEFAULT_QUERY } },
   "crm.whatsapp.reach": { service: "crm", method: "POST", path: "/orgs/whatsapp/reach", asRun: true },
   "crm.whatsapp.sent": { service: "crm", method: "GET", path: "/orgs/whatsapp/messages", asRun: true },
   "crm.whatsapp.send": { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", asRun: true },
@@ -558,7 +563,7 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
   }
   const unfilled = path.match(/\{(\w+)\}/);
   if (unfilled) return refuse(`${name} needs params.${unfilled[1]}`);
-  const q = Object.entries(query).filter(([, v]) => v !== undefined && v !== null);
+  const q = Object.entries({ ...(door.defaultQuery ?? {}), ...query }).filter(([, v]) => v !== undefined && v !== null);
   if (q.length > 0) path += `?${new URLSearchParams(q.map(([k, v]) => [k, String(v)]))}`;
   let body: Record<string, unknown> | null = null;
   if (door.method !== "GET") {
