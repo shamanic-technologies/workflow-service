@@ -24,7 +24,7 @@ const slug = (r) => `${r.outcome}/${r.dynasty}`;
 let failed = 0;
 for (const model of COPIES) {
   const body = {
-    absorbed: { outcome: "message_sent", dynasty: `dy_answer_lead__${model}` },
+    absorbed: `message_sent/dy_answer_lead__${model}`,
     places: [
       { survivor: slug(WRITER), askedBy: slug(SENDER) },
       { survivor: `llm_completion/dy_${model}`, askedBy: slug(WRITER) },
@@ -32,12 +32,12 @@ for (const model of COPIES) {
     reason: REASON,
   };
   if (!apply) {
-    console.log(`merge ${slug(body.absorbed)} -> ${body.places.map((p) => `${p.survivor} (asked by ${p.askedBy})`).join(" + ")} (dry run)`);
+    console.log(`merge ${body.absorbed} -> ${body.places.map((p) => `${p.survivor} (asked by ${p.askedBy})`).join(" + ")} (dry run)`);
     continue;
   }
   const res = await fetch(`${base}/internal/scripts/merges`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": key, "x-email": process.env.STAFF_EMAIL ?? "" }, body: JSON.stringify(body) });
   const text = await res.text();
-  console.log(`merge ${slug(body.absorbed)}: ${res.status} ${text.slice(0, 300)}`);
+  console.log(`merge ${body.absorbed}: ${res.status} ${text.slice(0, 300)}`);
   if (res.status >= 300 && !text.includes("already_merged")) failed++;
 }
 process.exit(failed ? 1 : 0);
