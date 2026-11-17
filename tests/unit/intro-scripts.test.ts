@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { ASKING_SCRIPTS } from "../../scripts/engine-ports/ask-completion-scripts.js";
+import { askCompletionSource } from "../../scripts/engine-ports/ask-completion.js";
 import { runScript, validateSource, type Bridge } from "../../src/lib/scripts/sandbox.js";
 import { readersOfHanded } from "../../src/lib/scripts/engine.js";
 import {
@@ -406,5 +408,23 @@ describe("the answerer respects an intro hold (upgrade of dy_answer_lead*)", () 
     expect(await runWith(stored, note, "2026-11-20T10:00:00.000Z")).toEqual({ content: { answered: true } });
     expect(await runWith(upgraded, note, "2026-11-20T10:00:00.000Z")).toEqual({ unmade: "answered_elsewhere: campaign camp-intro answers this lead", decided: "done" });
     expect(await runWith(upgraded, note, "2027-01-14T10:00:00.000Z")).toEqual({ content: { answered: true } });
+  });
+});
+
+describe("INTRO-BOARDY-LEVEL-1117 keeps the intro scripts movable onto the LLM completion Engine", () => {
+  it("the sibling's anchored rewrite (ONE-WRITER-N-MODELS-1116-OTHERS) still applies to every upgraded intro script", async () => {
+    const sources: Record<string, string> = {
+      dy_intro_lead_to_lead: buildIntroFirstEmailSource(),
+      dy_intro_open: buildIntroFirstEmailSource(),
+      dy_intro_client_to_lead: buildIntroFirstEmailSource(),
+      dy_intro_answer: buildIntroAnswerSource(),
+      dy_intro_path: buildIntroPathSource(),
+    };
+    for (const [dynasty, code] of Object.entries(sources)) {
+      const def = ASKING_SCRIPTS.find((d) => d.dynasty === dynasty)!;
+      const asked = askCompletionSource(code, def.edits, dynasty);
+      expect(asked).toContain("function askCompletion(");
+      expect((await validateSource(asked)).materials).toContain("llm_completion");
+    }
   });
 });
