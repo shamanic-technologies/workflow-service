@@ -415,14 +415,16 @@ async function judgeFields(fields: SentField[], row: ScriptRow, runId: string, d
   // of one written Unit). Judged alone, a short subject line read as "a subject line where a message body goes" and
   // failed 24 of 24 cold writer cases whose bodies were fine (2026-11-17); seen with its body, 24 of 24 pass and
   // labels / codes / empty values still fail.
-  const message = fields.map((f) => `[${f.door} ${f.path}]\n${f.value.slice(0, 8000)}`).join("\n\n");
+  // Only the field paths: an internal name beside them ("message_written") read as "this is a message body" and failed
+  // good subjects (P 0.71 without it, 0.14 with it, same subject, 2026-11-17).
+  const message = fields.map((f) => `[${f.path}]\n${f.value.slice(0, 8000)}`).join("\n\n");
   const state: string[] = [`The whole of what a person will read once this is sent, field by field:\n${message}`];
   fields.forEach((f, i) => {
     const key = `f${i}`;
-    state.push(`${key} = its field "${f.path}" of "${f.door}"`);
+    state.push(`${key} = its field "${f.path}"`);
     questions[key] = {
       instructions:
-        `Field ${key} is the "${f.path}" of what a person will read once it is sent (its name says what it holds: a subject is a ` +
+        `Field ${key} is the "${f.path}" of one message a person will read once it is sent (its name says what it holds: a subject is a ` +
         `subject line, a body is the message itself). Is it a usable value for THAT field: real words written for that person, ` +
         `whole and readable? It is NOT usable when it is empty, a label or a code, the name of a field or of a template, content ` +
         `of another kind than its field holds (a subject line or a quoted email where a body goes, a whole message where a ` +
