@@ -22,15 +22,17 @@
  *     lead: the brand's own person; open: nobody), write in our voice from the campaign brief, send.
  *  3. `message_sent/dy_intro_answer`: the intro conversation (owner's steps a-d), in the SAME campaign: records what
  *     the first email proposed, then answers each Lead event of a person of an intro thread: ask the other person
- *     (double opt-in), introduce both in one email (both on it), ask the reader about their own goal right after the
- *     first intro, the price only after a yes (from the offer's own facts), and a reader who declines is never offered
- *     an intro again (kept in storage). A lead of an intro thread is held by this campaign (`answering_leads`, with a
+ *     (double opt-in), introduce both in one email (both on it), one intro at a time; what is free, when we offer to go
+ *     on paid and when we ask for clients' emails is the campaign's brief (INTRO-BOARDY-LEVEL-1117); a reader who
+ *     declines is never offered an intro again (kept in storage). A lead of an intro thread is held by this campaign (`answering_leads`, with a
  *     `holdUntil`), so no other campaign of the brand answers its leads.
  *
- * No money in an intro email; no flattery; facts or nothing. Every LLM is a tactic of its script (`llms[place]`, read
+ * Writers play a game at Boardy's level (goal, a few truths, Boardy's own emails as the level: INTRO-BOARDY-LEVEL-1117),
+ * never a list of what a message must contain; no money in a first email. Every LLM is a tactic of its script (`llms[place]`, read
  * by `llm.pick`), never a model in code.
  */
 import { PORT_HEAD } from "./port-kit.js";
+import { CONVERSATION_LEVEL, FIRST_EMAIL_GAME, FIRST_EMAIL_LEVEL } from "./intro-level.js";
 
 /** The material only the intro path hands: what makes an intro script a candidate at all. */
 export const INTRO_MATERIAL = "intro_requested";
@@ -45,10 +47,13 @@ export const INTRO_HOLD_DAYS = 60;
 const RESEARCH_LLM = { provider: "anthropic", model: "sonnet" } as const;
 const WRITER_LLM = { provider: "anthropic", model: "opus" } as const;
 
+/** Who writes (a tactic): the persona fact and the signature say it is an AI; no rule about saying it (owner 2026-11-17). */
 const PERSONA = {
   name: "Sophie",
-  says: "I am an AI that connects founders.",
+  says: "an AI specialized in introducing people to clients",
 };
+/** The signature appended after the writer's text (a tactic), one line each. */
+const SIGNATURE = "Sophie\nAI introductions, distribute.you";
 
 export const INTRO_PATH = {
   outcome: "paid_client",
@@ -70,7 +75,7 @@ const FIRST_EMAIL_COMMON = {
   sendTag: "intro-email",
   llms: { research: RESEARCH_LLM, match: WRITER_LLM, writer: WRITER_LLM },
   persona: PERSONA,
-  signature: "Sophie",
+  signature: SIGNATURE,
   /** Fresh people served per run as candidates for the other person (lead to lead), beside the ones kept. */
   freshCandidates: 2,
   /** People kept as candidates (served, researched, not yet introduced), newest first. */
@@ -114,11 +119,12 @@ export const INTRO_ANSWER = {
     relationships: "pure_prospect",
     llms: { research: RESEARCH_LLM, match: WRITER_LLM, writer: WRITER_LLM },
     persona: PERSONA,
+    signature: SIGNATURE,
     freshCandidates: 3,
     holdDays: INTRO_HOLD_DAYS,
   },
   description:
-    "Carries an intro conversation by email: asks the other person before any intro (double opt-in), introduces both people in one email once both said yes, then asks the reader about their own goal; the price of the client's offer only after they say yes. A reader who declines is never offered an intro again. Leads only.",
+    "Carries an intro conversation by email: asks the other person before any intro (double opt-in), introduces both people in one email once both said yes, one intro at a time with whoever fits best, as the campaign's brief says. A reader who declines is never offered an intro again. Leads only.",
 } as const;
 
 /** The tactic value every EXISTING email writer carries: it pitches the offer, it offers no intro. */
@@ -168,45 +174,19 @@ export const MATCH_SCHEMA = {
   properties: { pick: { type: "integer" }, forReader: { type: "string" }, forThem: { type: "string" } },
 } as const;
 
-export const FIRST_EMAIL_PROMPT = [
-  "You write the FIRST email an AI that makes introductions sends to ONE person, the reader. Its one job is TRUST: the reader must see that we looked at them for real and that we stand on their side.",
-  "",
-  "FACTS OR NOTHING",
-  "- Every sentence carries a fact from the material below, true and checkable. What we know about the reader comes first, said in terms of what matters to them: one precise thing they did, in their own words when quoted.",
-  "- Appreciation is that one precise fact, stated plainly. Never a superlative, never a compliment adjective, never \"I read your post\", \"I came across\" or \"I noticed\" as an opener.",
-  "- When the material holds no checkable fact on someone, write less: never fill with generic words.",
-  "- How we found them is said exactly as HOW WE FOUND THEM states it: never a referral, a recommendation or someone who pointed you to them unless it says so.",
-  "",
-  "NO MONEY, NO PITCH",
-  "- No price, no cost, no budget, no free, no discount, nothing about what anything costs.",
-  "- Never pitch the brand, its product or its offer. This email is an introduction, nothing else.",
-  "",
-  "FORM",
-  "- Greet them by their first name. Plain short sentences, one idea each. 120 words at most. No bullet list. Paragraphs separated by one empty line. No dashes (no em dash, no en dash).",
-  "- Say plainly, in one short sentence, that you are an AI (the persona below says how).",
-  "- End on a short closing word (Cheers,). Write no name after it: the signature with your name is appended after your text.",
-  "- subject: the few plain words a person would write (for a proposed intro: the other person's name and company).",
-].join("\n");
+/**
+ * The first email (INTRO-BOARDY-LEVEL-1117): the goal, a few truths, Boardy's emails as the level, validated word for
+ * word by the owner. Deleted, never kept beside it: "Every sentence carries a fact", "What we know about the reader comes
+ * first", "Plain short sentences, one idea each", the rule about saying it is an AI, and every list of what the email
+ * must contain (« trop précis et robotique »).
+ */
+export const FIRST_EMAIL_PROMPT = FIRST_EMAIL_GAME + "\n\n" + FIRST_EMAIL_LEVEL;
 
+/** What THIS email is, per kind: one fact, never the email's parts. */
 export const FIRST_EMAIL_KIND: Record<string, string> = {
-  lead_to_lead: [
-    "THIS EMAIL proposes ONE other person to the reader (THE OTHER PERSON below).",
-    "- Who they are and what they do, in facts the reader can check (a number, something they said publicly, and where).",
-    "- Why the two of them should meet, tied to a fact on the reader's side.",
-    "- How we found them, in one plain clause (HOW WE FOUND THEM).",
-    "- Then ask whether they want the intro, and say that if this person is not a fit they can tell you why and you will find a better match.",
-    "- Never say you contacted the other person or that they know about this: they do not yet.",
-  ].join("\n"),
-  open: [
-    "THIS EMAIL offers the reader introductions. Name no other person.",
-    "- One or two facts on what they do and what they look for.",
-    "- Say you are an AI that makes introductions, and ask who they would like to meet: a kind of person, a precise person, or a list.",
-  ].join("\n"),
-  client_to_lead: [
-    "THIS EMAIL proposes to introduce the reader to a person of the brand (THE OTHER PERSON below).",
-    "- Who that person is, in facts the reader can check, and why the two of them should talk, tied to a fact on the reader's side.",
-    "- Ask whether they want the intro. It is an introduction, never a sales pitch: no product features, no offer.",
-  ].join("\n"),
+  lead_to_lead: "THIS EMAIL: you propose THE OTHER PERSON below, a person our lead search found.",
+  open: "THIS EMAIL: you have nobody to propose yet.",
+  client_to_lead: "THIS EMAIL: you propose THE OTHER PERSON below, a person of the brand's own team.",
 };
 
 export const FIRST_EMAIL_SCHEMA = {
@@ -216,22 +196,45 @@ export const FIRST_EMAIL_SCHEMA = {
   properties: { subject: { type: "string" }, body: { type: "string" } },
 } as const;
 
-export const INTRO_GAME = [
-  "You are the same AI that makes introductions, continuing ONE conversation by email. You remember every conversation (THE STATE). You stand on both sides: an intro is made only when BOTH people said yes (double opt-in), you check the fit before either one hears the other's name, and you say no when it is not a fit, even when asked.",
-  "Read the whole thread and THE STATE, then choose ONE action among the ones listed as open to you:",
-  "- ask_other: the reader said yes to the person we proposed. replyText: a short thanks to the reader saying you are asking that person now. otherSubject + otherText: a NEW email to the other person: who the reader is with facts they can check, why meeting is good for them, and would they like the intro. Never forward the reader's words or address.",
-  "- find: the reader wants to meet someone (a kind of person, a precise person, a list) and no intro is pending for them. wanted: what they want, in their own words. Leave every text empty: you will be called again with the people our lead search found.",
-  "- introduce: the other person said yes to meeting the reader. introText: ONE email to both of them (the reader in To, the other person in copy): one fact on each, why they should talk, then step back. goalText: a short message to the reader alone, right after, asking ONE question about their OWN goal in their own words, for example whether they would like more people like this in front of them, and that they can run you on their own account and get as many intros as their budget covers, each billed at exactly what it costs us to make. No price in it.",
-  "- counterpart_declined: the other person said no or is not a fit. replyText: thank them in one line. readerText: tell the reader in one or two lines, without blame, and that you keep looking.",
-  "- decline_intros: the reader does not want intros. replyText: thank them, and say you will keep them posted on any intro still pending. You will never propose a new intro to them again, even if they ask.",
-  "- reply: answer what they wrote. After the reader said yes to the goal question: the price of the brand's offer, from THE OFFER below only (never invented), then the few setup questions THE OFFER lists; once they answered, the brand's signup link from THE OFFER.",
-  "- later: nothing to send now (a next date in nextFollowUpAt).",
+/**
+ * The intro conversation (INTRO-BOARDY-LEVEL-1117): the same treatment as the first email, the goal, a few truths, what
+ * each action makes happen (the mechanism, never what a message must say), and Boardy's real conversation as the level.
+ * WHEN an intro is free, when we offer to go on paid, when we ask for clients' emails is the campaign's brief.
+ */
+const CONVERSATION_GAME = [
+  "You are continuing ONE email conversation. You introduce people to clients, and you remember every conversation (THE STATE).",
+  "",
+  "The person reading owes you nothing. They keep answering only while each message shows a mind worth answering: someone who understood what they want, brings them something they did not have, and is honest with them, reservations included. That is the whole game. How you play it is yours: what to say, what to leave out, the order, the length. Use your judgment, the way a brilliant, well-connected friend would.",
+  "",
+  "What stays true whatever you write:",
+  "- Only what the material states: the thread, THE STATE, the people's facts, THE OFFER, the campaign's brief. Nothing invented about anyone, including what you did or will do.",
+  "- An introduction happens only when both people said yes. Neither one hears the other's name before the fit is checked, and you say no when it is not a fit, even when asked.",
+  "- What anything costs the reader, and when, is only what the campaign's brief and THE OFFER state.",
+  "- Write in the language of their last message.",
+  "- End on a closing word (Cheers,) and write no name after it: your signature is added after your text.",
+].join("\n");
+
+const CONVERSATION_LEVEL_SECTION = [
+  "Below is a real conversation Boardy, the best AI at this, had with a founder named Kevin. Assume Boardy writes to strangers with the same tone. It is here for the level only: the intelligence, the candour, the tone, the length. Each message was written for one person at one moment, so never reuse its sentences or its shape. Write yours for this person.",
+  "",
+  CONVERSATION_LEVEL,
+].join("\n");
+
+const INTRO_ACTIONS = [
+  "Choose ONE action among those open to you (ACTIONS OPEN TO YOU). What each one makes happen:",
+  "- ask_other: the reader said yes to the person proposed. replyText goes to the reader in their thread; otherSubject + otherText go as a NEW email to the other person, who has never heard of the reader. Their words and address never travel without their yes.",
+  "- find: the reader told you who they want to meet and no intro is pending for them. wanted: what they want, in their own words. Every text stays empty: our lead search looks, and you are called again with who it found.",
+  "- introduce: the other person said yes. introText goes as ONE email to both (the reader in To, the other person in copy). followText, when not empty, goes right after to the reader alone.",
+  "- counterpart_declined: the other person said no or is not a fit. replyText goes to them; readerText goes to the reader.",
+  "- decline_intros: the reader does not want intros. replyText goes to them; no intro is ever proposed to them again.",
+  "- reply: replyText answers what they wrote, in their thread.",
+  "- later: nothing is sent now; the next look is nextFollowUpAt.",
   "- stop: they asked us to stop writing, in their own words.",
-  "- escalate: a question only the brand's team can answer (the question in why).",
-  "Money: never in an intro, never before the reader said yes to the goal question; the price only after that yes.",
-  "Facts only, no flattery, no superlative. Plain short sentences, no dashes (no em dash, no en dash). Greet by first name. No sign-off name: the signature is appended.",
+  "- escalate: a question only the brand's team can answer (the question in why); nothing is sent.",
   "Every text you do not use is an empty string. nextFollowUpAt: an ISO date, always set. why: one line on your choice.",
 ].join("\n");
+
+export const INTRO_GAME = [CONVERSATION_GAME, INTRO_ACTIONS, CONVERSATION_LEVEL_SECTION].join("\n\n");
 
 export const ANSWER_ACTIONS = ["ask_other", "find", "introduce", "counterpart_declined", "decline_intros", "reply", "later", "stop", "escalate"] as const;
 
@@ -240,7 +243,7 @@ export function answerSchema(actions: readonly string[]): Record<string, unknown
   return {
     type: "object",
     additionalProperties: false,
-    required: ["action", "replyText", "readerText", "otherSubject", "otherText", "introText", "goalText", "wanted", "nextFollowUpAt", "why"],
+    required: ["action", "replyText", "readerText", "otherSubject", "otherText", "introText", "followText", "wanted", "nextFollowUpAt", "why"],
     properties: {
       action: { type: "string", enum: [...actions] },
       replyText: text,
@@ -248,7 +251,7 @@ export function answerSchema(actions: readonly string[]): Record<string, unknown
       otherSubject: text,
       otherText: text,
       introText: text,
-      goalText: text,
+      followText: text,
       wanted: text,
       nextFollowUpAt: text,
       why: text,
@@ -256,10 +259,12 @@ export function answerSchema(actions: readonly string[]): Record<string, unknown
   };
 }
 
+/** The proposal after the reader said who they want to meet: same game, same level, one fact about THIS message. */
 export const PROPOSE_PROMPT = [
-  "The reader asked to meet someone (WHAT THEY WANT). Our lead search found the people below and picked the one that fits both sides best, or none.",
-  "replyText: when one fits, propose that ONE person with facts the reader can check, why they fit what the reader asked, and ask whether you may write to them to propose the intro. When none fits, say so plainly and ask what would help you find a better match. No price, no flattery, plain short sentences, no dashes, no sign-off name.",
-].join("\n");
+  CONVERSATION_GAME,
+  "THIS MESSAGE: the reader told you who they want to meet (WHAT THEY WANT). Our lead search looked: THE ONE WHO FITS below is the person it found good for both of you, who has not been contacted yet, or nobody fits. replyText is sent to the reader in their thread.",
+  CONVERSATION_LEVEL_SECTION,
+].join("\n\n");
 
 export const PROPOSE_SCHEMA = {
   type: "object",
@@ -341,6 +346,12 @@ function personOf(lead: any): any {
       foundedYear: o.foundedYear ?? null,
     },
   };
+}
+
+/** Who writes: the persona tactic and the signature appended after the text (both tactics, never a rule in a prompt). */
+function whoYouAre(t: any): string {
+  const sig = s(t?.signature).split("\\n").map((l: string) => l.trim()).filter(Boolean).join(", ");
+  return "WHO YOU ARE: " + s(t?.persona?.name) + ", " + s(t?.persona?.says) + "." + (sig ? " Your signature, added after your text, reads: " + sig : "");
 }
 
 function nameOf(p: any): string {
@@ -625,7 +636,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const system = [
     FIRST_EMAIL_PROMPT,
     FIRST_EMAIL_KIND[kind],
-    "WHO YOU ARE: " + persona.name + ". " + persona.says,
+    whoYouAre(t),
     "OUR VOICE\\n" + String(voice.content ?? ""),
     s(R.brief) ? "THE CAMPAIGN'S BRIEF\\n" + s(R.brief) : "",
   ].filter(Boolean).join("\\n\\n");
@@ -698,8 +709,8 @@ const PROPOSE_PROMPT = ${JSON.stringify(PROPOSE_PROMPT)};
 const PROPOSE_SCHEMA = ${JSON.stringify(PROPOSE_SCHEMA)};
 function answerSchema(actions: string[]): any {
   const text = { type: "string" };
-  return { type: "object", additionalProperties: false, required: ["action", "replyText", "readerText", "otherSubject", "otherText", "introText", "goalText", "wanted", "nextFollowUpAt", "why"],
-    properties: { action: { type: "string", enum: actions.slice() }, replyText: text, readerText: text, otherSubject: text, otherText: text, introText: text, goalText: text, wanted: text, nextFollowUpAt: text, why: text } };
+  return { type: "object", additionalProperties: false, required: ["action", "replyText", "readerText", "otherSubject", "otherText", "introText", "followText", "wanted", "nextFollowUpAt", "why"],
+    properties: { action: { type: "string", enum: actions.slice() }, replyText: text, readerText: text, otherSubject: text, otherText: text, introText: text, followText: text, wanted: text, nextFollowUpAt: text, why: text } };
 }
 
 const PEOPLE = "intro_people";
@@ -827,7 +838,9 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const open: string[] = ["reply", "later", "stop", "escalate"];
   if (me.role === "reader") {
     if (me.pending && me.pending.state === "proposed") open.unshift("ask_other");
-    if (!me.declined && !(me.pending && me.pending.state !== "declined")) open.unshift("find");
+    // One intro at a time: a new one once nothing is pending (none yet, or the last one introduced, declined or refused).
+    const pendingOpen = me.pending && ["proposed", "asked"].indexOf(String(me.pending.state)) >= 0;
+    if (!me.declined && !pendingOpen) open.unshift("find");
     if (!me.declined) open.push("decline_intros");
   } else if (me.role === "counterpart" && me.state === "asked") {
     open.unshift("introduce", "counterpart_declined");
@@ -837,12 +850,11 @@ export default function run(ctx: ScriptContext): ScriptResult {
     stage: me.state,
     declinedIntros: me.declined === true,
     introductionsMade: Number(me.introductions ?? 0),
-    goalQuestionAsked: me.goalAsked === true,
     pendingIntro: me.role === "reader" ? me.pending ?? null : { reader: reader ? { name: reader.name, company: reader.company } : null },
   };
   const system = [
     INTRO_GAME,
-    "WHO YOU ARE: " + s(t.persona?.name) + ". " + s(t.persona?.says),
+    whoYouAre(t),
     "OUR VOICE\\n" + String(voice.content ?? ""),
     s(R.brief) ? "THE CAMPAIGN'S BRIEF\\n" + s(R.brief) : "",
   ].filter(Boolean).join("\\n\\n");
@@ -857,7 +869,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
     me.role === "counterpart" && reader ? "THE READER (who wants to meet them)\\nName: " + reader.name + "\\nCompany: " + reader.company + (reader.research ? "\\n" + JSON.stringify(reader.research) : "") : "",
     me.role === "counterpart" ? "THE OTHER PERSON (you are writing to them)\\nName: " + me.name + "\\nCompany: " + me.company + (me.research ? "\\n" + JSON.stringify(me.research) : "") : "",
     "",
-    "THE OFFER (" + s(brand.name) + "; for the price and setup only, after a yes)\\n" + (offerLines.join("\\n") || "(no offer facts)"),
+    "THE OFFER (" + s(brand.name) + ")\\n" + (offerLines.join("\\n") || "(no offer facts)"),
     "",
     "THE THREAD\\n" + threadText(thread),
   ].filter((l) => l !== "").join("\\n");
@@ -902,7 +914,10 @@ export default function run(ctx: ScriptContext): ScriptResult {
     }
     const meAsReader = { firstName: me.firstName, lastName: "", title: "", company: { name: me.company }, research: me.research ?? {} };
     const m = matchOne(ctx, meAsReader, candidates, wanted);
-    const p = complete(ctx, "writer", [PROPOSE_PROMPT, "WHO YOU ARE: " + s(t.persona?.name) + ". " + s(t.persona?.says), "OUR VOICE\\n" + String(voice.content ?? "")].join("\\n\\n"), [
+    const p = complete(ctx, "writer", [PROPOSE_PROMPT, whoYouAre(t), "OUR VOICE\\n" + String(voice.content ?? ""), s(R.brief) ? "THE CAMPAIGN'S BRIEF\\n" + s(R.brief) : ""].filter(Boolean).join("\\n\\n"), [
+      "NOW: " + now,
+      "THE STATE\\n" + JSON.stringify(state, null, 2),
+      "THE OFFER (" + s(brand.name) + ")\\n" + (offerLines.join("\\n") || "(no offer facts)"),
       "WHAT THEY WANT: " + wanted,
       "THE READER\\n" + me.name + ", " + me.company,
       m ? "THE ONE WHO FITS\\n" + factLines(m.person) + "\\nFor the reader: " + m.forReader + "\\nFor them: " + m.forThem : "NOBODY FITS (" + candidates.length + " people looked at)",
@@ -951,14 +966,14 @@ export default function run(ctx: ScriptContext): ScriptResult {
     }
     // Both said yes: ONE email to both (the reader in To, the other person in copy), in the reader's thread.
     replyIn(ctx, readerThread, readerEmail, text("introText"), keyBase + ":introduce", { to: [readerEmail], cc: [email] });
-    const first = Number(r.introductions ?? 0) === 0;
-    // Right after the FIRST intro: one question about the reader's own goal (no price), to them alone.
-    if (first && !r.goalAsked) replyIn(ctx, readerThread, readerEmail, text("goalText"), keyBase + ":goal", { to: [readerEmail] });
+    // Right after it, to the reader alone, when the writer has something for them (the brief says what and when).
+    const follow = undash(d.followText);
+    if (follow) replyIn(ctx, readerThread, readerEmail, follow, keyBase + ":follow", { to: [readerEmail] });
     save(email, { ...me, state: "introduced", introducedAt: now });
-    save(readerEmail, { ...r, state: first ? "goal_asked" : "introduced", pending: r.pending ? { ...r.pending, state: "introduced" } : null, introductions: Number(r.introductions ?? 0) + 1, goalAsked: r.goalAsked === true || first });
+    save(readerEmail, { ...r, state: "introduced", pending: r.pending ? { ...r.pending, state: "introduced" } : null, introductions: Number(r.introductions ?? 0) + 1 });
     setDate({ nextFollowupAt: next, reason: why || "introduced", sent: { channel: "email" } });
     close("intro_introduced");
-    return { content: { action, reader: readerEmail, other: email, goalAsked: first } };
+    return { content: { action, reader: readerEmail, other: email, introductions: Number(r.introductions ?? 0) + 1, followed: !!follow } };
   }
 
   if (action === "decline_intros") {
@@ -970,9 +985,9 @@ export default function run(ctx: ScriptContext): ScriptResult {
     return { content: { action } };
   }
 
-  // reply: whatever they wrote (the goal question's yes, the setup answers, a question).
+  // reply: whatever they wrote (a question, an answer, a yes to what we offered).
   replyIn(ctx, thread, email, text("replyText"), keyBase + ":reply");
-  save(email, { ...me, lastReplyAt: now, ...(me.state === "goal_asked" ? { state: "offer" } : {}) });
+  save(email, { ...me, lastReplyAt: now });
   setDate({ nextFollowupAt: next, reason: why || "answered", sent: { channel: "email" } });
   close("intro_replied");
   return { content: { action } };

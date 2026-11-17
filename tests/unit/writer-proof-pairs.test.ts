@@ -253,4 +253,44 @@ describe("a writer that asks its model", () => {
     const out = await runStoredScript(db, { outcome: "message_sent", dynasty: "dy_answer_lead", units: {}, request: { email: "a@example.test" } }, who, { ledger: ledger(), vendors: v });
     expect(out.unit!.content).toEqual({ sent: true, writtenWith: "GLM Flash" });
   });
+
+  it("a script that asks its model and SENDS itself (no personFields) is a pair writer: its send fields are judged", async () => {
+    const SELF = `
+export default function run(ctx) {
+  const thread = ctx.vendor.call("crm.person.thread", { query: { personKey: "email:" + ctx.request.email } });
+  if (!thread.ok) throw new Error("thread unreadable");
+  ctx.ask({ units: {}, subject: { service: "lead-service", id: "lead-" + ctx.request.email }, request: { message: "Thread: " + JSON.stringify(thread.data), systemPrompt: "Say hello.", responseFormat: "json", responseSchema: { type: "object" } } });
+  const done = ctx.get("llm_completion");
+  const d = done.content.answer.json || {};
+  const sent = ctx.vendor.call("crm.whatsapp.send", { body: { phone: "+15550001", text: String(d.message || "") } });
+  if (!sent.ok) throw new Error("not sent");
+  return { content: { sent: true }, subject: { service: "lead-service", id: "lead-" + ctx.request.email } };
+}`;
+    const self = await add("whatsapp_message_sent", "dy_hello", SELF, { asks: [LLM_COMPLETION] });
+    const glm = await add(LLM_COMPLETION, completionDynasty(llm("glm-flash")), buildCompletionSource(), completionTactics(llm("glm-flash")));
+    for (let i = 0; i < PROOF_SAMPLE; i++) {
+      await runStoredScript(db, { outcome: "whatsapp_message_sent", dynasty: "dy_hello", units: {}, request: { email: `h${i}@example.test` } }, who, { ledger: ledger(), vendors: productionVendors({ message: "Hi there, welcome aboard." }) });
+    }
+    const cases = await db.select().from(writerCases);
+    expect(cases.map((c) => [c.outcome, c.wrote])).toEqual(Array.from({ length: PROOF_SAMPLE }, () => ["whatsapp_message_sent", true]));
+    const bad = await proveScript(db, proofDeps({ message: "M3" }).deps, self, "staff", glm);
+    expect([bad.state, bad.sample]).toEqual(["failed", 1]);
+    expect(JSON.stringify(bad.cases)).toContain("crm.whatsapp.send body.text is not usable");
+    const good = await proveScript(db, proofDeps({ message: "Hi, welcome aboard." }).deps, self, "staff", glm);
+    expect([good.state, good.usable]).toEqual(["passed", PROOF_SAMPLE]);
+    await setEngineEnforced(db, "whatsapp_message_sent", true, "staff");
+    expect((await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "whatsapp_message_sent/dy_hello" })).map((r) => r.dynasty)).toEqual(["dy_glm_flash"]);
+  });
+
+  it("a pair's proof survives an upgrade of the completion script (a pair = writer version x completion DYNASTY)", async () => {
+    const { writer, haiku } = await seed();
+    await produce(PROOF_SAMPLE);
+    await proveScript(db, proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps, writer, "staff", haiku);
+    await db.update(scripts).set({ status: "deprecated", dynastyStatus: "deprecated" }).where(eq(scripts.dynasty, "dy_glm_flash"));
+    // A byte-identical re-store of the completion script: new version row, same dynasty.
+    await db.update(scripts).set({ status: "deprecated" }).where(eq(scripts.id, haiku.id));
+    await db.insert(scripts).values({ ...haiku, id: undefined, version: 2, status: "active", createdAt: new Date() });
+    await setEngineEnforced(db, "message_written", true, "staff");
+    expect((await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "message_written/dy_answer_lead" })).map((r) => [r.dynasty, r.version])).toEqual([["dy_claude_haiku", 2]]);
+  });
 });

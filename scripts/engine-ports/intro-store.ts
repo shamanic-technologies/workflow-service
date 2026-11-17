@@ -20,12 +20,26 @@ import {
   INTRO_PATH,
   OFFER_PITCH_TACTIC,
 } from "./intro.js";
+import { askCompletionSource, askCompletionTactics } from "./ask-completion.js";
+import { ASKING_SCRIPTS } from "./ask-completion-scripts.js";
 
 const out = (o: unknown) => console.log(JSON.stringify(o));
+/**
+ * ONE-WRITER-N-MODELS-1116-OTHERS: the intro scripts name no model, they ASK the LLM completion Engine. The generator
+ * keeps its one `complete` helper; the same anchored rewrite the catalogue applied is applied here, so an upgrade
+ * from this generator never puts a model back (INTRO-BOARDY-LEVEL-1117: v4 did, v5 restored the ask).
+ */
+const asking = (outcome: string, dynasty: string, code: string, tactics: Record<string, unknown>) => {
+  const def = ASKING_SCRIPTS.find((x) => x.outcome === outcome && x.dynasty === dynasty);
+  if (!def) throw new Error(`${outcome}/${dynasty}: not an asking script`);
+  return { code: askCompletionSource(code, def.edits, `${outcome}/${dynasty}`, def.append ?? ""), tactics: { ...askCompletionTactics(tactics), ...(def.addTactics ?? {}) } };
+};
+const create = (d: { outcome: string; dynasty: string; description: string; tactics: Record<string, unknown> }, code: string) =>
+  out({ op: "create", body: { outcome: d.outcome, dynasty: d.dynasty, description: d.description, ...asking(d.outcome, d.dynasty, code, d.tactics) } });
 const first = buildIntroFirstEmailSource();
-for (const d of INTRO_FIRST_EMAILS) out({ op: "create", body: { outcome: d.outcome, dynasty: d.dynasty, code: first, description: d.description, tactics: d.tactics } });
-out({ op: "create", body: { outcome: INTRO_ANSWER.outcome, dynasty: INTRO_ANSWER.dynasty, code: buildIntroAnswerSource(), description: INTRO_ANSWER.description, tactics: INTRO_ANSWER.tactics } });
+for (const d of INTRO_FIRST_EMAILS) create(d, first);
+create(INTRO_ANSWER, buildIntroAnswerSource());
 // The path last: once it is runnable, an intro campaign's tick asks for the scripts above.
-out({ op: "create", body: { outcome: INTRO_PATH.outcome, dynasty: INTRO_PATH.dynasty, code: buildIntroPathSource(), description: INTRO_PATH.description, tactics: INTRO_PATH.tactics } });
+create(INTRO_PATH, buildIntroPathSource());
 out({ op: "replace", outcome: "message_sent", dynastyPrefix: "dy_answer_lead", from: ANSWERER_OWNER_CHECK, to: ANSWERER_OWNER_CHECK_WITH_HOLD, skipIfIncludes: "owner.holdUntil" });
 out({ op: "tag", outcome: "email_sent", dynastyPrefix: "dy_cold_email", tactics: OFFER_PITCH_TACTIC });

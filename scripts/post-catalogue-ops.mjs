@@ -33,6 +33,10 @@ const RUN_ID = (await opened.json()).id;
 const headers = { "x-api-key": key, "x-org-id": ORG_ID, "x-user-id": USER_ID, "x-run-id": RUN_ID, "x-email": STAFF_EMAIL, "content-type": "application/json" };
 const base = (process.env.WORKFLOW_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, "");
 
+/** A JSON value with its object keys sorted: jsonb reorders keys, so a stored value is compared by content. */
+const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
+const sameJson = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+
 async function call(method, path, body) {
   const res = await fetch(base + path, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) });
   const text = await res.text();
@@ -74,7 +78,7 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       // Already stored: the generator's code is the next version unless it is already the active one.
       const active = (await activeOf(b.outcome, b.dynasty)).find((s) => s.dynasty === b.dynasty);
       const current = active ? (await call("GET", `/scripts/${active.id}`)).json : null;
-      if (current && current.dynasty === b.dynasty && current.code === b.code && JSON.stringify(current.tactics) === JSON.stringify(b.tactics) && current.description === b.description) {
+      if (current && current.dynasty === b.dynasty && current.code === b.code && sameJson(current.tactics, b.tactics) && current.description === b.description) {
         console.log(`  ${b.outcome}/${b.dynasty}: the active version is the generator's, skipped`);
         continue;
       }
@@ -142,7 +146,7 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       next = { code: edited };
     } else if (op.op === "tag") {
       const tactics = full.json.tactics ?? {};
-      if (Object.entries(op.tactics).every(([k, v]) => JSON.stringify(tactics[k]) === JSON.stringify(v))) {
+      if (Object.entries(op.tactics).every(([k, v]) => sameJson(tactics[k], v))) {
         console.log(`tag ${op.outcome}/${s.dynasty} v${s.version}: already carried, skipped`);
         continue;
       }
