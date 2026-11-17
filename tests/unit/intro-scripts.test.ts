@@ -164,18 +164,26 @@ describe("the intro scripts", () => {
       expect(result.subject).toEqual({ service: "lead-service", id: "l-sarah" });
       expect(result.content.counterpart).toMatchObject({ email: "tom@lonestarfreight.com", name: "Tom Doe", company: "Lonestar Freight" });
       const send = h.calls.find((c) => c.name === "email.send")!.args.body as any;
-      expect(send).toMatchObject({ to: "sarah@corvia.com", leadId: "l-sarah", campaignId: "camp-intro", subject: "Tom Doe, Lonestar Freight", signature: { text: "Sophie" }, idempotencyKey: "intro:lead_to_lead:l-sarah" });
+      expect(send).toMatchObject({ to: "sarah@corvia.com", leadId: "l-sarah", campaignId: "camp-intro", subject: "Tom Doe, Lonestar Freight", signature: { text: "Sophie\nAI introductions, distribute.you" }, idempotencyKey: "intro:lead_to_lead:l-sarah" });
       // No dash reaches the reader.
       expect(send.sequence[0].bodyText).not.toMatch(/[–—]/);
       // Every research call grounds on the web; the writer reads facts on both people, the brief and our voice.
       const writer = h.calls.filter((c) => c.name === "llm.complete").pop()!.args as any;
-      expect(writer.systemPrompt).toContain("NO MONEY, NO PITCH");
+      // The validated game and Boardy's emails as the level; the old step lists and the robot rules are gone.
+      expect(writer.systemPrompt).toContain("That is the whole game.");
+      expect(writer.systemPrompt).toContain("You sell nothing and money is not a subject of this email.");
+      expect(writer.systemPrompt).toContain("--- Example 5 ---");
+      expect(writer.systemPrompt).toContain("THIS EMAIL: you propose THE OTHER PERSON below, a person our lead search found.");
+      expect(writer.systemPrompt).toContain("WHO YOU ARE: Sophie, an AI specialized in introducing people to clients. Your signature, added after your text, reads: Sophie, AI introductions, distribute.you");
+      for (const gone of ["Every sentence carries a fact", "What we know about the reader comes first", "Plain short sentences, one idea each", "you are an AI (the persona", "connects founders", "built by distribute.you"]) {
+        expect(writer.systemPrompt).not.toContain(gone);
+      }
       expect(writer.systemPrompt).toContain(brief);
       expect(writer.message).toContain("THE OTHER PERSON");
       expect(writer.message).toContain("https://lonestar.com/news");
       // How we found them is the truth, never a referral the writer could retell (first live email, 2026-11-16).
       expect(writer.message).toContain("Nobody recommended or pointed us to either of them.");
-      expect(writer.systemPrompt).toContain("never a referral");
+      expect(writer.systemPrompt).toContain("Nothing invented about anyone, including how you came to write to them.");
       // The proposed person leaves the candidates; the unpicked one is kept.
       const pool = h.store.get("intro_pool\u0000people") as any[];
       expect(pool.map((p) => p.email)).toEqual(["ann@acme.com"]);
@@ -198,7 +206,7 @@ describe("the intro scripts", () => {
       const out = await runScript(first, { subject: null, brand: "b", day: 0, tactics: INTRO_OPEN.tactics, request: baseRequest }, h.bridge);
       expect((out as any).result.content.counterpart).toBeNull();
       expect(h.calls.filter((c) => c.name === "lead.serve")).toHaveLength(1);
-      expect((h.calls.filter((c) => c.name === "llm.complete").pop()!.args as any).systemPrompt).toContain("Name no other person");
+      expect((h.calls.filter((c) => c.name === "llm.complete").pop()!.args as any).systemPrompt).toContain("THIS EMAIL: you have nobody to propose yet.");
     });
 
     it("client to lead: a brand stating no sales rep introduces nobody, before any spend", async () => {
@@ -244,7 +252,7 @@ describe("the intro scripts", () => {
         if (name === "brand.offer.fields") return ok({ fields: { riskReversal: { provenance: "confirmed", value: "The platform is free." }, draft: { provenance: "suggested", value: "not confirmed" } } });
         if (name === "voice.read") return ok({ content: "Short plain words." });
         if (name === "llm.pick") return llmPick(a);
-        if (name === "llm.complete") return ok({ json: { replyText: "", readerText: "", otherSubject: "", otherText: "", introText: "", goalText: "", wanted: "", nextFollowUpAt: "2026-11-21T10:00:00Z", why: "test", ...decision } });
+        if (name === "llm.complete") return ok({ json: { replyText: "", readerText: "", otherSubject: "", otherText: "", introText: "", followText: "", wanted: "", nextFollowUpAt: "2026-11-21T10:00:00Z", why: "test", ...decision } });
         if (name === "instantly.reply.send" || name === "email.send") return ok({ success: true });
         if (name === "lead.followup_date.set" || name === "lead.followup.record") return ok({});
         return undefined;
@@ -270,7 +278,7 @@ describe("the intro scripts", () => {
       expect(h.calls).toEqual([]);
     });
 
-    it("a) b) c) the reader says yes: we ask the other person; the other says yes: one email to both, then the goal question", async () => {
+    it("a) b) c) the reader says yes: we ask the other person; the other says yes: one email to both, then a follow-up only when the writer has one", async () => {
       // a/b: the reader confirms: thanks in their thread + a NEW email to Tom (double opt-in).
       const h = harness(doors({ action: "ask_other", replyText: "Great, asking Tom now.", otherSubject: "Sarah Doe, Corvia", otherText: "Hi Tom,\n\nSarah cut Corvia's onboarding to six days. Want the intro?" }), {
         units: unitsOf({ step: "answer" }),
@@ -291,11 +299,11 @@ describe("the intro scripts", () => {
       expect(h.store.get(`intro_people\u0000${tom}`)).toMatchObject({ role: "counterpart", state: "asked", reader: { email: sarah } });
       expect(h.store.get("answering_leads\u0000l-tom")).toMatchObject({ campaignId: "camp-intro", conversation: "intro" });
 
-      // c: Tom says yes: ONE email to both (Sarah in To, Tom in Cc), then the goal question to Sarah alone.
-      const h2 = harness(doors({ action: "introduce", introText: "<p>Sarah, meet Tom.</p><p>Tom, meet Sarah.</p>", goalText: "Would you like more people like Tom in front of you?" }), { units: unitsOf({ step: "answer" }) });
+      // c: Tom says yes: ONE email to both (Sarah in To, Tom in Cc), then the follow-up to Sarah alone (the brief says what and when).
+      const h2 = harness(doors({ action: "introduce", introText: "<p>Sarah, meet Tom.</p><p>Tom, meet Sarah.</p>", followText: "Would you like more people like Tom in front of you?" }), { units: unitsOf({ step: "answer" }) });
       for (const [k, v] of h.store) h2.store.set(k, v);
       const out2 = await runScript(answer, { subject: null, brand: "b", day: 0, tactics: INTRO_ANSWER.tactics, request: event(tom, "l-tom") }, h2.bridge);
-      expect((out2 as any).result.content).toEqual({ action: "introduce", reader: sarah, other: tom, goalAsked: true });
+      expect((out2 as any).result.content).toEqual({ action: "introduce", reader: sarah, other: tom, introductions: 1, followed: true });
       const replies = h2.calls.filter((c) => c.name === "instantly.reply.send").map((c) => c.args.body as any);
       expect(replies.map((r) => [r.email, r.to, r.cc])).toEqual([
         [sarah, [sarah], [tom]],
@@ -303,12 +311,36 @@ describe("the intro scripts", () => {
       ]);
       // A writer mirroring the thread's HTML is sent as clean paragraphs, never escaped tags.
       expect(replies[0].body_html).toBe("<p>Sarah, meet Tom.</p><p>Tom, meet Sarah.</p>");
-      expect(h2.store.get(`intro_people\u0000${sarah}`)).toMatchObject({ state: "goal_asked", introductions: 1, goalAsked: true });
+      expect(h2.store.get(`intro_people\u0000${sarah}`)).toMatchObject({ state: "introduced", introductions: 1, pending: { state: "introduced" } });
       // The price is open only through THE OFFER, never in the intro: the writer reads it from the offer's own facts.
       const offerMessage = (h2.calls.find((c) => c.name === "llm.complete")!.args as any).message;
       expect(offerMessage).toContain("Each intro billed at cost.");
       expect(offerMessage).toContain("riskReversal: The platform is free.");
       expect(offerMessage).not.toContain("not confirmed");
+
+      // One intro at a time, never one ever: once Tom is introduced, Sarah can ask for the next one (find is open again).
+      const h3 = harness(doors({ action: "later" }), { units: unitsOf({ step: "answer" }) });
+      for (const [k, v] of h2.store) h3.store.set(k, v);
+      await runScript(answer, { subject: null, brand: "b", day: 0, tactics: INTRO_ANSWER.tactics, request: event(sarah, "l-sarah") }, h3.bridge);
+      const next = h3.calls.find((c) => c.name === "llm.complete")!.args as any;
+      expect(next.responseSchema.properties.action.enum).toContain("find");
+      // The conversation plays Boardy's level, the brief decides when an intro is free or paid: no fixed goal question.
+      expect(next.systemPrompt).toContain("Assume Boardy writes to strangers with the same tone.");
+      expect(next.systemPrompt).toContain(brief);
+      expect(next.systemPrompt).not.toContain("billed at exactly what it costs us");
+    });
+
+    it("an introduction with no follow-up sends ONE email (to both), nothing to the reader alone", async () => {
+      const rec = harness(doors({}), { units: unitsOf({ step: "record", sent }) });
+      await runScript(answer, { subject: null, brand: "b", day: 0, tactics: INTRO_ANSWER.tactics, request: baseRequest }, rec.bridge);
+      const h = harness(doors({ action: "ask_other", replyText: "Asking Tom.", otherSubject: "Sarah, Corvia", otherText: "Hi Tom, want the intro?" }), { units: unitsOf({ step: "answer" }) });
+      for (const [k, v] of rec.store) h.store.set(k, v);
+      await runScript(answer, { subject: null, brand: "b", day: 0, tactics: INTRO_ANSWER.tactics, request: event(sarah, "l-sarah") }, h.bridge);
+      const h2 = harness(doors({ action: "introduce", introText: "Sarah, meet Tom." }), { units: unitsOf({ step: "answer" }) });
+      for (const [k, v] of h.store) h2.store.set(k, v);
+      const out = await runScript(answer, { subject: null, brand: "b", day: 0, tactics: INTRO_ANSWER.tactics, request: event(tom, "l-tom") }, h2.bridge);
+      expect((out as any).result.content).toMatchObject({ action: "introduce", followed: false });
+      expect(h2.calls.filter((c) => c.name === "instantly.reply.send")).toHaveLength(1);
     });
 
     it("d) a reader who declines is never offered an intro again, even when they ask", async () => {

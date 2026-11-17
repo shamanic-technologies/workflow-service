@@ -6,8 +6,10 @@
  *   docker exec -i distribute-workflow-service-1 node scripts/dry-run-intro-conversation.mjs \
  *     --source /tmp/intro-answer.ts --tactics /tmp/intro-answer-tactics.json --brief /tmp/intro-brief.txt < /tmp/intro-turns.json
  *
- * stdin: `{sent, offer: {name, answers:[{question, answer}]}, turns: [{from: email, text}]}`: `sent` is what a first
- * email recorded (reader + proposed person), each turn one message a person writes. The script records the first email,
+ * stdin: `{sent, offer: {name, answers:[{question, answer}]}, candidates?: [served lead + research], turns: [{from: email,
+ * text}]}`: `sent` is what a first email recorded (reader + proposed person), each turn one message a person writes,
+ * `candidates` the STAFF people our lead search serves in order when the reader asks to meet someone (each with its
+ * research stated, so no web search runs on a staff person; INTRO-BOARDY-LEVEL-1117). The script records the first email,
  * then answers each turn in order: every writer call is LIVE on chat-service's platform door (`support:
  * staff_experiment`), our voice is read live, the Engine's storage is kept in memory across turns, every send is
  * captured and printed, never made.
@@ -51,6 +53,16 @@ async function turn(step, trigger) {
     if (op === "storage.set") return (store.set(key, a[2]), { v: null });
     if (op !== "vendor") return { stop: `no ${op}` };
     const [name, c] = a;
+    if (name === "lead.serve") {
+      const next = (input.candidates ?? []).shift();
+      return { v: { ok: true, data: next ? { found: true, lead: next } : { found: false, reason: "audience_exhausted" } } };
+    }
+    if (name === "scraping.page") return { v: { ok: false, data: { status: 0, error: "dry run: research stated" } } };
+    if (name === "llm.complete" && c.webSearch) {
+      const who = (input.research ?? []).find((r) => String(c.message).includes("Name: " + r.name));
+      if (!who) return { stop: "dry run: no stated research for this person (no web search on a staff person)" };
+      return { v: { ok: true, data: { content: null, json: who.research } } };
+    }
     if (name === "lead.followup.claim") return { v: { ok: true, data: { found: true, followup: { id: "row-" + c.body.person.email, leadId: c.body.person.leadId, email: c.body.person.email } } } };
     if (name === "lead.followup.record" || name === "lead.followup_date.set") return { v: { ok: true, data: {} } };
     if (name === "crm.person.thread") return { v: { ok: false, data: { status: 404, error: "dry run" } } };
