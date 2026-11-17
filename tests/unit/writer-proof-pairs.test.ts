@@ -200,7 +200,10 @@ describe("a writer that asks its model", () => {
     expect(p.llmCalls).toHaveLength(PROOF_SAMPLE);
     expect(p.llmCalls[0]).toMatchObject({ provider: "anthropic", model: "claude-haiku", runId: "proof-run", message: expect.stringContaining("Can we meet Tuesday?") });
     expect(p.llmCalls[0]!.brandTools).toBeUndefined(); // never through a brand's tools
-    expect(p.judged[0]).toContain('field "message" of a "message_written"');
+    expect(p.judged[0]).toContain('its field "message" of "message_written"');
+    // Each field is judged inside the whole message it belongs to (ONE-WRITER-N-MODELS-1116: a subject alone read as misplaced).
+    expect(p.judged[0]).toContain("The whole of what a person will read once this is sent");
+    expect(p.judged[0]).toContain("[message_written message]\n<p>Tuesday 10am works for us.</p>");
     expect(p.doors).toEqual([]);
   });
 
