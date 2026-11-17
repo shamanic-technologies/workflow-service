@@ -169,6 +169,35 @@ describe("X post published: the quote script", () => {
     expect((await replayCase(src, c)).diffs).toEqual([]);
   });
 
+  // X-QUOTE-ANY-HOUR-1117: the hours it posts are its tactic, any hour for this version.
+  it("posts at any hour: at 03:00 UTC it goes past the turn check and asks the watch", async () => {
+    expect(X_QUOTE_INDUSTRY_POST.tactics.publishHoursUtc).toEqual([0, 24]);
+    const c: ReplayCase = {
+      id: "night",
+      units: { industry_news_found: { scanned: false, items: [] } },
+      request: { ...request, now: "2026-11-17T03:00:00.000Z" },
+      tactics: X_QUOTE_INDUSTRY_POST.tactics,
+      calls: [
+        { name: "social.accounts", answer: ok({ accounts: [acc] }) },
+        { name: "social.publications", answer: ok({ publications: [] }) },
+      ],
+      expect: { fails: "no_quotable_post: the watch kept no post of the industry's X accounts today that the brand has not quoted yet" },
+    };
+    expect((await replayCase(src, c)).diffs).toEqual([]);
+  });
+
+  it("ends idle outside the hours its tactic states, and refuses a run whose tactic states none", async () => {
+    const calls = [
+      { name: "social.accounts", answer: ok({ accounts: [acc] }) },
+      { name: "social.publications", answer: ok({ publications: [] }) },
+    ];
+    const idle: ReplayCase = { id: "out", units: {}, request: { ...request, now: "2026-11-17T03:00:00.000Z" }, tactics: { ...X_QUOTE_INDUSTRY_POST.tactics, publishHoursUtc: [13, 21] }, calls, expect: { nothing: true } };
+    expect((await replayCase(src, idle)).diffs).toEqual([]);
+    const { publishHoursUtc: _drop, ...noHours } = X_QUOTE_INDUSTRY_POST.tactics;
+    const refused: ReplayCase = { id: "none", units: {}, request, tactics: noHours, calls: [], expect: { fails: "tactic publishHoursUtc must be [from, to) UTC hours, got undefined" } };
+    expect((await replayCase(src, refused)).diffs).toEqual([]);
+  });
+
   it("forwards the watch's unmade answer", async () => {
     const c: ReplayCase = {
       id: "no-news",
