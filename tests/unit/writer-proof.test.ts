@@ -120,7 +120,7 @@ function proofDeps(json: Record<string, unknown>, tokens = { tokensInput: 3000, 
     async platformJudge(body) {
       const state = String(body.state);
       judged.push(state);
-      const p = /= field[^\n]*\n(cold_email_followup|M3|subject: .*)$/m.test(state) ? 0.03 : 0.97;
+      const p = /^\[[^\]]*\]\n(cold_email_followup|M3|subject: .*)$/m.test(state) ? 0.03 : 0.97;
       return { answers: Object.fromEntries(Object.keys(body.questions as object).map((k) => [k, { noul: p }])), model: "jev" };
     },
     async readSkill() {
