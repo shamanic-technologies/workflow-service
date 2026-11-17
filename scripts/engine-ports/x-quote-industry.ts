@@ -58,9 +58,12 @@ export const X_QUOTE_INDUSTRY_POST = {
     channel: "x-post",
     asks: ["industry_news_found", "llm_completion"],
     post: "quotes an industry post",
+    // The UTC hours it posts, [from, to): data on the script, never a constant every brand inherits
+    // (X-QUOTE-ANY-HOUR-1117, owner 2026-11-17 « on est encore en test, ça doit envoyer tout le temps »).
+    publishHoursUtc: [0, 24],
   },
   description:
-    "Publishes one X post per run quoting the day's best post of the brand's industry: the brand's own short macro take, then the original post's link, which X shows as a quote of it. Never quotes the same post twice for a brand; runs on X accounts typed Pro (AI), at least an hour apart during the day.",
+    "Publishes one X post per run quoting the day's best post of the brand's industry: the brand's own short macro take, then the original post's link, which X shows as a quote of it. Never quotes the same post twice for a brand; runs on X accounts typed Pro (AI), at any hour, at least an hour apart.",
 } as const;
 
 /** The brief sentence a campaign states so its strategy keeps only the quote script on X post published. */
@@ -262,6 +265,14 @@ function quotable(items: any[]): any[] {
   return out.sort((a, b) => score(b) - score(a) || Date.parse(b.publishedAt ?? "") - Date.parse(a.publishedAt ?? ""));
 }
 
+/** The hours this script posts are its tactic \`publishHoursUtc\` [from, to) in UTC hours, 0 <= from < to <= 24; none stated = refused, never a default. */
+function inPublishHours(hours: any, now: string): boolean {
+  const ok = Array.isArray(hours) && hours.length === 2 && hours.every((h: any) => typeof h === "number" && Number.isInteger(h)) && hours[0] >= 0 && hours[0] < hours[1] && hours[1] <= 24;
+  if (!ok) throw new Error("tactic publishHoursUtc must be [from, to) UTC hours, got " + JSON.stringify(hours));
+  const hour = new Date(now).getUTCHours();
+  return hour >= hours[0] && hour < hours[1];
+}
+
 /** The take as written (the writer is trusted): dashes rewritten, any link or tag it slipped in removed, the URL closing it. */
 function finalText(take: string, url: string): string {
   const undash = (s: string) => s.replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-").replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ");
@@ -277,6 +288,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const brief = typeof R.brief === "string" ? R.brief.trim() : "";
   const campaignId = typeof R.campaignId === "string" ? R.campaignId : null;
   const p = planRun(R.now, false, campaignId, (Array.isArray(R.brandIds) && R.brandIds.length ? R.brandIds.join(",") : ctx.brand), null, R);
+  p.inWindow = inPublishHours((ctx.tactics as any).publishHoursUtc, p.now);
   const accounts = must(ctx, "social.accounts", { query: { brandId: p.brandId, network } });
   const posts = must(ctx, "social.publications", { query: { brandId: p.brandId, network, since: p.postsQuery.since, limit: "1000" } });
   const turn = checkTurn(p, network, accounts, posts);
