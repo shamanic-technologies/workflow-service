@@ -2553,6 +2553,10 @@ export const UpgradeScriptWithCasesRequestSchema = z
   .object({
     code: z.string().min(1).max(500_000),
     description: z.string().min(1).max(2000).optional(),
+    tactics: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe("The new version's tactics, when the owner rule changes them too (ONE-WRITER-N-MODELS-1116-OTHERS: the model leaves the tactics, `asks` gains `llm_completion`). Absent = the active version's."),
     source: z.string().min(1).max(300).describe("Where the cases come from and the owner rule they are restated under (e.g. `content-generation recorded generations, FOLLOWUP-JIT-1107 one email`)."),
     cases: z.array(z.record(z.string(), z.unknown())).min(1).max(1000),
     createdBy: z.string().min(1).max(200).describe("Who decided it (staff email)."),

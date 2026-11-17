@@ -223,6 +223,11 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "apollo.email.find": { service: "apollo", method: "POST", path: "/email-finder/find", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
+  // ONE-WRITER-N-MODELS-1116-OTHERS: the exact /complete request the thread / WhatsApp writer would send, minus the
+  // model (no spend, nothing stored); the script asks the LLM completion Engine, then hands the completion back to the
+  // generate door (`completion: {request, answer, runId}`), which stores it as if content-generation had written it.
+  "content.thread.request": { service: "content-generation", method: "POST", path: "/generate-thread/request", asRun: true },
+  "content.whatsapp.request": { service: "content-generation", method: "POST", path: "/generate-whatsapp/request", asRun: true },
   "crm.people.list": { service: "crm", method: "GET", path: "/orgs/people", asRun: true },
   "chat.copilot.proactive_turn": { service: "chat", method: "POST", path: "/internal/copilot/proactive-turns", asRun: true },
   // The follow-ups (MIGRATE-1105 S4b): the figures a campaign's brief asks for, read for the person (figure-reader.ts).

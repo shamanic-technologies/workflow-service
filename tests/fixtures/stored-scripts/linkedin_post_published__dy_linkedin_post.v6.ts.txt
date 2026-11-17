@@ -1,0 +1,374 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+/** X / LinkedIn post (x_post_published | linkedin_post_published by tactic network): one post per run on the brand's next publishable account (SOCIAL-POSTS-ENGINES-1107). */
+const BRIEF_HEADER = "THE CAMPAIGN'S BRIEF (written by our client for this whole campaign, verbatim; it was written without knowing this person, so where it assumes something the rest of this prompt, the thread or who they are to us contradicts, those win):";
+
+const console = { log: (..._a: unknown[]) => {}, error: (..._a: unknown[]) => {} };
+/** The sandbox ships no URL class: the one thing the steps read off a URL is its host name (throws like URL on garbage). */
+const URL = function (this: { hostname: string; href: string }, u: string) {
+  const m = /^[a-z][a-z0-9+.-]*:[/][/](?:[^@/?#]*@)?([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(String(u));
+  if (!m) throw new TypeError("Invalid URL: " + String(u));
+  this.hostname = m[1]!.toLowerCase();
+  this.href = String(u);
+} as unknown as new (u: string) => { hostname: string; href: string };
+type Answer = { ok: boolean; data: Record<string, any> };
+function must(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (!r.ok) throw new Error(name + " failed (" + String(r.data.status ?? "") + "): " + String(r.data.error ?? "").slice(0, 500));
+  return r.data;
+}
+function tolerated(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (r.ok) return r.data;
+  return { ok: false, status: r.data.status ?? null, error: r.data.body && Object.keys(r.data.body).length ? JSON.stringify(r.data.body) : String(r.data.error ?? "") };
+}
+/** The campaign's brief on a chat-service completion: appended to the system prompt (campaign-brief.ts, verbatim). */
+function withBrief(body: Record<string, any>, brief: string): Record<string, any> {
+  if (!brief) return body;
+  const sys = typeof body.systemPrompt === "string" ? body.systemPrompt : "";
+  const msg = typeof body.message === "string" ? body.message : "";
+  if (sys.includes(brief) || msg.includes(brief)) return body;
+  return { ...body, systemPrompt: (sys ? sys + "\n\n" : "") + BRIEF_HEADER + "\n" + brief };
+}
+
+function planRun(__now, dryRun, campaignId, brandId, offerId, startRun) {
+  const dry = dryRun === true || dryRun === "true";
+  const campaign = typeof campaignId === "string" && campaignId ? campaignId : null;
+  if (!dry && !campaign) throw new Error("plan-run: a live run needs its campaign (a staff run without one must say dryRun: true)");
+  const brand = typeof brandId === "string" && brandId ? brandId : null;
+  if (!brand) throw new Error("plan-run: no brand on this run (x-brand-id)");
+  const offer = startRun?.offerId ?? (typeof offerId === "string" && offerId ? offerId : null);
+  if (!offer) throw new Error("plan-run: no offer (the campaign's /start-run states it; a dry run passes inputs.offerId)");
+  const now = new Date(__now);
+  const hour = now.getUTCHours();
+  return {
+    dryRun: dry,
+    campaignId: campaign,
+    brandId: brand,
+    offerId: offer,
+    now: now.toISOString(),
+    date: now.toISOString().slice(0, 10),
+    inWindow: hour >= 13 && hour < 21,
+    accountsQuery: { brandId: brand },
+    postsQuery: { brandId: brand, since: new Date(now.getTime() - 30 * 24 * 3600 * 1000).toISOString(), limit: "1000" },
+  };
+}
+
+function checkTurn(plan: any, network: string, accounts: any, posts: any): any {
+  const all = Array.isArray(accounts?.accounts) ? accounts.accounts : null;
+  if (all === null) throw new Error("check-turn: social-service served no accounts list: " + JSON.stringify(accounts).slice(0, 300));
+  const list = Array.isArray(posts?.publications) ? posts.publications : null;
+  if (list === null) throw new Error("check-turn: social-service served no publications list: " + JSON.stringify(posts).slice(0, 300));
+  const at = (p: any) => Date.parse(p.publishedAt ?? "");
+  const mains = list.filter((p: any) => Number.isFinite(at(p))).sort((a: any, b: any) => at(b) - at(a));
+  const skipped: string[] = [];
+  const candidates: any[] = [];
+  for (const a of all) {
+    if (a.publishable === true && a.accountType === "pro_ai" && a.health === "connected") candidates.push(a);
+    else skipped.push(a.username + " (" + String(a.notPublishableReason ?? a.accountTypeLabel ?? a.accountType) + ")");
+  }
+  const lastOn = (a: any) => { const m = mains.find((p: any) => p.accountId === a.id); return m ? at(m) : -Infinity; };
+  candidates.sort((a, b) => lastOn(a) - lastOn(b) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  const account = candidates[0] ?? null;
+  const today = mains.filter((p: any) => new Date(at(p)).toISOString().slice(0, 10) === plan.date);
+  const history = mains.map((p: any) => new Date(at(p)).toISOString().slice(0, 10) + ": " + String(p.text ?? "").slice(0, 400));
+  const shapes = ["insight","question to the reader","short story from our facts","myth vs fact","practical tip"];
+  const base = { account, history, shape: shapes[today.length % shapes.length], todayCount: today.length };
+  if (!account) {
+    const why = all.length ? skipped.join("; ") : "no " + network + " account is connected to the brand";
+    return { ...base, proceed: false, unmade: "no_publishable_account: no " + network + " account of the brand may be posted on by software: " + why };
+  }
+  if (!plan.inWindow) return { ...base, proceed: false, unmade: null };
+  const last = mains[0] ? at(mains[0]) : null;
+  if (last !== null && Date.parse(plan.now) - last < 60 * 60 * 1000) return { ...base, proceed: false, unmade: null };
+  return { ...base, proceed: true, unmade: null };
+}
+
+function gatherFactsWith(plan, offerAnswers, offerFields, brandFields) {
+  // The brand-scoped read is refused BY DESIGN once a brand sells several
+  // offers (409 SEVERAL_OFFERS: "name the offer"); the offer-scoped read above
+  // is then the answer, so that one refusal means "no brand-level fields".
+  // Every other failure of that read is still an error.
+  if (brandFields && brandFields.ok === false) {
+    if (brandFields.status === 409 && String(brandFields.error ?? "").includes("SEVERAL_OFFERS")) {
+      console.log("[facts] the brand sells several offers: brand-level fields are not read, the offer's own are");
+      brandFields = null;
+    } else {
+      throw new Error("brand user-fields read failed (" + String(brandFields.status) + "): " + String(brandFields.error ?? ""));
+    }
+  }
+  const isEmpty = (v) => {
+    if (v === null || v === undefined) return true;
+    if (typeof v === "string") return v.trim() === "" || /^unknown$/i.test(v.trim());
+    if (Array.isArray(v)) return v.length === 0 || v.every(isEmpty);
+    if (typeof v === "object") return Object.keys(v).length === 0;
+    return false;
+  };
+  const isPlaceholder = (v) => typeof v === "string" && /^\s*placeholder\b/i.test(v);
+  const render = (v) => {
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return v.filter((x) => !isEmpty(x)).map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("; ");
+    return JSON.stringify(v);
+  };
+
+  const exact = [];
+  const neverGive = [];
+  const withheld = [];
+  const unconfirmed = [];
+  const addExact = (f) => exact.push({ id: "E" + (exact.length + 1), ...f });
+
+  for (const a of offerAnswers?.answers ?? []) {
+    if (isEmpty(a?.question) || isEmpty(a?.answer)) continue;
+    if (isPlaceholder(a.answer)) {
+      withheld.push({ source: "offer-answers", label: String(a.question).trim() });
+      continue;
+    }
+    addExact({ source: "offer-answers", label: String(a.question).trim(), value: String(a.answer).trim() });
+  }
+
+  const seen = new Set();
+  for (const [scope, read] of [["offer-user-fields", offerFields], ["brand-user-fields", brandFields]]) {
+    for (const [key, field] of Object.entries(read?.fields ?? {})) {
+      if (isEmpty(field?.value)) continue;
+      // Not confirmed = the site's prefill, which nobody told us.
+      if (field?.provenance !== "confirmed") {
+        unconfirmed.push(scope + ":" + key);
+        continue;
+      }
+      const value = render(field.value);
+      if (isPlaceholder(value)) {
+        withheld.push({ source: scope, label: key });
+        continue;
+      }
+      if (key === "neverGive") {
+        for (const item of Array.isArray(field.value) ? field.value : [field.value]) {
+          if (isEmpty(item)) continue;
+          const text = render(item);
+          if (!neverGive.includes(text)) neverGive.push(text);
+        }
+        continue;
+      }
+      if (seen.has(key + "::" + value)) continue;
+      seen.add(key + "::" + value);
+      addExact({ source: scope, label: key, value });
+    }
+  }
+
+  const questions = (plan?.questions ?? []).map((q) => ({ key: q.key, question: q.question }));
+
+  const facts = { questions, exact, neverGive, withheld };
+  if (withheld.length) {
+    console.error("[ai-meeting-booking] withheld operator PLACEHOLDER answer(s), not facts: " + JSON.stringify(withheld));
+  }
+  if (unconfirmed.length) {
+    console.log("[ai-meeting-booking] not used, the client never confirmed them (site prefill): " + unconfirmed.join(", "));
+  }
+  console.log("[ai-meeting-booking] what our client told us, the only facts the reply may state: " + JSON.stringify(facts));
+  return facts;
+}
+
+function gatherFacts(offerAnswers, offerFields, brandFields) {
+  return gatherFactsWith(null, offerAnswers, offerFields, brandFields);
+}
+function composeAngles(brand, facts, plan) {
+  const b = brand?.brand ?? brand ?? {};
+  const lines = (facts?.exact ?? []).slice(0, 20).map((f) => "- " + f.label + ": " + String(f.value).slice(0, 300));
+  return {
+    systemPrompt: "You read the live web for a social media writer. Answer in plain text, at most 8 short lines, each a fresh development of the last 7 days in the brand's industry (what happened, who, the source URL). Never an opinion.",
+    message: ["BRAND: " + (b.name ?? "?") + " (" + (b.domain ?? b.url ?? "?") + ")", "TODAY: " + plan.date, "WHAT THE BRAND SELLS:", ...(lines.length ? lines : ["(no stated facts)"]), "", "Find what is new this week in this brand's industry that its buyers care about."].join("\n"),
+  };
+}
+function planOwnSite(brand, plan) {
+  const b = brand?.brand ?? brand ?? {};
+  const domain = String(b.domain ?? b.url ?? "").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  if (!domain) throw new Error("plan-own-site: the brand has no domain to read");
+  return { domain, brandName: String(b.name ?? domain), url: "https://" + domain, brandIds: [plan.brandId] };
+}
+function composePickPages(site, map, plan) {
+  const onDomain = (u, domain) => {
+    try { const h = new URL(String(u)).hostname.toLowerCase().replace(/^www\./, ""); return h === domain || h.endsWith("." + domain); } catch { return false; }
+  };
+  const all = map && map.ok !== false && Array.isArray(map.urls) ? map.urls : null;
+  if (!all) console.error("[threads-post] could not map " + site.domain + " (" + JSON.stringify(map?.error ?? map?.status ?? null) + "): no own pages read this run");
+  const urls = [...new Set((all ?? []).filter((u) => onDomain(u, site.domain)).map((u) => String(u).replace(/#.*$/, "")))].slice(0, 300);
+  return {
+    candidates: urls,
+    count: urls.length,
+    systemPrompt: [
+      "You pick pages of ONE brand's own website for a social media writer who quotes only what the brand itself publishes.",
+      "From the URL list, choose at most 4 pages most likely to hold: figures the brand publishes about its own results or data, customer results or case studies, and its most recent articles or launches.",
+      "Copy each URL exactly as listed. Never a URL that is not in the list.",
+    ].join("\n"),
+    message: ["BRAND: " + site.brandName + " (" + site.domain + ")", "TODAY: " + plan.date, "", "URLS:", ...urls].join("\n"),
+  };
+}
+function planOwnPages(pick, offered) {
+  const listed = new Set(offered?.candidates ?? []);
+  const asked = pick && pick.ok !== false && Array.isArray(pick.json?.urls) ? pick.json.urls : null;
+  if (asked === null && (offered?.count ?? 0) > 0) console.error("[threads-post] no own pages picked (" + JSON.stringify(pick?.error ?? pick?.status ?? null) + "): no own pages read this run");
+  const urls = [...new Set((asked ?? []).map((u) => String(u)).filter((u) => listed.has(u)))].slice(0, 4);
+  console.log("[threads-post] own pages to read: " + (urls.length ? urls.join(", ") : "(none)"));
+  return { count: urls.length, urls, url1: urls[0] ?? null, url2: urls[1] ?? null, url3: urls[2] ?? null, url4: urls[3] ?? null };
+}
+function composeOwnFigures(site, plan, p1, p2, p3, p4) {
+  const pages = [];
+  for (const p of [p1, p2, p3, p4]) {
+    const r = p && p.ok !== false ? p.result : null;
+    const text = typeof r?.rawMarkdown === "string" ? r.rawMarkdown : "";
+    const kept = text.split("\n").filter((l) => !/^\s*([-*+]\s*)?(!?\[[^\]]*\]\([^)]*\)\s*)+$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (kept) pages.push("PAGE: " + (r.url ?? "?") + "\n" + kept.slice(0, 12000));
+    else if (p) console.error("[threads-post] an own page read nothing (" + JSON.stringify(p?.error ?? p?.status ?? null) + ")");
+  }
+  return {
+    pageCount: pages.length,
+    systemPrompt: [
+      "You read pages of ONE brand's own website for a social media writer. Use only the page text given; never another source, never a figure the pages do not state.",
+      "Answer in plain text, at most 15 short lines, each one of:",
+      "- a figure a page publishes: the number, what it counts, the sample if stated, the reliability label the page gives it if any (for example Robust, Signal, Early read), the page URL;",
+      "- a customer result a page publishes: the result, the customer's name only if that page names it, the page URL;",
+      "- an item published recently: the title, the date, the URL.",
+      "Never an opinion, never a guess. If the pages publish none of these, answer exactly: (none)",
+    ].join("\n"),
+    message: ["BRAND: " + site.brandName + " (" + site.domain + ")", "TODAY: " + plan.date, "", ...pages].join("\n\n"),
+  };
+}
+function composeWrite(plan, turn, brand, facts, angles, ownFigures) {
+  const b = brand?.brand ?? brand ?? {};
+  const domain = String(b.domain ?? b.url ?? "").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  if (!domain) throw new Error("compose-write: the brand has no domain to close the thread on");
+  const brandName = String(b.name ?? domain);
+  const getStarted = "Get started: " + domain;
+  const exact = (facts?.exact ?? []).map((f) => "- [" + f.id + "] " + f.label + ": " + f.value);
+  const never = (facts?.neverGive ?? []).map((t) => "- " + t);
+  const read = (r) => (r && r.ok !== false && typeof r.content === "string" && r.content.trim() ? r.content.trim().slice(0, 3000) : null);
+  const web = read(angles);
+  if (!web) console.error("[threads-post] no web angles this run (" + JSON.stringify(angles?.error ?? angles?.status ?? null) + "): writing without them");
+  const own = read(ownFigures);
+  if (!own) console.error("[threads-post] no published figures read on " + domain + " this run (" + JSON.stringify(ownFigures?.error ?? ownFigures?.status ?? null) + "): writing without them");
+  const context = [
+    "BRAND: " + brandName + " (" + domain + ")",
+    "PUBLISHED ON: @" + turn.account.username,
+    "TODAY: " + plan.date,
+    "SUGGESTED SHAPE: " + turn.shape,
+    "",
+    "OUR FACTS (the only source of numbers besides OUR PUBLISHED FIGURES):",
+    ...(exact.length ? exact : ["(none)"]),
+    ...(never.length ? ["", "NEVER STATE OR OFFER:", ...never] : []),
+    "",
+    "OUR PUBLISHED FIGURES (read today on " + domain + ", each with its page):",
+    own ?? "(none)",
+    "",
+    "THIS WEEK IN THE INDUSTRY (angles only):",
+    web ?? "(none)",
+    "",
+    "ALREADY POSTED (never repeat a subject):",
+    ...(turn.history.length ? turn.history : ["(none yet)"]),
+  ].join("\n");
+  return { variables: { brandName, getStartedLine: getStarted }, context, getStarted, brandIds: [plan.brandId] };
+}
+function writerPlan(pick, skip) {
+  if (skip === true) return { skipped: true, templateDynastySlug: null };
+  const leg = pick && pick.legKey ? pick.legKey : "unknown leg";
+  const templateDynastySlug = pick && pick.template ? pick.template.templateDynastySlug : null;
+  if (typeof templateDynastySlug !== "string" || templateDynastySlug.length === 0) {
+    throw new Error("[writer-plan] no Threads template to write with on " + leg + ": " + ((pick && pick.templateUnavailableReason) || "features-service served none") + ". Nothing is written.");
+  }
+  console.log("[writer-plan] " + leg + (pick.strategyId ? " (strategy " + pick.strategyId + ")" : "") + ": template dynasty " + templateDynastySlug);
+  return { skipped: false, templateDynastySlug, legKey: pick.legKey ?? null, strategyId: pick.strategyId ?? null };
+}
+
+const OWN_PAGES_SCHEMA = {"type":"object","properties":{"urls":{"type":"array","items":{"type":"string"}}},"required":["urls"],"additionalProperties":false};
+
+/**
+ * INDUSTRY-NEWS-ENGINE-1108: the brand's fresh industry news, asked of the Industry news found Engine inside THIS run (a
+ * child run: its scan's spend and Units land on this campaign through the run tree; the day's scan is paid once, a second
+ * ask the same day reads it back). Social-service declares the Units (recordedBy social). No script / nothing kept = [].
+ */
+function freshNews(ctx: any, now: string): any[] {
+  ctx.ask({ units: {}, recordedBy: "social", request: { now } });
+  const u = ctx.get("industry_news_found");
+  return u && u.content && Array.isArray(u.content.items) ? u.content.items : [];
+}
+
+/** The angle reader's message with the watch's items first (each with its source URL), when there are any. */
+function withNews(message: string, news: any[]): string {
+  if (!news.length) return message;
+  const lines = news.slice(0, 12).map((i: any) => "- " + String(i.title ?? "").slice(0, 200) + " (" + String(i.url ?? "") + ")" + (i.whyItMatters ? ": " + String(i.whyItMatters).slice(0, 200) : ""));
+  return message + "\n\nFRESH INDUSTRY NEWS (the last day and a half, kept by the brand's own watch; start from these, with their source URL):\n" + lines.join("\n");
+}
+
+/** The post as written (the writer is trusted): dashes rewritten, its parts joined, the GET STARTED line closing it. */
+function finalPost(draft: any, compose: any): string {
+  const undash = (s: any) => String(s ?? "").replace(/(\d)\s*[\u2013\u2014]\s*(?=\d)/g, "$1-").replace(/\s*[\u2013\u2014]\s*/g, ", ").trim();
+  const strip = (s: any) => undash(s).split("\n").filter((l: string) => l.trim() !== compose.getStarted).join("\n").trim();
+  const parts = [draft?.post, ...(Array.isArray(draft?.replies) ? draft.replies : [])].map(strip).filter(Boolean);
+  if (!parts.length) throw new Error("final-post: the writer returned no post: " + JSON.stringify(draft).slice(0, 300));
+  return parts.join("\n\n") + "\n\n" + compose.getStarted;
+}
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const R: any = ctx.request ?? {};
+  const network = String((ctx.tactics as any).network ?? "");
+  if (network !== "x" && network !== "linkedin") throw new Error("the script's tactic network must be x or linkedin, got " + JSON.stringify(network));
+  const brief = typeof R.brief === "string" ? R.brief.trim() : "";
+  const campaignId = typeof R.campaignId === "string" ? R.campaignId : null;
+  const p = planRun(R.now, false, campaignId, (Array.isArray(R.brandIds) && R.brandIds.length ? R.brandIds.join(",") : ctx.brand), null, R);
+  const accounts = must(ctx, "social.accounts", { query: { brandId: p.brandId, network } });
+  const posts = must(ctx, "social.publications", { query: { brandId: p.brandId, network, since: p.postsQuery.since, limit: "1000" } });
+  const turn = checkTurn(p, network, accounts, posts);
+  if (turn.proceed !== true) return turn.unmade ? { unmade: turn.unmade } : null;
+
+  const brand = must(ctx, "brand.profile", { params: { id: p.brandId } });
+  const offerAnswers = must(ctx, "brand.offer.answers", { params: { brandId: p.brandId, offerId: p.offerId } });
+  const offerFields = must(ctx, "brand.offer.fields", { params: { brandId: p.brandId, offerId: p.offerId } });
+  const brandFields = tolerated(ctx, "brand.fields", { params: { brandId: p.brandId } });
+  const facts = gatherFacts(offerAnswers, offerFields, brandFields);
+
+  const news = freshNews(ctx, p.now);
+  const a = composeAngles(brand, facts, p);
+  const angles = tolerated(ctx, "llm.complete", withBrief({ ...pickLlm(ctx, "angles"), webSearch: true, maxTokens: 4000, message: withNews(a.message, news), systemPrompt: a.systemPrompt }, brief));
+
+  const site = planOwnSite(brand, p);
+  const map = tolerated(ctx, "scraping.site.map", { body: { url: site.url, brandIds: site.brandIds, campaignId } });
+  const offered = composePickPages(site, map, p);
+  const pick = (offered.count ?? 0) === 0
+    ? { ok: false, notCalled: true }
+    : tolerated(ctx, "llm.complete", withBrief({ ...pickLlm(ctx, "own_pages"), responseFormat: "json", responseSchema: OWN_PAGES_SCHEMA, maxTokens: 2000, message: offered.message, systemPrompt: offered.systemPrompt }, brief));
+  const pages = planOwnPages(pick, offered);
+  const scraped: any[] = [];
+  for (const url of [pages.url1, pages.url2, pages.url3, pages.url4]) {
+    if (scraped.length >= (pages.count ?? 0)) { scraped.push(null); continue; }
+    scraped.push(tolerated(ctx, "scraping.page", { body: { enrich: false, url, brandIds: site.brandIds, campaignId } }));
+  }
+  const own = composeOwnFigures(site, p, scraped[0], scraped[1], scraped[2], scraped[3]);
+  const ownFigures = (own.pageCount ?? 0) === 0
+    ? null
+    : tolerated(ctx, "llm.complete", withBrief({ ...pickLlm(ctx, "own_figures"), maxTokens: 4000, message: own.message, systemPrompt: own.systemPrompt }, brief));
+
+  const write = composeWrite(p, turn, brand, facts, angles, ownFigures);
+  const writerPick = must(ctx, "template.pick", { place: "writer" });
+  const writer = writerPlan(writerPick, undefined);
+  const head = must(ctx, "content.template_head", { params: { slug: writer.templateDynastySlug } });
+  const draft = must(ctx, "content.thread.generate", {
+    body: {
+      variables: write.variables,
+      context: write.context,
+      brandIds: write.brandIds,
+      campaignId,
+      dryRun: false,
+      type: head.template.type,
+      model: pickLlm(ctx, "writer").model,
+      ...(R.brief !== null && R.brief !== undefined ? { brief: R.brief } : {}),
+    },
+  });
+  const text = finalPost(draft, write);
+  must(ctx, "social.publish", { params: { id: turn.account.id }, body: { text, idempotencyKey: network + "-post:" + (campaignId ?? "no-campaign") + ":" + p.now } });
+  return { content: { end: { success: true, stopCampaign: false } } };
+}
+
+
+/** The LLM of one call: the Rating's pick for this Engine and this call (LLM-PICK-SCRIPTS-1112). No LLM in the Engine's universe = nothing is written: the run fails and is retried later, never a fallback model. */
+function pickLlm(ctx: any, place: string, outcome?: string): { provider: string; model: string } {
+  const p = ctx.vendor.call("llm.pick", outcome ? { place, outcome } : { place });
+  if (!p.ok) throw new Error("llm.pick " + place + ": " + String(p.data && p.data.error) + ". Nothing is written: the run is retried later.");
+  return { provider: p.data.provider, model: p.data.model };
+}

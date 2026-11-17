@@ -3736,6 +3736,13 @@
             "minLength": 1,
             "maxLength": 2000
           },
+          "tactics": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "The new version's tactics, when the owner rule changes them too (ONE-WRITER-N-MODELS-1116-OTHERS: the model leaves the tactics, `asks` gains `llm_completion`). Absent = the active version's."
+          },
           "source": {
             "type": "string",
             "minLength": 1,
