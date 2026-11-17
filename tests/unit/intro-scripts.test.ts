@@ -177,9 +177,11 @@ describe("the intro scripts", () => {
       expect(writer.systemPrompt).toContain("--- Example 5 ---");
       expect(writer.systemPrompt).toContain("THIS EMAIL: you propose THE OTHER PERSON below, a person our lead search found.");
       expect(writer.systemPrompt).toContain("WHO YOU ARE: Sophie, an AI specialized in introducing people to clients. Your signature, added after your text, reads: Sophie, AI introductions, distribute.you");
-      for (const gone of ["Every sentence carries a fact", "What we know about the reader comes first", "Plain short sentences, one idea each", "you are an AI (the persona", "connects founders", "built by distribute.you"]) {
+      for (const gone of ["Every sentence carries a fact", "What we know about the reader comes first", "Plain short sentences, one idea each", "you are an AI (the persona", "connects founders", "built by distribute.you", "someone who understood their business well enough"]) {
         expect(writer.systemPrompt).not.toContain(gone);
       }
+      // INTRO-EXAMPLES-1117: the reader knows their own business; what they lack is our read of it (no recital licence).
+      expect(writer.systemPrompt).toContain("Their own business they already know; your read of it, they do not.");
       expect(writer.systemPrompt).toContain(brief);
       expect(writer.message).toContain("THE OTHER PERSON");
       expect(writer.message).toContain("https://lonestar.com/news");
