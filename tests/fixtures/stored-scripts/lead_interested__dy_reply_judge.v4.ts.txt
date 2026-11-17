@@ -1,0 +1,192 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+
+/**
+ * Lead interested · distribute.you reply judge.
+ *
+ * Reads what the person wrote back (their words only: quoted history and our own footer stripped),
+ * framed by the email we sent and the thread's subject, and asks the model for ONE label of the
+ * reply-kind vocabulary. The label decides: positive (interested, asks for info, asks for a time),
+ * negative (declines, wrong person, changed job, asked to stop) or neutral (anything else). A
+ * person is interested when the label is positive. An answer outside the vocabulary is no verdict:
+ * nothing is asserted rather than a sentiment we did not obtain.
+ *
+ * Provenance (business logic only; instantly-service @ 83c8f8c): src/lib/self-send/qualify-reply.ts
+ * (SYSTEM_PROMPT verbatim, QUALIFICATION_EVENT_TYPES, stripQuotedHistory, subjectTheyTyped,
+ * withOurOutreach, withSubject, parseQualification, qualifyReply's message assembly);
+ * src/lib/reply-kind.ts (REPLY_KIND_CLASSIFICATION). v2 states the model call exactly as production sends it
+ * (JSON, temperature 0, reasoning off; the LLM is the Rating's pick since LLM-PICK-SCRIPTS-1112), proven on instantly's recorded requests.
+ * Left to the host: billing on the reply-judging run (platform, through the service's script door), the shadow judgment.
+ *
+ * Material: `reply_received` (the reply's text, the thread's subject, the email we sent).
+ */
+const SYSTEM_PROMPT = `You classify a single reply to a cold outreach email.
+
+Answer with JSON only: {"classification": "<one of the labels>"}
+
+Labels, and what each one means:
+- lead_interested — they are personally interested and say so, without asking a question or proposing a time
+- lead_referral — they are not the buyer themselves, but it is relevant to their company and they point you at the right person
+- lead_info_requested — they want to know more: they ask a question about the offer without committing
+- lead_meeting_requested — they propose or accept a specific time, or share a booking link
+- lead_not_interested — they decline or say it is not relevant, WITHOUT asking to be removed
+- lead_opt_out_requested — they ask to be taken off the list: "unsubscribe", "remove me", "take me off your list", "stop emailing me", "do not contact me again". Pick this over lead_not_interested whenever the reply contains a removal request, even if it also declines the offer
+- lead_wrong_person — they are not the right contact and hand you nothing: no name, no relevance
+- lead_changed_job — they say they have left the role or the company, so the role we wrote to is no longer theirs
+- lead_out_of_office — they are away and will return; the message says nothing about the offer
+- lead_neutral — anything else, including a bare acknowledgement or an unclear reply
+- lead_off_topic — the conversation is about something OTHER than them buying what we sell: a partnership or reseller proposal, a job application or hiring enquiry, investors or fundraising, a vendor pitching their own product to us, or press and media. Pick this over lead_interested, lead_info_requested, lead_meeting_requested and lead_neutral whenever the exchange is about one of those rather than a purchase; our email and the subject line tell you what the conversation is about, and when our email itself offers what the reply talks about (hiring help, a partnership program, a media placement), the reply is about buying it and is NOT lead_off_topic
+- lead_already_customer — they say they ALREADY buy, use or own what we offer from this company: "I already have your unit", "we're already one of your clinics", "we've been a customer for years". Pick this over every other label when they say so, even if they also ask a question. Using the same kind of product bought from ANOTHER company is not this: that is a decline
+- lead_is_client — they say they ARE the company we are writing on behalf of, or work for it: "this is our own company", "I'm on the team", "you're emailing your own client"
+
+Judge only what the reply says. Do not infer enthusiasm from politeness, and do
+not treat a question about how you got their address as interest.
+
+When the message starts with "Subject:", that is the thread's subject line. Use
+it only to know what the conversation is about — never classify the subject
+itself as something they wrote.
+
+When the message carries an "Our email:" section, that is what we sent them: it
+tells you what we sell. Use it only to know what the conversation is about —
+never classify our words as something they wrote. Their reply is under "Their reply:".
+
+The reply may quote our own email beneath it, and older emails of ours ended with
+the words "Not relevant? Reply "stop" and I won't email you again." or "Don't want
+to hear from me again? unsubscribe". That is OUR footer, not their request — only a
+removal request THEY wrote is lead_opt_out_requested.
+
+Worked examples, from real replies:
+- "Stop" -> lead_opt_out_requested
+- "Unsubscribe" -> lead_opt_out_requested
+- "unsusbsribe" -> lead_opt_out_requested (a misspelling is still the request)
+- "No interest, please stop sending emails." -> lead_opt_out_requested (the second clause asks to stop; the first alone would not)
+- "Not for us, thanks." -> lead_not_interested (a decline, with no request to be removed)
+- "No interest" -> lead_not_interested (declining is not asking to be taken off the list)
+- Subject "Re: Acme + Beta partnership?", reply "can you explain?" -> lead_off_topic (the conversation is a partnership proposal, not a purchase)
+- "Are you hiring? I'd love to join your team" -> lead_off_topic (a job enquiry)
+- Our email offers job listings to employers, reply "Yes we are hiring two warehouse operatives. A free first listing sounds good. How does it work?" -> lead_info_requested (hiring is what we sell here, so this is a purchase conversation)
+- "I actually am a Shockwave Centers of America clinic. I have the OTG unit. Is this email meant for those who don't have shockwave units?" -> lead_already_customer (they already own the product; the question does not make it interest)
+- "We're using another brand's unit and have no need for another one" -> lead_not_interested (they bought from someone else, not from us)
+- "Ha, I work at Acme, this is our own campaign" -> lead_is_client`;
+
+const LABELS = [
+  "lead_interested",
+  "lead_referral",
+  "lead_info_requested",
+  "lead_meeting_requested",
+  "lead_not_interested",
+  "lead_wrong_person",
+  "lead_changed_job",
+  "lead_opt_out_requested",
+  "lead_out_of_office",
+  "lead_neutral",
+  "lead_off_topic",
+  "lead_already_customer",
+  "lead_is_client",
+];
+
+const CLASSIFICATION: Record<string, "positive" | "negative" | "neutral"> = {
+  lead_interested: "positive",
+  lead_referral: "neutral",
+  lead_info_requested: "positive",
+  lead_meeting_requested: "positive",
+  lead_not_interested: "negative",
+  lead_wrong_person: "negative",
+  lead_changed_job: "negative",
+  lead_opt_out_requested: "negative",
+  lead_neutral: "neutral",
+  lead_off_topic: "neutral",
+  lead_already_customer: "neutral",
+  lead_is_client: "neutral",
+  lead_out_of_office: "neutral",
+};
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const reply = ctx.get("reply_received");
+  const subject = typeof reply.content.subject === "string" ? reply.content.subject : null;
+  const body = stripQuotedHistory(String(reply.content.text ?? "")).slice(0, 4000);
+  const typedSubject = body ? null : subjectTheyTyped(subject);
+  const stripped = body || typedSubject || "";
+  if (!stripped) return null;
+  const framed = withOurOutreach(stripped, typeof reply.content.ourOutreach === "string" ? reply.content.ourOutreach : null);
+  const message = typedSubject ? framed : withSubject(framed, subject);
+  const answer = ctx.vendor.call("llm.complete", { message, systemPrompt: SYSTEM_PROMPT, ...pickLlm(ctx, "judge"), responseFormat: "json", temperature: 0, disableThinking: true });
+  if (!answer.ok) throw new Error(`llm.complete failed: ${String(answer.data.error ?? "no answer")}`);
+  const kind = parseQualification(answer.data as { json?: Record<string, unknown>; content?: string });
+  if (kind === null) return null;
+  const classification = CLASSIFICATION[kind]!;
+  return { content: { kind, classification, interested: classification === "positive" } };
+}
+
+function parseQualification(result: { json?: Record<string, unknown>; content?: string }): string | null {
+  const fromJson = result.json?.classification;
+  if (typeof fromJson === "string" && LABELS.includes(fromJson)) return fromJson;
+  if (typeof result.content === "string") {
+    try {
+      const parsed = JSON.parse(result.content) as { classification?: unknown };
+      if (typeof parsed.classification === "string" && LABELS.includes(parsed.classification)) return parsed.classification;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function withOurOutreach(reply: string, ourOutreach: string | null | undefined): string {
+  const ours = ourOutreach?.trim();
+  return ours ? `Our email:\n${ours}\n\nTheir reply:\n${reply}` : reply;
+}
+
+function withSubject(message: string, subject: string | null | undefined): string {
+  const line = subject?.replace(/\s+/g, " ").trim();
+  return line ? `Subject: ${line.slice(0, 300)}\n\n${message}` : message;
+}
+
+function subjectTheyTyped(subject: string | null | undefined): string | null {
+  const line = subject?.replace(/\s+/g, " ").trim();
+  if (!line) return null;
+  if (/^(re|fw|fwd|aw|wg|tr|sv|vs)\s*:/i.test(line)) return null;
+  return line.slice(0, 300);
+}
+
+const QUOTED_LINE = /^\s*>/;
+const ATTRIBUTION_LINE = /^\s*On .{0,120}\bwrote:\s*$/i;
+const ATTRIBUTION_TAIL = /^\s*(?:\S.{0,120}\s)?wrote:\s*$/i;
+const ORIGINAL_MESSAGE_LINE = /^\s*-{2,}\s*Original Message\s*-{2,}/i;
+const SIGNATURE_DELIMITER = /^\s*-{2,}\s*$/;
+
+function stripQuotedHistory(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  let afterQuote = false;
+  const nextNonBlankIsQuoted = (from: number): boolean => {
+    for (let j = from; j < lines.length; j++) {
+      if (lines[j]!.trim()) return QUOTED_LINE.test(lines[j]!);
+    }
+    return false;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (QUOTED_LINE.test(line)) {
+      afterQuote = true;
+      continue;
+    }
+    if (ORIGINAL_MESSAGE_LINE.test(line)) break;
+    if (afterQuote && SIGNATURE_DELIMITER.test(line)) break;
+    const wrappedAttribution = !ATTRIBUTION_LINE.test(line) && ATTRIBUTION_TAIL.test(line) && kept.length > 0 && /^\s*On\s/i.test(kept[kept.length - 1]!);
+    if (ATTRIBUTION_LINE.test(line) || wrappedAttribution) {
+      if (wrappedAttribution) kept.pop();
+      if (nextNonBlankIsQuoted(i + 1)) continue;
+      break;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+
+/** The LLM of one call: the Rating's pick for this Engine and this call (LLM-PICK-SCRIPTS-1112). No LLM in the Engine's universe = nothing is written: the run fails and is retried later, never a fallback model. */
+function pickLlm(ctx: any, place: string, outcome?: string): { provider: string; model: string } {
+  const p = ctx.vendor.call("llm.pick", outcome ? { place, outcome } : { place });
+  if (!p.ok) throw new Error("llm.pick " + place + ": " + String(p.data && p.data.error) + ". Nothing is written: the run is retried later.");
+  return { provider: p.data.provider, model: p.data.model };
+}

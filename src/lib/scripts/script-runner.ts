@@ -43,6 +43,11 @@ export interface RunScriptInput {
    * finds its own subject, e.g. a proactive campaign's find): the Unit the script makes names it (`result.subject`).
    */
   subject?: SubjectRef;
+  /**
+   * The subject when neither the run nor the Unit names one (ONE-WRITER-N-MODELS-1116-OTHERS: an asked child, e.g. a
+   * completion, is about what its asker is about, else about the asking run).
+   */
+  fallbackSubject?: SubjectRef;
   /** The materials, by outcome; a list when the script may ask the same outcome again. */
   units: Record<string, MaterialUnit | MaterialUnit[]>;
   /** The run's tactics, on top of the script's own. */
@@ -220,7 +225,7 @@ export async function runStoredScript(
       if (held === undefined && asked) {
         const request = asked;
         asked = null;
-        const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
+        const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
         if ("v" in provided) {
           askedUnits[outcome] = provided.v;
           // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
@@ -286,7 +291,7 @@ export async function runStoredScript(
   const waited = out.kind === "stopped" && out.reason.startsWith(WAIT_STOP);
   let status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : waited ? "waiting" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
   // The subject a Unit is about: the run's, else the one the Unit names (an Engine run that found its own subject).
-  const subject: SubjectRef | null = input.subject ?? subjectOf(made?.subject);
+  const subject: SubjectRef | null = input.subject ?? subjectOf(made?.subject) ?? input.fallbackSubject ?? null;
   let error: string | null = out.kind === "error" ? out.message : waited ? `waits ${out.reason.slice(WAIT_STOP.length)} days` : out.kind === "stopped" ? out.reason : status === "unmade" ? made!.unmade! : null;
   if (status === "made" && !input.recordedBy && !subject) {
     status = "failed";
@@ -390,6 +395,8 @@ async function provide(
     orgId: string;
     userId: string;
     runId: string;
+    /** The asking run's own subject (null when it names none until it ends, e.g. a post). */
+    subject: SubjectRef | null;
     headers: Record<string, string>;
     askedBy: string;
     billing?: RunScriptInput["billing"];
@@ -420,7 +427,12 @@ async function provide(
   if (!pick) return { v: { id: `${parent.runId}:${outcome}:no_script`, outcome, subject: "", ageDays: 0, content: null, unmade: `${NO_SCRIPT}: no live script of that Engine can run on ${Object.keys(units).join(", ") || "nothing"}`, run: null } };
   const headers = { ...parent.headers };
   delete headers["x-workflow-slug"];
+  // ONE-WRITER-N-MODELS-1116-OTHERS: an ask naming no subject, whose child names none either, makes a Unit about the
+  // asker's own subject (a reply judge's completion is about the reply it judges), else about the asking RUN itself
+  // (a post's reading completions are about the run that asked them): never a Unit about nobody, so the asker's
+  // consumption links the chain.
   const subject = subjectOf(request.subject);
+  const fallbackSubject: SubjectRef = parent.subject ?? { service: "runs-service", id: parent.runId };
   let child: ScriptRunResult;
   try {
     child = await runStoredScript(
@@ -430,7 +442,7 @@ async function provide(
         dynasty: pick.script.dynasty,
         version: pick.script.version,
         units,
-        ...(subject ? { subject } : {}),
+        ...(subject ? { subject } : { fallbackSubject }),
         ...(request.request && typeof request.request === "object" ? { request: request.request as Record<string, unknown> } : {}),
         ...(request.tactics && typeof request.tactics === "object" ? { tactics: request.tactics as Record<string, unknown> } : {}),
         ...(typeof request.recordedBy === "string" ? { recordedBy: request.recordedBy } : {}),

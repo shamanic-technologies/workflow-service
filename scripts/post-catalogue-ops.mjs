@@ -5,6 +5,8 @@
  * `--apply` writes. Run inside the workflow-service container with a real staff identity (who decided):
  *   docker exec -i -e ORG_ID=… -e USER_ID=… -e STAFF_EMAIL=… distribute-workflow-service-1 node scripts/post-catalogue-ops.mjs [--apply]
  * `merge` {absorbed, places, reason} (ONE-WRITER-N-MODELS-1116: POST /internal/scripts/merges; already merged = skipped).
+ * `upgradeWithCases` {outcome, dynasty, code, tactics?, description?, source, cases} (ONE-WRITER-N-MODELS-1116-OTHERS:
+ * a port's upgrade with its cases restated; the dry run replays them server-side and writes nothing).
  * Ops: `create` {body} (409 = already stored: UPGRADED to the generator's code/tactics/description unless the active version already is); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
  * (UPGRADE of every active dynasty of that prefix whose code holds `from` exactly once; `edits` [{from, to}] instead of
  * one pair = every anchor found exactly once, applied in order, in ONE upgrade); `tag` {outcome, dynastyPrefix,
@@ -80,6 +82,24 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       console.log(`  upgrade ${b.outcome}/${b.dynasty}: ${u.status} ${u.status === 201 ? `v${u.json.version}` : JSON.stringify(u.json).slice(0, 300)}`);
       if (u.status !== 201) failed++;
     } else if (r.status !== 201) failed++;
+    continue;
+  }
+  if (op.op === "upgradeWithCases") {
+    // ONE-WRITER-N-MODELS-1116-OTHERS: a PORT upgraded under an owner rule, its recorded cases restated by the
+    // generator (POST /internal/scripts/dynasty/{o}/{d}/upgrade-with-cases); a dry run REPLAYS them server-side, writes nothing.
+    const r = await call("POST", `/internal/scripts/dynasty/${op.outcome}/${op.dynasty}/upgrade-with-cases`, {
+      code: op.code,
+      ...(op.description ? { description: op.description } : {}),
+      ...(op.tactics ? { tactics: op.tactics } : {}),
+      source: op.source,
+      cases: op.cases,
+      orgId: ORG_ID,
+      createdBy: STAFF_EMAIL,
+      dryRun: !apply,
+    });
+    const ok = apply ? r.status === 201 : r.status === 200 && r.json.matches === r.json.cases;
+    console.log(`upgrade-with-cases ${op.outcome}/${op.dynasty} (${op.cases.length} cases${op.excluded ? `, ${Object.keys(op.excluded).length} excluded` : ""}): ${r.status} ${apply && r.status === 201 ? `v${r.json.version} replay=${JSON.stringify(r.json.replay)}` : JSON.stringify(r.json).slice(0, 600)}${apply ? "" : " (dry run: replayed only)"}`);
+    if (!ok) failed++;
     continue;
   }
   if (op.op === "merge") {
