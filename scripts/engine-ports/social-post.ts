@@ -61,7 +61,7 @@ export const SOCIAL_POSTS = {
 } as const;
 
 /** GATHER_CLIENT_FACTS_CODE is a helper + a `main`: the helper keeps its name, the main becomes `gatherFacts`. */
-function gatherFactsFunctions(): string {
+export function gatherFactsFunctions(): string {
   const code = GATHER_CLIENT_FACTS_CODE.replace("async function gatherFacts(", "function gatherFactsWith(").replace("return gatherFacts(null,", "return gatherFactsWith(null,");
   return asFunction(code, "gatherFacts");
 }
@@ -71,7 +71,7 @@ function gatherFactsFunctions(): string {
  * social-service says software may post on (`publishable`: Pro (AI), connected, able to post where the page is), the
  * one whose last post is the oldest first. None = unmade with every account's reason, never a guess.
  */
-const CHECK_TURN = `
+export const CHECK_TURN = `
 function checkTurn(plan: any, network: string, accounts: any, posts: any): any {
   const all = Array.isArray(accounts?.accounts) ? accounts.accounts : null;
   if (all === null) throw new Error("check-turn: social-service served no accounts list: " + JSON.stringify(accounts).slice(0, 300));
@@ -103,8 +103,13 @@ function checkTurn(plan: any, network: string, accounts: any, posts: any): any {
 }
 `;
 
+/** The Threads plan step as a script function reading the run's clock (`planRun(now, dryRun, campaignId, brandId, offerId, startRun)`). */
+export function planRunFunction(): string {
+  return asFunction(PLAN_RUN_CODE.replace("const now = new Date();", "const now = new Date(__now);"), "planRun").replace("function planRun(", "function planRun(__now, ");
+}
+
 export function buildSocialPostSource(): string {
-  const plan = asFunction(PLAN_RUN_CODE.replace("const now = new Date();", "const now = new Date(__now);"), "planRun").replace("function planRun(", "function planRun(__now, ");
+  const plan = planRunFunction();
   return [
     `import type { ScriptContext, ScriptResult } from "@gtm-factory/core";`,
     `/** X / LinkedIn post (x_post_published | linkedin_post_published by tactic network): one post per run on the brand's next publishable account (SOCIAL-POSTS-ENGINES-1107). */`,
