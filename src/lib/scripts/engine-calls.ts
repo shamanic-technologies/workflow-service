@@ -217,6 +217,9 @@ async function runCall(db: AnyPgDb, callId: string, input: EngineCallInput, pick
   let error: string | null = null;
   try {
     for (const script of pick.ranked.slice(0, MAX_SCRIPTS_PER_RUN)) {
+      // As a campaign run states them: the owning service declares the Unit when the script's tactic says so
+      // (`recorded_by`), and a Unit naming no subject is about the run that asked for it (as `ctx.ask` does).
+      const recordedBy = (script.tactics as Record<string, unknown> | null)?.recorded_by;
       try {
         result = await deps.run(
           {
@@ -225,7 +228,8 @@ async function runCall(db: AnyPgDb, callId: string, input: EngineCallInput, pick
             version: script.version,
             units: input.units,
             request,
-            ...(input.subject ? { subject: input.subject } : {}),
+            ...(input.subject ? { subject: input.subject } : { fallbackSubject: { service: "runs-service", id: input.callerRunId } }),
+            ...(typeof recordedBy === "string" && recordedBy ? { recordedBy } : {}),
             billing: "org",
           },
           who,
