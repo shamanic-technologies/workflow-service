@@ -83,6 +83,7 @@ describe("call sites", () => {
     // support `staff_experiment` (no run stands behind it, nothing is produced).
     // src/lib/scripts/script-names.ts: the script namer (CAMPAIGN-SCRIPTS-1113-NAMES), support product_feature.
     // scripts/dry-run-intro*.mjs: staff dry runs of the intro scripts (INTRO-BOARDY-1114), same shape, nothing sent.
-    expect(hits).toEqual(["scripts/compare-answer-lead.mjs", "scripts/dry-run-intro-conversation.mjs", "scripts/dry-run-intro.mjs", "src/lib/chat-service-client.ts", "src/lib/scripts/script-names.ts", "src/lib/scripts/vendors.ts", "src/lib/sibling-line-refresher.ts"]);
+    // scripts/replay-answer-now.mjs: the ANSWER-NOW-1119 before/after of the lead answer writer, same shape, nothing sent.
+    expect(hits).toEqual(["scripts/compare-answer-lead.mjs", "scripts/dry-run-intro-conversation.mjs", "scripts/dry-run-intro.mjs", "scripts/replay-answer-now.mjs", "src/lib/chat-service-client.ts", "src/lib/scripts/script-names.ts", "src/lib/scripts/vendors.ts", "src/lib/sibling-line-refresher.ts"]);
   });
 });

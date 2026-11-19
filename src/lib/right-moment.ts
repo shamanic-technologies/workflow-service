@@ -99,22 +99,24 @@ export const nextDateStrategy = (m: RightMomentMedium): string =>
   "THE NEXT DATE. Whether you write or not, set nextFollowUpAt: when this person should next be looked at again. " +
   "There is no fixed schedule. Decide it from the history: how many times we already wrote and how recently, whether " +
   "they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many " +
-  m.many + " (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). Pick a " +
-  "working day and a working hour in their timezone when you know it. ISO 8601 date-time in UTC, strictly after " +
-  "NOW, at most " + MAX_NEXT_FOLLOW_UP_DAYS + " days away. Say why in nextFollowUpWhy.";
+  m.many + " (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). ISO 8601 " +
+  "date-time in UTC, strictly after NOW, at most " + MAX_NEXT_FOLLOW_UP_DAYS + " days away. Say why in nextFollowUpWhy.";
 
 /**
  * THEIR LOCAL TIME (TRIGGER-RIGHT-MOMENT-1016, owner Kevin 2026-10-16: « tu prends en compte la timezone du client
  * ????? », after a trigger WhatsApp landed at 08:27 on someone we had written to at midnight their time). A message
- * lands the moment it is sent, so the hour where THEY are is part of the right moment. Rendered beside
- * `LOCAL_TIME_FN`'s lines; no quiet-hours list per brand, the model judges the hour from their local time. Dash-free.
+ * lands the moment it is sent. Rendered beside `LOCAL_TIME_FN`'s lines. ANSWER-NOW-1119 (owner 2026-11-19: « mets tout
+ * le tps l'instant, ça n'a aucun sens d'attendre pour personne »): their local hour and weekday NEVER delay a message
+ * (the "sensible hour" licence made every evening reply wait until morning); their local time only shapes how the
+ * message reads. Never re-add a send window, a quiet hour or a working-hour rule here or in a script. Dash-free.
  */
 export const localTimeStrategy = (m: RightMomentMedium): string =>
   "THEIR LOCAL TIME. A " + m.message + " reaches them the moment it is sent. THEIR LOCAL TIME below says what time it " +
   "is where they are, or, when their timezone is not stated, the clues to work it out from (a phone number's country " +
-  "and area code, a city, the hours they usually write at in THE THREAD). Work out their local time first. Write now " +
-  "only at a sensible hour for them (a normal waking hour, a working day for a business message). Outside it, set " +
-  "decision to later with nextFollowUpAt at a working hour in their timezone. When nothing tells you their timezone, " +
+  "and area code, a city, the hours they usually write at in THE THREAD). Work out their local time first. Their " +
+  "local hour and weekday never delay a message: when it is the right moment to write, write now, at any hour, any " +
+  "day. Their local time only shapes how you write (a greeting that fits their evening, any day or time you name). " +
+  "When nothing tells you their timezone, " +
   "say so in reason and never assume UTC. Any day or time you put in the " + m.message + " is in their timezone, never UTC.";
 
 /**
