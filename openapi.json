@@ -4146,7 +4146,7 @@
           },
           "callable": {
             "type": "boolean",
-            "description": "At least one live script the Rating could draw now (an org's model may still narrow it at call time)."
+            "description": "At least one live script the Rating could draw now for a caller that is not a campaign (an org's model may still narrow it at call time). A script that only runs inside a campaign (it serves or answers that campaign's people) never counts."
           },
           "reason": {
             "type": "string",
@@ -4222,13 +4222,19 @@
               },
               "runnable": {
                 "type": "integer"
+              },
+              "needCampaign": {
+                "type": "integer",
+                "description": "Live scripts that only run inside a campaign: never drawn for an Engine call."
               }
             },
             "required": [
               "scripts",
               "live",
-              "runnable"
-            ]
+              "runnable",
+              "needCampaign"
+            ],
+            "description": "`runnable` = the live scripts an Engine call can draw."
           }
         },
         "required": [

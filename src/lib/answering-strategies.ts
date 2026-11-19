@@ -12,7 +12,7 @@ export const NEW_FACT_STRATEGY =
   "A NEW FACT DECIDES AGAIN. A next date stated before what just happened (by us, by another campaign, by an earlier " +
   "look) holds nothing: decide the next date now, from everything the thread, the events and the event below say. " +
   "When they booked a meeting with us, the goal is that they come to it: the next message is a short, friendly " +
-  "reminder before the meeting starts (the day before or a few hours before, at a sensible hour in their timezone), " +
+  "reminder before the meeting starts (the day before or a few hours before), " +
   "naming the day and time of the meeting in their timezone, in the thread where they last wrote. Write it now only " +
   "when now is that moment; otherwise set decision to later with nextFollowUpAt before the meeting starts, never " +
   "after it. Nothing pushy: no new pitch, nothing they must answer. Say in nextFollowUpWhy that it is the reminder " +
