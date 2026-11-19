@@ -62,6 +62,13 @@ export default function run(ctx) {
   return { content: { email: lead.content.email }, subject: { service: "lead-service", id: "lead-staff" } };
 }`;
 
+// Serves a lead to the campaign its run is for: lead-service refuses a run that names no campaign.
+const SERVES_CAMPAIGN = `
+export default function run(ctx) {
+  const r = ctx.vendor.call(ctx, "lead.serve", { body: {} });
+  return { content: { lead: r }, subject: { service: "lead-service", id: "lead-x" } };
+}`;
+
 let db: AnyPgDb;
 let app: express.Express;
 let ledgerCalls: unknown[][];
@@ -260,5 +267,48 @@ describe("GET /internal/engines", () => {
     expect(calls.notCallableReason({ scripts: 2, live: 2, unprovenPorts: 1, awaitingWriterProof: 1 })).toBe(
       "None of its 2 live scripts can run now: 1 not yet proven on their recorded cases, 1 waiting to pass their writing proof before writing to people.",
     );
+  });
+});
+
+describe("DISTRY-ENGINE-CALL-CAMPAIGN-1119: a script that needs its run's campaign is never callable outside one", { timeout: 60_000 }, () => {
+  it("only campaign scripts: the list says not callable with a plain reason, and a call is a 404, never a failed run", async () => {
+    await add("lead_found", "dy_lead_serve_crm_phone", SERVES_CAMPAIGN, { channel: "sourcing-crm-contacts" });
+    await add("lead_found", "dy_lead_serve_crm_everyone", SERVES_CAMPAIGN);
+    calls.setCatalogueOutcomesReader(async () => [{ key: "lead_found", name: "Lead found" }]);
+    const list = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    const [lead] = list.body.engines;
+    expect(lead).toMatchObject({
+      outcome: "lead_found",
+      callable: false,
+      reason: "None of its 2 live scripts can run now: 2 only run inside a campaign (they serve or answer that campaign's people).",
+      inputs: [],
+      scripts: [],
+      counts: { scripts: 2, live: 2, runnable: 0, needCampaign: 2 },
+    });
+    for (const body of [{ channel: "sourcing-crm-contacts" }, {}]) {
+      const res = await call("lead_found", body);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe("no_runnable_script");
+    }
+    expect(runs).toHaveLength(0);
+  });
+
+  it("a mix: the list shows only the campaign-free script and the pick draws it, whatever the Rating ranks first", async () => {
+    engine.setScriptPickReader(fakeScriptPick({ dy_serve: 9, dy_finds: 1 }));
+    await add(OUTCOME, "dy_serve", SERVES_CAMPAIGN);
+    await add(OUTCOME, "dy_finds", MAKES);
+    const list = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    const x = list.body.engines.find((e: { outcome: string }) => e.outcome === OUTCOME);
+    expect(x).toMatchObject({ callable: true, counts: { live: 2, runnable: 1, needCampaign: 1 } });
+    expect(x.scripts.map((s: { dynasty: string }) => s.dynasty)).toEqual(["dy_finds"]);
+    const res = await call(OUTCOME, { waitSeconds: 30 });
+    expect(res.body).toMatchObject({ status: "made", pick: { dynasty: "dy_finds" } });
+    expect(res.body.tried).toHaveLength(1);
+  });
+
+  it("a campaign run still draws it; a pick for no campaign never does", async () => {
+    await add("lead_found", "dy_serve", SERVES_CAMPAIGN);
+    expect((await engine.candidatesOf(db, { outcome: "lead_found", servable: [], channel: null })).map((r) => r.dynasty)).toEqual(["dy_serve"]);
+    expect(await engine.candidatesOf(db, { outcome: "lead_found", servable: [], channel: null, noCampaign: true })).toEqual([]);
   });
 });
