@@ -227,7 +227,9 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // run, idempotent per person, the address verified before it is served).
   "apollo.email.find": { service: "apollo", method: "POST", path: "/email-finder/find", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
-  "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true },
+  // WRITER-SENDER-SPLIT-1119-FOUNDER: the run a handed-back completion's message is declared on is the calling script's
+  // own (`completion.runId`), filled by the door: an asked writer cannot know its run.
+  "content.whatsapp.generate": { service: "content-generation", method: "POST", path: "/generate-whatsapp", asRun: true, runIdInBody: "completion.runId" },
   // ONE-WRITER-N-MODELS-1116-OTHERS: the exact /complete request the thread / WhatsApp writer would send, minus the
   // model (no spend, nothing stored); the script asks the LLM completion Engine, then hands the completion back to the
   // generate door (`completion: {request, answer, runId}`), which stores it as if content-generation had written it.
@@ -571,8 +573,22 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
     body = (args.body as Record<string, unknown> | undefined) ?? {};
   } else if (args.body !== undefined) return refuse(`${name} is a read: it takes no body`);
   if (door.runIdInBody && body) {
-    if (door.runIdInBody in body) return refuse(`${name}: ${door.runIdInBody} is the script's run, filled by the door`);
-    body = { ...body, [door.runIdInBody]: ctx.headers["x-run-id"] };
+    const dot = door.runIdInBody.indexOf(".");
+    if (dot < 0) {
+      if (door.runIdInBody in body) return refuse(`${name}: ${door.runIdInBody} is the script's run, filled by the door`);
+      body = { ...body, [door.runIdInBody]: ctx.headers["x-run-id"] };
+    } else {
+      // A field inside an object of the body (`completion.runId`): filled when that object is stated; a value the
+      // script states must be its own run (a script stored before the door filled it), never another run.
+      const outer = door.runIdInBody.slice(0, dot);
+      const inner = door.runIdInBody.slice(dot + 1);
+      const held = body[outer];
+      if (held && typeof held === "object" && !Array.isArray(held)) {
+        const stated = (held as Record<string, unknown>)[inner];
+        if (stated !== undefined && stated !== ctx.headers["x-run-id"]) return refuse(`${name}: ${door.runIdInBody} is the script's run, filled by the door`);
+        body = { ...body, [outer]: { ...(held as Record<string, unknown>), [inner]: ctx.headers["x-run-id"] } };
+      }
+    }
   }
   if (door.outcomeInBody && body && ctx.outcome) {
     if (door.outcomeInBody in body) return refuse(`${name}: ${door.outcomeInBody} is the script's Engine outcome, filled by the door`);
