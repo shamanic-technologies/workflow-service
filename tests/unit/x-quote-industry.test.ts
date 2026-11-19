@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { transformSync } from "esbuild";
 import { replayCase, type ReplayCase } from "../../src/lib/scripts/replay.js";
 import { validateSource } from "../../src/lib/scripts/sandbox.js";
 import { SERVICE_DOOR_VENDORS } from "../../src/lib/scripts/vendors.js";
@@ -152,6 +153,47 @@ describe("X post published: the quote script", () => {
       expect: { content: { end: { success: true, stopCampaign: false }, quoted: "https://x.com/MicroCapClub/status/222222" } },
     };
     expect((await replayCase(src, c)).diffs).toEqual([]);
+  });
+
+  // MON-SCRIPTS-WATCHING-1119: X refused 14 takes in 2 days (281 to 342 weighted chars), each run failed. The stored
+  // script's own functions, lifted out of its source.
+  const finalText = (() => {
+    const from = src.indexOf("function xWeight");
+    const to = src.indexOf("export default function run");
+    const js = transformSync(src.slice(from, to), { loader: "ts" }).code;
+    return new Function(js + "\nreturn finalText;")() as (take: string, url: string) => string;
+  })();
+  const URL = "https://x.com/MicroCapClub/status/222222";
+  const publishOf = async (take: string) => finalText(take, URL);
+  const weight = (t: string) => {
+    let n = 0;
+    const rest = t.replace(/https?:\/\/\S+/g, () => { n += 23; return ""; });
+    for (const ch of rest) { const cp = ch.codePointAt(0)!; n += cp <= 4351 || (cp >= 8192 && cp <= 8205) || (cp >= 8208 && cp <= 8223) || (cp >= 8242 && cp <= 8247) ? 1 : 2; }
+    return n;
+  };
+
+  it("a take too long for X keeps its whole first sentences and fits 280 with the link", async () => {
+    const take = "Small caps are where the next cycle starts. " + "Funds are crowding into the same ten names while real growth sits below them. ".repeat(4) + "That gap is the opportunity 🚀.";
+    const text = await publishOf(take);
+    expect(text.startsWith("Small caps are where the next cycle starts.")).toBe(true);
+    expect(text.endsWith("\n\n" + URL)).toBe(true);
+    expect(text).not.toContain("opportunity");
+    expect(weight(text)).toBeLessThanOrEqual(280);
+  });
+
+  it("one sentence too long for X ends on a whole word", async () => {
+    const text = await publishOf("word ".repeat(80).trim());
+    expect(weight(text)).toBeLessThanOrEqual(280);
+    expect(text).toMatch(/word\.\.\.\n\nhttps:/);
+  });
+
+  it("emoji weigh 2 on X: a take under 255 characters but over its weight is cut", async () => {
+    const text = await publishOf("Growth is here. " + "🚀".repeat(130));
+    expect(text).toBe("Growth is here.\n\n" + URL);
+  });
+
+  it("a take that fits is published as written", async () => {
+    expect(await publishOf("Margins turn at the small end first.")).toBe("Margins turn at the small end first.\n\nhttps://x.com/MicroCapClub/status/222222");
   });
 
   it("is unmade when every X post of the day was already quoted by the brand", async () => {

@@ -327,6 +327,8 @@ export async function readEngineMonitoring(db: AnyPgDb, days: number, now = new 
     const workflowRate = errorRate(window.workflow);
     const threshold = workflowRate === null ? RED_FLOOR : workflowRate + RED_NOISE;
     const finished = finishedOf(recentScript);
+    // An outcome with no workflow history is judged on the floor (MON-SCRIPTS-WATCHING-1119: hiding it hid real failures,
+    // Threads 21 %: a web-search ask drawn on models that refuse web search, X takes over 280).
     const red = finished >= RED_MIN_RUNS && scriptRate !== null && scriptRate > threshold;
     const todayRow = byDay.get(today);
     const lastWorkflowDay = [...byDay.entries()].filter(([, d]) => d.workflow.runs > 0).map(([day]) => day).sort().at(-1) ?? null;
