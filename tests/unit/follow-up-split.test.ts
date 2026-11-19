@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runScript, type Bridge } from "../../src/lib/scripts/sandbox.js";
+import { readMaterials, readVendors, runScript, type Bridge } from "../../src/lib/scripts/sandbox.js";
 import { sameJson } from "../../src/lib/scripts/replay.js";
 import {
   FOLLOW_UP_ANCHORS,
@@ -87,9 +87,24 @@ describe("splitFollowUp: the cut", () => {
     expect([...writerRun.matchAll(/callStep\(ctx, "([a-z_.]+)"/g)].map((m) => m[1])).toEqual(["llm_completion"]);
     // Everything else of the stored code is in the sender, untouched.
     const before = STORED.slice(0, STORED.indexOf(FOLLOW_UP_ANCHORS.compose));
-    const after = STORED.slice(STORED.indexOf(FOLLOW_UP_ANCHORS.finalize) + FOLLOW_UP_ANCHORS.finalize.length);
+    const runEnd = STORED.indexOf(FOLLOW_UP_ANCHORS.runEnd) + FOLLOW_UP_ANCHORS.runEnd.length;
+    const after = STORED.slice(STORED.indexOf(FOLLOW_UP_ANCHORS.finalize) + FOLLOW_UP_ANCHORS.finalize.length, runEnd);
     expect(HALVES.sender.startsWith(before)).toBe(true);
-    expect(HALVES.sender.endsWith(after)).toBe(true);
+    expect(HALVES.sender).toContain(after);
+    expect(HALVES.writer.endsWith(STORED.slice(runEnd))).toBe(true);
+  });
+
+  it("each half needs exactly what it is handed: the catalogue reads a script's materials off its code", () => {
+    // 2026-11-19: a completion helper left in the sender made the catalogue read `llm_completion` as a material nobody
+    // hands it: no run could draw the stored version. The sender asks its writer only; the writer its model only.
+    expect(readMaterials(HALVES.sender)).toEqual(["message_written"]);
+    expect(readMaterials(HALVES.writer)).toEqual([FOLLOW_UP_REQUESTED, "llm_completion"]);
+    expect(readMaterials(STORED)).toEqual(["llm_completion"]);
+    const t = followUpTactics({ asks: ["llm_completion"], channel: "ai-follow-up-email", recorded_by: "sender" });
+    // Every material a half reads is one it asks for (tactic `asks`) or one only its asker hands it.
+    expect(readMaterials(HALVES.sender).every((m) => (t.sender.asks as string[]).includes(m))).toBe(true);
+    expect(readMaterials(HALVES.writer).filter((m) => !(t.writer.asks as string[]).includes(m))).toEqual([FOLLOW_UP_REQUESTED]);
+    expect(readVendors(HALVES.sender)).toEqual(readVendors(STORED));
   });
 
   it("generates nothing when an anchor moved, or when the code is already split", () => {

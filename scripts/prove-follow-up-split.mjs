@@ -20,9 +20,9 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "../dist/db/index.js";
 import { scripts, writerCases } from "../dist/db/schema.js";
-import { runScript } from "../dist/lib/scripts/sandbox.js";
+import { readMaterials, runScript } from "../dist/lib/scripts/sandbox.js";
 import { sameJson } from "../dist/lib/scripts/replay.js";
-import { FOLLOW_UP_DYNASTY, FOLLOW_UP_SENDER_OUTCOME, FOLLOW_UP_WRITER_OUTCOME, compareFollowUpOnCase, followUpWriterCase, splitFollowUp } from "../dist/lib/scripts/follow-up-split.js";
+import { FOLLOW_UP_DYNASTY, FOLLOW_UP_SENDER_OUTCOME, FOLLOW_UP_WRITER_OUTCOME, compareFollowUpOnCase, followUpTactics, followUpWriterCase, splitFollowUp } from "../dist/lib/scripts/follow-up-split.js";
 
 const keep = process.argv.includes("--writer-cases");
 const apply = process.argv.includes("--apply");
@@ -40,6 +40,15 @@ const unsplit = already
 if (!unsplit || unsplit.code.includes(`ctx.get("${FOLLOW_UP_WRITER_OUTCOME}")`)) throw new Error("the unsplit follow-up code is not the active version nor the one before it");
 const halves = splitFollowUp(unsplit.code);
 const codeMd5 = md5(unsplit.code);
+// A run draws a script only when every material its code reads is one it asks for or one its asker hands it: a sender
+// reading a material nobody hands it would be stored and never run (2026-11-19, v9).
+const tactics = followUpTactics(unsplit.tactics ?? {});
+const unfed = { sender: readMaterials(halves.sender).filter((m) => !tactics.sender.asks.includes(m)), writer: readMaterials(halves.writer).filter((m) => !tactics.writer.asks.includes(m)) };
+console.log(`materials: sender ${JSON.stringify(readMaterials(halves.sender))} asks ${JSON.stringify(tactics.sender.asks)}; writer ${JSON.stringify(readMaterials(halves.writer))} asks ${JSON.stringify(tactics.writer.asks)}`);
+if (unfed.sender.length > 0 || unfed.writer.length !== 1) {
+  console.log(`a half reads a material nobody hands it (sender: ${JSON.stringify(unfed.sender)}, writer beyond its one handed material: ${JSON.stringify(unfed.writer)}): nothing may be stored`);
+  process.exit(1);
+}
 console.log(`unsplit code: ${FOLLOW_UP_SENDER_OUTCOME}/${FOLLOW_UP_DYNASTY}/v${unsplit.version} (md5 ${codeMd5})${already ? ", the active version is already the sender half" : ""}`);
 
 const all = await db.select().from(writerCases).where(eq(writerCases.outcome, FOLLOW_UP_SENDER_OUTCOME));
