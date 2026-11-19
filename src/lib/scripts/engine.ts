@@ -23,6 +23,7 @@ import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
 import { LLM_COMPLETION_OUTCOME, pairProofAllows, writerProofAllows } from "./writer-proof.js";
+import { needsCampaign } from "./vendors.js";
 
 /** The caller a campaign Engine switch is recorded under. */
 export const CAMPAIGN_CALLER = "campaign";
@@ -176,6 +177,12 @@ export interface PickInput {
    * drawn: every run it would make 400s. Absent / all false = not asked.
    */
   needs?: LlmNeeds;
+  /**
+   * DISTRY-ENGINE-CALL-CAMPAIGN-1119: the run is for NO campaign (an Engine call from Distry, or a script it asked).
+   * A script whose code calls a door that needs its run's campaign (`CAMPAIGN_DOORS`) is never drawn: every run it
+   * would make is refused for want of one. Absent/false = a campaign run (or a read that runs nothing).
+   */
+  noCampaign?: boolean;
 }
 
 /** Request features a pick must see honoured, as chat-service judges them (`GET /internal/local-llm/served-llms`). */
@@ -398,6 +405,7 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     if (!(row.materials ?? []).every((m) => input.servable.includes(m) || provided.includes(m))) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
+    if (input.noCampaign && needsCampaign(row.code)) continue;
     if (!(await provenness(db, row)).runnable) continue;
     // PROVEN-BEFORE-PEOPLE-1116: a writer of an enforced Engine is drawn only once proven on recorded cases.
     if (!(await writerProofAllows(db, row))) continue;
