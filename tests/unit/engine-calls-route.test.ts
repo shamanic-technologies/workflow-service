@@ -45,6 +45,11 @@ const MAKES = `
 export default function run(ctx) {
   return { content: { at: ctx.request.now, brands: ctx.request.brandIds, topic: ctx.request.topic || null }, subject: { service: "social-service", id: "acct-1" } };
 }`;
+// Names no subject: the Unit is about the caller's run (as an asked script's is).
+const NO_SUBJECT = `
+export default function run(ctx) {
+  return { content: { answer: "ready" } };
+}`;
 // Has nothing to make here.
 const NOTHING = `
 export default function run(ctx) {
@@ -137,6 +142,20 @@ describe("POST /internal/engines/{outcome}/calls", { timeout: 60_000 }, () => {
     expect(back.status).toBe(200);
     expect(back.body.status).toBe("made");
     expect((await request(app).get(`/internal/engine-calls/${res.body.callId}`).set("x-api-key", KEY).set("x-org-id", "org-other")).status).toBe(404);
+  });
+
+  it("a Unit naming no subject is about the caller's run; a script whose tactic says recorded_by declares nothing itself", async () => {
+    await add(OUTCOME, "dy_finds", NO_SUBJECT);
+    const res = await call(OUTCOME, { waitSeconds: 30 });
+    expect(res.body).toMatchObject({ status: "made", error: null });
+    const declared = ledgerCalls.find((c) => c[0] === "declare")![1] as { body: { produced: unknown[] } };
+    expect(declared.body.produced).toEqual([{ outcomeKey: OUTCOME, subjectService: "runs-service", subjectId: "distry-run-1" }]);
+    await add("email_sent", "dy_social", NO_SUBJECT, { recorded_by: "social" });
+    ledgerCalls = [];
+    const owned = await call("email_sent", { waitSeconds: 30 });
+    expect(owned.body).toMatchObject({ status: "made", error: null });
+    expect(runs.at(-1)!.input.recordedBy).toBe("social");
+    expect(ledgerCalls.find((c) => c[0] === "declare")).toBeUndefined();
   });
 
   it("the Rating's pick has nothing to make: its next candidate is asked, in the same draw's order (the campaign rule)", async () => {
