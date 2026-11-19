@@ -7,6 +7,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { eq } from "drizzle-orm";
 import { createScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import {
+  needsOfAsk,
   pickScript,
   productionLlmServing,
   runsAsStated,
@@ -180,5 +181,74 @@ describe("productionLlmServing (chat-service GET /internal/local-llm/served-llms
     setEnv();
     vi.stubGlobal("fetch", async () => new Response("down", { status: 502 }));
     await expect(productionLlmServing(LOCAL_ORG, [{ provider: "anthropic", model: "claude-sonnet" }])).rejects.toThrow("chat-service 502");
+  });
+});
+
+// WEBSEARCH-PICK-1119: the social post scripts ask llm_completion for a web-search angle read; the Rating drew DeepSeek /
+// GLM / Kimi / GPT completion scripts, whose direct-vendor path refuses web search: every such run 400'd.
+describe("a script is drawn only where its model takes what the ask needs", () => {
+  it("needsOfAsk reads the asked request's own webSearch / imageUrl", () => {
+    expect(needsOfAsk({ units: {}, request: { message: "m", webSearch: true } })).toEqual({ webSearch: true });
+    expect(needsOfAsk({ units: {}, request: { message: "m", imageUrl: "https://x/i.png" } })).toEqual({ imageUrl: true });
+    expect(needsOfAsk({ units: {}, request: { message: "m", webSearch: false, imageUrl: "" } })).toEqual({});
+    expect(needsOfAsk({ units: {} })).toEqual({});
+  });
+
+  it("a web-search ask keeps only the scripts whose model searches; the reader is told the need", async () => {
+    const asked: unknown[] = [];
+    setLlmServingReader(async (_org, llms, needs) => {
+      asked.push(needs);
+      return new Map(llms.map((l) => [`${l.provider}/${l.model}`, !(needs?.webSearch && l.provider === "deepseek")]));
+    });
+    const p = await pickScript(db, { outcome: "x_post_published", servable: [], channel: "x-post", campaignId: "camp-1", orgId: VENDOR_ORG, needs: { webSearch: true } });
+    expect(p?.ranked.map((r) => r.dynasty)).toEqual(["dy_x_post__claude_sonnet"]);
+    expect(asked).toEqual([{ webSearch: true }]);
+  });
+
+  it("an ask with no need is unchanged (the reader is asked nothing more)", async () => {
+    const asked: unknown[] = [];
+    setLlmServingReader(async (_org, llms, needs) => {
+      asked.push(needs);
+      return new Map(llms.map((l) => [`${l.provider}/${l.model}`, true]));
+    });
+    const p = await pickScript(db, { outcome: "x_post_published", servable: [], channel: "x-post", campaignId: "camp-1", orgId: VENDOR_ORG, needs: {} });
+    expect(p?.ranked).toHaveLength(2);
+    expect(asked).toEqual([undefined]);
+  });
+
+  it("a need with no org cannot be judged: throws", async () => {
+    await expect(pickScript(db, { outcome: "x_post_published", servable: [], channel: "x-post", campaignId: "camp-1", orgId: null, needs: { webSearch: true } })).rejects.toThrow(/names no org/);
+  });
+
+  it("production reader sends webSearch=true and keeps only rows that run as stated AND accept the request", async () => {
+    process.env.CHAT_SERVICE_URL = "http://chat.test";
+    process.env.CHAT_SERVICE_API_KEY = "chat-key";
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      return new Response(
+        JSON.stringify({
+          orgId: VENDOR_ORG,
+          local: false,
+          llms: [
+            { llm: "anthropic/claude-sonnet", runsAsStated: true, acceptsRequest: true },
+            { llm: "deepseek/deepseek-flash", runsAsStated: true, acceptsRequest: false },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+    const m = await productionLlmServing(VENDOR_ORG, [{ provider: "anthropic", model: "claude-sonnet" }, { provider: "deepseek", model: "deepseek-flash" }], { webSearch: true });
+    expect(urls[0]).toContain("&webSearch=true");
+    expect([...m.entries()]).toEqual([["anthropic/claude-sonnet", true], ["deepseek/deepseek-flash", false]]);
+    vi.unstubAllGlobals();
+  });
+
+  it("production reader fails loud when a need was asked and chat-service answers no acceptsRequest", async () => {
+    process.env.CHAT_SERVICE_URL = "http://chat.test";
+    process.env.CHAT_SERVICE_API_KEY = "chat-key";
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ orgId: VENDOR_ORG, local: false, llms: [{ llm: "deepseek/deepseek-flash", runsAsStated: true }] }), { status: 200 }));
+    await expect(productionLlmServing(VENDOR_ORG, [{ provider: "deepseek", model: "deepseek-flash" }], { webSearch: true })).rejects.toThrow(/no acceptsRequest/);
+    vi.unstubAllGlobals();
   });
 });
