@@ -164,6 +164,21 @@ describe("campaign Engine monitoring", () => {
     expect(red.red).toBe(true);
   });
 
+  it("is never red for an outcome that never ran on a workflow, even when its script error rate exceeds the floor (MON-SCRIPTS-WATCHING-1119)", async () => {
+    // linkedin_post_published, threads_post_published, x_post_published: Engine-native outcomes with no workflow
+    // baseline.  Their 2-7 % error rate sat above the 2 % RED_FLOOR for 8 days, flagging them red on the hub.
+    await runs(100, { outcome: "linkedin_post_published", status: "completed", at: at(6) });
+    await runs(8, { outcome: "linkedin_post_published", status: "failed", at: at(6) });
+    await refreshEngineMonitoring(db, deps, at(6, 13));
+    const out = await readEngineMonitoring(db, 30, at(6, 13));
+    const li = out.outcomes.find((o) => o.outcome === "linkedin_post_published")!;
+    expect(li.verdict.scriptErrorRate).toBeCloseTo(8 / 108);
+    expect(li.verdict.workflowErrorRate).toBeNull();
+    // 7.4 % > RED_FLOOR (2 %), but no workflow baseline → not red.
+    expect(li.red).toBe(false);
+    expect(li.lastWorkflowDay).toBeNull();
+  });
+
   it("is never red under 20 finished script runs, nor for an outcome that only runs on a workflow", async () => {
     const ballad = await workflow("cold-ballad", "cold");
     await runs(50, { workflowId: ballad, status: "failed", at: at(6) });

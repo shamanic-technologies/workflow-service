@@ -327,7 +327,14 @@ export async function readEngineMonitoring(db: AnyPgDb, days: number, now = new 
     const workflowRate = errorRate(window.workflow);
     const threshold = workflowRate === null ? RED_FLOOR : workflowRate + RED_NOISE;
     const finished = finishedOf(recentScript);
-    const red = finished >= RED_MIN_RUNS && scriptRate !== null && scriptRate > threshold;
+    // An outcome that NEVER ran on a workflow in the window has no baseline to regress against: it was born as an
+    // Engine script.  Red means "the script fails more than the workflow did"; with no workflow history, that
+    // comparison is meaningless — the RED_FLOOR is an arbitrary number, not a measured old-path rate.  These outcomes
+    // show `onWorkflow: false` + `lastWorkflowDay: null` (a normal "script-only"), never red.
+    // MON-SCRIPTS-WATCHING-1119: linkedin/threads/x_post_published stuck red at 2-7 % against the 2 % floor while
+    // no workflow ever ran them — 8 days of false red on the Monitoring hub.
+    const hasWorkflowBaseline = window.workflow.runs > 0;
+    const red = hasWorkflowBaseline && finished >= RED_MIN_RUNS && scriptRate !== null && scriptRate > threshold;
     const todayRow = byDay.get(today);
     const lastWorkflowDay = [...byDay.entries()].filter(([, d]) => d.workflow.runs > 0).map(([day]) => day).sort().at(-1) ?? null;
     return {
