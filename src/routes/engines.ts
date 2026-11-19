@@ -15,12 +15,12 @@
  */
 import { Router, type Request, type Response } from "express";
 import { db } from "../db/index.js";
-import { type WorkflowRun } from "../db/schema.js";
+import { engineReasons, type WorkflowRun } from "../db/schema.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
-import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema, EngineMakeRequestSchema, EngineCallRequestSchema, ENGINE_CALL_DEFAULT_WAIT_SECONDS, ENGINE_CALL_MAX_WAIT_SECONDS } from "../schemas.js";
+import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema, EngineMakeRequestSchema, EngineCallRequestSchema, EngineReasonRequestSchema, ENGINE_CALL_DEFAULT_WAIT_SECONDS, ENGINE_CALL_MAX_WAIT_SECONDS } from "../schemas.js";
 import { callEnded, listEngines, readEngineCall, servedCall, startEngineCall, type EngineCallDeps } from "../lib/scripts/engine-calls.js";
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
@@ -277,6 +277,54 @@ router.get("/internal/engines", requireApiKey, async (_req, res) => {
   } catch (err) {
     console.error("[workflow-service] engine list:", err);
     res.status(502).json({ code: "engine_list_unreadable", error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// DISTRY-ENGINES-1119: why an Engine no script makes on demand is not callable, stated by staff as data (never a branch
+// on an outcome in code); the Engine list shows it as-is while no script of the Engine can run.
+router.put("/internal/engines/:outcome/reason", requireApiKey, async (req, res) => {
+  const outcome = outcomeOf(req, res);
+  if (!outcome) return;
+  const parsed = EngineReasonRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
+    return;
+  }
+  const email = req.header("x-email");
+  const user = req.header("x-user-id");
+  const statedBy = parsed.data.statedBy ?? (email ? email : user ? `user:${user}` : null);
+  if (!statedBy) {
+    res.status(400).json({ error: "statedBy is required when the call carries no x-email or x-user-id" });
+    return;
+  }
+  try {
+    const now = new Date();
+    const [row] = await db
+      .insert(engineReasons)
+      .values({ outcome, reason: parsed.data.reason, statedBy, statedAt: now })
+      .onConflictDoUpdate({ target: engineReasons.outcome, set: { reason: parsed.data.reason, statedBy, statedAt: now } })
+      .returning();
+    console.log(`[workflow-service] engine ${outcome}: reason stated by ${statedBy}`);
+    res.json({ outcome: row!.outcome, reason: row!.reason, statedBy: row!.statedBy, statedAt: row!.statedAt.toISOString() });
+  } catch (err) {
+    console.error(`[workflow-service] engine reason ${outcome}:`, err);
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+router.delete("/internal/engines/:outcome/reason", requireApiKey, async (req, res) => {
+  const outcome = outcomeOf(req, res);
+  if (!outcome) return;
+  try {
+    const gone = await db.delete(engineReasons).where(eq(engineReasons.outcome, outcome)).returning();
+    if (!gone.length) {
+      res.status(404).json({ code: "reason_not_found", error: `no reason is stated for Engine ${outcome}` });
+      return;
+    }
+    res.status(204).end();
+  } catch (err) {
+    console.error(`[workflow-service] engine reason ${outcome}:`, err);
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 

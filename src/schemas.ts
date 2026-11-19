@@ -3267,6 +3267,48 @@ registry.registerPath({
   },
 });
 
+// DISTRY-ENGINES-1119: why an Engine no script makes on demand is not callable, stated by staff as data.
+export const EngineReasonRequestSchema = z
+  .object({
+    reason: z
+      .string()
+      .trim()
+      .min(10)
+      .max(400)
+      .describe("Plain words the dashboard shows as-is: why no script can make this outcome on demand, and what to ask instead."),
+    statedBy: z.string().trim().min(1).max(200).optional().describe("Who decided. Absent = the caller's `x-email`, else `user:<x-user-id>`."),
+  })
+  .openapi("EngineReasonRequest");
+
+registry.registerPath({
+  method: "put",
+  path: "/internal/engines/{outcome}/reason",
+  summary: "State why an Engine no script makes on demand is not callable (service key only)",
+  description:
+    "DISTRY-ENGINES-1119. Data, never a branch on an outcome: the Engine list (`GET /internal/engines`) shows this reason as-is while the Engine has no runnable script. A runnable script makes the Engine callable again whatever the stated reason. Idempotent (the last statement wins).",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EngineReasonRequestSchema } } } },
+  responses: {
+    200: { description: "Stated", content: { "application/json": { schema: z.object({ outcome: z.string(), reason: z.string(), statedBy: z.string(), statedAt: z.string() }) } } },
+    400: { description: "Invalid outcome key or reason", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/internal/engines/{outcome}/reason",
+  summary: "Withdraw an Engine's stated reason (service key only)",
+  description: "DISTRY-ENGINES-1119. The Engine list goes back to the reason it computes. 404 `reason_not_found` when none was stated.",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: { params: z.object({ outcome: z.string() }) },
+  responses: {
+    204: { description: "Withdrawn" },
+    404: { description: "`reason_not_found`", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 export const EngineOffRequestSchema = z
   .object({ orgId: z.string().min(1).nullable().optional(), reason: z.string().min(5) })
   .openapi("EngineOffRequest");

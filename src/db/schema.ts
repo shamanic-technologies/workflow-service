@@ -435,3 +435,12 @@ export const engineCalls = pgTable(
   (table) => [index("idx_engine_calls_org").on(table.orgId, table.createdAt), index("idx_engine_calls_running").on(table.status)]
 );
 export type EngineCallRow = typeof engineCalls.$inferSelect;
+
+// DISTRY-ENGINES-1119: why an Engine no script makes on demand is not callable, in plain words, stated by staff as data
+// (migration 0058). Shown on the Engine list while the Engine is not callable; a runnable script makes it callable again.
+export const engineReasons = pgTable("engine_reasons", {
+  outcome: text("outcome").primaryKey(),
+  reason: text("reason").notNull(),
+  statedBy: text("stated_by").notNull(),
+  statedAt: timestamp("stated_at", { withTimezone: true }).notNull().defaultNow(),
+});

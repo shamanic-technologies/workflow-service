@@ -263,6 +263,28 @@ describe("GET /internal/engines", () => {
     expect(res.body.code).toBe("engine_list_unreadable");
   });
 
+  it("a reason staff stated for an Engine no script makes is shown as-is; a moved dynasty says where it went (DISTRY-ENGINES-1119)", async () => {
+    const reason = "We run no ads yet: no ad account is connected, so nothing can show an ad.";
+    let res = await request(app).put("/internal/engines/meeting_booked/reason").set("x-api-key", KEY).set("x-email", "staff@example.com").send({ reason });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ outcome: "meeting_booked", reason, statedBy: "staff@example.com" });
+    res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    expect(res.body.engines.find((e: { outcome: string }) => e.outcome === "meeting_booked")).toMatchObject({ callable: false, reason });
+    // A runnable script wins over the stated reason.
+    await add("meeting_booked", "dy_now_runs", MAKES);
+    res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    expect(res.body.engines.find((e: { outcome: string }) => e.outcome === "meeting_booked")).toMatchObject({ callable: true, reason: null });
+    expect((await request(app).delete("/internal/engines/meeting_booked/reason").set("x-api-key", KEY)).status).toBe(204);
+    expect((await request(app).delete("/internal/engines/meeting_booked/reason").set("x-api-key", KEY)).status).toBe(404);
+    expect((await request(app).put("/internal/engines/meeting_booked/reason").set("x-api-key", KEY).send({ reason })).status).toBe(400); // nobody stated it
+    // A dynasty retired here that runs under another outcome: the reason names where.
+    const moved = await add("email_sent", "dy_moved", MAKES);
+    await db.update(scripts).set({ dynastyStatus: "deprecated", status: "deprecated" }).where(eq(scripts.id, moved.id));
+    await add(OUTCOME, "dy_moved", MAKES);
+    res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    expect(res.body.engines.find((e: { outcome: string }) => e.outcome === "email_sent")).toMatchObject({ callable: false, reason: "Its scripts moved to X account found, which make this work now: ask that Engine instead." });
+  });
+
   it("plain reasons for live scripts that cannot run", () => {
     expect(calls.notCallableReason({ scripts: 2, live: 2, unprovenPorts: 1, awaitingWriterProof: 1 })).toBe(
       "None of its 2 live scripts can run now: 1 not yet proven on their recorded cases, 1 waiting to pass their writing proof before writing to people.",
