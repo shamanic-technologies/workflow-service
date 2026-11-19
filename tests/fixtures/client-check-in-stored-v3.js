@@ -1,0 +1,1263 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+/** Answer of one current client of the brand when something happens with them (MIGRATE-1105 S4b: the old DAG's own steps, in its order, on doors). */
+
+const console = { log: (..._a: unknown[]) => {}, error: (..._a: unknown[]) => {}, warn: (..._a: unknown[]) => {} };
+const URL = function (this: { hostname: string; href: string }, u: string) {
+  const m = /^[a-z][a-z0-9+.-]*:[/][/](?:[^@/?#]*@)?([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(String(u));
+  if (!m) throw new TypeError("Invalid URL: " + String(u));
+  this.hostname = m[1]!.toLowerCase();
+  this.href = String(u);
+} as unknown as new (u: string) => { hostname: string; href: string };
+/** The run's clock: a Date made with no argument, and Date.now(), are the run's `now`. */
+const RealDate: any = (globalThis as any).Date;
+let NOW_MS = 0;
+let TRIGGER: any = null;
+const Date: any = function (this: unknown, ...a: unknown[]) {
+  if (!(this instanceof (Date as any))) return new RealDate(NOW_MS).toString();
+  return a.length === 0 ? new RealDate(NOW_MS) : new (RealDate as any)(...a);
+};
+Date.prototype = RealDate.prototype;
+Date.now = () => NOW_MS;
+Date.parse = RealDate.parse;
+Date.UTC = RealDate.UTC;
+
+/** The sender's human sentence on a refusal body: `details` when a sentence, else `error` (http-call readRefusalReason). */
+function refusalReason(o: any): string | null {
+  if (!o || typeof o !== "object") return null;
+  if (typeof o.details === "string" && o.details.trim() !== "") return o.details;
+  if (o.details && typeof o.details === "object") {
+    const nested = refusalReason(o.details);
+    if (nested !== null) return nested;
+  }
+  if (typeof o.error === "string" && o.error.trim() !== "") return o.error;
+  return null;
+}
+function readField(obj: any, field: string): unknown {
+  if (obj && typeof obj === "object" && field in obj) return obj[field];
+  return field.split(".").reduce((v: any, k) => (v && typeof v === "object" ? v[k] : undefined), obj);
+}
+const plain = (v: unknown): v is Record<string, any> => v !== null && typeof v === "object" && !Array.isArray(v);
+/** A body or query as the old step sent it: undefined keys gone, the converter's workflowSlug gone (a script runs none). */
+function sent(v: unknown): any {
+  if (!plain(v)) return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v)) if (x !== undefined && k !== "workflowSlug") out[k] = x;
+  return out;
+}
+
+/** One old call step, on its door: the same request, read the same way (http-call.ts). */
+function callStep(ctx: any, door: string, s: any, retries: number): any {
+  if (s.skip === true) return { ok: false, skipped: true, notCalled: true };
+  const where = String(s.method) + " " + String(s.service) + String(s.path);
+  let args: Record<string, unknown>;
+  if (door === "llm.complete") args = sent(s.body ?? {});
+  else if (door === "voice.read") args = {};
+  else if (door === "lead.serve") args = Object.fromEntries(Object.entries(sent(s.method === "GET" ? s.query ?? {} : s.body ?? {})).filter(([, v]) => v !== null));
+  else {
+    args = {};
+    const params = plain(s.params) && plain(s.rename) ? Object.fromEntries(Object.entries(s.params).map(([k, v]) => [s.rename[k] ?? k, v])) : s.params;
+    if (plain(params) && Object.keys(params).length) args.params = params;
+    const q = sent(s.query);
+    if (plain(q) && Object.keys(q).length) args.query = q;
+    if (s.method !== "GET") args.body = sent(s.body ?? {});
+    if (Array.isArray(s.omitHeaders) && s.omitHeaders.length) args.omitHeaders = s.omitHeaders;
+    if (plain(s.pollWhile)) args.pollWhile = s.pollWhile;
+  }
+  for (let attempt = 0; ; attempt++) {
+    const r: { ok: boolean; data: any } = ctx.vendor.call(door, args);
+    if (r.ok) {
+      const result = door === "lead.serve" || door === "voice.read" ? r.data : r.data ?? {};
+      if (s.validateResponse && readField(result, s.validateResponse.field) !== s.validateResponse.equals) {
+        throw new Error(where + " validation failed: expected " + s.validateResponse.field + "=" + JSON.stringify(s.validateResponse.equals) + ", got " + JSON.stringify(readField(result, s.validateResponse.field)));
+      }
+      return result;
+    }
+    const status = r.data.status;
+    const body = plain(r.data.body) ? r.data.body : {};
+    const text = Object.keys(body).length ? JSON.stringify(body) : String(r.data.error ?? "");
+    const codes: string[] = Array.isArray(s.skipOnRefusalCodes) ? s.skipOnRefusalCodes : [];
+    if (codes.length && typeof status === "number" && status >= 400 && status < 500) {
+      const code = typeof r.data.code === "string" ? r.data.code : null;
+      if (code !== null && (codes.includes(code) || (status === 409 && codes.includes("*")))) {
+        const reason = refusalReason(body) ?? code;
+        return { ok: false, skipped: true, status, code, reason, refusal: text, delivery: { state: "refused", code, reason } };
+      }
+    }
+    if (s.tolerateFailure === true) return { ok: false, status: typeof status === "number" ? status : 0, error: text };
+    if (attempt < retries) continue;
+    throw new Error(where + " failed (" + String(status ?? "") + "): " + text.slice(0, 1000));
+  }
+}
+
+/**
+ * The old end-run's body as the result the Engine runner states that same end from (engine-runner.ts endRunBodyOf):
+ * failed = a throw; nobody left = audience_exhausted; nothing to do = null; not admitted / refused = unmade with the
+ * producer's code and words; a delivered occurrence or any other normal run = made (an unfinished look on a run with
+ * no occurrence: a normal run that made nothing).
+ */
+function endOf(body: any, end: string): ScriptResult {
+  const b = plain(body) ? body : {};
+  const delivery = plain(b.delivery) ? b.delivery : null;
+  const refused = delivery && delivery.state === "refused";
+  if (b.success !== true && !refused) throw new Error("the run ended failed (" + end + ")");
+  if (b.stopCampaign === true) return { unmade: "audience_exhausted: nobody left to serve" };
+  if (plain(b.personNotAdmitted)) return { unmade: "person_not_admitted: " + String(b.personNotAdmitted.reason ?? "") };
+  if (refused) return { unmade: String(delivery.code ?? "refused") + ": " + String(delivery.reason ?? delivery.code ?? ""), ...(TRIGGER ? {} : { again: true }) };
+  if (b.noWorkAvailable === true) return null;
+  if (TRIGGER || (delivery && delivery.state === "delivered")) return { content: { end: b, step: end } };
+  return { unmade: end + ": nothing made this run", again: true };
+}
+
+const step_occurrence = (function () {
+function main(trigger, instruction, reactive) {
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const t = trigger && typeof trigger === "object" ? trigger : null;
+  const eventId = s(t?.eventId);
+  const triggerId = s(t?.triggerId);
+  const p = t?.person && typeof t.person === "object" ? t.person : null;
+  const hasInstruction = s(instruction) !== null;
+  return {
+    answering: eventId !== null,
+    eventId,
+    triggerId,
+    skipTriggerRead: triggerId === null,
+    hasInstruction,
+    skipFigures: !hasInstruction,
+    // Only a unit campaign-service SAYS is proactive (`/start-run` `reactive: false`) may be served a new lead.
+    // Reactive, or unknown (null: no leg, catalogue unreadable; absent: an older campaign-service), never buys a
+    // stranger: a reactive unit answers the people its trigger made due, nobody else.
+    serveNewLead: eventId === null && reactive === false,
+    person: p ? { email: s(p.email)?.toLowerCase() ?? null, name: s(p.name), phone: s(p.phone) } : null,
+  };
+}
+return main;
+})();
+const step_claim_person = (function () {
+function main(trigger) {
+  const t = trigger && typeof trigger === "object" ? trigger : null;
+  const str = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const p = t?.person && typeof t.person === "object" ? t.person : {};
+  const person = { email: str(p.email), phone: str(p.phone), leadId: str(t?.leadId) };
+  const named = !!(person.email || person.phone || person.leadId);
+  // An OCCURRENCE (it carries an eventId) that names nobody must claim nobody: with no person the claim hands out the
+  // queue's next due row, and that row's person was then answered with this occurrence's facts (OCCURRENCE-NAMES-NOBODY-1029).
+  const occurrence = !!(t && typeof t.eventId === "string" && t.eventId.trim());
+  return { person: named ? person : null, skipClaim: occurrence && !named };
+}
+return main;
+})();
+const step_claim_plan = (function () {
+function main(claim) {
+  const found = claim?.found === true && !!claim?.followup?.id;
+  return { found, skipDetail: !found };
+}
+return main;
+})();
+const step_resolve_person = (function () {
+function resolveClaimed(claim, detail, trigger) {
+  if (claim?.found !== true) {
+    const carries = !!(trigger && typeof trigger === "object" && typeof trigger.eventId === "string" && trigger.eventId.trim());
+    // An occurrence that names nobody claimed nobody on purpose (claim-person skipClaim): final, never redelivered,
+    // never answered with someone else's row (OCCURRENCE-NAMES-NOBODY-1029).
+    if (carries && claim?.notCalled === true) {
+      console.log("[follow-up] the occurrence names nobody (no email, phone or lead): nothing claimed, nothing written");
+      return { ok: false, why: "occurrence names nobody", endKind: "names_nobody", notAdmitted: { reason: "occurrence_names_nobody" } };
+    }
+    // The person IS due here but lead-service holds them back (they paid, a journalist, opted out: heldBack, final):
+    // said, never read as "nobody due" (WF-SILENT-FOLLOWUP-1101: a paid client named by the Copilot ended idle, no
+    // email, the Copilot told them it was sent). An occurrence naming someone reads only THEIR entry; a run naming
+    // nobody (a campaign naming its people, dispatched with no occurrence) reads the first one.
+    const heldBack = Array.isArray(claim?.heldBack) ? claim.heldBack.filter((h) => h && typeof h.reason === "string" && h.reason.trim()) : [];
+    if (heldBack.length > 0) {
+      const t = trigger && typeof trigger === "object" ? trigger : null;
+      const fold = (s) => (typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null);
+      const email = fold(t?.person?.email);
+      const digits = phoneDigits(t?.person?.phone ?? null);
+      const leadId = t && typeof t.leadId === "string" && t.leadId.trim() ? t.leadId.trim() : null;
+      const namesSomeone = !!(email || digits || leadId);
+      const held = namesSomeone
+        ? heldBack.find((h) =>
+            (email !== null && fold(h.email) === email) ||
+            (digits !== "" && phoneDigits(h.phone ?? null) === digits) ||
+            (leadId !== null && h.leadId === leadId))
+        : heldBack[0];
+      if (held) {
+        console.log("[follow-up] lead-service holds " + String(held.email ?? held.phone ?? held.leadId) + " back (" + held.reason +
+          "): nothing written. " + String(held.message ?? ""));
+        return { ok: false, why: "held back", endKind: "held_back", notAdmitted: { reason: held.reason.trim().slice(0, 200) }, heldMessage: held.message ?? null };
+      }
+    }
+    // A run with no occurrence that finds nobody due: nothing to do. One carrying an occurrence: it must claim someone.
+    return { ok: false, why: "nobody claimed", endKind: carries ? "unclaimed" : "idle" };
+  }
+  const f = claim.followup ?? {};
+  if (!f.id) throw new Error("resolve-person: a claimed row carries no id");
+  if (!f.brandId) throw new Error("resolve-person: the claimed row carries no brand");
+  const fold = (s) => (typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null);
+  const lead = detail?.leadDetail?.lead ?? null;
+  if (!lead) throw new Error("resolve-person: the claimed person's lead read returned no lead");
+  const email = fold(f.email);
+  const digits = phoneDigits(f.phone ?? lead.phone ?? null);
+  if (!email && !digits) throw new Error("resolve-person: the claimed row carries neither an email nor a phone");
+  const t = trigger && typeof trigger === "object" ? trigger : null;
+  const eventId = t && typeof t.eventId === "string" && t.eventId.trim() ? t.eventId.trim() : null;
+  const named = t?.person && typeof t.person === "object" ? t.person : null;
+  // An occurrence names its person by identity (email, else phone) or, for a fact rung with only a lead, by leadId.
+  const namedLead = t && typeof t.leadId === "string" && t.leadId.trim() ? t.leadId.trim() : null;
+  const namesSomeone = !!((named && (fold(named.email) || phoneDigits(named.phone))) || namedLead);
+  const namesThem = !!(
+    (named && ((email && fold(named.email) === email) || (!fold(named.email) && digits && phoneDigits(named.phone) === digits))) ||
+    (!(named && (fold(named.email) || phoneDigits(named.phone))) && namedLead && namedLead === f.leadId)
+  );
+  if (eventId && namesSomeone && !namesThem) {
+    console.error("[follow-up] claimed " + String(email ?? "+" + digits) + " but this run's occurrence names " +
+      String(named?.email ?? named?.phone ?? namedLead) + ": nothing is written, their row is left alone");
+    return { ok: false, why: "occurrence names someone else", endKind: "other_person", rowId: f.id };
+  }
+  // The phone the occurrence states for THIS person is the one they just gave: it wins over the row's, which may be an
+  // earlier typo ("+91 0 83..." refused not_on_whatsapp while the corrected "+91 83..." sat on the occurrence).
+  const givenDigits = namesThem ? phoneDigits(named?.phone ?? t?.item?.phone ?? null) : "";
+  const phoneDigitsKept = givenDigits || digits;
+  return {
+    ok: true,
+    entry: "claimed",
+    rowId: f.id,
+    leadId: f.leadId ?? null,
+    email,
+    phone: phoneDigitsKept ? "+" + phoneDigitsKept : null,
+    brandId: f.brandId,
+    // When this row was made due: another campaign's row made due by the same moment's facts is a sibling reaction,
+    // never a message already queued for them (READ_STATE_CODE).
+    dueAt: f.dueAt ?? null,
+    answersOccurrence: !!(eventId && namesThem),
+    lead,
+    timezone: lead.timezone ?? null,
+    sendKey: eventId && namesThem ? "follow-up:event:" + eventId : "follow-up:" + f.id + ":" + String(f.dueAt ?? ""),
+    eventId: eventId && namesThem ? eventId : null,
+  };
+}
+
+function phoneDigits(s) {
+  if (typeof s !== "string") return "";
+  const t = s.trim();
+  if (!/^(\+|00)/.test(t)) return "";
+  const d = t.replace(/^(\+|00)/, "").replace(/\D/g, "");
+  return d.length >= 8 ? d : "";
+}
+
+function inner(claim, detail, trigger) {
+  if (claim?.found !== true) {
+    const t = trigger && typeof trigger === "object" ? trigger : null;
+    const fold = (s) => (typeof s === "string" && s.trim() !== "" ? s.trim().toLowerCase() : null);
+    const email = fold(t?.person?.email);
+    const digits = phoneDigits(t?.person?.phone ?? null);
+    const leadId = t && typeof t.leadId === "string" && t.leadId.trim() ? t.leadId.trim() : null;
+    const isTheirs = (e) =>
+      (email !== null && fold(e?.email) === email) ||
+      (digits !== "" && fold(e?.email) === null && phoneDigits(e?.phone ?? null) === digits) ||
+      (leadId !== null && e?.leadId === leadId);
+    const refused = Array.isArray(claim?.relationships?.refused) ? claim.relationships.refused : [];
+    const pending = Array.isArray(claim?.relationships?.pending) ? claim.relationships.pending : [];
+    const r = refused.find(isTheirs);
+    if (r) {
+      console.log("[client-check-in] not a current client of the brand (" + String(r.reason) + "): nothing written");
+      return { ok: false, why: "not a current client", endKind: "not_admitted", notAdmitted: { reason: String(r.reason ?? "not_a_current_client") } };
+    }
+    if (pending.some(isTheirs)) {
+      console.log("[client-check-in] lead-service cannot say yet whether they are a current client: asked again later");
+      return { ok: false, why: "relationship pending", endKind: "pending" };
+    }
+    // lead-service naming WHY it holds them back (heldBack) wins over the bare "nothing_due" (WF-SILENT-FOLLOWUP-1101).
+    const heldTheirs = Array.isArray(claim?.heldBack) && claim.heldBack.some(isTheirs);
+    if (t && (email || digits || leadId) && claim?.reason === "nothing_due" && !heldTheirs) {
+      console.log("[client-check-in] lead-service keeps them off the queue (nothing_due): nothing written");
+      return { ok: false, why: "kept off the queue", endKind: "not_admitted", notAdmitted: { reason: "nothing_due" } };
+    }
+  }
+  return resolveClaimed(claim, detail, trigger);
+}
+
+
+function main(claim, detail, trigger) {
+  const out = inner(...arguments);
+  return { ...out, skipState: out.ok !== true };
+}
+return main;
+})();
+const step_now = (function () {
+function main() {
+  return { now: new Date().toISOString() };
+}
+return main;
+})();
+const step_read_state = (function () {
+function main(person, state, nowIso) {
+  if (person?.ok !== true) return { proceed: false, kind: "none", skip: true };
+  const owed = state?.owed;
+  const kind = owed?.kind;
+  if (kind !== "owed" && kind !== "stop" && kind !== "not_yet") {
+    throw new Error("follow-up-state: lead-service answered no follow-up kind: " + JSON.stringify(state).slice(0, 300));
+  }
+  if (!state.followupDate || typeof state.followupDate !== "object" || !state.queued || typeof state.queued !== "object") {
+    throw new Error("follow-up-state: lead-service answered no date or queue: " + JSON.stringify(state).slice(0, 300));
+  }
+  const now = Date.parse(String(nowIso));
+  const currentNext = Date.parse(String(state.followupDate.nextFollowupAt ?? ""));
+  const reasons = Array.isArray(owed.reasons) ? owed.reasons : [];
+  const EXPECTED = ["customer","meeting_attended","meeting_booked","positive_reply","not_pure_prospect","not_brand_lead","not_contacted","no_action_toward_us","disqualified","in_conversation","relationship_not_judged","same_person_question_open"];
+  const left = kind === "owed" ? [] : reasons.filter((r) => !EXPECTED.includes(r));
+  if (kind !== "owed" && reasons.length === 0) {
+    throw new Error("follow-up-state: lead-service said " + kind + " without naming a reason");
+  }
+  const sequence = left.length > 0 && left.every((r) => r === "sequence_running");
+  if (left.length > 0 && !sequence) {
+    console.log("[client-check-in] lead-service says stop (" + left.join(", ") + "): nothing written, no next date");
+    return { proceed: false, kind: "stop", reason: left[0], skip: true };
+  }
+  // Only a message of ours waiting to go out holds them (an email sequence step); another campaign's row is not one
+  // (ONE-FOLLOWUP-PER-LEAD-1103, MEETING-REMINDER-1103): the writer decides the one next date from the thread.
+  if (sequence || state.queued.emailSequence === true) {
+    const after = now + 3 * 86400000;
+    const next = new Date(Number.isFinite(currentNext) && currentNext > after ? currentNext : after).toISOString();
+    const what = "a step of their email sequence is still queued";
+    console.log("[client-check-in] " + what + ": nothing written, next look at " + next);
+    return { proceed: false, kind: "queued", reason: what, skip: true, nextFollowUpAt: next, nextFollowUpWhy: "Already queued: " + what };
+  }
+  return { proceed: true, kind: "owed", reason: null, skip: false };
+}
+return main;
+})();
+const step_person_thread_query = (function () {
+function main(person, plan) {
+  if (plan?.proceed !== true) return { skip: true, query: {} };
+  const key = person.email ? "email:" + person.email.toLowerCase() : "phone:" + person.phone;
+  return { skip: false, query: { brandId: person.brandId, personKey: key } };
+}
+return main;
+})();
+const step_reach_body = (function () {
+function main(person, plan) {
+  if (plan?.proceed !== true) return { skip: true, body: {} };
+  const body = { brandId: person.brandId };
+  if (person.email) body.email = person.email;
+  if (person.phone) body.phone = person.phone;
+  return { skip: false, body };
+}
+return main;
+})();
+const step_channel_plan = (function () {
+function main(person, plan, reach, timeline) {
+  if (plan?.proceed !== true) return { channel: null, skipModel: true };
+  if (!reach || reach.ok === false || typeof reach.reachable !== "boolean") {
+    throw new Error("channel-plan: the WhatsApp reach check did not answer: " + JSON.stringify(reach).slice(0, 300));
+  }
+  const items = Array.isArray(timeline?.items) ? timeline.items : [];
+  const msgs = items.filter((i) => i?.kind === "message" && i.source !== "api");
+  const lastTheirs = [...msgs].reverse().find((i) => i.direction === "inbound") ?? null;
+  const emails = Array.isArray(timeline?.person?.emails) ? timeline.person.emails.filter((e) => typeof e === "string" && e.includes("@")) : [];
+  const email = person.email ?? emails[0] ?? null;
+  const lastWhere = lastTheirs ? String(lastTheirs.channel ?? "unknown") : null;
+  if (reach.reachable === true) {
+    return {
+      channel: "whatsapp",
+      skipModel: false,
+      email,
+      phone: reach.to ?? person.phone ?? null,
+      fromAccount: reach.fromAccount ?? null,
+      // The persona of the account that will send, or null (SOPHIE-WA-1016): the writer speaks as it.
+      persona: senderPersona(reach),
+      why: "The brand's WhatsApp reaches them (" + String(reach.to) + ")" + (lastWhere && lastWhere !== "whatsapp" ? "; their last message came by " + lastWhere : "") + ".",
+    };
+  }
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): nothing on ANY channel, never
+  // an email instead.
+  if (reach.code === "stated_not_to_brand") {
+    console.log("[follow-up] the brand stated " + String(person.email ?? person.phone ?? "this person") + " is not someone of theirs: nothing drafted, nothing sent on any channel");
+    return { channel: null, skipModel: true, notToBrand: true, why: "The brand stated this person is not someone of theirs" };
+  }
+  if (email) {
+    return {
+      channel: "email",
+      skipModel: false,
+      email,
+      phone: person.phone ?? null,
+      why: "WhatsApp cannot reach them (" + String(reach.code) + "); we hold their address " + email + "." + (lastWhere && lastWhere !== "email" ? " Their last message came by " + lastWhere + ", where we cannot write." : ""),
+    };
+  }
+  console.error("[follow-up] no route can write to " + String(person.phone ?? "this person") + ": WhatsApp " + String(reach.code) + ", no email known; nothing drafted");
+  return { channel: null, skipModel: true, noChannel: true, why: "WhatsApp " + String(reach.code) + " and no email known" };
+}
+
+function senderPersona(reach) {
+  const p = reach && typeof reach === "object" && reach.persona && typeof reach.persona === "object" ? reach.persona : null;
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  if (!p || !s(p.name)) return null;
+  return { name: s(p.name), role: s(p.role), instructions: s(p.instructions) };
+}
+
+function personaLines(persona, brandName) {
+  return [
+    "WHO YOU ARE: you are " + persona.name + (persona.role ? ", " + persona.role : "") + " at " + brandName + ". You write from " + brandName + "'s WhatsApp number as yourself, " + persona.name + ": never as anyone else, never imitating how someone else at " + brandName + " writes.",
+    "Present yourself exactly as your role says. If your role says you are an AI or an assistant, never say or imply you are a human, and if they ask, say plainly what you are.",
+    "Messages in the thread typed by someone else at " + brandName + " are part of the history, never a model of how you write. Where a line says to write the way the owner or the founder would, write as yourself, in your own voice, keeping the relationship and its language.",
+    ...(persona.instructions ? ["YOUR OWN INSTRUCTIONS (how you write and present yourself; they win over any other line about style or tone):", persona.instructions] : []),
+  ];
+}
+return main;
+})();
+const step_gather_facts = (function () {
+function gatherFacts(plan, offerAnswers, offerFields, brandFields) {
+  // The brand-scoped read is refused BY DESIGN once a brand sells several
+  // offers (409 SEVERAL_OFFERS: "name the offer"); the offer-scoped read above
+  // is then the answer, so that one refusal means "no brand-level fields".
+  // Every other failure of that read is still an error.
+  if (brandFields && brandFields.ok === false) {
+    if (brandFields.status === 409 && String(brandFields.error ?? "").includes("SEVERAL_OFFERS")) {
+      console.log("[facts] the brand sells several offers: brand-level fields are not read, the offer's own are");
+      brandFields = null;
+    } else {
+      throw new Error("brand user-fields read failed (" + String(brandFields.status) + "): " + String(brandFields.error ?? ""));
+    }
+  }
+  const isEmpty = (v) => {
+    if (v === null || v === undefined) return true;
+    if (typeof v === "string") return v.trim() === "" || /^unknown$/i.test(v.trim());
+    if (Array.isArray(v)) return v.length === 0 || v.every(isEmpty);
+    if (typeof v === "object") return Object.keys(v).length === 0;
+    return false;
+  };
+  const isPlaceholder = (v) => typeof v === "string" && /^\s*placeholder\b/i.test(v);
+  const render = (v) => {
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return v.filter((x) => !isEmpty(x)).map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("; ");
+    return JSON.stringify(v);
+  };
+
+  const exact = [];
+  const neverGive = [];
+  const withheld = [];
+  const unconfirmed = [];
+  const addExact = (f) => exact.push({ id: "E" + (exact.length + 1), ...f });
+
+  for (const a of offerAnswers?.answers ?? []) {
+    if (isEmpty(a?.question) || isEmpty(a?.answer)) continue;
+    if (isPlaceholder(a.answer)) {
+      withheld.push({ source: "offer-answers", label: String(a.question).trim() });
+      continue;
+    }
+    addExact({ source: "offer-answers", label: String(a.question).trim(), value: String(a.answer).trim() });
+  }
+
+  const seen = new Set();
+  for (const [scope, read] of [["offer-user-fields", offerFields], ["brand-user-fields", brandFields]]) {
+    for (const [key, field] of Object.entries(read?.fields ?? {})) {
+      if (isEmpty(field?.value)) continue;
+      // Not confirmed = the site's prefill, which nobody told us.
+      if (field?.provenance !== "confirmed") {
+        unconfirmed.push(scope + ":" + key);
+        continue;
+      }
+      const value = render(field.value);
+      if (isPlaceholder(value)) {
+        withheld.push({ source: scope, label: key });
+        continue;
+      }
+      if (key === "neverGive") {
+        for (const item of Array.isArray(field.value) ? field.value : [field.value]) {
+          if (isEmpty(item)) continue;
+          const text = render(item);
+          if (!neverGive.includes(text)) neverGive.push(text);
+        }
+        continue;
+      }
+      if (seen.has(key + "::" + value)) continue;
+      seen.add(key + "::" + value);
+      addExact({ source: scope, label: key, value });
+    }
+  }
+
+  const questions = (plan?.questions ?? []).map((q) => ({ key: q.key, question: q.question }));
+
+  const facts = { questions, exact, neverGive, withheld };
+  if (withheld.length) {
+    console.error("[ai-meeting-booking] withheld operator PLACEHOLDER answer(s), not facts: " + JSON.stringify(withheld));
+  }
+  if (unconfirmed.length) {
+    console.log("[ai-meeting-booking] not used, the client never confirmed them (site prefill): " + unconfirmed.join(", "));
+  }
+  console.log("[ai-meeting-booking] what our client told us, the only facts the reply may state: " + JSON.stringify(facts));
+  return facts;
+}
+
+function main(channel, offerAnswers, offerFields, brandFields) {
+  if (channel?.skipModel === true) return { exact: [], neverGive: [], skipped: true };
+  return gatherFacts(null, offerAnswers, offerFields, brandFields);
+}
+return main;
+})();
+const step_person_history = (function () {
+function main(channel, history) {
+  if (channel?.skipModel === true) return { lines: [], omitted: 0, ourMessages: 0, lastOursAt: null, lastTheirsAt: null, unreadable: [] };
+  if (!history || !Array.isArray(history.events)) throw new Error("person-history: lead-service returned no events");
+  const BLIND = ["lead-service", "outreach", "delivery"];
+  const down = (history.sources ?? []).filter((s) => BLIND.includes(s?.source) && s?.status === "unavailable");
+  if (down.length) {
+    throw new Error("person-history: " + down.map((s) => s.source + " (" + (s.reason ?? "unavailable") + ")").join(", ") +
+      " could not be read; the next follow-up is never decided blind");
+  }
+  const clip = (t, n) => { const s = String(t ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "..." : s; };
+  const day = (at) => (typeof at === "string" ? at.slice(0, 16).replace("T", " ") + " UTC" : "date unknown");
+  const lines = [];
+  let ours = 0;
+  let lastOurs = null;
+  let lastTheirs = null;
+  for (const e of history.events) {
+    if (e?.type === "message") {
+      if (e.direction === "outbound") { ours += 1; lastOurs = e.at ?? lastOurs; }
+      if (e.direction === "inbound") lastTheirs = e.at ?? lastTheirs;
+      continue; // the words are in THE THREAD
+    }
+    if (e?.type === "delivery") {
+      if (e.milestone === "sent") { ours += 1; lastOurs = e.at ?? lastOurs; }
+      lines.push(day(e.at) + " | EVENT: " + (e.channel ?? "email") + " " + e.milestone);
+    } else if (e?.type === "conversion") {
+      lines.push(day(e.at) + " | EVENT: " + (e.event ?? e.step ?? "conversion"));
+    } else if (e?.type === "reply_statement" || e?.type === "opt_out_statement" || e?.type === "step_statement") {
+      lines.push(day(e.at) + " | RECORDED: " + e.type.replace("_", " ") + (e.replyKind ? " " + e.replyKind : "") + (e.step ? " " + e.step : "") + (e.note ? ": " + clip(e.note, 200) : ""));
+    }
+  }
+  return {
+    lines: lines.slice(-60),
+    omitted: Math.max(0, lines.length - 60),
+    ourMessages: ours,
+    lastOursAt: lastOurs,
+    lastTheirsAt: lastTheirs,
+    unreadable: (history.sources ?? []).filter((s) => s?.status === "unavailable").map((s) => s.source),
+  };
+}
+return main;
+})();
+const step_who_they_are = (function () {
+function main(relationshipRead, served, timeline) {
+  const KNOWN = ["personal","customer","team","investor","advisor","partner","supplier"];
+  const LABEL = {
+    personal: "a personal contact of the owner (a friend, someone he knows outside work)",
+    customer: "a customer",
+    prospect: "a prospect (signed up, or showed interest)",
+    team: "on the brand's team",
+    investor: "an investor",
+    advisor: "an advisor",
+    supplier: "a supplier",
+    partner: "a partner",
+    other_professional: "someone the owner knows professionally",
+    journalist: "a journalist the brand pitches for press coverage (never a buyer)",
+  };
+  if (relationshipRead && relationshipRead.ok === false && relationshipRead.notCalled !== true && relationshipRead.status !== 404) {
+    throw new Error("who-they-are: who the person is to the brand could not be read (" + String(relationshipRead.status ?? "no status") + " " + String(relationshipRead.error ?? "").slice(0, 200) + "); nothing is written blind");
+  }
+  const fromRead = relationshipRead && relationshipRead.ok !== false ? relationshipRead : null;
+  const fromServe = served && served.found === true && served.lead ? served.lead : null;
+  if (!fromRead && !fromServe && (served?.found === false || served?.ok === false)) return null;
+
+  const rel = fromRead?.relationship ?? fromServe?.data?.relationship ?? null;
+  const tags = Array.isArray(rel?.tags) ? rel.tags.filter((t) => typeof t === "string") : [];
+  const unsureTags = Array.isArray(rel?.unsureTags) ? rel.unsureTags.filter((t) => typeof t === "string") : [];
+  const judged = typeof rel?.judgedAt === "string" && rel.judgedAt !== "";
+
+  // The thread. A tolerated failure: 404 = crm-service knows nobody under that key = no thread.
+  let items = [];
+  let threadState = "none";
+  if (timeline && timeline.ok === false) {
+    if (timeline.notCalled === true) threadState = "not_read";
+    else if (timeline.status !== 404) {
+      throw new Error("who-they-are: the person's thread could not be read (" + String(timeline.status ?? "no status") + " " + String(timeline.error ?? "").slice(0, 200) + "); nothing is written blind");
+    }
+  } else if (timeline) {
+    if (!Array.isArray(timeline.items)) throw new Error("who-they-are: the person's thread came back without items");
+    const failed = (timeline.sources ?? []).filter((x) => ["gmail","matrix","instantly","copilot"].includes(x?.source) && x?.status === "failed");
+    if (failed.length) {
+      throw new Error("who-they-are: the person's thread is unreadable (" + failed.map((x) => x.source + ": " + (x.error ?? "failed")).join("; ") + "); nothing is written blind");
+    }
+    items = timeline.items;
+    threadState = "read";
+  }
+  const clip = (t, n) => { const s = String(t ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "..." : s; };
+  const day = (at) => (typeof at === "string" ? at.slice(0, 16).replace("T", " ") : "date unknown");
+  const who = (i) => {
+    if (i.direction === "inbound") return "THEM";
+    if (i.source === "instantly") return "US [automated cold email]";
+    if (i.source === "copilot") return "US [AI Copilot]";
+    return "US";
+  };
+  const messages = items.filter((i) => i?.kind === "message" && i.source !== "api" && clip(i.text, 10));
+  const threadLines = messages.slice(-40).map((i) =>
+    day(i.at) + " | " + i.channel + " | " + who(i) + ": " + (i.subject && i.channel === "email" ? "[" + clip(i.subject, 80) + "] " : "") + clip(i.text, 400));
+  // What they did, in crm-service's own words (its `text`), the step name only when it states none.
+  const eventLines = items.filter((i) => i?.kind === "event").slice(-30).map((i) => day(i.at) + " | " + i.channel + " | EVENT: " + (clip(i.text, 300) || (i.event?.step ?? "event")) + " (" + i.source + ")");
+  const talked = messages.length > 0;
+
+  const knownTags = tags.filter((t) => KNOWN.includes(t));
+  const state = knownTags.length > 0
+    ? "known"
+    : !judged || unsureTags.some((t) => KNOWN.includes(t)) || talked
+      ? "possibly_known"
+      : "not_known";
+
+  const lines = [];
+  if (state === "known") lines.push("The brand ALREADY KNOWS this person. They are " + knownTags.map((t) => LABEL[t] ?? t).join(", ") + ".");
+  else if (state === "possibly_known") lines.push(judged
+    ? "This person MAY be known to the brand: read the thread before assuming anything."
+    : "Nobody judged yet whether the brand knows this person: treat them as possibly known, and read the thread before assuming anything.");
+  else lines.push("Judged: nothing shows the brand knows this person yet.");
+  const other = tags.filter((t) => !KNOWN.includes(t));
+  if (other.length) lines.push("Also: " + other.map((t) => LABEL[t] ?? t).join(", ") + ".");
+  if (unsureTags.length) lines.push("Possibly (not confirmed): " + unsureTags.map((t) => LABEL[t] ?? t).join(", ") + ".");
+  const company = rel?.company?.name ?? rel?.company?.domain ?? null;
+  if (company) lines.push("Their company: " + clip(company, 120) + ".");
+  const evidence = (Array.isArray(rel?.details) ? rel.details : [])
+    .filter((d) => d?.state === "yes" && typeof d.evidence === "string" && d.evidence.trim())
+    .slice(0, 6)
+    .map((d) => "Why " + (LABEL[d.tag] ?? d.tag) + ": " + clip(d.evidence, 240));
+  lines.push(...evidence);
+  if (threadState === "read" && !talked) lines.push("No message was ever exchanged with them on record.");
+
+  return {
+    state,
+    known: state === "known",
+    judged,
+    tags,
+    unsureTags,
+    lines,
+    hasThread: talked,
+    threadLines,
+    olderMessagesOmitted: Math.max(0, messages.length - threadLines.length),
+    eventLines,
+    strategy: "WHO THIS PERSON IS TO US decides how you write, before anything else. Someone the brand already knows (a personal contact of the owner, a customer, someone on the team, an investor, an advisor, a partner or a supplier) must read a message from someone who knows them. Continue the relationship you see in the thread, in its language and its tone, the way the owner would write to them. Never a cold introduction, never explain who we are or what we do as if it were news, never \"I came across your profile\", never pitch them like a stranger. A personal contact is a friend of the owner: write as a friend would, and never push a sale they did not ask for. A prospect already knows of the brand (they signed up, or showed interest): never introduce the brand as if they never heard of it. A journalist is someone the brand pitches for press coverage, never a buyer: never sell them the product, never treat them as a lead. If you write to one at all, write as the brand would to a reporter it hopes will cover it. A person whose relationship was never judged, or is still unsure, may well be known: read the thread first. If anything in it shows they know us, write as someone who knows them. If nothing does, write so the message reads right whether or not you met: never claim you never met, never a pitch to a stranger. Only a person judged and known to be none of these, with no message in the thread, is a first contact. Never mention these tags, and never say that anyone classified them.",
+  };
+}
+return main;
+})();
+const step_business_role_plan = (function () {
+function main(channel, timeline, relationship, person) {
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const none = { skip: true, questions: {}, state: {} };
+  if (channel?.skipModel === true || channel?.channel !== "whatsapp") return none;
+  const instructions = s(channel?.persona?.instructions);
+  if (!instructions) return none;
+  const bare = (v) => {
+    const t = s(v);
+    if (!t) return null;
+    const d = t.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[\/?#].*$/, "");
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) ? d : null;
+  };
+  const orgs = Array.isArray(timeline?.person?.organizations) ? timeline.person.organizations : [];
+  const org = person?.lead?.organization ?? {};
+  const domain = [
+    ...orgs.map((o) => o?.domain),
+    relationship?.company?.domain,
+    org.primaryDomain,
+    org.websiteUrl,
+    org.domain,
+  ].map(bare).find(Boolean) ?? null;
+  if (!domain) {
+    console.log("[business-role] the sending line states instructions, but no website is known for this person's business: nothing asked");
+    return none;
+  }
+  return {
+    skip: false,
+    domain,
+    questions: {
+      role: { type: "noul", instructions: "Do these instructions of an AI assistant's WhatsApp line ask it to answer AS the business of the person writing to it (that person's own company), rather than as the company that owns the line?", criteria: {"true":"The instructions say the assistant speaks for, plays or demonstrates the writer's own business (their shop, restaurant, company), answering as that business's assistant would.","false":"The instructions only describe the line owner's own assistant, its tone or its rules, or never mention the writer's business."} },
+    },
+    state: { assistantName: s(channel.persona.name), assistantRole: s(channel.persona.role), instructions },
+  };
+}
+return main;
+})();
+const step_business_site_plan = (function () {
+function main(plan, judge, brandId) {
+  if (plan?.skip !== false) return { read: false, skip: true };
+  const yes = judge?.answers?.role?.noul;
+  if (typeof yes !== "number") throw new Error("business-site-plan: Jev returned no answer on the line's instructions: " + JSON.stringify(judge).slice(0, 300));
+  if (yes < 0.5) {
+    console.log("[business-role] the line's instructions do not ask to answer as the writer's business (" + yes.toFixed(2) + ")");
+    return { read: false, skip: true };
+  }
+  console.log("[business-role] the line answers as the writer's business (" + yes.toFixed(2) + "): reading https://" + plan.domain);
+  return { read: true, skip: false, domain: plan.domain, url: "https://" + plan.domain, brandIds: [brandId] };
+}
+return main;
+})();
+const step_business_role = (function () {
+function main(site, scrape) {
+  if (site?.read !== true) return { active: false };
+  const raw = scrape && scrape.ok !== false && typeof scrape?.result?.rawMarkdown === "string" ? scrape.result.rawMarkdown.trim() : "";
+  if (!raw) console.error("[business-role] " + site.domain + " could not be read (" + JSON.stringify(scrape?.error ?? scrape?.status ?? null) + "): the writer answers as that business without its page");
+  const clipped = raw.length > 20000 ? raw.slice(0, 20000) + "..." : raw;
+  return { active: true, domain: site.domain, content: clipped || null };
+}
+return main;
+})();
+const step_compose = (function () {
+function main(person, channel, offer, brand, facts, history, figures, instruction, occurrence, triggerType, trigger, nowIso, currentDate, who, business) {
+  if (channel?.skipModel === true) return { skip: true, systemPrompt: "", message: "" };
+  if (!who || !Array.isArray(who.lines) || !Array.isArray(who.threadLines) || typeof who.strategy !== "string") {
+    throw new Error("compose: who this person is to the brand was not read; nothing is written blind");
+  }
+  const offerName = typeof offer?.name === "string" ? offer.name.trim() : "";
+  if (!offerName) throw new Error("compose: the campaign's offer read carries no name");
+  const b = brand?.brand ?? {};
+  const brandName = typeof b.name === "string" && b.name.trim() ? b.name.trim() : null;
+  if (!brandName) throw new Error("compose: the brand read carries no name");
+  const wa = channel.channel === "whatsapp";
+  const present = (v) => typeof v === "string" ? v.trim() !== "" : v !== null && v !== undefined;
+  const p = person?.lead ?? {};
+  const org = p.organization ?? {};
+  const personLines = [
+    ["Name", [p.firstName, p.lastName].filter(present).join(" ")],
+    ["Email", channel.email],
+    ["Phone", channel.phone],
+    ["Title", p.currentTitle],
+    ["Company", org.name],
+    ["Timezone", person?.timezone],
+  ].filter(([, v]) => present(v)).map(([k, v]) => k + ": " + String(v).trim());
+  const text = typeof instruction === "string" ? instruction.trim() : "";
+  const factLines = whyNowLines(occurrence, triggerType, person?.email, nowIso);
+  // A generic trigger (Lead event) names the fact behind it: what the person actually did.
+  const source = trigger && typeof trigger === "object" && typeof trigger.sourceTriggerId === "string" ? trigger.sourceTriggerId.trim() : "";
+  if (factLines.length && source) factLines.push("The fact behind it: " + source.replace(/_/g, " ") + ".");
+  const exact = facts?.exact ?? [];
+  const neverGive = facts?.neverGive ?? [];
+  const skippedFigures = !figures || figures.notCalled === true;
+  if (!skippedFigures && !Array.isArray(figures.figures)) throw new Error("compose: the figure read returned no figures list");
+  const read = skippedFigures ? [] : figures.figures;
+  const notRead = !skippedFigures && typeof figures.missing === "string" && figures.missing.trim() ? figures.missing.trim() : null;
+  const game = wa ? "THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.\nIt is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an automated message), or when what this WhatsApp message would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, leave message empty, and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).\nIt IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: the message continues the WhatsApp conversation we already have with them, from the same number, so never re-introduce us and never repeat what the thread already says.\nlater is never the end: the person stays followed up at the date you choose." : "THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.\nIt is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an automated email), or when what this email would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, leave subject and bodyHtml empty, and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).\nIt IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: the email is a reply in the thread they wrote in last, so never re-introduce us and never repeat what the thread already says.\nlater is never the end: the person stays followed up at the date you choose.";
+  const nextDate = wa ? "THE NEXT DATE. Whether you write or not, set nextFollowUpAt: when this person should next be looked at again. There is no fixed schedule. Decide it from the history: how many times we already wrote and how recently, whether they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many messages (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). Pick a working day and a working hour in their timezone when you know it. ISO 8601 date-time in UTC, strictly after NOW, at most 365 days away. Say why in nextFollowUpWhy." : "THE NEXT DATE. Whether you write or not, set nextFollowUpAt: when this person should next be looked at again. There is no fixed schedule. Decide it from the history: how many times we already wrote and how recently, whether they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many emails (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). Pick a working day and a working hour in their timezone when you know it. ISO 8601 date-time in UTC, strictly after NOW, at most 365 days away. Say why in nextFollowUpWhy.";
+  const localHour = wa ? "THEIR LOCAL TIME. A WhatsApp message reaches them the moment it is sent. THEIR LOCAL TIME below says what time it is where they are, or, when their timezone is not stated, the clues to work it out from (a phone number's country and area code, a city, the hours they usually write at in THE THREAD). Work out their local time first. Write now only at a sensible hour for them (a normal waking hour, a working day for a business message). Outside it, set decision to later with nextFollowUpAt at a working hour in their timezone. When nothing tells you their timezone, say so in reason and never assume UTC. Any day or time you put in the WhatsApp message is in their timezone, never UTC." : "THEIR LOCAL TIME. A email reaches them the moment it is sent. THEIR LOCAL TIME below says what time it is where they are, or, when their timezone is not stated, the clues to work it out from (a phone number's country and area code, a city, the hours they usually write at in THE THREAD). Work out their local time first. Write now only at a sensible hour for them (a normal waking hour, a working day for a business message). Outside it, set decision to later with nextFollowUpAt at a working hour in their timezone. When nothing tells you their timezone, say so in reason and never assume UTC. Any day or time you put in the email is in their timezone, never UTC.";
+  const localTime = localTimeLines(nowIso, { timezone: person?.timezone, city: p.city, country: p.country, phone: channel.phone ?? person?.phone });
+
+  const systemPrompt = [
+    "You look after ONE current client of " + brandName + ": they already pay us. Something just happened with them, and you decide whether to write to them now or WHEN we next look at them. The thread below is everything that passed between us on every channel, our automatic messages and our transactional emails included.",
+    "THE GAME. A client stays and grows when the service keeps bringing them value: more meetings, people who fit them better, a result they have not noticed yet, a reload before their credit runs dry so nothing stops. Write only when ONE of those is real for them NOW, read from the thread, the events and the facts: a short check-in on what they wanted to get, or one concrete way to get more from what they already use. Never sell them what they already have, never a generic \"how is it going\", never a reminder of an earlier message. Its call to action is the ONE concrete next step that gets them more value now, with its link when the thread or the FACTS hold one, never an open question that leaves them where they are, never a choice between options you list. When the event needs nothing from us, or we wrote recently and they have not answered, choose later.",
+    "Read the thread like the person on our side who knows them. A client who just asked us something (their message, or the form or event that brought this run, is the last word and nobody on our side answered it) is waiting for us right now: write NOW, on any day, since they are there. Answer it when the FACTS or the thread hold the answer; when they do not, escalate (below), never a holding line and never a promise. Never repeat what one of our messages or transactional emails already told them. Everything we already told them stands: build on it and never contradict it. When they talk about who they sell to, reason on THEIR economics (what one client is worth to them, as the thread and their events show it) and suggest only buyers worth enough to them.",
+    wa
+      ? "THE CHANNEL is WhatsApp: the message continues our WhatsApp conversation with them, from the same number, in the language and tone of that conversation. No greeting line of its own, no sign off, plain text, no links unless the facts give one. " + "HOW IT LANDS ON THEIR PHONE: on WhatsApp people text in several short bubbles, never one composed block. Write the message as the bubbles they will receive, in order, separated by ONE EMPTY LINE: each bubble arrives as its own WhatsApp message, a few seconds after the one before. One idea per bubble, casual, as short as a text typed on a phone. Text like a person on their phone: no greeting paragraph, emojis only if the thread uses them. When messages typed by people of the brand are shown, copy their rhythm (bubble count, length, punctuation), never their identity. Usually 2 to 4 bubbles; a one-line answer can be one bubble. A single line break inside a bubble is fine (a short list); an empty line always starts a new bubble. Never an em dash or an en dash."
+      : "THE CHANNEL is email: the email is a reply in the last email thread we have with them, from the same mailbox, so never re-introduce us. Under 120 words. Greet them by first name when you have it. No sign off or signature block: ours is added below your text. bodyHtml is simple HTML, <p> paragraphs only. The subject is short and plain, never \"Re:\" or \"Follow-up\".",
+    // The sending WhatsApp account's own persona (SOPHIE-WA-1016): none = the prompt of before.
+    ...(wa && channel.persona ? personaLines(channel.persona, brandName) : []),
+    // The line answers as the writer's own business (MERCHANT-DEMO-LINE-1103): none = the prompt of before.
+    ...businessRoleLines(business),
+    "Write in the language of the person's own last message to us, their very first message included, whatever language the rest of this prompt or the thread is in. Only when they never wrote to us, use the language of the thread, else of where they live.",
+    "The channel was chosen for you. Their last message may be on another channel (LinkedIn, Telegram, a call): read it, carry on from it, never say where you are writing from or why.",
+    ...(text
+      ? ["You also follow the INSTRUCTION from our client below where it does not contradict these rules."]
+      : []),
+    ...(factLines.length ? ["WHY WE WRITE NOW names the fact that made this message due: what this person did with us, and, when its settings name a step they have not reached since, what they have not done yet (and how long we waited). Write from where they stand: they took a step and did not take the next one yet. Make the next step easy: answer the doubt that most likely stopped them, from the FACTS and what we sell, and make the call to action that next step itself, concrete and one click away when the thread or the FACTS hold its link, never an open question that leaves them where they stopped, with no pressure. Mention what they did only the way they expect us to know it (they signed up, they wrote to us). Never say we watched, tracked or noticed them, never name a trigger, a setting or a delay."] : []),
+    "What they did (opened, clicked, visited, signed up) is for choosing what to say and when, never something to say: never write that you saw them open, click or visit.",
+    "You state only what the FACTS, the FIGURES, the INSTRUCTION or the thread say. What they get from us (a price, free or matched credits, a discount, a trial, a guarantee, any term of signing up) is only what the FACTS state today: an earlier message of ours may name an offer that has ended, so a term the thread holds and the FACTS do not is never repeated. Never invent a figure, a price, a result, a customer, a date, a promise, or where their account or their work with us stands (what was sent, started, ready or decided). A number appears only if it is written there, exactly as written, with what it counts as written: never recomputed, converted, split or added up.",
+    "If the INSTRUCTION asks for something none of those hold (a figure that could not be read), set decision to cannot_write and say in reason what is missing.",
+    "WHAT ONLY THE TEAM DECIDES. Some answers are not yours to give, even when the thread seems to hold pieces of them: a proposal, a plan or options for their account, a price, a budget or terms for them, a yes or a no to something they propose (a sample, a discount, a condition), a change to anything already agreed, and anything a person of our team promised to send or do for them personally. The same when they refer to something you cannot read here (a call, another conversation, a document). When their last message asks for one of these, or the thread shows they are waiting for one from us, set decision to escalate: write nothing to them, put what they asked in question, in their words, and say in reason what the team must decide. The team answers them itself, with what it knows and you do not.",
+    "WHEN THEY ALREADY USE SOMEONE ELSE. When they say they already use, test or work with another company, tool or team for what we offer, a pitch is wasted: someone fully happy there has no reason to switch, and only what is missing there makes us worth their time. So learn before you sell. Ask ONE short, friendly question that finds out whether it fully works for them: what one result costs them there, in the unit of what we offer (per meeting booked, per client, per lead), or what they miss with it. That question is the next step of their path and the one question the message ends on: no comparison yet, no list of what we do better, no call or link to push. Once they answer, compare their result with what the FACTS say we can do for that result, and propose the step that fits only if we do better. When they also asked us to stop, it is a stop like any other. When they say our product or offer was hard to understand or to start, own it in one plain sentence, never defend it and never make it their fault, and offer the easiest way in that the FACTS or the thread hold (we set it up for them, when the FACTS say we do). When they name no one else, none of this applies: never ask who they use.",
+    "If THEY asked something you cannot answer from what you hold (the FACTS, the FIGURES, the thread" + (business && business.active === true ? ", THEIR BUSINESS" : "") + "), or what only the team decides, never guess and never stall with a holding message: set decision to escalate, put what they asked in question, in their words, leave subject, bodyHtml and message empty, and set nextFollowUpAt to when to look again if nobody answered them. The team is told at once and answers them itself.",
+    who.strategy,
+    game,
+    localHour,
+    nextDate,
+    "A NEW FACT DECIDES AGAIN. A next date stated before what just happened (by us, by another campaign, by an earlier look) holds nothing: decide the next date now, from everything the thread, the events and the event below say. When they booked a meeting with us, the goal is that they come to it: the next message is a short, friendly reminder before the meeting starts (the day before or a few hours before, at a sensible hour in their timezone), naming the day and time of the meeting in their timezone, in the thread where they last wrote. Write it now only when now is that moment; otherwise set decision to later with nextFollowUpAt before the meeting starts, never after it. Nothing pushy: no new pitch, nothing they must answer. Say in nextFollowUpWhy that it is the reminder for that meeting.",
+    "STOP only on the client's OWN words asking us to stop writing to them, unsubscribe or never write again. Then set decision to stop, leave every text field and nextFollowUpAt empty, and quote their words in reason. A complaint, a \"not now\" or a quiet stretch is NOT a stop: answer what they said, or choose later. Silence is never a reason to stop.",
+    "Write like a person who knows them: short, plain, warm, one idea per sentence. No filler, no \"I hope this finds you well\".",
+    "Never use an em dash or an en dash. Use a comma or a period.",
+    wa ? "Fill message; leave subject and bodyHtml empty." : "Fill subject and bodyHtml; leave message empty.",
+  ].join("\n");
+
+  const message = [
+    "NOW: " + String(nowIso) + " (" + stampAt(nowIso, null) + "; their own local time is under THEIR LOCAL TIME)",
+    "CHANNEL: " + channel.channel + ". " + String(channel.why ?? ""),
+    "Messages of ours on record: " + String(history?.ourMessages ?? 0) + ". Our last: " + String(history?.lastOursAt ?? "unknown") + ". Their last message: " + String(history?.lastTheirsAt ?? "never") + ".",
+    ...(text ? ["", "INSTRUCTION from our client:", text] : []),
+    ...(factLines.length ? ["", "WHY WE WRITE NOW:", ...factLines] : []),
+    ...(itemLines(trigger).length ? ["", "WHAT THE EVENT CARRIES (its own record, never quote it as ours):", ...itemLines(trigger)] : []),
+    "",
+    "THEIR LOCAL TIME:",
+    ...localTime,
+    "",
+    "WHO WE WRITE TO:",
+    ...(personLines.length ? personLines : ["(nothing beyond how to reach them)"]),
+    "",
+    "WHO THEY ARE TO US:",
+    ...who.lines,
+    "",
+    "THE THREAD with this person, every channel, oldest first:",
+    ...(who.olderMessagesOmitted > 0 ? ["(" + who.olderMessagesOmitted + " older messages not shown)"] : []),
+    ...(who.threadLines.length ? who.threadLines : ["(no message ever exchanged)"]),
+    ...(who.eventLines?.length ? ["", "RECENT EVENTS:", ...who.eventLines] : []),
+    ...(history?.lines?.length ? ["", "WHAT WE SENT AND WHAT THEY DID, oldest first:", ...history.lines] : []),
+    "",
+    "WHO WE ARE: " + brandName + ", offer \"" + offerName + "\".",
+    "",
+    ...(read.length || notRead ? ["FIGURES read for this message (their own account, or public):",
+      ...read.map((f, i) => "F" + (i + 1) + ". " + f.label + ": " + f.value + " (source: " + f.source + ")"),
+      ...(notRead ? ["NOT READABLE: " + notRead] : []), ""] : []),
+    "FACTS our client told us:",
+    ...(exact.length ? exact.map((f) => f.id + ". " + f.label + ": " + f.value) : ["(none)"]),
+    ...(neverGive.length ? ["", "NEVER offer or promise any of these, whole or in part:", ...neverGive.map((x) => "- " + x)] : []),
+    ...businessMessageLines(business),
+  ].join("\n");
+
+  return { skip: false, systemPrompt, message };
+}
+
+function whyNowLines(occurrence, triggerType, claimedEmail, nowIso) {
+  if (!occurrence || occurrence.skipTriggerRead === true || !occurrence.triggerId) return [];
+  const t = triggerType && typeof triggerType === "object" && triggerType.notCalled !== true ? triggerType : null;
+  if (!t || typeof t.name !== "string") throw new Error("why-now: the trigger " + occurrence.triggerId + " this run answers was not read; nothing is written blind");
+  const fold = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim().toLowerCase() : null);
+  const params = t.params && typeof t.params === "object" ? Object.entries(t.params) : [];
+  const lines = ["Trigger: " + t.name + (typeof t.line === "string" && t.line.trim() ? ": " + t.line.trim() : "")];
+  if (typeof t.fromStepName === "string" && t.fromStepName.trim()) lines.push("It starts when the person reaches: " + t.fromStepName.trim());
+  if (params.length) lines.push("Its settings: " + params.map(([k, v]) => k + " = " + (typeof v === "string" ? v : JSON.stringify(v))).join(", "));
+  const named = fold(occurrence.person?.email);
+  if (named && named === fold(claimedEmail)) {
+    lines.push("It fired for THIS person just now (" + String(nowIso) + ").");
+  } else {
+    lines.push("This person is owed a message because of this same trigger.");
+  }
+  return lines;
+}
+
+function localTimeLines(nowIso, clues) {
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const city = [s(clues?.city), s(clues?.country)].filter(Boolean).join(", ");
+  const places = [...(city ? [{ label: "their city", value: city }] : []), ...(Array.isArray(clues?.places) ? clues.places : [])];
+  return nowLines(nowIso, { timezone: clues?.timezone, places, phone: clues?.phone });
+}
+function validTimeZone(tz) {
+  if (typeof tz !== "string" || tz.trim() === "") return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz.trim() }).format(new Date(0));
+    return tz.trim();
+  } catch {
+    return null;
+  }
+}
+function utcOffsetOf(at, tz) {
+  const parts = {};
+  for (const p of new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(at)) {
+    parts[p.type] = p.value;
+  }
+  const asUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));
+  const minutes = Math.round((asUtc - Math.floor(at.getTime() / 1000) * 1000) / 60000);
+  const abs = Math.abs(minutes);
+  return "UTC" + (minutes < 0 ? "-" : "+") + String(Math.floor(abs / 60)).padStart(2, "0") + ":" + String(abs % 60).padStart(2, "0");
+}
+function fullDateTime(at, tz) {
+  const zone = validTimeZone(tz);
+  const day = (z) => new Intl.DateTimeFormat("en-US", { timeZone: z, weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(at);
+  if (!zone) {
+    const hm = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
+    return day("UTC") + ", " + hm + " UTC";
+  }
+  const hm = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit", hour12: true }).format(at);
+  return day(zone) + ", " + hm + " " + zone + " (" + utcOffsetOf(at, zone) + ")";
+}
+function stampAt(iso, tz) {
+  const at = new Date(String(iso ?? ""));
+  return Number.isFinite(at.getTime()) ? fullDateTime(at, tz) : null;
+}
+function nowLines(nowIso, clues) {
+  const parsed = new Date(String(nowIso ?? ""));
+  const at = Number.isFinite(parsed.getTime()) ? parsed : new Date();
+  const zone = validTimeZone(clues?.timezone);
+  if (zone) {
+    return ["Now, where they are: " + fullDateTime(at, zone) + ". In UTC: " + fullDateTime(at, null) + "."];
+  }
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const held = [
+    ...(Array.isArray(clues?.places) ? clues.places : []).filter((p) => s(p?.value)).map((p) => p.label + ": " + s(p.value)),
+    s(clues?.timezone) ? "timezone as written (not a zone we can read): " + s(clues.timezone) : null,
+    s(clues?.phone) ? "phone: " + s(clues.phone) : null,
+  ].filter(Boolean);
+  return [
+    "Now, in UTC: " + fullDateTime(at, null) + ".",
+    "Their timezone is unknown: nothing we hold states it.",
+    held.length
+      ? "Where they may be, from what we hold: " + held.join("; ") + ". Work out their likely timezone from these, and write any day or time you give them in it, naming the zone. Never assume UTC."
+      : "Nothing we hold says where they are (no city, no company location, no phone). Judge it from the hours they write at in the conversation, and name the zone of any time you give them. Never assume UTC.",
+  ];
+}
+
+function itemLines(trigger) {
+  const item = trigger && typeof trigger === "object" && trigger.item && typeof trigger.item === "object" ? trigger.item : null;
+  if (!item) return [];
+  const text = JSON.stringify(item, null, 1).replace(/[\u2013\u2014]/g, ",");
+  if (!text || text === "{}") return [];
+  return [text.length > 3000 ? text.slice(0, 3000) + "..." : text];
+}
+
+function senderPersona(reach) {
+  const p = reach && typeof reach === "object" && reach.persona && typeof reach.persona === "object" ? reach.persona : null;
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  if (!p || !s(p.name)) return null;
+  return { name: s(p.name), role: s(p.role), instructions: s(p.instructions) };
+}
+
+function personaLines(persona, brandName) {
+  return [
+    "WHO YOU ARE: you are " + persona.name + (persona.role ? ", " + persona.role : "") + " at " + brandName + ". You write from " + brandName + "'s WhatsApp number as yourself, " + persona.name + ": never as anyone else, never imitating how someone else at " + brandName + " writes.",
+    "Present yourself exactly as your role says. If your role says you are an AI or an assistant, never say or imply you are a human, and if they ask, say plainly what you are.",
+    "Messages in the thread typed by someone else at " + brandName + " are part of the history, never a model of how you write. Where a line says to write the way the owner or the founder would, write as yourself, in your own voice, keeping the relationship and its language.",
+    ...(persona.instructions ? ["YOUR OWN INSTRUCTIONS (how you write and present yourself; they win over any other line about style or tone):", persona.instructions] : []),
+  ];
+}
+
+function businessRoleLines(business) {
+  if (!business || business.active !== true) return [];
+  return [
+    "THEIR BUSINESS: your own instructions ask you to answer as the business of the person writing, and that business is " + business.domain + ". In this message you are that business's assistant: answer what they asked the way that business's assistant would answer one of its customers, from THEIR BUSINESS below (read live from its site). Name it as its own site names it.",
+    "In that role the FACTS about us and our offer are not what you answer from, and you never sell our offer in this message. Never invent a price, an opening hour, a product or a policy: state only what THEIR BUSINESS shows, exactly as written.",
+  ];
+}
+
+function businessMessageLines(business) {
+  if (!business || business.active !== true) return [];
+  return [
+    "",
+    "THEIR BUSINESS (" + business.domain + ", read live from its site; the only source when you answer as it):",
+    business.content ?? "(the site could not be read: nothing about this business is known)",
+  ];
+}
+return main;
+})();
+const step_copilot_turn_plan = (function () {
+function main(person, channel, trigger) {
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const medium = channel?.channel === "whatsapp" ? "whatsapp" : channel?.channel === "email" ? "email" : null;
+  if (!medium) return { skip: true };
+  const lead = person?.lead ?? {};
+  const data = lead.data && typeof lead.data === "object" ? lead.data : {};
+  const name = [s(lead.firstName) ?? s(data.firstName), s(lead.lastName) ?? s(data.lastName)].filter(Boolean).join(" ") || null;
+  const p = channel?.persona && typeof channel.persona === "object" ? channel.persona : null;
+  const key = s(person?.sendKey);
+  if (!key) throw new Error("copilot-turn-plan: the resolved person carries no send key");
+  return {
+    skip: false,
+    medium,
+    recipient: { email: s(channel?.email) ?? s(person?.email), phone: s(channel?.phone) ?? s(person?.phone), name },
+    assistant: p && s(p.name) ? { name: s(p.name), role: s(p.role), instructions: s(p.instructions) } : null,
+    messageField: medium === "whatsapp" ? "message" : "bodyHtml",
+    idempotencyKey: "copilot-lead-turn:" + key,
+    occurrenceItem: trigger && typeof trigger === "object" && trigger.item && typeof trigger.item === "object" && !Array.isArray(trigger.item) ? trigger.item : null,
+  };
+}
+return main;
+})();
+const step_finalize = (function () {
+function main(draft, person, channel, campaignId) {
+  if (channel?.skipModel === true) return { decision: "none", skipWhatsapp: true, skipEmail: true, whatsappBody: {} };
+  const json = draft?.json ?? {};
+  const none = { skipWhatsapp: true, skipEmail: true, whatsappBody: {} };
+  if (json.decision === "cannot_write") {
+    console.error("[follow-up] the instruction cannot be written from what we hold; nothing is sent. Missing: " + JSON.stringify(json.reason ?? null));
+    return { decision: "cannot_write", reason: String(json.reason ?? ""), ...none };
+  }
+  if (json.decision === "stop") {
+    console.log("[follow-up] the person's own words end the follow-ups: " + JSON.stringify(json.reason ?? null));
+    return { decision: "stop", reason: String(json.reason ?? ""), ...none };
+  }
+  if (json.decision === "escalate") {
+    const question = String(json.question ?? "").trim();
+    if (!question) throw new Error("finalize: decision escalate with no question");
+    const later = nextDate(json, "finalize");
+    console.log("[follow-up] they asked what we cannot answer, nothing is sent to them; the team is told. Asked: " + JSON.stringify(question));
+    return { decision: "escalate", question, ...later, reason: String(json.reason ?? ""), ...none };
+  }
+  if (json.decision === "later") {
+    const later = nextDate(json, "finalize");
+    console.log("[follow-up] not the right moment, nothing is sent; next look at " + later.nextFollowUpAt + ": " + later.nextFollowUpWhy);
+    return { decision: "later", ...later, reason: String(json.reason ?? ""), ...none };
+  }
+  if (json.decision !== "write") throw new Error("finalize: unknown decision " + JSON.stringify(json.decision));
+  const undash = (s) => String(s ?? "")
+    .replace(/&(mdash|ndash);|&#(8212|8211|x2014|x2013);/gi, (m) => (/mdash|8212|2014/i.test(m) ? "\u2014" : "\u2013"))
+    .replace(/(\d)\s*[\u2013\u2014]\s*(?=\d)/g, "$1-")
+    .replace(/\s*[\u2013\u2014]\s*/g, ", ")
+    .trim();
+  const next = nextDate(json, "finalize");
+  if (channel.channel === "whatsapp") {
+    const text = undash(json.message);
+    if (!text) throw new Error("finalize: decision write on WhatsApp with an empty message");
+    if (text !== String(json.message ?? "").trim()) console.error("[follow-up] the draft used a dash the person must never read; rewritten before the send");
+    // Several bubbles = crm-service's `messages` (WA-BUBBLES-1023), one = `text` as before.
+    const whatsappBody = { brandId: person.brandId, ...bubbleSendFields(text), idempotencyKey: person.sendKey };
+    if (channel.email) whatsappBody.email = channel.email;
+    if (channel.phone) whatsappBody.phone = channel.phone;
+    if (channel.fromAccount) whatsappBody.fromAccount = channel.fromAccount;
+    // The message the Copilot's answer quotes goes out as a WhatsApp « Reply » (SOPHIE-WA-HUMAN-1106); none = as before.
+    const quoted = typeof json.replyToEventId === "string" ? json.replyToEventId.trim() : "";
+    if (quoted) whatsappBody.replyToEventId = quoted;
+    return { decision: "write", channel: "whatsapp", ...next, skipWhatsapp: false, skipEmail: true, whatsappBody };
+  }
+  if (channel.channel !== "email") throw new Error("finalize: no transport for channel " + JSON.stringify(channel.channel));
+  const subject = undash(json.subject);
+  const bodyHtml = undash(json.bodyHtml);
+  if (!subject || !bodyHtml) throw new Error("finalize: decision write by email with an empty subject or body");
+  if (subject !== String(json.subject ?? "").trim() || bodyHtml !== String(json.bodyHtml ?? "").trim()) {
+    console.error("[follow-up] the draft used a dash the person must never read; rewritten before the send");
+  }
+  return {
+    decision: "write",
+    channel: "email",
+    ...next,
+    skipWhatsapp: true,
+    skipEmail: false,
+    whatsappBody: {},
+    to: channel.email,
+    subject,
+    sequence: [{ step: 1, bodyHtml, daysSinceLastStep: 0 }],
+    idempotencyKey: person.sendKey,
+  };
+}
+
+function nextDate(json, label) {
+  const at = Date.parse(String(json?.nextFollowUpAt ?? ""));
+  if (!Number.isFinite(at)) throw new Error(label + ": the next follow-up date is not a date: " + JSON.stringify(json?.nextFollowUpAt));
+  if (at <= Date.now()) throw new Error(label + ": the next follow-up date is not in the future: " + JSON.stringify(json?.nextFollowUpAt));
+  // A date beyond the year lead-service accepts is brought back to that year's end (a deterministic cleanup of a
+  // trusted writer's output, never a refusal: "in a year" written as the same day next year is a few hours too far).
+  const max = Date.now() + 365 * 86400000 - 3600000;
+  return { nextFollowUpAt: new Date(Math.min(at, max)).toISOString(), nextFollowUpWhy: String(json?.nextFollowUpWhy ?? "") };
+}
+
+function bubbleSendFields(text) {
+  const all = bubblesOf(text);
+  if (all.length <= 1) return { text: all[0] ?? "" };
+  if (all.length <= 5) return { messages: all };
+  return { messages: [...all.slice(0, 5 - 1), all.slice(5 - 1).join("\n\n")] };
+}
+
+function bubblesOf(text) {
+  return String(text ?? "").replace(/\r\n/g, "\n").split(/\n[ \t]*\n/).map((b) => b.trim()).filter((b) => b !== "");
+}
+return main;
+})();
+const step_compose_rep_alert = (function () {
+function main(final, person, channel, brand, timeline) {
+  if (final?.decision !== "escalate") return { skip: true };
+  const repPhone = typeof brand?.brand?.salesRepPhone === "string" && brand.brand.salesRepPhone.trim() ? brand.brand.salesRepPhone.trim() : null;
+  const theirPhone = channel?.phone ?? person?.phone ?? null;
+  const theirEmail = channel?.email ?? person?.email ?? null;
+  if (!repPhone) {
+    console.error("[follow-up] handed " + String(theirEmail ?? theirPhone ?? "a person") + " to the team, but the brand states no sales rep phone: NOBODY was alerted on WhatsApp");
+    return { skip: true, reason: "no_sales_rep_phone" };
+  }
+  const items = Array.isArray(timeline?.items) ? timeline.items : [];
+  const lastTheirs = [...items].reverse().find((i) => i?.kind === "message" && i.direction === "inbound") ?? null;
+  const where = String(lastTheirs?.channel ?? channel?.channel ?? "a channel");
+  const lead = person?.lead ?? {};
+  const name = [lead.firstName, lead.lastName].filter((v) => typeof v === "string" && v.trim()).join(" ") || timeline?.person?.name || null;
+  const who = (name ?? theirEmail ?? theirPhone ?? "Someone") + (theirPhone ? " (" + theirPhone + ")" : theirEmail && name ? " (" + theirEmail + ")" : "");
+  const text = [
+    "Needs your call: " + who + " wrote on " + where + " and I could not answer.",
+    "They asked: \"" + final.question + "\"",
+    "I sent them nothing. Please reply to them yourself.",
+  ].join("\n\n");
+  return { skip: false, phone: repPhone, text, idempotencyKey: String(person.sendKey) + ":rep-alert" };
+}
+return main;
+})();
+const step_outcome = (function () {
+function main(person, plan, channel, final, sendWhatsapp, sendEmail, nowIso) {
+  const PASSING = ["brand_sequence_queued","recent_brand_contact","google_send_permission_missing"];
+  const R = {"sent":"follow_up_sent","later":"follow_up_later","queued":"follow_up_queued","notYet":"follow_up_not_yet","notOwed":"follow_up_not_owed","stopped":"follow_up_stopped","refused":"follow_up_refused","noChannel":"follow_up_no_channel","notWritable":"instruction_not_writable","escalated":"follow_up_escalated","notToBrand":"follow_up_stated_not_to_brand"};
+  const now = Date.parse(String(nowIso));
+  const skipAll = { skipSetDate: true, skipStop: true, skipRow: true, setDateBody: {}, stopBody: {}, rowBody: {}, delivery: null };
+  if (person?.ok !== true) return { endKind: person?.endKind ?? "idle", ...skipAll };
+  const row = (reason) => person.entry === "claimed" ? { skipRow: false, rowBody: { kind: "stopped", reason } } : { skipRow: true, rowBody: {} };
+  // lead-service's statements (idempotent there on the run and the body): a date, with the send it follows when one
+  // went out, or a stop in the person's own words.
+  const date = (at, why, sent) => ({
+    skipSetDate: false,
+    setDateBody: { nextFollowupAt: at, reason: String(why ?? "").slice(0, 500) || "next look", ...(sent ? { sent: { channel: sent } } : {}) },
+    skipStop: true,
+    stopBody: {},
+  });
+  const stop = (why) => ({
+    skipSetDate: true,
+    setDateBody: {},
+    skipStop: false,
+    stopBody: { stop: { reason: String(why ?? "").slice(0, 1000) || "stopped" } },
+  });
+  if (plan?.kind === "stop") return { endKind: "not_owed", ...row(R.notOwed), skipSetDate: true, setDateBody: {}, skipStop: true, stopBody: {}, delivery: null };
+  if (plan?.kind === "not_yet") return { endKind: "not_yet", ...row(R.notYet), ...date(plan.nextFollowUpAt, plan.nextFollowUpWhy), delivery: null };
+  if (plan?.kind === "queued") return { endKind: "queued", ...row(R.queued), ...date(plan.nextFollowUpAt, plan.nextFollowUpWhy), delivery: null };
+  // The brand stated this person is not someone of theirs (DUALIST-WA-SILENCE-1104): nothing sent anywhere, no
+  // delivery attempted, looked at again later (the statement can be undone), and a claimed occurrence is not admitted.
+  const notToBrand = () => ({
+    endKind: "not_to_brand",
+    ...row(R.notToBrand),
+    ...date(new Date(now + 30 * 86400000).toISOString(), "The brand stated this person is not someone of theirs: nothing is sent while that stands"),
+    delivery: null,
+    ...(person.entry === "claimed" ? { notAdmitted: { reason: "stated_not_to_brand" } } : {}),
+  });
+  if (channel?.notToBrand === true) return notToBrand();
+  if (channel?.noChannel === true) {
+    const at = new Date(now + 30 * 86400000).toISOString();
+    return { endKind: "no_channel", ...row(R.noChannel), ...date(at, "No route can write to them now: " + channel.why),
+      delivery: { state: "refused", code: "no_channel", reason: "Nothing can be sent to this person: " + channel.why } };
+  }
+  const d = final?.decision;
+  if (d === "cannot_write") {
+    return { endKind: "not_writable", ...row(R.notWritable), skipSetDate: true, setDateBody: {}, skipStop: true, stopBody: {},
+      delivery: { state: "refused", code: R.notWritable, reason: final.reason || "The message could not be written from what we hold." } };
+  }
+  if (d === "stop") return { endKind: "stopped", ...row(R.stopped), ...stop("Their own words: " + final.reason), delivery: null };
+  if (d === "later") return { endKind: "later", ...row(R.later), ...date(final.nextFollowUpAt, final.nextFollowUpWhy), delivery: null };
+  // Nothing sent to them: the team is told (alert-rep) and answers them; the next look waits for that.
+  if (d === "escalate") return { endKind: "escalated", ...row(R.escalated), ...date(final.nextFollowUpAt, "Handed to the team, they asked: " + final.question), delivery: null };
+  if (d !== "write") throw new Error("outcome: no decision to act on: " + JSON.stringify(final).slice(0, 200));
+  const send = final.channel === "whatsapp" ? sendWhatsapp : sendEmail;
+  if (!send || send.notCalled === true) throw new Error("outcome: the " + final.channel + " send did not run");
+  if (send.skipped !== true) {
+    return { endKind: "sent", ...row(R.sent), ...date(final.nextFollowUpAt, final.nextFollowUpWhy, final.channel), delivery: { state: "delivered" } };
+  }
+  const code = String(send.code ?? "refused");
+  // The brand's statement, refused by crm-service (WhatsApp) or by the email sender (DUALIST-WA-SILENCE-EMAIL-1104).
+  if (code === "stated_not_to_brand") return notToBrand();
+  const refused = { state: "refused", code, reason: typeof send.reason === "string" ? send.reason : code };
+  // Their address failed the sender's verification: no email route now, looked at again later, never a stop.
+  if (final.channel === "email" && ["email_not_verified"].includes(code)) {
+    const at = new Date(now + 30 * 86400000).toISOString();
+    return { endKind: "refused_kept", ...row(R.refused), ...date(at, "Not sent (" + code + "): their email address did not pass verification"), delivery: refused };
+  }
+  // A refusal on WhatsApp is about the channel (reach changed since the check), never about the person: kept.
+  // By email, a passing refusal keeps them (a queued step, a live thread); any other says they are out.
+  if (final.channel === "whatsapp" || PASSING.includes(code)) {
+    return { endKind: "refused_kept", ...row(R.refused), ...date(final.nextFollowUpAt, "Not sent (" + code + "); " + final.nextFollowUpWhy), delivery: refused };
+  }
+  return { endKind: "refused_final", ...row(R.refused), ...stop("The send was refused: " + code), delivery: refused };
+}
+return main;
+})();
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const R: any = ctx.request ?? {};
+  if (typeof R.now !== "string" || !R.now) throw new Error("the run carries no clock (request.now)");
+  NOW_MS = RealDate.parse(R.now);
+  TRIGGER = R.trigger ?? null;
+  const START = R;
+  const flow_input: any = {
+    campaignId: R.campaignId ?? null,
+    runId: R.runId ?? null,
+    trigger: R.trigger ?? null,
+    currentDate: R.now.slice(0, 10),
+    brandId: Array.isArray(R.brandIds) ? R.brandIds.join(",") : (R.brandId ?? null),
+    featureSlug: R.featureSlug ?? null,
+  };
+  const results: any = {};
+  // gate_check: the Engine runner's
+  results.start_run = START;
+  results.occurrence = step_occurrence((flow_input.trigger), (results.start_run?.brief), (results.start_run?.reactive));
+  results.trigger_type = callStep(ctx, "features.trigger", { service: "features", method: "GET", path: "/internal/catalogue/triggers/{id}", params: (({id: results.occurrence?.triggerId})), skip: (results.occurrence?.skipTriggerRead), rename: {"id":"triggerId"} }, 2);
+  results.claim_person = step_claim_person((flow_input.trigger));
+  results.claim_followup = callStep(ctx, "lead.followup.claim", { service: "lead", method: "POST", path: "/orgs/campaigns/{campaignId}/followups/claim-next", params: (({campaignId: flow_input.campaignId})), body: (({...{"relationships":"current_client"}, person: results.claim_person?.person})), skip: (results.claim_person?.skipClaim) }, 0);
+  results.claim_plan = step_claim_plan((results.claim_followup));
+  results.lead_detail = callStep(ctx, "lead.detail", { service: "lead", method: "GET", path: "/orgs/leads/{id}", params: (({id: results.claim_followup?.followup?.id})), query: (({campaignId: flow_input.campaignId})), skip: (results.claim_plan?.skipDetail) }, 3);
+  results.resolve_person = step_resolve_person((results.claim_followup), (results.lead_detail), (flow_input.trigger));
+  results.now = step_now();
+  // pipe_of_run: the Engine runner's (left out)
+  // declare_consumed_lead: the Engine runner's (left out)
+  results.followup_state = callStep(ctx, "lead.followup_date.read", { service: "lead", method: "GET", path: "/orgs/leads/{id}/followup-date", params: (({id: results.resolve_person?.rowId})), query: (({brandId: results.resolve_person?.brandId})), skip: (results.resolve_person?.skipState) }, 2);
+  results.read_state = step_read_state((results.resolve_person), (results.followup_state), (results.now?.now));
+  results.person_thread_query = step_person_thread_query((results.resolve_person), (results.read_state));
+  results.person_thread = callStep(ctx, "crm.person.thread", { service: "crm", method: "GET", path: "/orgs/people/timeline", query: (results.person_thread_query?.query), skip: (results.person_thread_query?.skip), tolerateFailure: true, pollWhile: {"field":"factFeed.settled","equals":false,"intervalSeconds":10,"timeoutSeconds":180,"throwWhenTimedOut":true} }, 3);
+  results.reach_body = step_reach_body((results.resolve_person), (results.read_state));
+  results.reach_check = callStep(ctx, "crm.whatsapp.reach", { service: "crm", method: "POST", path: "/orgs/whatsapp/reach", body: (((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) && !b.fromLine && !b.fromAccountType ? { ...b, fromAccount: f.trim() } : b))(results.reach_body?.body, results.start_run?.whatsappSenderPhone)), skip: (results.reach_body?.skip) }, 2);
+  results.channel_plan = step_channel_plan((results.resolve_person), (results.read_state), (results.reach_check), (results.person_thread));
+  results.offer_economics = callStep(ctx, "brand.offer.economics", { service: "brand", method: "GET", path: "/internal/offers/{offerId}/economics", params: (({offerId: results.start_run?.offerId})), skip: (results.channel_plan?.skipModel) }, 3);
+  results.brand_profile = callStep(ctx, "brand.profile", { service: "brand", method: "GET", path: "/internal/brands/{id}", params: (({id: results.resolve_person?.brandId})), skip: (results.channel_plan?.skipModel) }, 3);
+  results.offer_answers = callStep(ctx, "brand.offer.answers", { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/answers", params: (({brandId: results.resolve_person?.brandId, offerId: results.start_run?.offerId})), skip: (results.channel_plan?.skipModel) }, 3);
+  results.offer_user_fields = callStep(ctx, "brand.offer.fields", { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/user-fields", params: (({brandId: results.resolve_person?.brandId, offerId: results.start_run?.offerId})), skip: (results.channel_plan?.skipModel) }, 3);
+  results.brand_user_fields = callStep(ctx, "brand.fields", { service: "brand", method: "GET", path: "/orgs/brands/{brandId}/user-fields", params: (({brandId: results.resolve_person?.brandId})), skip: (results.channel_plan?.skipModel), tolerateFailure: true }, 3);
+  results.gather_facts = step_gather_facts((results.channel_plan), (results.offer_answers), (results.offer_user_fields), (results.brand_user_fields));
+  results.history_read = callStep(ctx, "lead.history", { service: "lead", method: "GET", path: "/orgs/leads/{id}/history", params: (({id: results.resolve_person?.rowId})), query: (({...{"scope":"brand"}, brandId: results.resolve_person?.brandId})), skip: (results.channel_plan?.skipModel) }, 2);
+  results.person_history = step_person_history((results.channel_plan), (results.history_read));
+  results.relationship_read = callStep(ctx, "lead.relationship", { service: "lead", method: "GET", path: "/orgs/leads/{id}/relationship", params: (({id: results.resolve_person?.rowId})), query: (({brandId: results.resolve_person?.brandId})), skip: (results.channel_plan?.skipModel), tolerateFailure: true }, 3);
+  results.who_they_are = step_who_they_are((results.relationship_read), undefined, (results.person_thread));
+  results.business_role_plan = step_business_role_plan((results.channel_plan), (results.person_thread), (results.relationship_read), (results.resolve_person));
+  results.business_role_judge = callStep(ctx, "chat.judgment", { service: "chat", method: "POST", path: "/orgs/judgments", body: (((b, r, h) => ((brief, s) => (!brief || !b || typeof b !== "object") ? b : typeof s === "string" ? (s.includes(brief) ? b : { ...b, state: s + "\n\n" + h + "\n" + brief }) : Array.isArray(s) ? { ...b, state: { items: s, campaignBrief: brief } } : (s && typeof s === "object") ? { ...b, state: { ...s, campaignBrief: brief } } : b)((typeof r === "string" ? r.trim() : ""), (b && typeof b === "object") ? b.state : undefined))(({state: results.business_role_plan?.state, questions: results.business_role_plan?.questions}), results.start_run?.brief, "THE CAMPAIGN'S BRIEF (written by our client for this whole campaign, verbatim; it was written without knowing this person, so where it assumes something the rest of this prompt, the thread or who they are to us contradicts, those win):")), skip: (results.business_role_plan?.skip) }, 1);
+  results.business_site_plan = step_business_site_plan((results.business_role_plan), (results.business_role_judge), (results.resolve_person?.brandId));
+  results.business_site_read = callStep(ctx, "scraping.page", { service: "scraping", method: "POST", path: "/scrape", body: (({...{"enrich":false,"featureSlug":"ai-follow-up-email"}, url: results.business_site_plan?.url, brandIds: results.business_site_plan?.brandIds, campaignId: flow_input.campaignId, workflowSlug: flow_input.workflowSlug})), skip: (results.business_site_plan?.skip), tolerateFailure: true }, 0);
+  results.business_role = step_business_role((results.business_site_plan), (results.business_site_read));
+  results.compose = step_compose((results.resolve_person), (results.channel_plan), (results.offer_economics), (results.brand_profile), (results.gather_facts), (results.person_history), undefined, (results.start_run?.brief), (results.occurrence), (results.trigger_type), (flow_input.trigger), (results.now?.now), (flow_input.currentDate), (results.who_they_are), (results.business_role));
+  results.copilot_turn_plan = step_copilot_turn_plan((results.resolve_person), (results.channel_plan), (flow_input.trigger));
+  results.draft = callStep(ctx, "chat.copilot.lead_turn", { service: "chat", method: "POST", path: "/internal/copilot/lead-turns", body: (((b, r, h) => ((brief, sys, msg) => (!brief || !b || typeof b !== "object" || sys.includes(brief) || msg.includes(brief)) ? b : { ...b, systemPrompt: (sys ? sys + "\n\n" : "") + h + "\n" + brief })((typeof r === "string" ? r.trim() : ""), (b && typeof b.systemPrompt === "string") ? b.systemPrompt : "", (b && typeof b.message === "string") ? b.message : ""))(({...{"responseSchema":{"type":"object","additionalProperties":false,"properties":{"decision":{"type":"string","enum":["write","later","stop","cannot_write","escalate"]},"subject":{"type":"string","description":"Email only: the subject line. Empty on WhatsApp and unless decision is write."},"bodyHtml":{"type":"string","description":"Email only: the body as simple HTML paragraphs. Empty on WhatsApp and unless decision is write."},"message":{"type":"string","description":"WhatsApp only: the plain text message, its bubbles in order separated by one empty line. Empty on email and unless decision is write."},"nextFollowUpAt":{"type":"string","description":"When the NEXT follow-up is due (decision write or later), ISO 8601 date-time in UTC, strictly after now. Empty when decision is stop."},"nextFollowUpWhy":{"type":"string","description":"One sentence: why that date, from the history."},"reason":{"type":"string","description":"One sentence: what the message does, why now is not the moment, (stop) the person's own words that end the follow-ups, (cannot_write) what is missing, or (escalate) why it cannot be answered from what we hold."},"question":{"type":"string","description":"Escalate only: what they asked that you cannot answer or that only the team decides, in their own words. Empty otherwise."}},"required":["decision","subject","bodyHtml","message","nextFollowUpAt","nextFollowUpWhy","reason","question"]}}, message: results.compose?.message, systemPrompt: results.compose?.systemPrompt, brandId: results.resolve_person?.brandId, medium: results.copilot_turn_plan?.medium, recipient: results.copilot_turn_plan?.recipient, assistant: results.copilot_turn_plan?.assistant, messageField: results.copilot_turn_plan?.messageField, idempotencyKey: results.copilot_turn_plan?.idempotencyKey, occurrenceItem: results.copilot_turn_plan?.occurrenceItem}), results.start_run?.brief, "THE CAMPAIGN'S BRIEF (written by our client for this whole campaign, verbatim; it was written without knowing this person, so where it assumes something the rest of this prompt, the thread or who they are to us contradicts, those win):")), skip: (results.compose?.skip) }, 0);
+  results.finalize = step_finalize((results.draft), (results.resolve_person), (results.channel_plan), (flow_input.campaignId));
+  results.send_whatsapp = callStep(ctx, "crm.whatsapp.send", { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", body: (((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) && !b.fromLine && !b.fromAccountType ? { ...b, fromAccount: f.trim() } : b))(results.finalize?.whatsappBody, results.start_run?.whatsappSenderPhone)), skip: (results.finalize?.skipWhatsapp), skipOnRefusalCodes: ["whatsapp_not_linked","whatsapp_not_connected","no_phone_known","not_on_whatsapp","person_replied","automation_not_allowed","human_in_conversation","stated_not_to_brand"] }, 0);
+  results.send_email = callStep(ctx, "email.send", { service: "email-gateway", method: "POST", path: "/orgs/send", body: (({...{"type":"broadcast","tag":"follow-up","followUp":true}, to: results.finalize?.to, subject: results.finalize?.subject, sequence: results.finalize?.sequence, idempotencyKey: results.finalize?.idempotencyKey, leadId: results.resolve_person?.leadId, campaignId: flow_input.campaignId, workflowSlug: results.start_run?.workflowSlug, timezone: results.resolve_person?.timezone})), skip: (results.finalize?.skipEmail), skipOnRefusalCodes: ["recent_brand_contact","lead_opted_out","stated_not_to_brand","brand_sequence_queued","google_send_permission_missing","lead_not_a_prospect","email_not_verified"], validateResponse: {"field":"success","equals":true} }, 0);
+  results.compose_rep_alert = step_compose_rep_alert((results.finalize), (results.resolve_person), (results.channel_plan), (results.brand_profile), (results.person_thread));
+  results.alert_rep = callStep(ctx, "crm.whatsapp.send", { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", body: (((b, f) => (typeof f === "string" && f.trim() && b && typeof b === "object" && !Array.isArray(b) && !b.fromLine && !b.fromAccountType ? { ...b, fromAccount: f.trim() } : b))(({phone: results.compose_rep_alert?.phone, brandId: results.resolve_person?.brandId, text: results.compose_rep_alert?.text, idempotencyKey: results.compose_rep_alert?.idempotencyKey}), results.start_run?.whatsappSenderPhone)), skip: (results.compose_rep_alert?.skip), omitHeaders: ["x-campaign-id"] }, 0);
+  results.outcome = step_outcome((results.resolve_person), (results.read_state), (results.channel_plan), (results.finalize), (results.send_whatsapp), (results.send_email), (results.now?.now));
+  results.set_next_date = callStep(ctx, "lead.followup_date.set", { service: "lead", method: "PUT", path: "/orgs/leads/{id}/followup-date", params: (({id: results.resolve_person?.rowId})), query: (({brandId: results.resolve_person?.brandId})), body: (results.outcome?.setDateBody), skip: (results.outcome?.skipSetDate) }, 2);
+  results.stop_chain = callStep(ctx, "lead.followup_date.set", { service: "lead", method: "PUT", path: "/orgs/leads/{id}/followup-date", params: (({id: results.resolve_person?.rowId})), query: (({brandId: results.resolve_person?.brandId})), body: (results.outcome?.stopBody), skip: (results.outcome?.skipStop) }, 2);
+  results.record_row = callStep(ctx, "lead.followup.record", { service: "lead", method: "POST", path: "/orgs/leads/{id}/followups", params: (({id: results.resolve_person?.rowId})), body: (results.outcome?.rowBody), skip: (results.outcome?.skipRow) }, 0);
+  // declare_message_written: the Engine runner's (left out)
+  if (results.outcome?.endKind == 'sent') {
+    return endOf((({...{"success":true,"stopCampaign":false}, delivery: results.outcome?.delivery})), "end_run_sent");
+  }
+  else if (results.outcome?.endKind == 'later') {
+    return endOf({"success":true,"stopCampaign":false}, "end_run_later");
+  }
+  else if (results.outcome?.endKind == 'queued') {
+    return endOf({"success":true,"stopCampaign":false}, "end_run_queued");
+  }
+  else if (results.outcome?.endKind == 'not_yet') {
+    return endOf({"success":true,"stopCampaign":false}, "end_run_not_yet");
+  }
+  else if (results.outcome?.endKind == 'not_owed') {
+    return endOf({"success":true,"stopCampaign":false}, "end_run_not_owed");
+  }
+  else if (results.outcome?.endKind == 'stopped') {
+    return endOf({"success":true,"stopCampaign":false}, "end_run_stopped");
+  }
+  else if (results.outcome?.endKind == 'no_channel') {
+    return endOf((({...{"success":true,"stopCampaign":false}, delivery: results.outcome?.delivery})), "end_run_no_channel");
+  }
+  else if (results.outcome?.endKind == 'refused_kept') {
+    return endOf((({...{"success":true,"stopCampaign":false}, delivery: results.outcome?.delivery})), "end_run_refused_kept");
+  }
+  else if (results.outcome?.endKind == 'refused_final') {
+    return endOf((({...{"success":true,"stopCampaign":false}, delivery: results.outcome?.delivery})), "end_run_refused_final");
+  }
+  else if (results.outcome?.endKind == 'not_writable') {
+    return endOf((({...{"success":false,"stopCampaign":false}, delivery: results.outcome?.delivery})), "end_run_not_writable");
+  }
+  else if (results.outcome?.endKind == 'escalated') {
+    return endOf({"success":true,"stopCampaign":false}, "end_run_escalated");
+  }
+  else if (results.outcome?.endKind == 'not_to_brand') {
+    return endOf((({...{"success":true,"stopCampaign":false}, personNotAdmitted: results.outcome?.notAdmitted})), "end_run_not_to_brand");
+  }
+  else if (results.outcome?.endKind == 'idle') {
+    return endOf({"success":true,"stopCampaign":false,"noWorkAvailable":true}, "end_run_idle");
+  }
+  else if (results.outcome?.endKind == 'unclaimed') {
+    return endOf({"success":false,"stopCampaign":false}, "end_run_unclaimed");
+  }
+  else if (results.outcome?.endKind == 'other_person') {
+    return endOf({"success":false,"stopCampaign":false}, "end_run_other_person");
+  }
+  else if (results.outcome?.endKind == 'names_nobody') {
+    return endOf((({...{"success":true,"stopCampaign":false}, personNotAdmitted: results.resolve_person?.notAdmitted})), "end_run_names_nobody");
+  }
+  else if (results.outcome?.endKind == 'held_back') {
+    return endOf((({...{"success":true,"stopCampaign":false}, personNotAdmitted: results.resolve_person?.notAdmitted})), "end_run_held_back");
+  }
+  else if (results.outcome?.endKind == 'not_admitted') {
+    return endOf((({...{"success":true,"stopCampaign":false}, personNotAdmitted: results.resolve_person?.notAdmitted})), "end_run_not_admitted");
+  }
+  else if (results.outcome?.endKind == 'pending') {
+    return endOf({"success":true,"stopCampaign":false,"noWorkAvailable":true}, "end_run_pending");
+  }
+  throw new Error("the run reached no end");
+}
