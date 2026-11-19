@@ -412,3 +412,26 @@ export const writerProofEngines = pgTable("writer_proof_engines", {
   decidedBy: text("decided_by").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// DISTRY-PRINCIPAL-1119: one call to an Engine by a caller that is not a campaign (Distry): the Rating's pick, run, and
+// the result read back by the caller (migration 0057).
+export const engineCalls = pgTable(
+  "engine_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: text("outcome").notNull(),
+    orgId: text("org_id").notNull(),
+    callerRunId: text("caller_run_id").notNull(),
+    /** running | made | nothing | unmade | waiting | stopped | failed */
+    status: text("status").notNull().default("running"),
+    pick: jsonb("pick").notNull(),
+    unit: jsonb("unit"),
+    error: text("error"),
+    /** Every script tried, in the Rating's order: {script, runId, status, error}. */
+    tried: jsonb("tried").$type<unknown[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [index("idx_engine_calls_org").on(table.orgId, table.createdAt), index("idx_engine_calls_running").on(table.status)]
+);
+export type EngineCallRow = typeof engineCalls.$inferSelect;
