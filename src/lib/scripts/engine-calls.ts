@@ -23,6 +23,7 @@ import { START_OUTCOME, pickScript, provenness, type Pick as RatingPick } from "
 import { MAX_SCRIPTS_PER_RUN, fallsThrough } from "./engine-runner.js";
 import { ScriptRunFailed, type MaterialUnit, type RunIdentity, type RunScriptInput, type ScriptRunResult, type SubjectRef } from "./script-runner.js";
 import { writerProofDrawsNow } from "./writer-proof.js";
+import { needsCampaign } from "./vendors.js";
 
 // ── 1. The Engine list ─────────────────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,8 @@ export interface EngineListing {
   inputs: EngineInputOption[];
   /** The runnable scripts the Rating draws among (their client-readable names). */
   scripts: Array<{ dynasty: string; name: string | null; version: number; units: string[]; channel: string | null }>;
-  counts: { scripts: number; live: number; runnable: number };
+  /** `runnable` = what a caller with no campaign can get drawn; `needCampaign` = live scripts that run only for a campaign. */
+  counts: { scripts: number; live: number; runnable: number; needCampaign: number };
 }
 
 /** The materials a script needs handed: what its code reads minus what it asks another Engine for (tactic `asks`). */
@@ -89,10 +91,11 @@ const channelOf = (row: Pick<ScriptRow, "tactics">): string | null => {
 };
 
 /** PURE: why an outcome has no runnable script, in words the dashboard shows as-is. */
-export function notCallableReason(counts: { scripts: number; live: number; unprovenPorts: number; awaitingWriterProof: number }): string {
+export function notCallableReason(counts: { scripts: number; live: number; unprovenPorts: number; awaitingWriterProof: number; needCampaign?: number }): string {
   if (counts.scripts === 0) return "No script makes this outcome yet.";
   if (counts.live === 0) return `Every script of this outcome is retired (${counts.scripts} stored).`;
   const parts: string[] = [];
+  if (counts.needCampaign) parts.push(`${counts.needCampaign} only run inside a campaign (they serve or answer that campaign's people)`);
   if (counts.unprovenPorts > 0) parts.push(`${counts.unprovenPorts} not yet proven on their recorded cases`);
   if (counts.awaitingWriterProof > 0) parts.push(`${counts.awaitingWriterProof} waiting to pass their writing proof before writing to people`);
   return `None of its ${counts.live} live scripts can run now: ${parts.join(", ")}.`;
@@ -113,7 +116,14 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
     const runnable: ScriptRow[] = [];
     let unprovenPorts = 0;
     let awaitingWriterProof = 0;
+    let needCampaign = 0;
     for (const r of live) {
+      // DISTRY-ENGINE-CALL-CAMPAIGN-1119: the list says what a caller that is NOT a campaign can get, exactly as the
+      // call's pick draws (`noCampaign`): a script that needs its run's campaign is never callable here.
+      if (needsCampaign(r.code)) {
+        needCampaign++;
+        continue;
+      }
       if (!(await provenness(db, r)).runnable) {
         unprovenPorts++;
         continue;
@@ -134,10 +144,10 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
       outcome: o.key,
       name: o.name,
       callable: runnable.length > 0,
-      reason: runnable.length > 0 ? null : notCallableReason({ scripts: dynasties.size, live: live.length, unprovenPorts, awaitingWriterProof }),
+      reason: runnable.length > 0 ? null : notCallableReason({ scripts: dynasties.size, live: live.length, unprovenPorts, awaitingWriterProof, needCampaign }),
       inputs: [...inputs.values()].sort((a, b) => a.units.length - b.units.length || JSON.stringify(a).localeCompare(JSON.stringify(b))),
       scripts: runnable.map((r) => ({ dynasty: r.dynasty, name: r.name ?? null, version: r.version, units: unitsToHand(r), channel: channelOf(r) })),
-      counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length },
+      counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length, needCampaign },
     });
   }
   return out;
@@ -197,11 +207,11 @@ export type StartedCall = { kind: "not_callable"; message: string } | { kind: "s
  */
 export async function startEngineCall(db: AnyPgDb, input: EngineCallInput, deps: EngineCallDeps): Promise<StartedCall> {
   const servable = Object.keys(input.units);
-  const pick = await pickScript(db, { outcome: input.outcome, servable, channel: input.channel ?? null, orgId: input.orgId });
+  const pick = await pickScript(db, { outcome: input.outcome, servable, channel: input.channel ?? null, orgId: input.orgId, noCampaign: true });
   if (!pick) {
     return {
       kind: "not_callable",
-      message: `no script of Engine ${input.outcome} can run on ${servable.length ? servable.join(", ") : "no Units"}${input.channel ? ` for channel ${input.channel}` : ""}: read GET /internal/engines for what it needs`,
+      message: `no script of Engine ${input.outcome} can run outside a campaign on ${servable.length ? servable.join(", ") : "no Units"}${input.channel ? ` for channel ${input.channel}` : ""}: read GET /internal/engines for what it needs`,
     };
   }
   const [call] = await db.insert(engineCalls).values({ outcome: input.outcome, orgId: input.orgId, callerRunId: input.callerRunId, pick: servedPickOf(input.outcome, pick) }).returning();
