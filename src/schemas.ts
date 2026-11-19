@@ -3211,11 +3211,13 @@ export const EngineListingSchema = z
   .object({
     outcome: z.string(),
     name: z.string().describe("The outcome's name in the catalogue."),
-    callable: z.boolean().describe("At least one live script the Rating could draw now (an org's model may still narrow it at call time)."),
+    callable: z.boolean().describe("At least one live script the Rating could draw now for a caller that is not a campaign (an org's model may still narrow it at call time). A script that only runs inside a campaign (it serves or answers that campaign's people) never counts."),
     reason: z.string().nullable().describe("Plain words: why no Unit can be asked now. Null when callable."),
     inputs: z.array(z.object({ units: z.array(z.string()), channel: z.string().nullable() })).describe("Each way to call it: the Units (by outcome) to hand in `units`, the `channel` to state (null = any)."),
     scripts: z.array(z.object({ dynasty: z.string(), name: z.string().nullable(), version: z.number().int(), units: z.array(z.string()), channel: z.string().nullable() })),
-    counts: z.object({ scripts: z.number().int(), live: z.number().int(), runnable: z.number().int() }),
+    counts: z
+      .object({ scripts: z.number().int(), live: z.number().int(), runnable: z.number().int(), needCampaign: z.number().int().describe("Live scripts that only run inside a campaign: never drawn for an Engine call.") })
+      .describe("`runnable` = the live scripts an Engine call can draw."),
   })
   .openapi("EngineListing");
 
