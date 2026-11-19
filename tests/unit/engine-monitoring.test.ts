@@ -164,9 +164,9 @@ describe("campaign Engine monitoring", () => {
     expect(red.red).toBe(true);
   });
 
-  it("is never red for an outcome that never ran on a workflow, even when its script error rate exceeds the floor (MON-SCRIPTS-WATCHING-1119)", async () => {
-    // linkedin_post_published, threads_post_published, x_post_published: Engine-native outcomes with no workflow
-    // baseline.  Their 2-7 % error rate sat above the 2 % RED_FLOOR for 8 days, flagging them red on the hub.
+  it("is red for an outcome that never ran on a workflow when its script fails above the floor (MON-SCRIPTS-WATCHING-1119)", async () => {
+    // linkedin / threads / x_post_published: Engine-native, no workflow baseline. Their failures were real (models that
+    // refuse web search drawn for a web-search read, X takes over 280): the floor is what shows them.
     await runs(100, { outcome: "linkedin_post_published", status: "completed", at: at(6) });
     await runs(8, { outcome: "linkedin_post_published", status: "failed", at: at(6) });
     await refreshEngineMonitoring(db, deps, at(6, 13));
@@ -174,8 +174,8 @@ describe("campaign Engine monitoring", () => {
     const li = out.outcomes.find((o) => o.outcome === "linkedin_post_published")!;
     expect(li.verdict.scriptErrorRate).toBeCloseTo(8 / 108);
     expect(li.verdict.workflowErrorRate).toBeNull();
-    // 7.4 % > RED_FLOOR (2 %), but no workflow baseline → not red.
-    expect(li.red).toBe(false);
+    // 7.4 % > RED_FLOOR (2 %): red, workflow history or not.
+    expect(li.red).toBe(true);
     expect(li.lastWorkflowDay).toBeNull();
   });
 

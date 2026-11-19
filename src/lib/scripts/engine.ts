@@ -170,7 +170,31 @@ export interface PickInput {
    * alone (features-service). Absent = the pick of a campaign's own run.
    */
   askedBy?: string | null;
+  /**
+   * WEBSEARCH-PICK-1119: request features the asked script's model must honour (`ctx.ask` request's own `webSearch` /
+   * `imageUrl`). A script whose stated LLM refuses them (chat-service: the direct-vendor paths are text-only) is never
+   * drawn: every run it would make 400s. Absent / all false = not asked.
+   */
+  needs?: LlmNeeds;
 }
+
+/** Request features a pick must see honoured, as chat-service judges them (`GET /internal/local-llm/served-llms`). */
+export interface LlmNeeds {
+  webSearch?: boolean;
+  imageUrl?: boolean;
+}
+
+/** PURE: the features an asked Request carries for its model (`request.request.webSearch` / `.imageUrl`), none = {}. */
+export function needsOfAsk(request: unknown): LlmNeeds {
+  const inner = request && typeof request === "object" ? (request as Record<string, unknown>).request : null;
+  if (!inner || typeof inner !== "object") return {};
+  const r = inner as Record<string, unknown>;
+  const on = (v: unknown) => v === true || v === "true";
+  const imageUrl = typeof r.imageUrl === "string" ? r.imageUrl.trim() !== "" : on(r.imageUrl);
+  return { ...(on(r.webSearch) ? { webSearch: true } : {}), ...(imageUrl ? { imageUrl: true } : {}) };
+}
+
+const anyNeed = (n: LlmNeeds | undefined) => n?.webSearch === true || n?.imageUrl === true;
 
 /** One LLM as a script's tactics state it (`llm` / `llms[place]`): provider + chat-service LLM dynasty slug. */
 export interface StatedLlm {
@@ -192,24 +216,27 @@ export function statedLlmsOf(tactics: unknown): StatedLlm[] {
 }
 
 /**
- * For one org, which of `llms` it runs AS STATED (key `<provider>/<model>`; false = chat-service would run another model
- * in its place, e.g. an org on local Claude). Throws when it cannot be read (fail closed: the run picks nothing, retried).
+ * For one org, which of `llms` may be drawn (key `<provider>/<model>`): it runs AS STATED (false = chat-service would run
+ * another model in its place, e.g. an org on local Claude) AND, when `needs` asks, its model takes such a request
+ * (WEBSEARCH-PICK-1119). Throws when it cannot be read (fail closed: the run picks nothing, retried).
  */
-export type LlmServingReader = (orgId: string, llms: StatedLlm[]) => Promise<Map<string, boolean>>;
+export type LlmServingReader = (orgId: string, llms: StatedLlm[], needs?: LlmNeeds) => Promise<Map<string, boolean>>;
 
 /**
  * chat-service `GET /internal/local-llm/served-llms` (the one owner of which model serves which LLM for an org). A row
  * answering `runsAsStated: null` names an LLM chat-service does not serve at all: the script cannot run as stated
  * anywhere, so it is not drawn (false), logged. Unreadable = throws.
  */
-export const productionLlmServing: LlmServingReader = async (orgId, llms) => {
+export const productionLlmServing: LlmServingReader = async (orgId, llms, needs) => {
+  const asked = anyNeed(needs);
+  const needsQuery = `${needs?.webSearch ? "&webSearch=true" : ""}${needs?.imageUrl ? "&imageUrl=true" : ""}`;
   const base = (process.env.CHAT_SERVICE_URL ?? "").replace(/\/$/, "");
   const key = process.env.CHAT_SERVICE_API_KEY ?? "";
   if (!base || !key) throw new Error("CHAT_SERVICE_URL and CHAT_SERVICE_API_KEY must be set to read which LLMs an org runs as stated");
   const out = new Map<string, boolean>();
   for (let i = 0; i < llms.length; i += 50) {
-    const asked = llms.slice(i, i + 50).map((l) => `${l.provider}/${l.model}`);
-    const res = await fetch(`${base}/internal/local-llm/served-llms?orgId=${encodeURIComponent(orgId)}&llms=${encodeURIComponent(asked.join(","))}`, {
+    const names = llms.slice(i, i + 50).map((l) => `${l.provider}/${l.model}`);
+    const res = await fetch(`${base}/internal/local-llm/served-llms?orgId=${encodeURIComponent(orgId)}&llms=${encodeURIComponent(names.join(","))}${needsQuery}`, {
       headers: { "x-api-key": key },
       signal: AbortSignal.timeout(600_000),
     });
@@ -217,11 +244,16 @@ export const productionLlmServing: LlmServingReader = async (orgId, llms) => {
     if (!res.ok) throw new Error(`which LLMs org ${orgId} runs as stated could not be read (chat-service ${res.status}): ${text.slice(0, 300)}`);
     const rows = (JSON.parse(text) as { llms?: unknown }).llms;
     if (!Array.isArray(rows)) throw new Error(`chat-service answered no llms for org ${orgId}: ${text.slice(0, 300)}`);
-    for (const r of rows as Array<{ llm?: unknown; runsAsStated?: unknown; error?: unknown }>) {
+    for (const r of rows as Array<{ llm?: unknown; runsAsStated?: unknown; acceptsRequest?: unknown; error?: unknown }>) {
       if (typeof r.llm !== "string") continue;
-      if (r.runsAsStated === null) console.warn(`[workflow-service] chat-service serves no ${r.llm}: a script stating it is not drawn (${String(r.error ?? "")})`);
-      else if (typeof r.runsAsStated !== "boolean") throw new Error(`chat-service answered ${JSON.stringify(r.runsAsStated)} for ${r.llm} (org ${orgId})`);
-      out.set(r.llm, r.runsAsStated === true);
+      if (r.runsAsStated === null) {
+        console.warn(`[workflow-service] chat-service serves no ${r.llm}: a script stating it is not drawn (${String(r.error ?? "")})`);
+        out.set(r.llm, false);
+        continue;
+      }
+      if (typeof r.runsAsStated !== "boolean") throw new Error(`chat-service answered ${JSON.stringify(r.runsAsStated)} for ${r.llm} (org ${orgId})`);
+      if (asked && typeof r.acceptsRequest !== "boolean") throw new Error(`chat-service answered no acceptsRequest for ${r.llm} asked ${needsQuery} (org ${orgId})`);
+      out.set(r.llm, r.runsAsStated === true && (!asked || r.acceptsRequest === true));
     }
   }
   return out;
@@ -375,12 +407,17 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     }
     out.push(row);
   }
-  // LOCAL-CLAUDE-RATING-1116: only where its stated LLM runs as stated for this org (one read per pick).
-  if (!input.orgId) return out;
+  // LOCAL-CLAUDE-RATING-1116: only where its stated LLM runs as stated for this org (one read per pick), and
+  // WEBSEARCH-PICK-1119: only where that model takes what the asked request needs (web search, an image).
+  const needs = anyNeed(input.needs) ? input.needs : undefined;
+  if (!input.orgId) {
+    if (needs) throw new Error(`a pick for ${input.outcome} needs ${JSON.stringify(needs)} but names no org: which model takes it cannot be read`);
+    return out;
+  }
   const stated = new Map<string, StatedLlm>();
   for (const r of out) for (const l of statedLlmsOf(r.tactics)) stated.set(`${l.provider}/${l.model}`, l);
   if (stated.size === 0) return out;
-  return runsAsStated(out, await llmServing(input.orgId, [...stated.values()]));
+  return runsAsStated(out, await llmServing(input.orgId, [...stated.values()], needs));
 }
 
 /**

@@ -273,11 +273,44 @@ function inPublishHours(hours: any, now: string): boolean {
   return hour >= hours[0] && hour < hours[1];
 }
 
+/** X's own count (twitter-text v3): these code points weigh 1, any other (emoji, CJK) 2; a link weighs 23. */
+function xWeight(text: string): number {
+  let n = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    n += cp <= 4351 || (cp >= 8192 && cp <= 8205) || (cp >= 8208 && cp <= 8223) || (cp >= 8242 && cp <= 8247) ? 1 : 2;
+  }
+  return n;
+}
+/** What the take may weigh: 280 minus the blank line and the quoted post's link (23). */
+const X_TAKE_BUDGET = 280 - 2 - 23;
+
 /** The take as written (the writer is trusted): dashes rewritten, any link or tag it slipped in removed, the URL closing it. */
 function finalText(take: string, url: string): string {
   const undash = (s: string) => s.replace(/(\\d)\\s*[\\u2013\\u2014]\\s*(?=\\d)/g, "$1-").replace(/\\s*[\\u2013\\u2014]\\s*/g, ", ");
-  const body = undash(take).replace(/https?:[/][/]\\S+/g, "").replace(/(^|\\s)@([A-Za-z0-9_]{1,15})/g, "$1$2").replace(/[ \\t]{2,}/g, " ").replace(/[ \\t]+\\n/g, "\\n").trim();
+  let body = undash(take).replace(/https?:[/][/]\\S+/g, "").replace(/(^|\\s)@([A-Za-z0-9_]{1,15})/g, "$1$2").replace(/[ \\t]{2,}/g, " ").replace(/[ \\t]+\\n/g, "\\n").trim();
   if (!body) throw new Error("final-text: the writer returned no take");
+  // X refuses a post over 280 (MON-SCRIPTS-WATCHING-1119: 14 takes in 2 days, 281 to 342): whole trailing sentences
+  // are dropped until it fits, like a thread keeps at most 3 replies; one sentence still too long ends on its last whole word.
+  if (xWeight(body) > X_TAKE_BUDGET) {
+    const sentences = body.match(/[^.!?\\n]+(?:[.!?]+|\\n+|$)/g) ?? [body];
+    let kept = "";
+    for (const part of sentences) {
+      if (xWeight((kept + part).trim()) > X_TAKE_BUDGET) break;
+      kept += part;
+    }
+    kept = kept.trim();
+    if (!kept) {
+      const words = body.split(/\\s+/);
+      for (const w of words) {
+        const next = kept ? kept + " " + w : w;
+        if (xWeight(next + "...") > X_TAKE_BUDGET) break;
+        kept = next;
+      }
+      kept = kept.replace(/[,;:]+$/, "") + "...";
+    }
+    body = kept;
+  }
   return body + "\\n\\n" + url;
 }
 
