@@ -71,7 +71,7 @@ export async function engineState(db: AnyPgDb, outcome: string, orgId: string | 
 }
 
 /** A port runs only when it replays 100 % of its recorded cases; a script with no case is not a port. */
-async function provenness(db: AnyPgDb, row: ScriptRow): Promise<{ runnable: boolean; port: boolean }> {
+export async function provenness(db: AnyPgDb, row: ScriptRow): Promise<{ runnable: boolean; port: boolean }> {
   const cases = await caseCount(db, row.outcome, row.dynasty);
   if (cases === 0) return { runnable: true, port: false };
   const proven = !!row.replay && row.replay.cases === cases && row.replay.matches === cases;

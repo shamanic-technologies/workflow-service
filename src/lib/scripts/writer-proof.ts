@@ -588,6 +588,16 @@ export async function writerProofAllows(db: AnyPgDb, row: ScriptRow): Promise<bo
 }
 
 /**
+ * READ ONLY (DISTRY-PRINCIPAL-1119): whether the Rating would draw this writer version today, the same verdict as
+ * `writerProofAllows`, without ever starting a proof (a listing must spend nothing).
+ */
+export async function writerProofDrawsNow(db: AnyPgDb, row: ScriptRow): Promise<boolean> {
+  if (!writesToPerson(row.code) || !callsCompletion(row.code)) return true;
+  if (!(await engineEnforced(db, row.outcome))) return true;
+  return gateFor(await proofsOf(db, row.id, null), await fedCaseCount(db, row), Date.now()).draws;
+}
+
+/**
  * Whether the Rating may draw `completion` for the writer `writer` that asks it (ONE-WRITER-N-MODELS-1116-ANSWERER).
  * Any other asker, or a writer of an Engine not enforced, always may. An unproven pair is proven in the background, once.
  */
