@@ -17,7 +17,7 @@
  *    without a client timeout: the start answers once done or after its wait, the poll answers the same row.
  */
 import { and, eq, inArray, lt } from "drizzle-orm";
-import { engineCalls, scripts, type EngineCallRow, type ScriptRow } from "../../db/schema.js";
+import { engineCalls, engineReasons, scripts, type EngineCallRow, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 import { START_OUTCOME, pickScript, provenness, type Pick as RatingPick } from "./engine.js";
 import { MAX_SCRIPTS_PER_RUN, fallsThrough } from "./engine-runner.js";
@@ -88,14 +88,40 @@ const channelOf = (row: Pick<ScriptRow, "tactics">): string | null => {
   return typeof c === "string" ? c : null;
 };
 
-/** PURE: why an outcome has no runnable script, in words the dashboard shows as-is. */
-export function notCallableReason(counts: { scripts: number; live: number; unprovenPorts: number; awaitingWriterProof: number }): string {
+/**
+ * PURE: why an outcome has no runnable script, in words the dashboard shows as-is. A reason staff STATED for the Engine
+ * (`engine_reasons`, DISTRY-ENGINES-1119: an outcome no script can make on demand) wins; an Engine whose retired scripts
+ * all live on under other outcomes says where they went (`movedTo`, those outcomes' names).
+ */
+export function notCallableReason(counts: {
+  scripts: number;
+  live: number;
+  unprovenPorts: number;
+  awaitingWriterProof: number;
+  stated?: string | null;
+  movedTo?: string[];
+}): string {
+  if (counts.stated) return counts.stated;
   if (counts.scripts === 0) return "No script makes this outcome yet.";
+  if (counts.live === 0 && counts.movedTo && counts.movedTo.length) {
+    return `Its scripts moved to ${counts.movedTo.join(", ")}, which make this work now: ask ${counts.movedTo.length > 1 ? "those Engines" : "that Engine"} instead.`;
+  }
   if (counts.live === 0) return `Every script of this outcome is retired (${counts.scripts} stored).`;
   const parts: string[] = [];
   if (counts.unprovenPorts > 0) parts.push(`${counts.unprovenPorts} not yet proven on their recorded cases`);
   if (counts.awaitingWriterProof > 0) parts.push(`${counts.awaitingWriterProof} waiting to pass their writing proof before writing to people`);
   return `None of its ${counts.live} live scripts can run now: ${parts.join(", ")}.`;
+}
+
+/** The names of the outcomes where EVERY one of these dynasties runs now (empty when one of them runs nowhere else). */
+function movedTo(dynasties: string[], outcome: string, liveHome: Map<string, Set<string>>, nameOf: Map<string, string>): string[] {
+  const homes = new Set<string>();
+  for (const d of dynasties) {
+    const elsewhere = [...(liveHome.get(d) ?? [])].filter((o) => o !== outcome);
+    if (!elsewhere.length) return [];
+    for (const o of elsewhere) homes.add(o);
+  }
+  return [...homes].sort().map((o) => nameOf.get(o) ?? o);
 }
 
 /** Every Engine of the live catalogue, callable or not and why. Read only. */
@@ -105,6 +131,14 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
   const rows = keys.length ? await db.select().from(scripts).where(inArray(scripts.outcome, keys)) : [];
   const byOutcome = new Map<string, ScriptRow[]>();
   for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r]);
+  const stated = new Map((await db.select().from(engineReasons)).map((r) => [r.outcome, r.reason] as const));
+  const nameOf = new Map(outcomes.map((o) => [o.key, o.name] as const));
+  // Where a dynasty runs now: an outcome whose dynasties are all retired may have had them moved (re-homed) elsewhere.
+  const liveHome = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (r.status !== "active" || r.dynastyStatus !== "active") continue;
+    liveHome.set(r.dynasty, new Set([...(liveHome.get(r.dynasty) ?? []), r.outcome]));
+  }
   const out: EngineListing[] = [];
   for (const o of outcomes) {
     const all = byOutcome.get(o.key) ?? [];
@@ -134,7 +168,17 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
       outcome: o.key,
       name: o.name,
       callable: runnable.length > 0,
-      reason: runnable.length > 0 ? null : notCallableReason({ scripts: dynasties.size, live: live.length, unprovenPorts, awaitingWriterProof }),
+      reason:
+        runnable.length > 0
+          ? null
+          : notCallableReason({
+              scripts: dynasties.size,
+              live: live.length,
+              unprovenPorts,
+              awaitingWriterProof,
+              stated: stated.get(o.key) ?? null,
+              movedTo: movedTo([...dynasties], o.key, liveHome, nameOf),
+            }),
       inputs: [...inputs.values()].sort((a, b) => a.units.length - b.units.length || JSON.stringify(a).localeCompare(JSON.stringify(b))),
       scripts: runnable.map((r) => ({ dynasty: r.dynasty, name: r.name ?? null, version: r.version, units: unitsToHand(r), channel: channelOf(r) })),
       counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length },

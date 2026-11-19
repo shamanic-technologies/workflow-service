@@ -4523,6 +4523,26 @@
           }
         }
       },
+      "EngineReasonRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 400,
+            "description": "Plain words the dashboard shows as-is: why no script can make this outcome on demand, and what to ask instead."
+          },
+          "statedBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Who decided. Absent = the caller's `x-email`, else `user:<x-user-id>`."
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
       "EngineState": {
         "type": "object",
         "properties": {
@@ -12854,6 +12874,119 @@
           },
           "404": {
             "description": "`call_not_found` for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}/reason": {
+      "put": {
+        "summary": "State why an Engine no script makes on demand is not callable (service key only)",
+        "description": "DISTRY-ENGINES-1119. Data, never a branch on an outcome: the Engine list (`GET /internal/engines`) shows this reason as-is while the Engine has no runnable script. A runnable script makes the Engine callable again whatever the stated reason. Idempotent (the last statement wins).",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineReasonRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statedBy": {
+                      "type": "string"
+                    },
+                    "statedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "reason",
+                    "statedBy",
+                    "statedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid outcome key or reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Withdraw an Engine's stated reason (service key only)",
+        "description": "DISTRY-ENGINES-1119. The Engine list goes back to the reason it computes. 404 `reason_not_found` when none was stated.",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Withdrawn"
+          },
+          "404": {
+            "description": "`reason_not_found`",
             "content": {
               "application/json": {
                 "schema": {
