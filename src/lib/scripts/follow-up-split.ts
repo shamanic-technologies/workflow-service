@@ -44,7 +44,22 @@ export const FOLLOW_UP_ANCHORS = {
   draft: '  results.draft = callStep(ctx, "llm_completion", ',
   finalize: "  results.finalize = step_finalize((results.draft), (results.resolve_person), (results.channel_plan), (flow_input.campaignId));\n",
   runEnd: '  throw new Error("the run reached no end");\n}\n',
+  /** After the run: the helpers that ask the LLM completion Engine (the writer's alone). */
+  completionHelpers: "\n/**\n * ONE-WRITER-N-MODELS-1116: this script names no model.",
 };
+
+/**
+ * The sender asks no model: the completion helpers leave with the writer. A script's materials are read off its code
+ * (`readMaterials`: every `ctx.get("<outcome>")`), so a helper left behind made the sender need a completion nobody
+ * hands it and no run could draw it (2026-11-19: stored v9 read `["message_written", "llm_completion"]`, put back
+ * within the minute). The stored step caller still names the helper for its completion door: it stays, unreachable.
+ */
+const SENDER_NO_MODEL = `
+/** WRITER-SENDER-SPLIT-1118: this script asks its writer, never a model. No step of its flow reaches here. */
+function askCompletionData(_ctx: any, _call: Record<string, unknown>): any {
+  throw new Error("this script calls no model: its writer does");
+}
+`;
 
 /** What the prompt lines read, handed by the sender as one material, read back by the writer under the same names. */
 const HANDED_RESULTS = ["resolve_person", "channel_plan", "offer_economics", "brand_profile", "gather_facts", "person_history", "who_they_are", "business_role"];
@@ -129,9 +144,13 @@ export function splitFollowUp(stored: string): { writer: string; sender: string 
 
   // The voice is read by the sender at the same place, skipped on the same condition (compose skips exactly then).
   const senderVoice = voiceReadLine.replace(A.voiceSkip, "skip: (results.channel_plan?.skipModel === true) }, 2);");
-  const sender = code.slice(0, compose) + senderVoice + SENDER_ASK + code.slice(afterFinalize);
+  // The completion helpers are everything after the run, and the only place the stored code asks the model.
+  const tailAt = runEnd + A.runEnd.length;
+  if (!code.slice(tailAt).startsWith(A.completionHelpers)) throw new Error("the stored follow-up's completion helpers do not follow its run: nothing generated");
+  if (code.slice(0, tailAt).includes('.get("llm_completion")')) throw new Error("the stored follow-up asks its model outside its completion helpers: nothing generated");
+  const sender = code.slice(0, compose) + senderVoice + SENDER_ASK + code.slice(afterFinalize, tailAt) + SENDER_NO_MODEL;
 
-  const writer = code.slice(0, runStart) + WRITER_RUN_HEAD + composeLine + voicedLine + draftLine + A.finalize + WRITER_RUN_TAIL + code.slice(runEnd + A.runEnd.length);
+  const writer = code.slice(0, runStart) + WRITER_RUN_HEAD + composeLine + voicedLine + draftLine + A.finalize + WRITER_RUN_TAIL + code.slice(tailAt);
   return { writer, sender };
 }
 
