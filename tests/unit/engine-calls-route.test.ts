@@ -278,7 +278,11 @@ describe("GET /internal/engines", () => {
     await db.update(scripts).set({ dynastyStatus: "deprecated", status: "deprecated" }).where(eq(scripts.dynasty, "dy_asks_free"));
     res = await request(app).get("/internal/engines").set("x-api-key", KEY);
     const after = new Map(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
-    expect(after.get("meeting_booked")).toMatchObject({
+    expect(after.get("meeting_booked")).toMatchObject({ callable: false });
+    // A no-channel script that reads a Unit it must be handed (dy_reads_lead) does not serve an ask handing nothing.
+    await add("email_sent", "dy_reads_lead", READS_LEAD);
+    res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    expect(new Map(res.body.engines.map((e: { outcome: string }) => [e.outcome, e])).get("meeting_booked")).toMatchObject({
       callable: false,
       reason: "None of its 1 live scripts can run now: 1 only run inside a campaign (they serve or answer that campaign's people).",
       counts: { runnable: 0, needCampaign: 1 },
