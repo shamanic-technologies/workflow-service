@@ -85,6 +85,12 @@ export function unitsToHand(row: Pick<ScriptRow, "materials" | "tactics">): stri
   return [...new Set((row.materials ?? []).filter((m) => !asked.includes(m)))].sort();
 }
 
+/** The Engines a script asks for a Unit inside its run (tactic `asks`). */
+const asksOf = (row: Pick<ScriptRow, "tactics">): string[] => {
+  const asks = ((row.tactics ?? {}) as Record<string, unknown>).asks;
+  return Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+};
+
 const channelOf = (row: Pick<ScriptRow, "tactics">): string | null => {
   const c = ((row.tactics ?? {}) as Record<string, unknown>).channel;
   return typeof c === "string" ? c : null;
@@ -143,7 +149,8 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
     if (r.status !== "active" || r.dynastyStatus !== "active") continue;
     liveHome.set(r.dynasty, new Set([...(liveHome.get(r.dynasty) ?? []), r.outcome]));
   }
-  const out: EngineListing[] = [];
+  type Tally = { all: ScriptRow[]; dynasties: Set<string>; live: ScriptRow[]; runnable: ScriptRow[]; unprovenPorts: number; awaitingWriterProof: number; needCampaign: number };
+  const tally = new Map<string, Tally>();
   for (const o of outcomes) {
     const all = byOutcome.get(o.key) ?? [];
     const dynasties = new Set(all.map((r) => r.dynasty));
@@ -169,6 +176,29 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
       }
       runnable.push(r);
     }
+    tally.set(o.key, { all, dynasties, live, runnable, unprovenPorts, awaitingWriterProof, needCampaign });
+  }
+  // DISTRY-ENGINES-1119: a script that ASKS other Engines (tactic `asks`) runs outside a campaign only when each one it
+  // asks can be drawn there too: an ask from a call carries no campaign and no channel, so the asked Engine needs a
+  // runnable script that needs no campaign and states no channel. Otherwise every call of it ends `no_script`, so it
+  // counts as running only inside a campaign. Repeated until nothing moves (an ask of an ask).
+  const askable = (outcome: string) => {
+    const t = tally.get(outcome);
+    return !t || t.runnable.some((r) => channelOf(r) === null);
+  };
+  for (let moved = true; moved; ) {
+    moved = false;
+    for (const t of tally.values()) {
+      const keep = t.runnable.filter((r) => asksOf(r).every(askable));
+      if (keep.length === t.runnable.length) continue;
+      t.needCampaign += t.runnable.length - keep.length;
+      t.runnable = keep;
+      moved = true;
+    }
+  }
+  const out: EngineListing[] = [];
+  for (const o of outcomes) {
+    const { dynasties, live, runnable, unprovenPorts, awaitingWriterProof, needCampaign } = tally.get(o.key)!;
     runnable.sort((a, b) => a.dynasty.localeCompare(b.dynasty));
     const inputs = new Map<string, EngineInputOption>();
     for (const r of runnable) {
