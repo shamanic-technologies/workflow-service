@@ -180,11 +180,11 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
   }
   // DISTRY-ENGINES-1119: a script that ASKS other Engines (tactic `asks`) runs outside a campaign only when each one it
   // asks can be drawn there too: an ask from a call carries no campaign and no channel, so the asked Engine needs a
-  // runnable script that needs no campaign and states no channel. Otherwise every call of it ends `no_script`, so it
+  // runnable script that needs no campaign, states no channel and reads no Unit it must be handed. Otherwise every call of it ends `no_script`, so it
   // counts as running only inside a campaign. Repeated until nothing moves (an ask of an ask).
   const askable = (outcome: string) => {
     const t = tally.get(outcome);
-    return !t || t.runnable.some((r) => channelOf(r) === null);
+    return !t || t.runnable.some((r) => channelOf(r) === null && unitsToHand(r).length === 0);
   };
   for (let moved = true; moved; ) {
     moved = false;
