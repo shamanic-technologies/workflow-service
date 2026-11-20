@@ -226,6 +226,17 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // LISTICLE-OUTREACH-1110: one person's work email (apollo-service's finder: treg or Explee, metered on the caller's
   // run, idempotent per person, the address verified before it is served).
   "apollo.email.find": { service: "apollo", method: "POST", path: "/email-finder/find", asRun: true },
+  // DISTRY-ENGINES-1119: every Engine callable by Distry. Each is the owning service's own org route, which bills the
+  // caller's run and declares its own Unit (recorded_by the service): one address checked (apollo, `email_checked`),
+  // a reply under someone's post (social, `x_reply_published` / `linkedin_comment_published`, outcome filled by the
+  // door), a company checked against an offer's checks (lead, `company_researched`), and one industry update video
+  // rendered (content-generation, `industry_update_video`; read back with its own long-poll `waitSeconds`).
+  "apollo.email.verifications": { service: "apollo", method: "POST", path: "/email-verifications", asRun: true },
+  "social.reply": { service: "social", method: "POST", path: "/orgs/social/accounts/{id}/replies", asRun: true, outcomeInBody: "outcomeKey" },
+  "lead.company.preview": { service: "lead", method: "POST", path: "/orgs/brands/{brandId}/offers/{offerId}/qualification/previews", asRun: true },
+  "lead.company.preview.read": { service: "lead", method: "GET", path: "/orgs/brands/{brandId}/offers/{offerId}/qualification/previews/{previewId}", asRun: true },
+  "content.debrief.render": { service: "content-generation", method: "POST", path: "/industry-debrief-videos", asRun: true },
+  "content.debrief.read": { service: "content-generation", method: "GET", path: "/industry-debrief-videos/{id}", asRun: true },
   "content.thread.generate": { service: "content-generation", method: "POST", path: "/generate-thread", asRun: true },
   // WRITER-SENDER-SPLIT-1119-FOUNDER: the run a handed-back completion's message is declared on is the calling script's
   // own (`completion.runId`), filled by the door: an asked writer cannot know its run.
