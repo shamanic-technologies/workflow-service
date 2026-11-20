@@ -263,6 +263,28 @@ describe("GET /internal/engines", () => {
     expect(res.body.code).toBe("engine_list_unreadable");
   });
 
+  it("a script asking an Engine nothing outside a campaign can make is not callable either: its asks would find no script (DISTRY-ENGINES-1119)", async () => {
+    // email_sent's only script states a channel: an ask from a call (no channel) finds nothing there.
+    await add("email_sent", "dy_channel_only", MAKES, { channel: "sales-cold-email-outreach" });
+    await add("meeting_booked", "dy_path", `export default function run(ctx) { ctx.ask({ units: {} }); const u = ctx.get("email_sent"); return { content: { u: u.content } }; }`, { asks: ["email_sent"] });
+    // x_account_found's script states no channel: an asker of it stays callable.
+    await add(OUTCOME, "dy_free", NO_SUBJECT);
+    await add("email_sent", "dy_asks_free", `export default function run(ctx) { ctx.ask({ units: {} }); const u = ctx.get("x_account_found"); return { content: { u: u.content } }; }`, { asks: [OUTCOME] });
+    let res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    const by = new Map(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
+    expect(by.get("email_sent")).toMatchObject({ callable: true, counts: { runnable: 2 } });
+    // email_sent now has a no-channel runnable script (dy_asks_free): the path to it is callable.
+    expect(by.get("meeting_booked")).toMatchObject({ callable: true });
+    await db.update(scripts).set({ dynastyStatus: "deprecated", status: "deprecated" }).where(eq(scripts.dynasty, "dy_asks_free"));
+    res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    const after = new Map(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
+    expect(after.get("meeting_booked")).toMatchObject({
+      callable: false,
+      reason: "None of its 1 live scripts can run now: 1 only run inside a campaign (they serve or answer that campaign's people).",
+      counts: { runnable: 0, needCampaign: 1 },
+    });
+  });
+
   it("a reason staff stated for an Engine no script makes is shown as-is; a moved dynasty says where it went (DISTRY-ENGINES-1119)", async () => {
     const reason = "We run no ads yet: no ad account is connected, so nothing can show an ad.";
     let res = await request(app).put("/internal/engines/meeting_booked/reason").set("x-api-key", KEY).set("x-email", "staff@example.com").send({ reason });
