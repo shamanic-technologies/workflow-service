@@ -17,6 +17,9 @@
  *   4. PRODUCER (`buildEmailCheckSource`, `buildPhoneRevealSource`, `buildCompanyCheckSource`,
  *      `buildIndustryVideoSource`): one call of the owning service's own org route, which bills the run and declares
  *      its Unit (`recorded_by` that service).
+ * No path is filed under Positive reply (`conversation`): campaign-service runs that Engine fleet-wide (switch rows), so a
+ * runnable script there would take over every live campaign whose leg reaches a positive reply (cold email, pushed
+ * email). Its scripts moved to finer Engines; the list says so.
  * An outcome no script can make on demand (an ad with no ad account, a draft only a person of the team approves, a
  * newsletter released to a whole list) holds no script: its plain-words reason is stated as data
  * (`PUT /internal/engines/{outcome}/reason`, `ENGINE_REASONS` below), shown as-is on the Engine list.
@@ -118,14 +121,6 @@ const publicPath = (outcome: string, dynasty: string, name: string, asks: string
 });
 
 export const PATHS: PathSpec[] = [
-  answererPath(
-    "conversation",
-    "dy_positive_reply_path",
-    "Answer toward a positive reply",
-    "crm",
-    "This answer works toward a positive reply: the lead telling us they want what the brand offers. Answer what they said first, then make the next step easy to say yes to with one simple question. A no stays a no.",
-    "Works toward a positive reply: when a lead writes or acts, asks for the one answer that makes the next step easy to say yes to. Leads only.",
-  ),
   answererPath(
     "form_submitted",
     "dy_form_path",

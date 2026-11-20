@@ -183,6 +183,9 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "instantly.reply.send": { service: "instantly", method: "POST", path: "/orgs/replies", asRun: true },
   "instantly.reply.escalate": { service: "instantly", method: "POST", path: "/orgs/replies/escalate", asRun: true },
   "email.send": { service: "email-gateway", method: "POST", path: "/orgs/send", asRun: true },
+  // SEND-CHECK-BEFORE-WRITE-1120: the send's refusals on the person (opt-out, not a prospect, stated not to the brand,
+  // an address our verifier judged invalid), on the route the send would take, asked before a writer is paid. Sends nothing.
+  "email.send_check": { service: "email-gateway", method: "POST", path: "/orgs/send-checks", asRun: true },
   "chat.judgment": { service: "chat", method: "POST", path: "/orgs/judgments", asRun: true },
   "chat.copilot.lead_turn": { service: "chat", method: "POST", path: "/internal/copilot/lead-turns", asRun: true },
   "apollo.phone.reveal": { service: "apollo", method: "POST", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
