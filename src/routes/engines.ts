@@ -8,8 +8,6 @@
  *   POST /internal/engines/{outcome}/pick       the Rating's pick among kept dynasties, outside a run (a preview)
  *   POST /internal/engines/{outcome}/make       the Rating's pick, RUN for a service waiting on its Unit (a field draft)
  *   GET  /internal/engines                      every Engine of the live catalogue: callable now or why not (Distry, dashboard)
- *   POST /internal/engines/{outcome}/calls      one Unit for a caller that is not a campaign (Distry): pick, run, wait or poll
- *   GET  /internal/engine-calls/{callId}        that call read back (waits up to `waitSeconds` for it to end)
  *
  * Mounted before the identity gate: the execute route checks its own headers (and never needs `x-workflow-slug`).
  */
@@ -20,8 +18,8 @@ import { requireApiKey } from "../middleware/auth.js";
 import { executeRateLimit } from "../middleware/rate-limit.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
-import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema, EngineMakeRequestSchema, EngineCallRequestSchema, EngineReasonRequestSchema, ENGINE_CALL_DEFAULT_WAIT_SECONDS, ENGINE_CALL_MAX_WAIT_SECONDS } from "../schemas.js";
-import { callEnded, listEngines, readEngineCall, servedCall, startEngineCall, type EngineCallDeps } from "../lib/scripts/engine-calls.js";
+import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema, EngineMakeRequestSchema, EngineReasonRequestSchema } from "../schemas.js";
+import { listEngines } from "../lib/scripts/engine-calls.js";
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
 import { engineState, pickScript, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
@@ -325,110 +323,6 @@ router.delete("/internal/engines/:outcome/reason", requireApiKey, async (req, re
   } catch (err) {
     console.error(`[workflow-service] engine reason ${outcome}:`, err);
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-export function productionEngineCallDeps(): EngineCallDeps {
-  const ledger = productionLedgerDeps();
-  return {
-    run: (input, who) => runStoredScript(db, input, who, { ledger, vendors: productionVendorDeps() }),
-    noteScriptRun: (outcome) => noteScriptRunForGuard(outcome),
-  };
-}
-
-let callDepsFactory: () => EngineCallDeps = productionEngineCallDeps;
-/** Tests swap the outside world. */
-export function setEngineCallDepsFactory(f: (() => EngineCallDeps) | null): void {
-  callDepsFactory = f ?? productionEngineCallDeps;
-}
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-/** Resolves with the value, or null once `ms` elapsed first. */
-const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).then(() => null)]);
-
-// DISTRY-PRINCIPAL-1119: one Unit of an Engine for a caller that is not a campaign (Distry). The SAME Rating pick a
-// campaign run takes, the picked script run on its own run (a child of the caller's), org-billed; the call answers once
-// ended or after `waitSeconds` (202, then GET /internal/engine-calls/{callId}), so no client times out on a long Engine.
-router.post("/internal/engines/:outcome/calls", requireApiKey, async (req, res) => {
-  const outcome = outcomeOf(req, res);
-  if (!outcome) return;
-  const orgId = header(req, "x-org-id");
-  const callerRunId = header(req, "x-run-id");
-  if (!orgId || !callerRunId) {
-    res.status(400).json({ error: "x-org-id (the org the Unit is for, billed) and x-run-id (the caller's own run) are required" });
-    return;
-  }
-  const parsed = EngineCallRequestSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation error", details: zodErrorDetails(parsed.error) });
-    return;
-  }
-  const body = parsed.data;
-  let started;
-  try {
-    started = await startEngineCall(
-      db,
-      {
-        outcome,
-        orgId,
-        userId: header(req, "x-user-id"),
-        callerRunId,
-        headers: extractDownstreamHeaders(req) as Record<string, string>,
-        units: body.units ?? {},
-        request: body.request ?? null,
-        ...(body.subject ? { subject: body.subject } : {}),
-        channel: body.channel ?? null,
-      },
-      callDepsFactory(),
-    );
-  } catch (err) {
-    console.error(`[workflow-service] engine call ${outcome}: pick unreadable:`, err);
-    res.status(502).json({ code: "script_pick_unreadable", error: err instanceof Error ? err.message : String(err) });
-    return;
-  }
-  if (started.kind === "not_callable") {
-    res.status(404).json({ code: "no_runnable_script", error: started.message });
-    return;
-  }
-  const ended = await within(started.done, (body.waitSeconds ?? ENGINE_CALL_DEFAULT_WAIT_SECONDS) * 1000);
-  if (ended) {
-    res.json(servedCall(ended));
-    return;
-  }
-  res.status(202).json(servedCall(started.call));
-});
-
-router.get("/internal/engine-calls/:callId", requireApiKey, async (req, res) => {
-  const orgId = header(req, "x-org-id");
-  if (!orgId) {
-    res.status(400).json({ error: "x-org-id (the org the call was made for) is required" });
-    return;
-  }
-  const raw = typeof req.query.waitSeconds === "string" ? Number(req.query.waitSeconds) : 0;
-  if (!Number.isInteger(raw) || raw < 0 || raw > ENGINE_CALL_MAX_WAIT_SECONDS) {
-    res.status(400).json({ error: `waitSeconds must be a whole number from 0 to ${ENGINE_CALL_MAX_WAIT_SECONDS}` });
-    return;
-  }
-  const callId = String(req.params.callId ?? "");
-  if (!/^[0-9a-f-]{36}$/i.test(callId)) {
-    res.status(400).json({ error: `${callId} is not a call id` });
-    return;
-  }
-  try {
-    const deadline = Date.now() + raw * 1000;
-    let row = await readEngineCall(db, callId, orgId);
-    while (row && !callEnded(row) && Date.now() < deadline) {
-      await sleep(Math.min(1000, Math.max(0, deadline - Date.now())));
-      row = await readEngineCall(db, callId, orgId);
-    }
-    if (!row) {
-      res.status(404).json({ code: "call_not_found", error: `no Engine call ${callId} for this org` });
-      return;
-    }
-    res.json(servedCall(row));
-  } catch (err) {
-    console.error("[workflow-service] engine call read:", err);
-    res.status(500).json({ error: "Internal server error" });
   }
 });
 

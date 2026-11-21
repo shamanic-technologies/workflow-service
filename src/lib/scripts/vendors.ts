@@ -282,21 +282,6 @@ export function writesToPerson(code: string): boolean {
   return Object.keys(TO_PERSON_DOORS).some((name) => code.includes(`"${name}"`) || code.includes(`'${name}'`));
 }
 
-/**
- * DISTRY-ENGINE-CALL-CAMPAIGN-1119: the doors whose producer acts for ONE CAMPAIGN (the campaign the script's run is
- * for: its `x-campaign-id` header, or the `campaignId` in the path), and refuses a run that names none. lead-service
- * serves a lead to a campaign's audience (`lead.serve`: "x-campaign-id and x-brand-id headers required") and claims a
- * person on a campaign's queue; campaign-service reads that campaign. A script whose code calls one of them runs only
- * for a campaign: a caller that is not one (Distry, `POST /internal/engines/{outcome}/calls`) is never handed it.
- * A new door that needs its run's campaign = one entry here.
- */
-export const CAMPAIGN_DOORS: readonly string[] = ["lead.serve", "lead.followup.claim", "campaign.detail", "campaign.predecessor"];
-
-/** Whether a script's code calls a door that needs the campaign its run is for (read from the code, like its materials). */
-export function needsCampaign(code: string): boolean {
-  return CAMPAIGN_DOORS.some((name) => code.includes(`"${name}"`) || code.includes(`'${name}'`));
-}
-
 export const APOLLO_EMAIL_VERIFY = "apollo.email.verify";
 export const APOLLO_APIFY_AVAILABLE = "apollo.apify.available";
 export const SCRIPT_VENDORS = [LLM_COMPLETE, CHAT_COMPLETE, JEV_NOUL, VOICE_READ, BOOKING_SLOTS, JEV_CHOICE, LLM_PICK, TEMPLATE_PICK, ...Object.keys(SERVICE_DOOR_VENDORS)] as const;

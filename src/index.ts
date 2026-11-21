@@ -32,7 +32,6 @@ import figuresRoutes from "./routes/figures.js";
 import scriptsRoutes, { internalScriptsRouter } from "./routes/scripts.js";
 import enginesRoutes, { productionEngineRunDeps } from "./routes/engines.js";
 import { closeOrphanEngineRuns } from "./lib/scripts/engine-runner.js";
-import { closeOrphanEngineCalls } from "./lib/scripts/engine-calls.js";
 import { nameUnnamedScripts, productionNamer } from "./lib/scripts/script-names.js";
 import { maybeRefreshMonitoring, productionMonitoringDeps, setMonitoringContext } from "./lib/scripts/script-monitoring.js";
 import { maybeRefreshEngineMonitoring, productionEngineMonitoringDeps, setEngineMonitoringContext } from "./lib/scripts/engine-monitoring.js";
@@ -111,10 +110,6 @@ async function boot(): Promise<void> {
   void closeOrphanEngineRuns(db, productionEngineRunDeps())
     .then((n) => n > 0 && console.warn(`[workflow-service] closed ${n} Engine run(s) left open by the previous process`))
     .catch((err) => console.error("[workflow-service] closing orphan Engine runs failed:", err));
-  // DISTRY-PRINCIPAL-1119: an Engine call the previous process was running ended with it (its caller reads why).
-  void closeOrphanEngineCalls(db)
-    .then((n) => n > 0 && console.warn(`[workflow-service] closed ${n} Engine call(s) left running by the previous process`))
-    .catch((err) => console.error("[workflow-service] closing orphan Engine calls failed:", err));
 
   // Verify API Registry is reachable — fail fast if not
   if (process.env.API_REGISTRY_SERVICE_URL && process.env.API_REGISTRY_SERVICE_API_KEY) {

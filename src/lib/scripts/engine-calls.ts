@@ -1,31 +1,20 @@
 /**
- * DISTRY-PRINCIPAL-1119 (owner 2026-11-19: Distry « has access to all Engines as tools, by calling the most performing
- * script … it just waits for the results »; « Make sure every outcome is callable by Distry »).
+ * DISTRY-PRINCIPAL-1119: THE ENGINE LIST, the SAME for every Engine (never a branch on an outcome, a channel or a client):
+ * every outcome of features-service's live catalogue, with whether one Unit of it can be made now (at least one live
+ * script the Rating could draw: active, proven when a port, past its writing proof when it writes to people) and, when
+ * not, why in plain words; plus what a run must hand (the materials each runnable script reads, the channel it states).
+ * Read only: nothing spent, no proof started.
  *
- * Two things, the SAME for every Engine (never a branch on an outcome, a channel or a client):
- *
- * 1. THE ENGINE LIST: every outcome of features-service's live catalogue, with whether a caller can get one Unit of it
- *    now (at least one live script the Rating could draw: active, proven when a port, past its writing proof when it
- *    writes to people) and, when not, why in plain words; plus what a caller must hand (the materials each runnable
- *    script reads, the channel it states). Read only: nothing spent, no proof started.
- *
- * 2. ONE ENGINE CALL: the Rating's pick (`pickScript`, features-service's script pick, the same a campaign run calls,
- *    never a hand pick), then that script runs on its own runs-service run, a child of the CALLER's run, org-billed and
- *    declared exactly as a campaign's script run (`runStoredScript`). When the pick has nothing to make (nothing, or
- *    unmade with no decision), the Rating's next candidate is asked, in the order of the same draw, up to
- *    `MAX_SCRIPTS_PER_RUN` (the campaign rule, `fallsThrough`). The call is stored (`engine_calls`) so a caller waits
- *    without a client timeout: the start answers once done or after its wait, the poll answers the same row.
+ * DISTRY-CALL-IS-CAMPAIGN-1121 (owner 2026-11-21: « tout appel de Distry sur un de ces engines est TOUJOURS une campagne,
+ * obligatoirement »): Distry gets a Unit through a campaign (campaign-service creates it, the campaign Engine run makes
+ * it); the direct Engine call route and its campaign-door list are deleted. A script missing something stops with a
+ * plain reason, never a rule here.
  */
-import { and, eq, inArray, lt } from "drizzle-orm";
-import { engineCalls, engineReasons, scripts, type EngineCallRow, type ScriptRow } from "../../db/schema.js";
+import { inArray } from "drizzle-orm";
+import { engineReasons, scripts, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
-import { START_OUTCOME, pickScript, provenness, type Pick as RatingPick } from "./engine.js";
-import { MAX_SCRIPTS_PER_RUN, fallsThrough } from "./engine-runner.js";
-import { ScriptRunFailed, type MaterialUnit, type RunIdentity, type RunScriptInput, type ScriptRunResult, type SubjectRef } from "./script-runner.js";
+import { START_OUTCOME, provenness } from "./engine.js";
 import { writerProofDrawsNow } from "./writer-proof.js";
-import { needsCampaign } from "./vendors.js";
-
-// ── 1. The Engine list ─────────────────────────────────────────────────────────────────────────────
 
 /** One outcome of the live catalogue (features-service `GET /public/catalogue/steps`). */
 export interface CatalogueOutcome {
@@ -74,8 +63,8 @@ export interface EngineListing {
   inputs: EngineInputOption[];
   /** The runnable scripts the Rating draws among (their client-readable names). */
   scripts: Array<{ dynasty: string; name: string | null; version: number; units: string[]; channel: string | null }>;
-  /** `runnable` = what a caller with no campaign can get drawn; `needCampaign` = live scripts that run only for a campaign. */
-  counts: { scripts: number; live: number; runnable: number; needCampaign: number };
+  /** `runnable` = the live scripts the Rating can draw. */
+  counts: { scripts: number; live: number; runnable: number };
 }
 
 /** The materials a script needs handed: what its code reads minus what it asks another Engine for (tactic `asks`). */
@@ -84,12 +73,6 @@ export function unitsToHand(row: Pick<ScriptRow, "materials" | "tactics">): stri
   const asked = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
   return [...new Set((row.materials ?? []).filter((m) => !asked.includes(m)))].sort();
 }
-
-/** The Engines a script asks for a Unit inside its run (tactic `asks`). */
-const asksOf = (row: Pick<ScriptRow, "tactics">): string[] => {
-  const asks = ((row.tactics ?? {}) as Record<string, unknown>).asks;
-  return Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
-};
 
 const channelOf = (row: Pick<ScriptRow, "tactics">): string | null => {
   const c = ((row.tactics ?? {}) as Record<string, unknown>).channel;
@@ -106,7 +89,6 @@ export function notCallableReason(counts: {
   live: number;
   unprovenPorts: number;
   awaitingWriterProof: number;
-  needCampaign?: number;
   stated?: string | null;
   movedTo?: string[];
 }): string {
@@ -117,7 +99,6 @@ export function notCallableReason(counts: {
   }
   if (counts.live === 0) return `Every script of this outcome is retired (${counts.scripts} stored).`;
   const parts: string[] = [];
-  if (counts.needCampaign) parts.push(`${counts.needCampaign} only run inside a campaign (they serve or answer that campaign's people)`);
   if (counts.unprovenPorts > 0) parts.push(`${counts.unprovenPorts} not yet proven on their recorded cases`);
   if (counts.awaitingWriterProof > 0) parts.push(`${counts.awaitingWriterProof} waiting to pass their writing proof before writing to people`);
   return `None of its ${counts.live} live scripts can run now: ${parts.join(", ")}.`;
@@ -149,7 +130,7 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
     if (r.status !== "active" || r.dynastyStatus !== "active") continue;
     liveHome.set(r.dynasty, new Set([...(liveHome.get(r.dynasty) ?? []), r.outcome]));
   }
-  type Tally = { all: ScriptRow[]; dynasties: Set<string>; live: ScriptRow[]; runnable: ScriptRow[]; unprovenPorts: number; awaitingWriterProof: number; needCampaign: number };
+  type Tally = { all: ScriptRow[]; dynasties: Set<string>; live: ScriptRow[]; runnable: ScriptRow[]; unprovenPorts: number; awaitingWriterProof: number };
   const tally = new Map<string, Tally>();
   for (const o of outcomes) {
     const all = byOutcome.get(o.key) ?? [];
@@ -158,14 +139,7 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
     const runnable: ScriptRow[] = [];
     let unprovenPorts = 0;
     let awaitingWriterProof = 0;
-    let needCampaign = 0;
     for (const r of live) {
-      // DISTRY-ENGINE-CALL-CAMPAIGN-1119: the list says what a caller that is NOT a campaign can get, exactly as the
-      // call's pick draws (`noCampaign`): a script that needs its run's campaign is never callable here.
-      if (needsCampaign(r.code)) {
-        needCampaign++;
-        continue;
-      }
       if (!(await provenness(db, r)).runnable) {
         unprovenPorts++;
         continue;
@@ -176,29 +150,11 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
       }
       runnable.push(r);
     }
-    tally.set(o.key, { all, dynasties, live, runnable, unprovenPorts, awaitingWriterProof, needCampaign });
-  }
-  // DISTRY-ENGINES-1119: a script that ASKS other Engines (tactic `asks`) runs outside a campaign only when each one it
-  // asks can be drawn there too: an ask from a call carries no campaign and no channel, so the asked Engine needs a
-  // runnable script that needs no campaign, states no channel and reads no Unit it must be handed. Otherwise every call of it ends `no_script`, so it
-  // counts as running only inside a campaign. Repeated until nothing moves (an ask of an ask).
-  const askable = (outcome: string) => {
-    const t = tally.get(outcome);
-    return !t || t.runnable.some((r) => channelOf(r) === null && unitsToHand(r).length === 0);
-  };
-  for (let moved = true; moved; ) {
-    moved = false;
-    for (const t of tally.values()) {
-      const keep = t.runnable.filter((r) => asksOf(r).every(askable));
-      if (keep.length === t.runnable.length) continue;
-      t.needCampaign += t.runnable.length - keep.length;
-      t.runnable = keep;
-      moved = true;
-    }
+    tally.set(o.key, { all, dynasties, live, runnable, unprovenPorts, awaitingWriterProof });
   }
   const out: EngineListing[] = [];
   for (const o of outcomes) {
-    const { dynasties, live, runnable, unprovenPorts, awaitingWriterProof, needCampaign } = tally.get(o.key)!;
+    const { dynasties, live, runnable, unprovenPorts, awaitingWriterProof } = tally.get(o.key)!;
     runnable.sort((a, b) => a.dynasty.localeCompare(b.dynasty));
     const inputs = new Map<string, EngineInputOption>();
     for (const r of runnable) {
@@ -217,166 +173,13 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
               live: live.length,
               unprovenPorts,
               awaitingWriterProof,
-              needCampaign,
               stated: stated.get(o.key) ?? null,
               movedTo: movedTo([...dynasties], o.key, liveHome, nameOf),
             }),
       inputs: [...inputs.values()].sort((a, b) => a.units.length - b.units.length || JSON.stringify(a).localeCompare(JSON.stringify(b))),
       scripts: runnable.map((r) => ({ dynasty: r.dynasty, name: r.name ?? null, version: r.version, units: unitsToHand(r), channel: channelOf(r) })),
-      counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length, needCampaign },
+      counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length },
     });
   }
   return out;
-}
-
-// ── 2. One Engine call ─────────────────────────────────────────────────────────────────────────────
-
-export interface EngineCallInput {
-  outcome: string;
-  orgId: string;
-  userId: string;
-  /** The caller's own run: every script run is its child. */
-  callerRunId: string;
-  /** The caller's downstream headers (brand, user...), forwarded to the run and the vendors. */
-  headers: Record<string, string>;
-  units: Record<string, MaterialUnit | MaterialUnit[]>;
-  request: Record<string, unknown> | null;
-  subject?: SubjectRef;
-  channel?: string | null;
-}
-
-export interface EngineCallDeps {
-  run(input: RunScriptInput, who: RunIdentity): Promise<ScriptRunResult>;
-  noteScriptRun?(outcome: string): void;
-}
-
-/** The pick as a call serves it. */
-export function servedPickOf(outcome: string, pick: RatingPick) {
-  return {
-    outcome,
-    dynasty: pick.script.dynasty,
-    version: pick.script.version,
-    scriptId: pick.script.id,
-    name: pick.script.name ?? null,
-    basis: pick.basis,
-    draws: pick.draws,
-  };
-}
-
-/** The Request a called script reads: the caller's, with the clock and the brand a campaign run would carry. */
-export function callRequestOf(input: Pick<EngineCallInput, "request" | "headers">, now: Date): Record<string, unknown> {
-  const r = { ...(input.request ?? {}) };
-  if (typeof r.now !== "string") r.now = now.toISOString();
-  if (!Array.isArray(r.brandIds)) {
-    const brand = input.headers["x-brand-id"] ?? "";
-    r.brandIds = brand.split(",").map((s) => s.trim()).filter(Boolean);
-  }
-  return r;
-}
-
-export type StartedCall = { kind: "not_callable"; message: string } | { kind: "started"; call: EngineCallRow; done: Promise<EngineCallRow> };
-
-/**
- * The Rating's pick, stored, then run in the background (the caller waits on `done` or polls the row). Throws when the
- * pick cannot be read (nothing ran, nothing stored); `not_callable` when no script of the Engine can run on what the
- * caller hands.
- */
-export async function startEngineCall(db: AnyPgDb, input: EngineCallInput, deps: EngineCallDeps): Promise<StartedCall> {
-  const servable = Object.keys(input.units);
-  const pick = await pickScript(db, { outcome: input.outcome, servable, channel: input.channel ?? null, orgId: input.orgId, noCampaign: true });
-  if (!pick) {
-    return {
-      kind: "not_callable",
-      message: `no script of Engine ${input.outcome} can run outside a campaign on ${servable.length ? servable.join(", ") : "no Units"}${input.channel ? ` for channel ${input.channel}` : ""}: read GET /internal/engines for what it needs`,
-    };
-  }
-  const [call] = await db.insert(engineCalls).values({ outcome: input.outcome, orgId: input.orgId, callerRunId: input.callerRunId, pick: servedPickOf(input.outcome, pick) }).returning();
-  const done = runCall(db, call!.id, input, pick, deps);
-  return { kind: "started", call: call!, done };
-}
-
-async function runCall(db: AnyPgDb, callId: string, input: EngineCallInput, pick: RatingPick, deps: EngineCallDeps): Promise<EngineCallRow> {
-  const request = callRequestOf(input, new Date());
-  const who: RunIdentity = { orgId: input.orgId, userId: input.userId, parentRunId: input.callerRunId, headers: input.headers };
-  const tried: Array<{ script: string; runId: string | null; status: string; error: string | null }> = [];
-  let result: ScriptRunResult | null = null;
-  let error: string | null = null;
-  try {
-    for (const script of pick.ranked.slice(0, MAX_SCRIPTS_PER_RUN)) {
-      // As a campaign run states them: the owning service declares the Unit when the script's tactic says so
-      // (`recorded_by`), and a Unit naming no subject is about the run that asked for it (as `ctx.ask` does).
-      const recordedBy = (script.tactics as Record<string, unknown> | null)?.recorded_by;
-      try {
-        result = await deps.run(
-          {
-            outcome: script.outcome,
-            dynasty: script.dynasty,
-            version: script.version,
-            units: input.units,
-            request,
-            ...(input.subject ? { subject: input.subject } : { fallbackSubject: { service: "runs-service", id: input.callerRunId } }),
-            ...(typeof recordedBy === "string" && recordedBy ? { recordedBy } : {}),
-            billing: "org",
-          },
-          who,
-        );
-      } catch (e) {
-        if (!(e instanceof ScriptRunFailed)) throw e;
-        result = e.result;
-      }
-      deps.noteScriptRun?.(input.outcome);
-      tried.push({ script: result.scriptSlug, runId: result.runId, status: result.status, error: result.error });
-      if (!fallsThrough(result, false)) break;
-    }
-  } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
-    console.error(`[workflow-service] engine call ${callId} ${input.outcome} failed: ${error}`);
-  }
-  const status = error ? "failed" : (result?.status ?? "failed");
-  const [row] = await db
-    .update(engineCalls)
-    .set({ status, unit: result?.status === "made" ? result.unit : null, error: error ?? result?.error ?? null, tried, finishedAt: new Date() })
-    .where(eq(engineCalls.id, callId))
-    .returning();
-  console.log(`[workflow-service] engine call ${callId} ${input.outcome} for org ${input.orgId}: ${tried.map((t) => `${t.script} ${t.status}`).join(", ") || "no script ran"}${row?.error ? `: ${row.error}` : ""}`);
-  return row!;
-}
-
-/** Whether a call has ended. */
-export const callEnded = (row: Pick<EngineCallRow, "status">) => row.status !== "running";
-
-/** One call, read back by its caller's org. */
-export async function readEngineCall(db: AnyPgDb, id: string, orgId: string): Promise<EngineCallRow | null> {
-  const [row] = await db.select().from(engineCalls).where(and(eq(engineCalls.id, id), eq(engineCalls.orgId, orgId)));
-  return row ?? null;
-}
-
-/** When this process started: a call created before it was run by a process that is gone. */
-const PROCESS_STARTED_AT = new Date();
-
-/** At boot: a call a dead process left running ended with it (nobody runs it any more). Never touches this process's calls. */
-export async function closeOrphanEngineCalls(db: AnyPgDb, startedAt = PROCESS_STARTED_AT): Promise<number> {
-  const now = new Date();
-  const rows = await db
-    .update(engineCalls)
-    .set({ status: "failed", error: "interrupted: the service restarted while the script ran; call the Engine again", finishedAt: now })
-    .where(and(eq(engineCalls.status, "running"), lt(engineCalls.createdAt, startedAt)))
-    .returning({ id: engineCalls.id });
-  return rows.length;
-}
-
-/** The answer a call serves: the result once ended, else the call still running. */
-export function servedCall(row: EngineCallRow) {
-  return {
-    callId: row.id,
-    outcome: row.outcome,
-    status: row.status,
-    ended: callEnded(row),
-    unit: row.unit ?? null,
-    error: row.error ?? null,
-    pick: row.pick,
-    tried: row.tried,
-    createdAt: row.createdAt.toISOString(),
-    finishedAt: row.finishedAt?.toISOString() ?? null,
-  };
 }

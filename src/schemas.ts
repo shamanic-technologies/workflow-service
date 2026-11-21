@@ -3163,61 +3163,18 @@ export const EngineMakeRequestSchema = z
   })
   .openapi("EngineMakeRequest");
 
-// DISTRY-PRINCIPAL-1119: one Unit of an Engine for a caller that is not a campaign (Distry), and the Engine list.
-export const ENGINE_CALL_DEFAULT_WAIT_SECONDS = 25;
-export const ENGINE_CALL_MAX_WAIT_SECONDS = 240;
-
-export const EngineCallRequestSchema = z
-  .object({
-    units: z
-      .record(z.string(), z.union([MaterialUnitSchema, z.array(MaterialUnitSchema)]))
-      .optional()
-      .describe("The materials handed, by outcome (see each Engine's `inputs` on `GET /internal/engines`). Absent = none: only scripts that need nothing handed are candidates."),
-    request: z
-      .record(z.string(), z.unknown())
-      .nullable()
-      .optional()
-      .describe("What the script reads as its Request (`ctx.request`). `now` (the clock) and `brandIds` (from `x-brand-id`) are filled when absent."),
-    subject: SubjectRefSchema.optional().describe("Who or what the Unit is about, when the caller knows it; else the script names it."),
-    channel: z.string().min(1).nullable().optional().describe("The channel the work is for: a script stating a tactic `channel` runs only for it."),
-    waitSeconds: z
-      .number()
-      .int()
-      .min(0)
-      .max(ENGINE_CALL_MAX_WAIT_SECONDS)
-      .optional()
-      .describe(`How long the start waits for the call to end before answering 202 (default ${ENGINE_CALL_DEFAULT_WAIT_SECONDS}). Then poll GET /internal/engine-calls/{callId}.`),
-  })
-  .openapi("EngineCallRequest");
-
-export const EngineCallResponseSchema = z
-  .object({
-    callId: z.string().uuid(),
-    outcome: z.string(),
-    status: z
-      .enum(["running", "made", "nothing", "unmade", "waiting", "stopped", "failed"])
-      .describe("`made` = a Unit (`unit`); `nothing` = no Unit and no reason; `unmade` = no Unit for a reason the world gave (`error`, `<code>: <why>`); `waiting`/`stopped`/`failed` = no Unit, `error` says why; `running` = not ended yet, poll."),
-    ended: z.boolean(),
-    unit: z.object({ outcome: z.string(), subject: SubjectRefSchema.nullable(), content: z.record(z.string(), z.unknown()) }).passthrough().nullable(),
-    error: z.string().nullable(),
-    pick: z.object({ outcome: z.string(), dynasty: z.string(), version: z.number().int(), scriptId: z.string(), name: z.string().nullable(), basis: z.string(), draws: z.array(z.record(z.string(), z.unknown())) }).passthrough(),
-    tried: z.array(z.object({ script: z.string(), runId: z.string().nullable(), status: z.string(), error: z.string().nullable() })).describe("Every script run, in the Rating's order (the next one is asked only when one had nothing to make)."),
-    createdAt: z.string(),
-    finishedAt: z.string().nullable(),
-  })
-  .openapi("EngineCallResponse");
-
+// DISTRY-PRINCIPAL-1119: the Engine list (every Distry call to an Engine is a campaign, DISTRY-CALL-IS-CAMPAIGN-1121).
 export const EngineListingSchema = z
   .object({
     outcome: z.string(),
     name: z.string().describe("The outcome's name in the catalogue."),
-    callable: z.boolean().describe("At least one live script the Rating could draw now for a caller that is not a campaign (an org's model may still narrow it at call time). A script that only runs inside a campaign (it serves or answers that campaign's people) never counts."),
+    callable: z.boolean().describe("At least one live script the Rating could draw now (an org's model or a campaign's strategy may still narrow it at run time)."),
     reason: z.string().nullable().describe("Plain words: why no Unit can be asked now. Null when callable."),
     inputs: z.array(z.object({ units: z.array(z.string()), channel: z.string().nullable() })).describe("Each way to call it: the Units (by outcome) to hand in `units`, the `channel` to state (null = any)."),
     scripts: z.array(z.object({ dynasty: z.string(), name: z.string().nullable(), version: z.number().int(), units: z.array(z.string()), channel: z.string().nullable() })),
     counts: z
-      .object({ scripts: z.number().int(), live: z.number().int(), runnable: z.number().int(), needCampaign: z.number().int().describe("Live scripts that only run inside a campaign: never drawn for an Engine call.") })
-      .describe("`runnable` = the live scripts an Engine call can draw."),
+      .object({ scripts: z.number().int(), live: z.number().int(), runnable: z.number().int() })
+      .describe("`runnable` = the live scripts the Rating can draw."),
   })
   .openapi("EngineListing");
 
@@ -3232,38 +3189,6 @@ registry.registerPath({
   responses: {
     200: { description: "The Engines", content: { "application/json": { schema: z.object({ engines: z.array(EngineListingSchema), callable: z.number().int(), total: z.number().int() }) } } },
     502: { description: "`engine_list_unreadable`: the catalogue could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/internal/engines/{outcome}/calls",
-  summary: "One Unit of an Engine for a caller that is not a campaign (Distry): the Rating picks the script, it runs, the caller waits or polls (service key only)",
-  description:
-    "DISTRY-PRINCIPAL-1119 (owner 2026-11-19: Distry calls « the most performing script … it just waits for the results »). The SAME `pickScript` a campaign run calls (features-service's script pick, never a hand pick), then the script runs on its own runs-service run, a child of the caller's run (`x-run-id`, required), org-billed (`x-org-id`, required) and declared as a campaign's script run. A pick with nothing to make asks the Rating's next candidate, as a campaign run does (at most 5). Answers 200 once ended within `waitSeconds`, else 202 with `status: running`: poll `GET /internal/engine-calls/{callId}`. 404 `no_runnable_script`: nothing can run on what was handed (see `GET /internal/engines`); 502 `script_pick_unreadable`: nothing ran.",
-  tags: ["Engines"],
-  security: [{ apiKey: [] }],
-  request: { params: z.object({ outcome: z.string() }), body: { required: false, content: { "application/json": { schema: EngineCallRequestSchema } } } },
-  responses: {
-    200: { description: "The call ended (a Unit, or why not)", content: { "application/json": { schema: EngineCallResponseSchema } } },
-    202: { description: "Still running: poll", content: { "application/json": { schema: EngineCallResponseSchema } } },
-    400: { description: "Not an outcome key, no `x-org-id`/`x-run-id`, or an invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
-    404: { description: "`no_runnable_script`", content: { "application/json": { schema: z.object({ error: z.string(), code: z.literal("no_runnable_script") }) } } },
-    502: { description: "`script_pick_unreadable`", content: { "application/json": { schema: ErrorResponseSchema } } },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/internal/engine-calls/{callId}",
-  summary: "One Engine call read back by its org, waiting up to `waitSeconds` for it to end (service key only)",
-  tags: ["Engines"],
-  security: [{ apiKey: [] }],
-  request: { params: z.object({ callId: z.string().uuid() }), query: z.object({ waitSeconds: z.string().optional().describe(`0..${ENGINE_CALL_MAX_WAIT_SECONDS}, default 0.`) }) },
-  responses: {
-    200: { description: "The call (`ended` false = still running)", content: { "application/json": { schema: EngineCallResponseSchema } } },
-    400: { description: "No `x-org-id`, or an invalid id / waitSeconds", content: { "application/json": { schema: ErrorResponseSchema } } },
-    404: { description: "`call_not_found` for this org", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
