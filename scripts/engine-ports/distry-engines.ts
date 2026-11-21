@@ -17,9 +17,12 @@
  *   4. PRODUCER (`buildEmailCheckSource`, `buildPhoneRevealSource`, `buildCompanyCheckSource`,
  *      `buildIndustryVideoSource`): one call of the owning service's own org route, which bills the run and declares
  *      its Unit (`recorded_by` that service).
- * No path is filed under Positive reply (`conversation`): campaign-service runs that Engine fleet-wide (switch rows), so a
- * runnable script there would take over every live campaign whose leg reaches a positive reply (cold email, pushed
- * email). Its scripts moved to finer Engines; the list says so.
+ * Positive reply (`conversation`) holds two paths (TARGET-CONVERSATION-NO-SCRIPT-1121: two campaigns launched on that
+ * Target alone were refused every tick, the Engine held no runnable script): a first email to a new lead (asks Email
+ * sent) and an answer to a lead owed one (asks Message sent with the goal). Every live channel whose leg reaches a
+ * positive reply names a finer Engine in the catalogue (cold email and pushed email = Email sent, follow-up = Lead
+ * interested, founder hello = WhatsApp message sent), so these paths serve only campaigns that reach Positive reply
+ * itself: a campaign launched on that Target, or a channel stating no finer outcome.
  * An outcome no script can make on demand (an ad with no ad account, a draft only a person of the team approves, a
  * newsletter released to a whole list) holds no script: its plain-words reason is stated as data
  * (`PUT /internal/engines/{outcome}/reason`, `ENGINE_REASONS` below), shown as-is on the Engine list.
@@ -169,6 +172,15 @@ export const PATHS: PathSpec[] = [
     "This answer works toward the lead giving their WhatsApp number. When a chat would be easier for them, ask whether they want to go on over WhatsApp and for their number, in one line.",
     "Works toward a WhatsApp number given: when a lead writes or acts, asks for the one answer that offers to go on over WhatsApp. Leads only.",
   ),
+  answererPath(
+    "conversation",
+    "dy_reply_answer_path",
+    "Answer toward a positive reply",
+    "instantly",
+    "This answer works toward the lead replying with interest. Write the one message that makes a real conversation easy for them to start: about what they care about, one easy question, nothing to buy.",
+    "Works toward a positive reply: asks for the one answer to a lead owed a message that opens a real conversation with one easy question. Leads only.",
+  ),
+  publicPath("conversation", "dy_reply_first_email_path", "First email toward a positive reply", "email_sent", "instantly", "instantly", "Works toward a positive reply: sends one first email to a new lead of the brand, whose reply the brand's mailbox reports."),
   publicPath("post_viewed", "dy_post_views_x", "X post toward views", "x_post_published", "social", "social", "Works toward post views: publishes one X post of the brand, whose views the brand's X account reports."),
   publicPath("post_viewed", "dy_post_views_linkedin", "LinkedIn post toward views", "linkedin_post_published", "social", "social", "Works toward post views: publishes one LinkedIn post of the brand, whose views the brand's LinkedIn account reports."),
   publicPath("post_engaged", "dy_post_engagement_x", "X post toward engagement", "x_post_published", "social", "social", "Works toward post engagement: publishes one X post of the brand, whose likes, replies and reposts the brand's X account reports."),
