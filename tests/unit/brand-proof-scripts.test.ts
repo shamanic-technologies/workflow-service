@@ -175,6 +175,31 @@ describe("Press feature found: the mailbox script", () => {
     expect(src).toContain(JSON.stringify(QUOTES_BRAND_QUESTION));
   });
 
+  it("states a platform-hosted outlet by its name with a null domain (never the platform's own site)", async () => {
+    const post = "https://www.linkedin.com/pulse/uk-innovation-landscape";
+    const m = mail("m3", "Your insights are now live on The Business Navigator (LinkedIn Newsletter)", [{ url: post, text: "Top Content on LinkedIn" }]);
+    const c: ReplayCase = {
+      id: "platform",
+      units: { llm_completion: completion({ articleUrl: post, outlet: "The Business Navigator", outletDomain: "", title: "", publishedAt: "2026-09-02" }) },
+      request,
+      tactics: PRESS_MAILBOX.tactics,
+      calls: [
+        { name: "brand.profile", answer: ok({ brand: profile }) },
+        { name: "google.mail.search", answer: ok({ mailboxes: ["owner@brand.test"], reason: null, messages: [m], nextCursor: null }) },
+        { name: "jev.noul", answer: ok({ probabilities: { announces: 0.9 } }) },
+        { name: "scraping.page", answer: ok({ result: { rawMarkdown: "Kevin of Brandy" } }) },
+        { name: "jev.noul", answer: ok({ probabilities: { quotesBrand: 0.8 } }) },
+        {
+          name: "brand.proof.press.store",
+          args: { params: { brandId: "brand-1" }, body: { features: [{ articleUrl: post, title: null, publishedAt: "2026-09-02", outlet: { name: "The Business Navigator", domain: null } }] } },
+          answer: ok({ units: [{ index: 0, unitId: "u3", companyId: null, newUnit: true, unresolvedReason: null, notoriety: null }] }),
+        },
+      ],
+      expect: { content: { judged: 1, notAnnouncing: 0, notThisBrand: 0, kept: [{ outlet: "The Business Navigator", articleUrl: post, title: null, publishedAt: "2026-09-02", newUnit: true, notoriety: null }] } },
+    };
+    expect((await replayCase(src, c)).diffs).toEqual([]);
+  });
+
   it("keeps nothing for a piece quoting another brand, and is unmade naming why", async () => {
     const c: ReplayCase = {
       id: "other-brand",
