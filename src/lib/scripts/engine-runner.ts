@@ -253,6 +253,9 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
       /** One script of the plan on its own run: the Engine run for the first, a child run named by it for the next. */
       const attempt = async (script: ScriptRow, scriptInput: RunScriptInput, scriptRunId: string): Promise<ScriptRunResult> => {
         scriptInput.request = { ...request, runId: scriptRunId };
+        // DISTRY-CALL-IS-CAMPAIGN-1121: a Unit about no person (a draft, a check a campaign asked for) is about the run
+        // that made it, when neither the occurrence nor the script names a subject; the script's own subject still wins.
+        if (!scriptInput.subject && !scriptInput.fallbackSubject) scriptInput.fallbackSubject = { service: "runs-service", id: scriptRunId };
         const recordedBy = (script.tactics as Record<string, unknown>)?.recorded_by;
         if (typeof recordedBy === "string" && recordedBy) scriptInput.recordedBy = recordedBy;
         let out: ScriptRunResult;
