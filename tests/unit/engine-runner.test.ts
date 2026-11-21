@@ -293,6 +293,14 @@ describe("a campaign run executes its Engine's script, with no workflow", () => 
     noWorkflowSlugAnywhere(w);
   });
 
+  it("a Unit about no person (a draft a campaign asked for) is declared on the run that made it (DISTRY-CALL-IS-CAMPAIGN-1121)", async () => {
+    await addScript("newsletter_drafted", "dy_draft", `export default function run(ctx) { return { content: { text: "a draft" } }; }`);
+    const w = world();
+    const { runId } = await runOnce(dispatch({ outcome: "newsletter_drafted" }), w);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false });
+    expect(w.declared).toEqual([{ runId, body: { produced: [{ outcomeKey: "newsletter_drafted", subjectService: "runs-service", subjectId: runId }], consumed: [] } }]);
+  });
+
   it("a reactive run with nothing pushed has no script it can run: it ends idle", async () => {
     await addScript("meeting_booked", "dy_answer", ANSWER);
     const w = world();
