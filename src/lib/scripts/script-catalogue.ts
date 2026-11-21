@@ -16,6 +16,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { scriptCases, scripts, type ScriptRow } from "../../db/schema.js";
 import { replayAll, type ReplayCase, type ReplaySummary } from "./replay.js";
 import { ScriptSourceError, validateSource } from "./sandbox.js";
+import { proveOnStore } from "./writer-proof.js";
 import { nameNewDynasty, productionNamer, type NameDynasties } from "./script-names.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -232,6 +233,7 @@ export async function createScript(db: AnyPgDb, input: CreateInput, author: Auth
       replay,
     })
     .returning();
+  proveOnStore(db, row!);
   return row!;
 }
 
@@ -272,7 +274,7 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
     checkCases(replacement.cases);
   }
   const replay = await requireProven(db, outcome, dynasty, input.code, input.tactics ?? (current.tactics as Record<string, unknown>) ?? {}, replacement?.cases);
-  return db.transaction(async (tx) => {
+  const stored = await db.transaction(async (tx) => {
     if (replacement) {
       await tx.delete(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
       for (const c of replacement.cases) await tx.insert(scriptCases).values({ outcome, dynasty, caseId: c.id, body: c, source: replacement.source });
@@ -304,6 +306,8 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
       .returning();
     return row!;
   });
+  proveOnStore(db, stored);
+  return stored;
 }
 
 export interface ForkInput {
@@ -350,6 +354,7 @@ export async function forkScript(db: AnyPgDb, outcome: string, sourceDynasty: st
       replay,
     })
     .returning();
+  proveOnStore(db, row!);
   return row!;
 }
 
@@ -371,7 +376,9 @@ export async function setDynastyStatus(db: AnyPgDb, outcome: string, dynasty: st
       await tx.update(scripts).set({ status: "active", deprecationReason: null, updatedAt: new Date() }).where(eq(scripts.id, versions[0]!.id));
     }
   });
-  return dynastyVersions(db, outcome, dynasty);
+  const after = await dynastyVersions(db, outcome, dynasty);
+  if (status === "active" && after[0]) proveOnStore(db, after[0]);
+  return after;
 }
 
 /** Store (or replace) a dynasty's recorded cases. Idempotent per case id. */
