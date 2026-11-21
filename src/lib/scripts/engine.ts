@@ -42,7 +42,12 @@ export interface EngineState {
   rollbackReason: string | null;
 }
 
-/** Whether `outcome`'s Engine runs the campaigns of `orgId` (its own latest row, else the fleet's latest row). */
+/**
+ * Whether `outcome`'s Engine runs the campaigns of `orgId` (its own latest row, else the fleet's latest row) AND holds a
+ * script that can run (TARGET-CONVERSATION-NO-SCRIPT-1121: Positive reply read `live: true` off a switch row while every
+ * one of its scripts had moved to finer Engines, so a campaign launched on it was dispatched and refused every tick).
+ * A switch row with no runnable script is not live: the state never promises a run nothing can make.
+ */
 export async function engineState(db: AnyPgDb, outcome: string, orgId: string | null): Promise<EngineState> {
   const rows = await db
     .select()
@@ -61,13 +66,23 @@ export async function engineState(db: AnyPgDb, outcome: string, orgId: string | 
   return {
     outcome,
     orgId,
-    live: deciding?.state === "switched",
+    live: deciding?.state === "switched" && (await holdsRunnableScript(db, outcome)),
     scope: own ? "org" : fleet ? "fleet" : null,
     provenOn: deciding?.dynasty ?? null,
     switchedAt: deciding?.switchedAt?.toISOString() ?? null,
     rolledBackAt: deciding?.rolledBackAt?.toISOString() ?? null,
     rollbackReason: deciding?.rollbackReason ?? null,
   };
+}
+
+/** Whether any active version of a live dynasty of `outcome` can run (a port only when proven 100 %). */
+export async function holdsRunnableScript(db: AnyPgDb, outcome: string): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(scripts)
+    .where(and(eq(scripts.outcome, outcome), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+  for (const row of rows) if ((await provenness(db, row)).runnable) return true;
+  return false;
 }
 
 /** A port runs only when it replays 100 % of its recorded cases; a script with no case is not a port. */

@@ -196,6 +196,22 @@ describe("an Engine switch", () => {
     await expect(switchEngine(db, { outcome: "meeting_booked", dynasty: "dy_path_fork" })).rejects.toThrow(/created from scratch/);
   });
 
+  it("never reads live for an Engine whose switch row stands while no runnable script is left (TARGET-CONVERSATION-NO-SCRIPT-1121)", async () => {
+    await addScript("conversation", "dy_path", SERVE);
+    await switchEngine(db, { outcome: "conversation", dynasty: "dy_path" });
+    expect(await engineState(db, "conversation", ORG)).toMatchObject({ live: true, scope: "fleet" });
+    // Every script moved to a finer Engine: the switch row stays, the Engine is no longer live (no dispatch, no 409 loop).
+    await db.update(scripts).set({ status: "deprecated", dynastyStatus: "deprecated" }).where(eq(scripts.dynasty, "dy_path"));
+    expect(await engineState(db, "conversation", ORG)).toMatchObject({ live: false, scope: "fleet", provenOn: "dy_path" });
+    // A port that no longer proves its cases is not runnable either.
+    await addScript("conversation", "dy_port", SERVE);
+    await putCases(db, "conversation", "dy_port", [{ id: "c1", units: {}, calls: [], expect: { fails: "x" } }], "test");
+    expect((await engineState(db, "conversation", ORG)).live).toBe(false);
+    // A script that can run makes it live again, with no new switch.
+    await addScript("conversation", "dy_path_2", SERVE);
+    expect((await engineState(db, "conversation", ORG)).live).toBe(true);
+  });
+
   it("refuses a port that does not replay all its cases", async () => {
     await addScript("lead_found", "dy_serve", SERVE);
     await putCases(db, "lead_found", "dy_serve", [{ id: "c1", units: {}, calls: [], expect: { content: {} } }], "test");

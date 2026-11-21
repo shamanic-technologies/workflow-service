@@ -35,10 +35,10 @@ const ALL = [
 describe("the scripts that make every Engine callable", () => {
   it("cover every gap Engine once, each a valid script that never names its own outcome, a model or a template", async () => {
     const covered = new Set(ALL.map((s) => s.outcome));
-    for (const o of ["form_submitted", "signup", "purchase", "website_visit", "lead_visited", "whatsapp_number_given", "post_viewed", "post_engaged", "google_search_click", "x_post_drafted", "linkedin_post_drafted", "linkedin_comment_drafted", "newsletter_drafted", "x_reply_published", "linkedin_comment_published", "email_checked", "phone_found", "company_researched", "industry_update_video"]) {
+    for (const o of ["conversation", "form_submitted", "signup", "purchase", "website_visit", "lead_visited", "whatsapp_number_given", "post_viewed", "post_engaged", "google_search_click", "x_post_drafted", "linkedin_post_drafted", "linkedin_comment_drafted", "newsletter_drafted", "x_reply_published", "linkedin_comment_published", "email_checked", "phone_found", "company_researched", "industry_update_video"]) {
       expect(covered.has(o), o).toBe(true);
     }
-    for (const o of [...Object.keys(ENGINE_REASONS), "conversation"]) expect(covered.has(o), o).toBe(false);
+    for (const o of Object.keys(ENGINE_REASONS)) expect(covered.has(o), o).toBe(false);
     const seen = new Set<string>();
     for (const s of ALL) {
       const key = `${s.outcome}/${s.dynasty}`;
