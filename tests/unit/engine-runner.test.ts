@@ -500,6 +500,13 @@ export default function run(ctx) {
     expect(fallsThrough({ status: "unmade", decided: "done" }, false)).toBe(false);
     expect(fallsThrough({ status: "unmade", again: true }, false)).toBe(false);
     expect(fallsThrough({ status: "unmade" }, true)).toBe(false);
+    // LEAD-EVENT-ONE-CAMPAIGN-1121: on an occurrence only a refusal about WHO the person is to that script falls through.
+    expect(fallsThrough({ status: "unmade", error: "person_not_admitted: customer" }, true)).toBe(true);
+    expect(fallsThrough({ status: "unmade", error: "person_not_admitted" }, true)).toBe(true);
+    expect(fallsThrough({ status: "unmade", error: "person_not_admitted: x", decided: "idle" }, true)).toBe(false);
+    expect(fallsThrough({ status: "unmade", error: "person_not_admitted: x", again: true }, true)).toBe(false);
+    expect(fallsThrough({ status: "unmade", error: "opted_out: stop" }, true)).toBe(false);
+    expect(fallsThrough({ status: "nothing" }, true)).toBe(false);
     for (const status of ["made", "waiting", "failed", "stopped"] as const) expect(fallsThrough({ status }, false)).toBe(false);
     expect(fallsThrough(null, false)).toBe(false);
   });
@@ -516,6 +523,84 @@ export default function run(ctx) {
     expect(w.runs.length).toBe(MAX_SCRIPTS_PER_RUN);
     expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
     expect(row.status).toBe("completed");
+  });
+});
+
+describe("one Lead event campaign answers every population (LEAD-EVENT-ONE-CAMPAIGN-1121)", () => {
+  // Each script answers its own population: it asks its admission (a door, as a claim) and refuses anyone else.
+  const POPULATION = `
+export default function run(ctx) {
+  ctx.vendor.call("lead.serve", {});
+  const who = ctx.request.trigger && ctx.request.trigger.who;
+  if (who !== ctx.tactics.relationships) return { unmade: "person_not_admitted: not_a_" + ctx.tactics.relationships };
+  return { content: { answered: who }, subject: { service: "lead-service", id: ctx.request.trigger.leadId } };
+}`;
+  const REFUSES_OTHERWISE = `
+export default function run(ctx) { return { unmade: "opted_out: they asked us to stop" }; }`;
+  async function threePopulations() {
+    await addScript("paid_client", "dy_prospects", POPULATION, { relationships: "pure_prospect" });
+    await addScript("paid_client", "dy_clients", POPULATION, { relationships: "current_client" });
+    await addScript("paid_client", "dy_team", POPULATION, { relationships: "own_team" });
+    // The Rating ranks the prospect script first, then clients, then the team.
+    picks = fakeScriptPick({ dy_prospects: 3, dy_clients: 2, dy_team: 1 });
+    setScriptPickReader(picks);
+  }
+  const occurrence = (who: string) => dispatch({ outcome: "paid_client", fromOutcome: "lead_event", featureSlug: null, inputs: { trigger: { eventId: "ev-1", triggerId: "lead_event", leadId: "lead-7", who } } });
+
+  it("a current client reaches the script that admits them: one answer, the refusals before it never final", async () => {
+    await threePopulations();
+    const w = world();
+    const { row } = await runOnce(occurrence("current_client"), w);
+    expect(w.runs.map((r) => r.taskName)).toEqual(["script:paid_client/dy_prospects", "script:paid_client/dy_clients"]);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
+    // The refused attempt told lead-service another script follows; the admitting one claims final.
+    expect(w.doors.map((d) => d.headers["x-refusal-not-final"])).toEqual(["true", "true"]);
+    expect(row.result).toMatchObject({ status: "made", tried: [{ status: "unmade", error: "person_not_admitted: not_a_pure_prospect" }, { status: "made" }] });
+  });
+
+  it("a team member reaches the last script, whose claim is final", async () => {
+    await threePopulations();
+    const w = world();
+    await runOnce(occurrence("own_team"), w);
+    expect(w.runs.length).toBe(3);
+    expect(w.doors.map((d) => d.headers["x-refusal-not-final"])).toEqual(["true", "true", undefined]);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false, delivery: { state: "delivered" } });
+  });
+
+  it("a person no script admits is refused once, with the last script's reason, as before", async () => {
+    await threePopulations();
+    const w = world();
+    await runOnce(occurrence("investor"), w);
+    expect(w.runs.length).toBe(3);
+    expect(w.calls[2]!.body).toEqual({ success: true, stopCampaign: false, personNotAdmitted: { reason: "not_a_own_team" } });
+  });
+
+  it("a prospect is answered by the first script alone, its claim final when no other script is left", async () => {
+    await threePopulations();
+    const w = world();
+    await runOnce(occurrence("pure_prospect"), w);
+    expect(w.runs.length).toBe(1);
+    expect(w.doors.map((d) => d.headers["x-refusal-not-final"])).toEqual(["true"]);
+  });
+
+  it("any other refusal on an occurrence stays final", async () => {
+    await addScript("paid_client", "dy_stop", REFUSES_OTHERWISE);
+    await addScript("paid_client", "dy_clients", POPULATION, { relationships: "current_client" });
+    picks = fakeScriptPick({ dy_stop: 2, dy_clients: 1 });
+    setScriptPickReader(picks);
+    const w = world();
+    await runOnce(occurrence("current_client"), w);
+    expect(w.runs.length).toBe(1);
+    expect(w.calls[2]!.body).toMatchObject({ delivery: { state: "refused", code: "opted_out" } });
+  });
+
+  it("a proactive run never carries the header", async () => {
+    await addScript("lead_found", "dy_a", SERVE, { recorded_by: "lead" });
+    await addScript("lead_found", "dy_b", SERVE, { recorded_by: "lead" });
+    const w = world({ found: false, reason: "nobody" });
+    await runOnce(dispatch(), w);
+    expect(w.doors.length).toBe(2);
+    for (const d of w.doors) expect(d.headers["x-refusal-not-final"]).toBeUndefined();
   });
 });
 
