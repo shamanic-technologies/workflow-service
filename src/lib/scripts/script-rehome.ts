@@ -26,6 +26,7 @@ import {
   type Author,
   type CatalogueDeps,
 } from "./script-catalogue.js";
+import { proveOnStore } from "./writer-proof.js";
 import { validateSource } from "./sandbox.js";
 import { nameNewDynasty, sameName, takenNames } from "./script-names.js";
 import { CAMPAIGN_CALLER } from "./engine.js";
@@ -94,7 +95,7 @@ export async function rehomeScript(db: AnyPgDb, outcome: string, dynasty: string
       : await nameNewDynasty(db, toOutcome, { dynasty, description: input.description ?? current.description, tactics }, undefined, deps.nameDynasties);
   const cases = await db.select().from(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(scripts)
       .values({
@@ -206,4 +207,6 @@ export async function rehomeScript(db: AnyPgDb, outcome: string, dynasty: string
       waitsMoved: moved.length,
     };
   });
+  proveOnStore(db, result.script);
+  return result;
 }

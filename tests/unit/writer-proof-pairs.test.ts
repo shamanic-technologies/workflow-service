@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { eq } from "drizzle-orm";
-import { createScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
+import { createScript, setDynastyStatus, upgradeScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { candidatesOf, setScriptPickReader, setScriptStrategyReader } from "../../src/lib/scripts/engine.js";
@@ -248,6 +248,55 @@ describe("a writer that asks its model", () => {
     expect(await models()).toEqual(["dy_claude_haiku"]);
     expect((await db.select().from(writerProofs)).map((r) => [r.state, r.trigger, r.completionScriptId])).toEqual([["passed", "auto", haiku.id]]);
     expect(await models()).toEqual(["dy_claude_haiku"]);
+  });
+
+  const settle = async () => {
+    for (let i = 0; i < 200; i++) {
+      const rows = await db.select().from(writerProofs);
+      if (rows.length > 0 && rows.every((r) => r.state !== "running")) return rows;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return db.select().from(writerProofs);
+  };
+
+  it("WRITER-PROOF-AT-STORE-1121: storing a new writer version starts its pair proofs, with every live model, before any draw", async () => {
+    const { glmFlash, haiku } = await seed();
+    await produce(PROOF_SAMPLE);
+    await setEngineEnforced(db, "message_written", true, "staff");
+    setProofContext({ db, deps: proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps });
+    const v2 = await upgradeScript(db, "message_written", "dy_answer_lead", { code: WRITER + "\n// v2" }, author);
+    const proofs = await settle();
+    expect(proofs.map((r) => [r.scriptId, r.trigger, r.state, r.completionScriptId]).sort()).toEqual(
+      [[v2.id, "auto", "passed", glmFlash.id], [v2.id, "auto", "passed", haiku.id]].sort(),
+    );
+  });
+
+  it("WRITER-PROOF-AT-STORE-1121: a restored writer dynasty starts its proofs; a retired upgrade or a non-enforced Engine starts none", async () => {
+    await seed();
+    await produce(PROOF_SAMPLE);
+    setProofContext({ db, deps: proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps });
+    await upgradeScript(db, "message_written", "dy_answer_lead", { code: WRITER + "\n// not enforced" }, author);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await db.select().from(writerProofs)).toEqual([]);
+    await setEngineEnforced(db, "message_written", true, "staff");
+    await setDynastyStatus(db, "message_written", "dy_answer_lead", "deprecated", "awaiting the go");
+    await upgradeScript(db, "message_written", "dy_answer_lead", { code: WRITER + "\n// retired" }, author);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await db.select().from(writerProofs)).toEqual([]);
+    const [restored] = await setDynastyStatus(db, "message_written", "dy_answer_lead", "active", "go");
+    expect(new Set((await settle()).map((r) => r.scriptId))).toEqual(new Set([restored!.id]));
+  });
+
+  it("WRITER-PROOF-AT-STORE-1121: a draw while the stored version's proofs still run waits for them and draws a proven model, never 'no script'", async () => {
+    await seed();
+    await produce(PROOF_SAMPLE);
+    await setEngineEnforced(db, "message_written", true, "staff");
+    setProofContext({ db, deps: proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps });
+    await upgradeScript(db, "message_written", "dy_answer_lead", { code: WRITER + "\n// v2" }, author);
+    const models = (await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "message_written/dy_answer_lead" })).map((r) => r.dynasty);
+    expect(models.length).toBeGreaterThan(0);
+    // The draw started no second proof: the store's own proofs are the only ones.
+    expect((await settle()).length).toBe(2);
   });
 
   it("a pair whose waited-for proof FAILS is still not drawn (the wait never bypasses the gate)", async () => {

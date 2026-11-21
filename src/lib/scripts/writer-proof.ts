@@ -28,7 +28,7 @@
  * 3. THE GATE, per Engine (`writer_proof_engines.enforced`, a staff switch, so an Engine is enforced only once its
  *    combinations were proven, never leaving its campaigns with no script): the Rating draws a writer version of an
  *    enforced Engine only when its latest proof passed (or it cannot be proven: fewer than `PROOF_SAMPLE` fitting
- *    cases). An unproven version is proven ONCE in the background the first time the Rating meets it (`auto`); a failed
+ *    cases). An unproven version is proven ONCE in the background, started when it is STORED (`proveOnStore`), else the first time the Rating meets it (`auto`); a failed
  *    one stays out until staff re-prove it; an interrupted one is retried at most `AUTO_ATTEMPTS` times. Never a
  *    validator, retry or rewrite on a live send: the proof happens before.
  *
@@ -634,6 +634,33 @@ async function gateAndProve(db: AnyPgDb, row: ScriptRow, completion: ScriptRow |
     void proveScript(ctx.db, ctx.deps, row, "auto", completion).catch((e) => console.error(`[workflow-service] writer proof of ${name} FAILED to start: ${String(e)}`));
   }
   return verdict.draws;
+}
+
+/**
+ * WRITER-PROOF-AT-STORE-1121: a writer version just STORED (create, upgrade, upgrade-with-cases, fork, re-home, restore)
+ * starts its proofs NOW, in the background, never on its first draw: `message_written/dy_answer_lead` v4 was stored at
+ * 15:20 and its 15 pair proofs started only when a run asked it at 18:11. Same gate, same proofs, same spend bound as
+ * the draw would start (`gateAndProve`: once per version or pair, `AUTO_ATTEMPTS` at most); a version that is not a
+ * writer, a retired one, or one of an Engine not enforced starts nothing. A pair writer is proven with every live
+ * completion script (what its completion pick would meet). Never awaited by the store, never throws into it.
+ */
+export function proveOnStore(db: AnyPgDb, row: ScriptRow): void {
+  if (!proofContext || row.status !== "active" || row.dynastyStatus !== "active") return;
+  const pair = isPairWriter(row);
+  if (!pair && (!writesToPerson(row.code) || !callsCompletion(row.code))) return;
+  const name = `${row.outcome}/${row.dynasty}/v${row.version}`;
+  void (async () => {
+    if (!(await engineEnforced(db, row.outcome))) return;
+    if (!pair) {
+      await gateAndProve(db, row, null);
+      return;
+    }
+    const completions = await db
+      .select()
+      .from(scripts)
+      .where(and(eq(scripts.outcome, LLM_COMPLETION_OUTCOME), eq(scripts.status, "active"), eq(scripts.dynastyStatus, "active")));
+    for (const completion of completions) await gateAndProve(db, row, completion);
+  })().catch((e) => console.error(`[workflow-service] writer proofs of ${name} FAILED to start at store: ${String(e)}`));
 }
 
 /** At boot: a proof left running by a dead process is abandoned (it holds nothing out any more). */
