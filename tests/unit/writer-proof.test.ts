@@ -298,14 +298,13 @@ describe("the gate: an enforced Engine's Rating draws only proven writers", () =
     expect(view.combinations.find((c) => c.dynasty === "dy_answer__claude_haiku")).toMatchObject({ state: "passed", red: false });
   });
 
-  it("an unproven writer of an enforced Engine is held out and proven once in the background", async () => {
+  it("an unproven writer of an enforced Engine is proven once; with nothing else drawable the pick waits for it (NEW-WRITER-FIRST-RUN-1121)", async () => {
     await seedWriter();
     await recordProductionRuns(PROOF_SAMPLE);
     await setEngineEnforced(db, "message_sent", true, "staff@example.com");
     const p = proofDeps({ decision: "write", message: "<p>Tuesday 10am works.</p>" });
     setProofContext({ db, deps: p.deps });
-    expect(await candidatesOf(db, { outcome: "message_sent", servable: [], channel: null })).toEqual([]);
-    for (let i = 0; i < 50 && (await db.select().from(writerProofs)).every((r) => r.state === "running"); i++) await new Promise((r) => setTimeout(r, 20));
+    expect((await candidatesOf(db, { outcome: "message_sent", servable: [], channel: null })).map((r) => r.dynasty)).toEqual(["dy_answer"]);
     expect((await db.select().from(writerProofs)).map((r) => [r.state, r.trigger])).toEqual([["passed", "auto"]]);
     expect((await candidatesOf(db, { outcome: "message_sent", servable: [], channel: null })).map((r) => r.dynasty)).toEqual(["dy_answer"]);
   });
