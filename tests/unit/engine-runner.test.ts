@@ -188,6 +188,21 @@ describe("an Engine switch", () => {
     expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: false, scope: "org", rollbackReason: "held back for a test" });
   });
 
+  it("lets a fleet switch made AFTER an org's roll-back cover that org, never one made before (ENGINE-STALE-ORG-ROLLBACK-1122)", async () => {
+    await addScript("lead_found", "dy_serve", SERVE);
+    await switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve", orgId: ORG });
+    await switchEngineOff(db, { outcome: "lead_found", orgId: ORG, reason: "guard: error rate" });
+    expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: false, scope: "org" });
+    // Every client switched on later: the older org stop no longer holds that org out.
+    await new Promise((r) => setTimeout(r, 5));
+    await switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve" });
+    expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: true, scope: "fleet" });
+    // A hold placed after the fleet switch still wins.
+    await switchEngine(db, { outcome: "lead_found", dynasty: "dy_serve", orgId: ORG });
+    await switchEngineOff(db, { outcome: "lead_found", orgId: ORG, reason: "held back after the fleet switch" });
+    expect(await engineState(db, "lead_found", ORG)).toMatchObject({ live: false, scope: "org", rollbackReason: "held back after the fleet switch" });
+  });
+
   it("switches every org on a script created from scratch with no case (SCRIPT-VALUE-RATING-1113-WF1), never on a fork without proof", async () => {
     await addScript("meeting_booked", "dy_path", SERVE);
     await switchEngine(db, { outcome: "meeting_booked", dynasty: "dy_path" });
