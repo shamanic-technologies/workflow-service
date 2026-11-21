@@ -168,6 +168,19 @@ describe("Press feature found: the mailbox script", () => {
     expect((await replayCase(src, c)).diffs).toEqual([]);
   });
 
+  it("hands Jev the article's opening and every passage naming the brand, far down a long roundup", async () => {
+    const { ARTICLE_VIEW_FN, PAGE_MAX_CHARS, PAGE_OPENING_CHARS, PASSAGE_RADIUS_CHARS } = await import("../../scripts/engine-ports/brand-proof.js");
+    const view = new Function("PAGE_MAX_CHARS", "PAGE_OPENING_CHARS", "PASSAGE_RADIUS_CHARS", `${ARTICLE_VIEW_FN}; return articleView;`)(PAGE_MAX_CHARS, PAGE_OPENING_CHARS, PASSAGE_RADIUS_CHARS) as (t: string, w: string[]) => string;
+    const filler = "Another leader shared a view on budgets and models. ".repeat(1500);
+    const long = "How to Control AI API Costs. " + filler + "Kevin Lourd, Founder of Brandy, says cache every prompt. " + filler;
+    const out = view(long, ["Brandy", "brandy.test"]);
+    expect(out.startsWith("How to Control AI API Costs.")).toBe(true);
+    expect(out).toContain("Kevin Lourd, Founder of Brandy, says cache every prompt.");
+    expect(out.length).toBeLessThanOrEqual(PAGE_MAX_CHARS);
+    expect(view("short page", ["Brandy"])).toBe("short page");
+    expect(src).toContain("articleView(String(page.result?.rawMarkdown");
+  });
+
   it("hands Jev the whole email and the brand, with the stated questions", async () => {
     expect(src).toContain(JSON.stringify(ANNOUNCES_QUESTION));
     expect(src).toContain(JSON.stringify(QUOTES_BRAND_QUESTION));

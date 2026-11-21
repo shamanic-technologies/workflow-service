@@ -86,12 +86,42 @@ export const ARTICLE_READ_PROMPT = [
 /** Most characters of an email or an article handed to a judge or the reader. */
 export const MAIL_MAX_CHARS = 8000;
 /**
- * The whole article, up to this cap: a roundup quoting 60 people names the brand far down the page (the first 12k
- * characters of « How to Control AI API Costs », Substack, never reached « Kevin Lourd, Founder of Distribute.you »).
+ * What the judge reads of an article: its opening, then every passage that names the brand (its name or its site,
+ * any case), up to this cap. A roundup quoting 60 people names the brand far down the page (the first 12k characters
+ * of « How to Control AI API Costs », Substack, never reached « Kevin Lourd, Founder of Distribute.you »), and Jev's
+ * window refuses a whole one (80k characters: `max_tokens_exceeded`). Choosing which passages to show is retrieval,
+ * never a verdict: Jev still judges whether the piece quotes the brand.
  */
-export const PAGE_MAX_CHARS = 80000;
+export const PAGE_MAX_CHARS = 16000;
+export const PAGE_OPENING_CHARS = 4000;
+export const PASSAGE_RADIUS_CHARS = 1200;
 /** The verdicts' storage table: a new judging rule = a new table, every message judged again under it. */
-export const JUDGED_TABLE = "judged_v2";
+export const JUDGED_TABLE = "judged_v3";
+
+/** Plain JS (no types): embedded in the script and evaluated as-is by the tests. */
+export const ARTICLE_VIEW_FN = `/** The article's opening, then each passage naming one of the brand's words (merged when they overlap), capped. */
+function articleView(text, words) {
+  if (text.length <= PAGE_MAX_CHARS) return text;
+  const low = text.toLowerCase();
+  const spans = [[0, PAGE_OPENING_CHARS]];
+  for (const w of words.map((x) => String(x || "").toLowerCase()).filter((x) => x.length > 2)) {
+    for (let i = low.indexOf(w); i >= 0; i = low.indexOf(w, i + w.length)) spans.push([Math.max(0, i - PASSAGE_RADIUS_CHARS), Math.min(text.length, i + w.length + PASSAGE_RADIUS_CHARS)]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const sp of spans) {
+    const last = merged[merged.length - 1];
+    if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+    else merged.push([sp[0], sp[1]]);
+  }
+  let out = "";
+  for (const [a, b] of merged) {
+    const piece = (a > 0 ? "[...] " : "") + text.slice(a, b);
+    if (out.length + piece.length > PAGE_MAX_CHARS) { out += piece.slice(0, Math.max(0, PAGE_MAX_CHARS - out.length)); break; }
+    out += piece + "\\n";
+  }
+  return out;
+}`;
 
 export function buildClientPastEmployersSource(): string {
   return [
@@ -161,6 +191,10 @@ const QUOTES_BRAND_QUESTION = ${JSON.stringify(QUOTES_BRAND_QUESTION)};
 const ARTICLE_READ_PROMPT = ${JSON.stringify(ARTICLE_READ_PROMPT)};
 const MAIL_MAX_CHARS = ${MAIL_MAX_CHARS};
 const PAGE_MAX_CHARS = ${PAGE_MAX_CHARS};
+const PAGE_OPENING_CHARS = ${PAGE_OPENING_CHARS};
+const PASSAGE_RADIUS_CHARS = ${PASSAGE_RADIUS_CHARS};
+
+${ARTICLE_VIEW_FN}
 const JUDGED_TABLE = ${JSON.stringify(JUDGED_TABLE)};
 
 /**
@@ -257,7 +291,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
     let pageText = "";
     if (articleUrl) {
       const page = tolerated(ctx, "scraping.page", { body: { url: articleUrl, enrich: false, brandIds: [brandId] } });
-      pageText = String(page.result?.rawMarkdown ?? "").slice(0, PAGE_MAX_CHARS);
+      pageText = articleView(String(page.result?.rawMarkdown ?? ""), [brandName, brandDomain]);
     }
     const q = must(ctx, "jev.noul", {
       state: { brand: brandState, email, article: articleUrl ? { url: articleUrl, outlet, title, text: pageText || "(the page could not be read)" } : "(the email links to no published piece)" },
