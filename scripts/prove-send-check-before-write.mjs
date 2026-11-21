@@ -16,6 +16,9 @@
  *
  * `--ops` prints one `upgradeWithCases` line per sender (its cases restated for the upgrade): pipe into
  * `node scripts/post-catalogue-ops.mjs` (dry run first). `--only <dynasty>` limits to one sender.
+ * `--store [--apply]` makes the SAME upgrade in this process (`upgradeScript` with its cases replaced, as the route does):
+ * dy_brand_team's restated cases hold whole threads (80 MB), past the route's 32 MB body limit. Dry = the upgrade replayed
+ * on its restated cases, nothing written. Needs ORG_ID and STAFF_EMAIL (who decided).
  *
  * Inside the workflow-service container, from /app/scripts (it reads ../dist):
  *   docker exec <container> node scripts/prove-send-check-before-write.mjs [--only dy_follow_up_due] [--ops]
@@ -94,6 +97,23 @@ for (const { outcome, dynasty } of SEND_CHECK_SENDERS) {
     log(`${dynasty}: the upgrade does NOT do what the stored code did on every recorded case: nothing may be stored`);
     failed++;
     continue;
+  }
+  if (process.argv.includes("--store")) {
+    const { replayAll } = await import("../dist/lib/scripts/replay.js");
+    const { upgradeScript } = await import("../dist/lib/scripts/script-catalogue.js");
+    const summary = await replayAll(next, restated.map((c) => ({ ...c, tactics: { ...(active.tactics ?? {}), ...(c.tactics ?? {}) } })));
+    log(`${dynasty}: the upgrade on its restated cases: ${summary.matches}/${summary.cases}`);
+    if (summary.matches !== summary.cases) {
+      for (const f of summary.failures.slice(0, 5)) log(`FAILS ${f.id}: ${f.diffs.slice(0, 2).join(" | ")}`);
+      failed++;
+      continue;
+    }
+    if (process.argv.includes("--apply")) {
+      const { ORG_ID, STAFF_EMAIL } = process.env;
+      if (!ORG_ID || !STAFF_EMAIL) throw new Error("ORG_ID and STAFF_EMAIL (who decided) are required");
+      const row = await upgradeScript(db, outcome, dynasty, { code: next, tactics: active.tactics ?? {}, replaceCases: { cases: restated, source: `SEND-CHECK-BEFORE-WRITE-1120: v${active.version}'s cases restated (the send's check asked before the writer)` } }, { orgId: ORG_ID, createdBy: STAFF_EMAIL });
+      log(`upgraded ${row.outcome}/${row.dynasty}/v${row.version} replay=${JSON.stringify(row.replay)}`);
+    }
   }
   if (ops) {
     console.log(
