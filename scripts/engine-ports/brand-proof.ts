@@ -156,6 +156,16 @@ const ARTICLE_READ_PROMPT = ${JSON.stringify(ARTICLE_READ_PROMPT)};
 const MAIL_MAX_CHARS = ${MAIL_MAX_CHARS};
 const PAGE_MAX_CHARS = ${PAGE_MAX_CHARS};
 
+/**
+ * The outlet as brand-service keys it: its own site when it has one; a stated null domain = hosted on a platform (a
+ * LinkedIn newsletter, a Substack), kept by its name; neither known = left out (brand-service reads the article's host).
+ */
+function outletOf(name: string, domain: string): Record<string, unknown> {
+  if (domain) return { outlet: { name: name || null, domain } };
+  if (name) return { outlet: { name, domain: null } };
+  return {};
+}
+
 function probability(j: any, key: string, what: string): number {
   const p = j && j.probabilities ? j.probabilities[key] : undefined;
   if (typeof p !== "number") throw new Error("press-mailbox: Jev answered no probability on " + what);
@@ -259,7 +269,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
       ctx.storage.set("judged", brandId, judged);
       continue;
     }
-    const feature = { articleUrl, title: title || null, publishedAt: publishedAt || (/^\\d{4}-\\d{2}-\\d{2}/.test(String(m.sentAt ?? "")) ? String(m.sentAt).slice(0, 10) : null), outlet: { name: outlet || null, domain: outletDomain || null } };
+    const feature = { articleUrl, title: title || null, publishedAt: publishedAt || (/^\\d{4}-\\d{2}-\\d{2}/.test(String(m.sentAt ?? "")) ? String(m.sentAt).slice(0, 10) : null), ...outletOf(outlet, outletDomain) };
     const stored = tolerated(ctx, ${JSON.stringify(PRESS_STORE_DOOR)}, { params: { brandId }, body: { features: [feature] } });
     if (stored.ok === false && !String(stored.error).includes("notoriety_unavailable")) throw new Error(${JSON.stringify(PRESS_STORE_DOOR)} + " failed (" + String(stored.status ?? "") + "): " + String(stored.error).slice(0, 500));
     // Stored either way; a failed notoriety judgment is retried by storing it again on a later run.
