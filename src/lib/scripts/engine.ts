@@ -22,7 +22,7 @@ import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
 import { SwitchError } from "./script-writer-switch.js";
-import { LLM_COMPLETION_OUTCOME, pairProofAllows, writerProofAllows } from "./writer-proof.js";
+import { LLM_COMPLETION_OUTCOME, pairProofAllows, pendingProof, writerProofAllows } from "./writer-proof.js";
 
 /** The caller a campaign Engine switch is recorded under. */
 export const CAMPAIGN_CALLER = "campaign";
@@ -388,7 +388,27 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     asker = at > 0 ? await activeVersion(db, input.askedBy!.slice(0, at), input.askedBy!.slice(at + 1)) : null;
     return asker;
   };
+  // PROVEN-BEFORE-PEOPLE-1116: a writer of an enforced Engine is drawn only once proven on recorded cases (a model
+  // asked by such a writer: the pair). A refusal while its proof runs in this process is noted in `awaiting`.
+  const proofAllows = async (row: ScriptRow, note = true): Promise<boolean> => {
+    if (!(await writerProofAllows(db, row))) {
+      const proof = pendingProof(row, null);
+      if (note && proof) awaiting.push({ row, proof });
+      return false;
+    }
+    if (input.outcome === LLM_COMPLETION_OUTCOME && input.askedBy) {
+      const writer = await askingWriter();
+      if (writer && !(await pairProofAllows(db, writer, row))) {
+        const proof = pendingProof(writer, row);
+        if (note && proof) awaiting.push({ row, proof });
+        return false;
+      }
+    }
+    return true;
+  };
   const out: ScriptRow[] = [];
+  // Rows held back only by a proof running right now (NEW-WRITER-FIRST-RUN-1121): waited for when nothing else is drawable.
+  const awaiting: Array<{ row: ScriptRow; proof: Promise<unknown> }> = [];
   for (const row of rows) {
     if (kept && !kept.has(row.dynasty)) continue;
     // A material the script ASKS another Engine for (tactic `asks`: `ctx.ask(request)` then `ctx.get(<outcome>)`, a
@@ -399,13 +419,13 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
     if (!(await provenness(db, row)).runnable) continue;
-    // PROVEN-BEFORE-PEOPLE-1116: a writer of an enforced Engine is drawn only once proven on recorded cases.
-    if (!(await writerProofAllows(db, row))) continue;
-    if (input.outcome === LLM_COMPLETION_OUTCOME && input.askedBy) {
-      const writer = await askingWriter();
-      if (writer && !(await pairProofAllows(db, writer, row))) continue;
-    }
-    out.push(row);
+    if (await proofAllows(row)) out.push(row);
+  }
+  // A version whose proof is still running is not refused: when nothing else can be drawn, the pick waits for those
+  // proofs (bounded by the proof's own ceiling) and draws whatever passed, never "no script" for a new version.
+  if (out.length === 0 && awaiting.length > 0) {
+    await Promise.allSettled(awaiting.map((a) => a.proof));
+    for (const { row } of awaiting) if (await proofAllows(row, false)) out.push(row);
   }
   // LOCAL-CLAUDE-RATING-1116: only where its stated LLM runs as stated for this org (one read per pick), and
   // WEBSEARCH-PICK-1119: only where that model takes what the asked request needs (web search, an image).

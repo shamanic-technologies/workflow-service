@@ -237,17 +237,38 @@ describe("a writer that asks its model", () => {
     ]);
   });
 
-  it("an unproven pair is held out and proven once in the background, then drawn", async () => {
+  it("NEW-WRITER-FIRST-RUN-1121: a new writer version with no proven model: the pick waits for the proofs it starts and draws what passed", async () => {
     const { haiku } = await seed();
     await db.update(scripts).set({ status: "deprecated", dynastyStatus: "deprecated" }).where(eq(scripts.dynasty, "dy_glm_flash"));
     await produce(PROOF_SAMPLE);
     await setEngineEnforced(db, "message_written", true, "staff");
     setProofContext({ db, deps: proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps });
     const models = async () => (await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "message_written/dy_answer_lead" })).map((r) => r.dynasty);
-    expect(await models()).toEqual([]);
-    for (let i = 0; i < 100 && (await db.select().from(writerProofs)).some((r) => r.state === "running"); i++) await new Promise((r) => setTimeout(r, 20));
+    // Before: the first run answered "no script" and failed its campaign run while the proof passed behind it.
+    expect(await models()).toEqual(["dy_claude_haiku"]);
     expect((await db.select().from(writerProofs)).map((r) => [r.state, r.trigger, r.completionScriptId])).toEqual([["passed", "auto", haiku.id]]);
     expect(await models()).toEqual(["dy_claude_haiku"]);
+  });
+
+  it("a pair whose waited-for proof FAILS is still not drawn (the wait never bypasses the gate)", async () => {
+    await seed();
+    await db.update(scripts).set({ status: "deprecated", dynastyStatus: "deprecated" }).where(eq(scripts.dynasty, "dy_claude_haiku"));
+    await produce(PROOF_SAMPLE);
+    await setEngineEnforced(db, "message_written", true, "staff");
+    setProofContext({ db, deps: proofDeps({ decision: "write", message: "M3" }).deps });
+    expect(await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "message_written/dy_answer_lead" })).toEqual([]);
+    expect((await db.select().from(writerProofs)).map((r) => r.state)).toEqual(["failed"]);
+  });
+
+  it("a pick that can already draw a proven model never waits for another pair's proof", async () => {
+    const { writer, haiku } = await seed();
+    await produce(PROOF_SAMPLE);
+    await proveScript(db, proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps, writer, "staff", haiku);
+    await setEngineEnforced(db, "message_written", true, "staff");
+    setProofContext({ db, deps: proofDeps({ decision: "write", message: "<p>Tuesday works.</p>" }).deps });
+    expect((await candidatesOf(db, { outcome: LLM_COMPLETION, servable: [], channel: null, askedBy: "message_written/dy_answer_lead" })).map((r) => r.dynasty)).toEqual(["dy_claude_haiku"]);
+    // glm flash's proof was started in the background, not awaited.
+    for (let i = 0; i < 100 && (await db.select().from(writerProofs)).some((r) => r.state === "running"); i++) await new Promise((r) => setTimeout(r, 20));
   });
 
   it("the model that wrote reaches the sender (SERVED-MODEL-1116)", async () => {

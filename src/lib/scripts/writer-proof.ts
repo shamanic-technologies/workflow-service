@@ -452,7 +452,8 @@ export async function proofTarget(db: AnyPgDb, outcome: string, dynasty: string)
   return rows.find((r) => r.status === "active") ?? rows[0] ?? null;
 }
 
-const inFlight = new Set<string>();
+/** The proofs running in this process, by pair: a pick that has nothing else to draw waits for them (`pendingProof`). */
+const inFlight = new Map<string, Promise<WriterProofRow>>();
 /**
  * A pair is (writer VERSION, completion DYNASTY): a model is one completion dynasty (a new model is a new dynasty), so an
  * upgrade of the completion script's code (byte-identical re-stores included) never orphans a pair's proof; an upgrade
@@ -471,7 +472,26 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
   }
   const key = pairKey(row.id, completion?.dynasty ?? null);
   if (inFlight.has(key)) throw new ProofError(409, `a proof of ${name} is already running`);
-  inFlight.add(key);
+  const running = runProof(db, deps, row, trigger, completion, name);
+  inFlight.set(key, running);
+  try {
+    return await running;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/**
+ * The proof of this version (or pair) running in this process right now, else null. A pick whose every candidate is
+ * held back only by a proof in flight waits for it (NEW-WRITER-FIRST-RUN-1121: a writer upgraded at 15:20 had no
+ * proven model at its first run at 18:11, the run answered "no script" and failed the campaign's run while its 15
+ * proofs passed within the minute).
+ */
+export function pendingProof(row: ScriptRow, completion: ScriptRow | null): Promise<unknown> | null {
+  return inFlight.get(pairKey(row.id, completion?.dynasty ?? null)) ?? null;
+}
+
+async function runProof(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "auto" | "staff", completion: ScriptRow | null, name: string): Promise<WriterProofRow> {
   const [proof] = await db
     .insert(writerProofs)
     .values({ scriptId: row.id, outcome: row.outcome, dynasty: row.dynasty, version: row.version, ...(completion ? { completionScriptId: completion.id, completionDynasty: completion.dynasty } : {}), state: "running", trigger, ceilingCents: String(PROOF_CEILING_CENTS) })
@@ -521,8 +541,6 @@ export async function proveScript(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, 
     console.error(`[workflow-service] writer proof of ${name} FAILED to run: ${message}`);
     if (runId) await deps.closeRun(runId, "failed").catch((c) => console.error(`[workflow-service] writer proof run ${runId} could not be closed: ${String(c)}`));
     return await finish({ state: "error", error: message.slice(0, 1000) });
-  } finally {
-    inFlight.delete(key);
   }
 }
 
