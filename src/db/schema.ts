@@ -413,29 +413,6 @@ export const writerProofEngines = pgTable("writer_proof_engines", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// DISTRY-PRINCIPAL-1119: one call to an Engine by a caller that is not a campaign (Distry): the Rating's pick, run, and
-// the result read back by the caller (migration 0057).
-export const engineCalls = pgTable(
-  "engine_calls",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    outcome: text("outcome").notNull(),
-    orgId: text("org_id").notNull(),
-    callerRunId: text("caller_run_id").notNull(),
-    /** running | made | nothing | unmade | waiting | stopped | failed */
-    status: text("status").notNull().default("running"),
-    pick: jsonb("pick").notNull(),
-    unit: jsonb("unit"),
-    error: text("error"),
-    /** Every script tried, in the Rating's order: {script, runId, status, error}. */
-    tried: jsonb("tried").$type<unknown[]>().notNull().default([]),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    finishedAt: timestamp("finished_at", { withTimezone: true }),
-  },
-  (table) => [index("idx_engine_calls_org").on(table.orgId, table.createdAt), index("idx_engine_calls_running").on(table.status)]
-);
-export type EngineCallRow = typeof engineCalls.$inferSelect;
-
 // DISTRY-ENGINES-1119: why an Engine no script makes on demand is not callable, in plain words, stated by staff as data
 // (migration 0058). Shown on the Engine list while the Engine is not callable; a runnable script makes it callable again.
 export const engineReasons = pgTable("engine_reasons", {

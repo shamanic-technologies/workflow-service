@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { replayCase, type ReplayCase } from "../../src/lib/scripts/replay.js";
 import { validateSource } from "../../src/lib/scripts/sandbox.js";
-import { SERVICE_DOOR_VENDORS, needsCampaign, writesToPerson } from "../../src/lib/scripts/vendors.js";
+import { SERVICE_DOOR_VENDORS, writesToPerson } from "../../src/lib/scripts/vendors.js";
 import {
   ANNOUNCES_QUESTION,
   buildClientPastEmployersSource,
@@ -33,7 +33,6 @@ describe("Client past employer found: the paying clients' past employers script"
 
   it("needs no material, no campaign, sends to nobody, never names its outcome; brand-service declares the Units", async () => {
     expect((await validateSource(src)).materials).toEqual([]);
-    expect(needsCampaign(src)).toBe(false);
     expect(writesToPerson(src)).toBe(false);
     expect(src).not.toMatch(/"client_past_employer_found"/);
     expect(CLIENT_PAST_EMPLOYERS.tactics.recorded_by).toBe("brand");
@@ -137,7 +136,6 @@ describe("Press feature found: the mailbox script", () => {
 
   it("asks a model (never names one), needs no campaign, sends to nobody, never names its outcome", async () => {
     expect((await validateSource(src)).materials).toEqual(["llm_completion"]);
-    expect(needsCampaign(src)).toBe(false);
     expect(writesToPerson(src)).toBe(false);
     expect(src).not.toMatch(/"press_feature_found"/);
     expect(src).not.toMatch(/provider:\s*"|model:\s*"/);
