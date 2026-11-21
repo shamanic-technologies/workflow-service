@@ -97,7 +97,7 @@ export const INTRO_OPEN = {
   dynasty: "dy_intro_open",
   tactics: { ...FIRST_EMAIL_COMMON, intro: "open" },
   description:
-    "Offers introductions: writes one first email to a new prospect, with checkable facts on them, saying it is an AI that makes introductions and asking who they would like to meet. Names nobody, no price. Pitches no offer.",
+    "Offers introductions: writes one first email to a new prospect, with checkable facts on them, saying it is an AI that makes introductions and asking who they would like to meet. It proposes nobody to meet and names no other person, no price. Pitches no offer.",
 } as const;
 
 export const INTRO_CLIENT_TO_LEAD = {
