@@ -136,11 +136,34 @@ export const MAX_SCRIPTS_PER_RUN = 5;
  * Whether a script's answer lets the run ask the Rating's next candidate: a proactive run (no occurrence: a refusal
  * about a pushed person is final) whose script made nothing and did not decide its look was done or unfinished.
  */
-export function fallsThrough(result: Pick<ScriptRunResult, "status" | "again" | "decided"> | null, answersOccurrence: boolean): boolean {
-  if (!result || answersOccurrence) return false;
+export function fallsThrough(result: Pick<ScriptRunResult, "status" | "again" | "decided" | "error"> | null, answersOccurrence: boolean): boolean {
+  if (!result) return false;
+  // LEAD-EVENT-ONE-CAMPAIGN-1121: on an occurrence, only a refusal about WHO the person is to this script (its own
+  // admission, lead-service's verdict) hands the occurrence to the next candidate: one campaign answers prospects,
+  // clients and the team, each script its own population, and the Rating decides among those that admit the person.
+  if (answersOccurrence) return refusesPerson(result);
   if (result.status === "nothing") return true;
   return result.status === "unmade" && result.again !== true && result.decided !== "done";
 }
+
+/** The refusal code a script states (`<code>` or `<code>: <why>`). */
+export const refusalCodeOf = (error: string | null | undefined): string | null => {
+  if (!error) return null;
+  const split = /^([a-z][a-z0-9_]*)(?:: [\s\S]*)?$/.exec(error);
+  return split ? split[1]! : null;
+};
+
+/** The person is not someone THIS script acts for (its admission refused them), never the script's own decision. */
+export function refusesPerson(result: Pick<ScriptRunResult, "status" | "again" | "decided" | "error">): boolean {
+  return result.status === "unmade" && result.again !== true && result.decided === undefined && refusalCodeOf(result.error) === "person_not_admitted";
+}
+
+/**
+ * LEAD-EVENT-ONE-CAMPAIGN-1121: the header an occurrence attempt's door calls carry while another candidate of the
+ * same run will still be asked: lead-service then reports a relationship refusal without stopping the person's row
+ * (the next script claims it). The last attempt carries none: its refusal is final, as before.
+ */
+export const REFUSAL_NOT_FINAL_HEADER = "x-refusal-not-final";
 
 export const planTaskName = (d: EngineDispatch, plan: EnginePlan) =>
   plan.kind === "none" ? engineTaskName(d.outcome) : scriptTaskName(plan.script.outcome, plan.script.dynasty);
@@ -251,13 +274,16 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
       const vendorHeaders: Record<string, string> = { ...headers, ...(audienceId ? { "x-audience-id": audienceId } : {}) };
       delete vendorHeaders["x-engine-outcome"];
       /** One script of the plan on its own run: the Engine run for the first, a child run named by it for the next. */
-      const attempt = async (script: ScriptRow, scriptInput: RunScriptInput, scriptRunId: string): Promise<ScriptRunResult> => {
+      const attempt = async (script: ScriptRow, scriptInput: RunScriptInput, scriptRunId: string, othersFollow = false): Promise<ScriptRunResult> => {
         scriptInput.request = { ...request, runId: scriptRunId };
+        // DISTRY-CALL-IS-CAMPAIGN-1121: a Unit about no person (a draft, a check a campaign asked for) is about the run
+        // that made it, when neither the occurrence nor the script names a subject; the script's own subject still wins.
+        if (!scriptInput.subject && !scriptInput.fallbackSubject) scriptInput.fallbackSubject = { service: "runs-service", id: scriptRunId };
         const recordedBy = (script.tactics as Record<string, unknown>)?.recorded_by;
         if (typeof recordedBy === "string" && recordedBy) scriptInput.recordedBy = recordedBy;
         let out: ScriptRunResult;
         try {
-          out = await deps.runScript(scriptInput, { orgId: d.orgId, userId: d.userId, parentRunId: d.callerRunId, headers: { ...vendorHeaders, "x-run-id": scriptRunId } }, {
+          out = await deps.runScript(scriptInput, { orgId: d.orgId, userId: d.userId, parentRunId: d.callerRunId, headers: { ...vendorHeaders, "x-run-id": scriptRunId, ...(othersFollow ? { [REFUSAL_NOT_FINAL_HEADER]: "true" } : {}) } }, {
             runId: scriptRunId,
             onWait: async (days) => {
               await db.insert(engineWaits).values({
@@ -287,14 +313,17 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
         }
         return out;
       };
-      result = await attempt(plan.script, input, runId);
-      tried.push(result);
-      if (plan.kind === "resume") await db.update(engineWaits).set({ status: "resumed", resumedRunId: runId }).where(eq(engineWaits.id, plan.wait.id));
       // RATING-UNMADE-FALLTHROUGH-1112: the pick had nothing to make for this campaign: the Rating's next candidate, in
       // the order of the same draw, each on a child run of this one named by its script (its spend and Unit land there).
       const next = plan.kind === "pick" ? [...(plan.fallbacks ?? [])] : [];
+      // Whether another candidate will be asked after the attempt about to run (occurrences only: proactive unchanged).
+      const othersFollow = () => answersOccurrence && next.length > 0 && tried.length + 1 < MAX_SCRIPTS_PER_RUN;
+      result = await attempt(plan.script, input, runId, othersFollow());
+      tried.push(result);
+      if (plan.kind === "resume") await db.update(engineWaits).set({ status: "resumed", resumedRunId: runId }).where(eq(engineWaits.id, plan.wait.id));
       while (fallsThrough(result, answersOccurrence) && next.length > 0 && tried.length < MAX_SCRIPTS_PER_RUN) {
         const script = next.shift()!;
+        const notLast = othersFollow();
         const childRunId = await deps.ledger.createRun({
           parentRunId: runId,
           orgId: d.orgId,
@@ -306,7 +335,7 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
         });
         let childOk = false;
         try {
-          result = await attempt(script, { outcome: script.outcome, dynasty: script.dynasty, version: script.version, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units }, childRunId);
+          result = await attempt(script, { outcome: script.outcome, dynasty: script.dynasty, version: script.version, ...(pushed.subject ? { subject: pushed.subject } : {}), units: pushed.units }, childRunId, notLast);
           childOk = result.status !== "failed" && result.status !== "stopped";
         } finally {
           await deps.ledger.closeRun(childRunId, childOk ? "completed" : "failed", d.orgId).catch((err) => console.error(`[workflow-service] engine run ${runId}: closing child run ${childRunId} failed:`, err));
