@@ -268,9 +268,10 @@ router.post("/internal/engines/:outcome/make", requireApiKey, async (req, res) =
 });
 
 // DISTRY-PRINCIPAL-1119: every Engine of the live catalogue, callable now or why not, and what a caller hands each one.
-router.get("/internal/engines", requireApiKey, async (_req, res) => {
+router.get("/internal/engines", requireApiKey, async (req, res) => {
+  const orgId = typeof req.query.orgId === "string" && req.query.orgId ? req.query.orgId : null;
   try {
-    const engines = await listEngines(db);
+    const engines = await listEngines(db, orgId);
     res.json({ engines, callable: engines.filter((e) => e.callable).length, total: engines.length });
   } catch (err) {
     console.error("[workflow-service] engine list:", err);

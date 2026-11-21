@@ -3168,7 +3168,10 @@ export const EngineListingSchema = z
   .object({
     outcome: z.string(),
     name: z.string().describe("The outcome's name in the catalogue."),
-    callable: z.boolean().describe("At least one live script the Rating could draw now (an org's model or a campaign's strategy may still narrow it at run time)."),
+    callable: z
+      .boolean()
+      .describe("A campaign of the org asked can make it now: switched on for its campaigns and one runnable script needs no Unit handed (an org's model or a campaign's strategy may still narrow it at run time)."),
+    liveForCampaigns: z.boolean().describe("Switched on for campaigns of the org asked (its own row, else the fleet's; no `orgId` = the fleet's)."),
     reason: z.string().nullable().describe("Plain words: why no Unit can be asked now. Null when callable."),
     inputs: z.array(z.object({ units: z.array(z.string()), channel: z.string().nullable() })).describe("Each way to call it: the Units (by outcome) to hand in `units`, the `channel` to state (null = any)."),
     scripts: z.array(z.object({ dynasty: z.string(), name: z.string().nullable(), version: z.number().int(), units: z.array(z.string()), channel: z.string().nullable() })),
@@ -3181,9 +3184,10 @@ export const EngineListingSchema = z
 registry.registerPath({
   method: "get",
   path: "/internal/engines",
+  request: { query: z.object({ orgId: z.string().optional().describe("The org whose campaigns would run it (absent = the fleet's switch only).") }) },
   summary: "Every Engine of the live catalogue: callable now or why not, and what a caller hands (service key only)",
   description:
-    "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = at least one live script the Rating could draw (active, proven when a port, past its writing proof when it writes to people); `reason` says why not, in words the dashboard shows as-is. Read only: nothing spent, no proof started.",
+    "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = a campaign of `orgId` can make it now: switched on for its campaigns AND a runnable script (active, proven when a port, past its writing proof when it writes to people) needing no Unit handed; `reason` says why not, in words the dashboard shows as-is. Read only: nothing spent, no proof started.",
   tags: ["Engines"],
   security: [{ apiKey: [] }],
   responses: {

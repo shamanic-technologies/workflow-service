@@ -4146,7 +4146,11 @@
           },
           "callable": {
             "type": "boolean",
-            "description": "At least one live script the Rating could draw now (an org's model or a campaign's strategy may still narrow it at run time)."
+            "description": "A campaign of the org asked can make it now: switched on for its campaigns and one runnable script needs no Unit handed (an org's model or a campaign's strategy may still narrow it at run time)."
+          },
+          "liveForCampaigns": {
+            "type": "boolean",
+            "description": "Switched on for campaigns of the org asked (its own row, else the fleet's; no `orgId` = the fleet's)."
           },
           "reason": {
             "type": "string",
@@ -4236,6 +4240,7 @@
           "outcome",
           "name",
           "callable",
+          "liveForCampaigns",
           "reason",
           "inputs",
           "scripts",
@@ -12385,13 +12390,25 @@
     "/internal/engines": {
       "get": {
         "summary": "Every Engine of the live catalogue: callable now or why not, and what a caller hands (service key only)",
-        "description": "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = at least one live script the Rating could draw (active, proven when a port, past its writing proof when it writes to people); `reason` says why not, in words the dashboard shows as-is. Read only: nothing spent, no proof started.",
+        "description": "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = a campaign of `orgId` can make it now: switched on for its campaigns AND a runnable script (active, proven when a port, past its writing proof when it writes to people) needing no Unit handed; `reason` says why not, in words the dashboard shows as-is. Read only: nothing spent, no proof started.",
         "tags": [
           "Engines"
         ],
         "security": [
           {
             "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The org whose campaigns would run it (absent = the fleet's switch only)."
+            },
+            "required": false,
+            "description": "The org whose campaigns would run it (absent = the fleet's switch only).",
+            "name": "orgId",
+            "in": "query"
           }
         ],
         "responses": {

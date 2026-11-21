@@ -8,12 +8,15 @@
  * DISTRY-CALL-IS-CAMPAIGN-1121 (owner 2026-11-21: « tout appel de Distry sur un de ces engines est TOUJOURS une campagne,
  * obligatoirement »): Distry gets a Unit through a campaign (campaign-service creates it, the campaign Engine run makes
  * it); the direct Engine call route and its campaign-door list are deleted. A script missing something stops with a
- * plain reason, never a rule here.
+ * plain reason, never a rule here. So `callable` = a CAMPAIGN can make it for the org asked: the Engine is switched on for
+ * that org's campaigns (its own row, else the fleet's) AND one runnable script needs no Unit handed (a campaign hands
+ * none); otherwise not callable, with the reason. A listing that offered an Engine every campaign refuses
+ * (`engine_not_live`) would hand Distry a tool that only ever fails (DISTRY-CALL-IS-CAMPAIGN-1121 AC, 2026-11-21).
  */
 import { inArray } from "drizzle-orm";
 import { engineReasons, scripts, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
-import { START_OUTCOME, provenness } from "./engine.js";
+import { START_OUTCOME, engineState, provenness } from "./engine.js";
 import { writerProofDrawsNow } from "./writer-proof.js";
 
 /** One outcome of the live catalogue (features-service `GET /public/catalogue/steps`). */
@@ -57,6 +60,8 @@ export interface EngineListing {
   outcome: string;
   name: string;
   callable: boolean;
+  /** Switched on for campaigns of the org asked (its own row, else the fleet's; no org = the fleet's). */
+  liveForCampaigns: boolean;
   /** Plain words: why no Unit can be asked now. Null when callable. */
   reason: string | null;
   /** Each way to call it: the Units to hand (none = nothing to hand) and the channel to state (null = any). */
@@ -115,8 +120,21 @@ function movedTo(dynasties: string[], outcome: string, liveHome: Map<string, Set
   return [...homes].sort().map((o) => nameOf.get(o) ?? o);
 }
 
-/** Every Engine of the live catalogue, callable or not and why. Read only. */
-export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
+/**
+ * PURE: why runnable scripts still give no campaign a Unit. Switched off by the guard or staff = their reason; never
+ * switched on = said so; every runnable script needs a handed Unit = another Engine asks it inside its own run.
+ */
+export function notForCampaignsReason(input: { live: boolean; rollbackReason: string | null; unitsNeeded: string[] }): string {
+  if (!input.live) {
+    return input.rollbackReason
+      ? `Switched off for campaigns: ${input.rollbackReason}.`
+      : "Not switched on for campaigns yet: a campaign on it would be refused.";
+  }
+  return `Each of its scripts needs Units a campaign does not hand (${input.unitsNeeded.join(", ")}): another Engine asks it inside its own run.`;
+}
+
+/** Every Engine of the live catalogue, callable by a campaign of `orgId` (no org = the fleet's) or not and why. Read only. */
+export async function listEngines(db: AnyPgDb, orgId: string | null = null): Promise<EngineListing[]> {
   const outcomes = (await catalogueOutcomes()).filter((o) => o.key !== START_OUTCOME);
   const keys = outcomes.map((o) => o.key);
   const rows = keys.length ? await db.select().from(scripts).where(inArray(scripts.outcome, keys)) : [];
@@ -161,13 +179,22 @@ export async function listEngines(db: AnyPgDb): Promise<EngineListing[]> {
       const opt = { units: unitsToHand(r), channel: channelOf(r) };
       inputs.set(JSON.stringify(opt), opt);
     }
+    const state = await engineState(db, o.key, orgId);
+    const needNothing = runnable.some((r) => unitsToHand(r).length === 0);
+    const callable = runnable.length > 0 && state.live && needNothing;
     out.push({
       outcome: o.key,
       name: o.name,
-      callable: runnable.length > 0,
-      reason:
-        runnable.length > 0
-          ? null
+      callable,
+      liveForCampaigns: state.live,
+      reason: callable
+        ? null
+        : runnable.length > 0
+          ? notForCampaignsReason({
+              live: state.live,
+              rollbackReason: state.rollbackReason,
+              unitsNeeded: [...new Set(runnable.flatMap((r) => unitsToHand(r)))].sort(),
+            })
           : notCallableReason({
               scripts: dynasties.size,
               live: live.length,

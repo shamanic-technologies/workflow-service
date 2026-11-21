@@ -9,6 +9,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { eq } from "drizzle-orm";
 import { createScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { scripts } from "../../src/db/schema.js";
+import { switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
 
 // DISTRY-PRINCIPAL-1119: the Engine list. DISTRY-CALL-IS-CAMPAIGN-1121: every Distry call to an Engine is a campaign,
 // so the direct call route is gone and no script is held out for "needing a campaign".
@@ -78,20 +79,29 @@ afterEach(() => {
 
 const add = (outcome: string, dynasty: string, code: string, tactics: Record<string, unknown> = {}) =>
   createScript(db, { outcome, dynasty, code, description: "x", tactics }, author, known);
+const on = (outcome: string, dynasty: string, orgId: string | null = null) => switchEngine(db, { outcome, dynasty, orgId });
 
 describe("GET /internal/engines", () => {
   it("every catalogue outcome, callable or not and why in plain words, and what a caller hands", async () => {
     await add(OUTCOME, "dy_finds", MAKES, { channel: "x-posts" });
     await add("email_sent", "dy_reads_lead", READS_LEAD);
+    await on(OUTCOME, "dy_finds");
+    await on("email_sent", "dy_reads_lead");
     const retired = await add("meeting_booked", "dy_old", MAKES);
     await db.update(scripts).set({ dynastyStatus: "deprecated", status: "deprecated" }).where(eq(scripts.id, retired.id));
     const res = await request(app).get("/internal/engines").set("x-api-key", KEY);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(3); // `start` is not an outcome
-    expect(res.body.callable).toBe(2);
+    expect(res.body.callable).toBe(1);
     const by = new Map(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
-    expect(by.get(OUTCOME)).toMatchObject({ name: "X account found", callable: true, reason: null, inputs: [{ units: [], channel: "x-posts" }], counts: { scripts: 1, live: 1, runnable: 1 } });
-    expect(by.get("email_sent")).toMatchObject({ callable: true, inputs: [{ units: ["lead_found"], channel: null }] });
+    expect(by.get(OUTCOME)).toMatchObject({ name: "X account found", callable: true, reason: null, inputs: [{ units: [], channel: "x-posts" }], counts: { scripts: 1, live: 1, runnable: 1 }, liveForCampaigns: true });
+    // A campaign hands no Unit: a script that must be handed one never makes a campaign's Unit.
+    expect(by.get("email_sent")).toMatchObject({
+      callable: false,
+      liveForCampaigns: true,
+      reason: "Each of its scripts needs Units a campaign does not hand (lead_found): another Engine asks it inside its own run.",
+      inputs: [{ units: ["lead_found"], channel: null }],
+    });
     expect(by.get("meeting_booked")).toMatchObject({ callable: false, reason: "Every script of this outcome is retired (1 stored).", inputs: [] });
   });
 
@@ -110,6 +120,8 @@ describe("GET /internal/engines", () => {
     await add("email_sent", "dy_channel_only", MAKES, { channel: "sales-cold-email-outreach" });
     await add("meeting_booked", "dy_path", `export default function run(ctx) { ctx.ask({ units: {} }); const u = ctx.get("email_sent"); return { content: { u: u.content } }; }`, { asks: ["email_sent"] });
     await add(OUTCOME, "dy_serve", SERVES_CAMPAIGN);
+    await on("meeting_booked", "dy_path");
+    await on(OUTCOME, "dy_serve");
     const res = await request(app).get("/internal/engines").set("x-api-key", KEY);
     const by = new Map(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
     expect(by.get("meeting_booked")).toMatchObject({ callable: true, reason: null, counts: { scripts: 1, live: 1, runnable: 1 } });
@@ -124,8 +136,9 @@ describe("GET /internal/engines", () => {
     expect(res.body).toMatchObject({ outcome: "meeting_booked", reason, statedBy: "staff@example.com" });
     res = await request(app).get("/internal/engines").set("x-api-key", KEY);
     expect(res.body.engines.find((e: { outcome: string }) => e.outcome === "meeting_booked")).toMatchObject({ callable: false, reason });
-    // A runnable script wins over the stated reason.
+    // A runnable script switched on for campaigns wins over the stated reason.
     await add("meeting_booked", "dy_now_runs", MAKES);
+    await on("meeting_booked", "dy_now_runs");
     res = await request(app).get("/internal/engines").set("x-api-key", KEY);
     expect(res.body.engines.find((e: { outcome: string }) => e.outcome === "meeting_booked")).toMatchObject({ callable: true, reason: null });
     expect((await request(app).delete("/internal/engines/meeting_booked/reason").set("x-api-key", KEY)).status).toBe(204);
@@ -137,6 +150,26 @@ describe("GET /internal/engines", () => {
     await add(OUTCOME, "dy_moved", MAKES);
     res = await request(app).get("/internal/engines").set("x-api-key", KEY);
     expect(res.body.engines.find((e: { outcome: string }) => e.outcome === "email_sent")).toMatchObject({ callable: false, reason: "Its scripts moved to X account found, which make this work now: ask that Engine instead." });
+  });
+
+  it("callable only when a campaign of the org asked can run it: never switched on, switched off, an org's own row (DISTRY-CALL-IS-CAMPAIGN-1121 AC)", async () => {
+    await add(OUTCOME, "dy_finds", MAKES);
+    const row = (r: request.Response) => r.body.engines.find((e: { outcome: string }) => e.outcome === OUTCOME);
+    let res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    expect(row(res)).toMatchObject({ callable: false, liveForCampaigns: false, reason: "Not switched on for campaigns yet: a campaign on it would be refused.", counts: { runnable: 1 } });
+    // One org first: callable for that org only.
+    await on(OUTCOME, "dy_finds", "org-a");
+    res = await request(app).get("/internal/engines?orgId=org-a").set("x-api-key", KEY);
+    expect(row(res)).toMatchObject({ callable: true, liveForCampaigns: true, reason: null });
+    res = await request(app).get("/internal/engines?orgId=org-b").set("x-api-key", KEY);
+    expect(row(res)).toMatchObject({ callable: false });
+    // Every org, then switched off for org-a: org-a's own row wins and says why.
+    await on(OUTCOME, "dy_finds");
+    await switchEngineOff(db, { outcome: OUTCOME, orgId: "org-a", reason: "the guard rolled it back" });
+    res = await request(app).get("/internal/engines?orgId=org-b").set("x-api-key", KEY);
+    expect(row(res)).toMatchObject({ callable: true });
+    res = await request(app).get("/internal/engines?orgId=org-a").set("x-api-key", KEY);
+    expect(row(res)).toMatchObject({ callable: false, liveForCampaigns: false, reason: "Switched off for campaigns: the guard rolled it back." });
   });
 
   it("plain reasons for live scripts that cannot run", () => {
