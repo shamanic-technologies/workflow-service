@@ -251,6 +251,16 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "content.whatsapp.request": { service: "content-generation", method: "POST", path: "/generate-whatsapp/request", asRun: true },
   "crm.people.list": { service: "crm", method: "GET", path: "/orgs/people", asRun: true },
   "chat.copilot.proactive_turn": { service: "chat", method: "POST", path: "/internal/copilot/proactive-turns", asRun: true },
+  // BRAND-PROOF-LOGOS-1121: the companies where the run's brand's PAYING clients worked, with the clients, roles and
+  // dates behind each (lead-service looks up the careers it holds none for first, treg billed on the caller's run,
+  // Apollo never; `lookups.remaining` > 0 = call again); and the brand org's connected mailbox searched by the words
+  // of the mail (google-service, read-only: readable body + links of each match, paged).
+  "lead.client_past_employers": { service: "lead", method: "POST", path: "/internal/brands/{brandId}/client-past-employers", asRun: true },
+  "google.mail.search": { service: "google", method: "POST", path: "/orgs/google/messages/search", asRun: true },
+  // brand-service's proof store: each company / article kept for the run's brand with its trace, its notoriety judged
+  // once (cross-org, billed under the caller's run), each NEW row declared as one Unit under the Engine's outcome.
+  "brand.proof.employers.store": { service: "brand", method: "PUT", path: "/orgs/brands/{brandId}/proof/employers", asRun: true, outcomeInBody: "outcomeKey" },
+  "brand.proof.press.store": { service: "brand", method: "PUT", path: "/orgs/brands/{brandId}/proof/press-features", asRun: true, outcomeInBody: "outcomeKey" },
   // The follow-ups (MIGRATE-1105 S4b): the figures a campaign's brief asks for, read for the person (figure-reader.ts).
   "workflow.figures.read": { service: "workflow", method: "POST", path: "/orgs/figures/read", asRun: true },
 };
