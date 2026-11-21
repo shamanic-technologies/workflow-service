@@ -64,7 +64,7 @@ export const ARTICLE_READ_SCHEMA = {
     articleUrl: { type: "string", description: "The link to the published piece, copied exactly from the email's links; empty when none of them is." },
     outlet: { type: "string", description: "The publication's name as the email states it (a magazine, a newsletter, a site, a podcast)." },
     outletDomain: { type: "string", description: "The publication's OWN website domain (example.com) when it has one; empty when the piece is hosted on a platform that is not the publication (a LinkedIn newsletter, a Substack, a Medium page)." },
-    title: { type: "string", description: "The piece's title as the email states it; empty when it states none." },
+    title: { type: "string", description: "The piece's title as the email states it (never a link or a URL slug); empty when it states none." },
     publishedAt: { type: "string", description: "The date it went live, YYYY-MM-DD, when the email states one; empty otherwise." },
   },
   required: ["articleUrl", "outlet", "outletDomain", "title", "publishedAt"],
@@ -85,7 +85,13 @@ export const ARTICLE_READ_PROMPT = [
 
 /** Most characters of an email or an article handed to a judge or the reader. */
 export const MAIL_MAX_CHARS = 8000;
-export const PAGE_MAX_CHARS = 12000;
+/**
+ * The whole article, up to this cap: a roundup quoting 60 people names the brand far down the page (the first 12k
+ * characters of « How to Control AI API Costs », Substack, never reached « Kevin Lourd, Founder of Distribute.you »).
+ */
+export const PAGE_MAX_CHARS = 80000;
+/** The verdicts' storage table: a new judging rule = a new table, every message judged again under it. */
+export const JUDGED_TABLE = "judged_v2";
 
 export function buildClientPastEmployersSource(): string {
   return [
@@ -155,6 +161,7 @@ const QUOTES_BRAND_QUESTION = ${JSON.stringify(QUOTES_BRAND_QUESTION)};
 const ARTICLE_READ_PROMPT = ${JSON.stringify(ARTICLE_READ_PROMPT)};
 const MAIL_MAX_CHARS = ${MAIL_MAX_CHARS};
 const PAGE_MAX_CHARS = ${PAGE_MAX_CHARS};
+const JUDGED_TABLE = ${JSON.stringify(JUDGED_TABLE)};
 
 /**
  * The outlet as brand-service keys it: its own site when it has one; a stated null domain = hosted on a platform (a
@@ -189,7 +196,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
   if (!brandName) throw new Error("press-mailbox: the brand states no name");
 
   // Every message already judged for this brand, never judged twice (kept per brand in the Engine's storage).
-  const judged: Record<string, string> = (ctx.storage.get("judged", brandId) as any) ?? {};
+  const judged: Record<string, string> = (ctx.storage.get(JUDGED_TABLE, brandId) as any) ?? {};
   // Articles kept while their outlet's notoriety could not be judged: stored again (idempotent) so it is judged now.
   let pending: any[] = (ctx.storage.get("pending_notoriety", brandId) as any) ?? [];
   if (pending.length) {
@@ -233,7 +240,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
     if (probability(a, "announces", "the announcement") < 0.5) {
       judged[id] = "not_announcing";
       counts.notAnnouncing++;
-      ctx.storage.set("judged", brandId, judged);
+      ctx.storage.set(JUDGED_TABLE, brandId, judged);
       continue;
     }
     const links: string[] = email.links.map((l: any) => String(l.url));
@@ -260,13 +267,13 @@ export default function run(ctx: ScriptContext): ScriptResult {
     if (pq < 0.5) {
       judged[id] = "not_this_brand";
       counts.notThisBrand++;
-      ctx.storage.set("judged", brandId, judged);
+      ctx.storage.set(JUDGED_TABLE, brandId, judged);
       continue;
     }
     if (!articleUrl) {
       judged[id] = "no_article_link";
       counts.notThisBrand++;
-      ctx.storage.set("judged", brandId, judged);
+      ctx.storage.set(JUDGED_TABLE, brandId, judged);
       continue;
     }
     const feature = { articleUrl, title: title || null, publishedAt: publishedAt || (/^\\d{4}-\\d{2}-\\d{2}/.test(String(m.sentAt ?? "")) ? String(m.sentAt).slice(0, 10) : null), ...outletOf(outlet, outletDomain) };
@@ -276,7 +283,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
     if (stored.ok === false) pending.push(feature);
     judged[id] = "kept";
     counts.kept++;
-    ctx.storage.set("judged", brandId, judged);
+    ctx.storage.set(JUDGED_TABLE, brandId, judged);
     ctx.storage.set("pending_notoriety", brandId, pending);
     const u: any = stored.ok === false ? null : (Array.isArray(stored.units) ? stored.units[0] : null);
     kept.push({ outlet, articleUrl, title: title || null, publishedAt: feature.publishedAt, newUnit: u ? u.newUnit === true : null, notoriety: u?.notoriety?.score ?? null });
