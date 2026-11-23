@@ -407,6 +407,7 @@ describe("a writer asking its model directly is recorded and proven like the pai
 export default function run(ctx) {
   const a = ctx.get("answer_requested");
   const past = ctx.get("lead_found", { params: { brandId: ctx.brand } });
+  ctx.consume("lead_found", { service: "lead-service", id: past.data.leads[0].id });
   const done = ctx.ask("llm_completion", { subject: { service: "lead-service", id: a.subject }, request: { message: "Thread: " + a.content.thread + " (" + past.data.total + " found)", systemPrompt: "Answer the person.", responseFormat: "json", responseSchema: { type: "object" } } });
   const d = done.content.answer.json || {};
   if (d.decision !== "write") throw new Error("unknown decision");
@@ -462,5 +463,117 @@ export default function run(ctx) {
     expect(llmCalls).toHaveLength(PROOF_SAMPLE);
     expect(String(llmCalls[0]!.message)).toContain("(1 found)");
     expect(doors).toEqual([]);
+  });
+});
+
+// ENGINE-GET-ASK-1123 step 2a (owner 2026-11-23, option A): a read declares nothing; the Script says, Unit by Unit,
+// which Units it read it USED (`ctx.consume(outcome, {service, id})`), and the run declares exactly those consumed.
+describe("ctx.consume(outcome, subject): the script declares a Unit it read as used", () => {
+  const verification = { service: "apollo-service", id: "verif-12" };
+  const reuse = `
+export default function run(ctx) {
+  const past = ctx.get("email_sent", { query: { leadId: ctx.subject } });
+  const found = ctx.get("email_found", { query: { leadId: ctx.subject } });
+  ctx.consume("email_found", found.data.subject);
+  ctx.consume("email_found", { service: " apollo-service ", id: "verif-12" });
+  return { content: { sentBefore: past.ok } };
+}`;
+  const SPECS2 = new Map<string, Record<string, unknown>>([
+    ["apollo", { paths: { "/orgs/emails-found": { get: { operationId: "listEmailsFound", tags: ["provider:email_found"] } } } }],
+    ["instantly", { paths: { "/orgs/emails-sent": { get: { operationId: "listEmailsSent", tags: ["provider:email_sent"] } } } }],
+  ]);
+  const index2 = providerOperationsOf(SPECS2);
+  const reads = () => {
+    const { v } = vendors({ status: 200, body: { subject: verification, verdict: "deliverable" } });
+    (v as unknown as { providerReads: unknown }).providerReads = async (outcome: string): Promise<ProviderReads> => ({ operations: index2.get(outcome) ?? [], unread: [] });
+    return v;
+  };
+  const lead = { service: "lead-service", id: "lead-9" };
+
+  it("reaches the ledger declaration once per Unit: the one it used, never the one it only looked at", async () => {
+    await add("conversation", "dy_reuse", reuse);
+    const { l, declared } = ledger();
+    const out = await runStoredScript(db, { outcome: "conversation", dynasty: "dy_reuse", subject: lead, units: {} }, who, { ledger: l, vendors: reads() });
+    expect(out.status).toBe("made");
+    const consumed = [{ outcomeKey: "email_found", subjectService: "apollo-service", subjectId: "verif-12" }];
+    expect(declared).toEqual([{ runId: out.runId, body: { produced: [{ outcomeKey: "conversation", subjectService: "lead-service", subjectId: "lead-9" }], consumed } }]);
+    expect(out.declared.consumed).toEqual(consumed);
+    // No call to the world: neither a vendor call nor a Provider read.
+    expect(out.vendorCalls.map((c) => c.name)).toEqual(["provider:email_sent", "provider:email_found"]);
+    const [stored] = await db.select().from(scriptRuns).where(eq(scriptRuns.runId, out.runId));
+    expect((stored!.declared as { consumed: unknown }).consumed).toEqual(consumed);
+  });
+
+  it("is declared too when the run's own Unit is recorded by a service, beside nothing else", async () => {
+    await add("conversation", "dy_reuse", reuse);
+    const { l, declared } = ledger();
+    const out = await runStoredScript(db, { outcome: "conversation", dynasty: "dy_reuse", subject: lead, units: {}, recordedBy: "content-generation" }, who, { ledger: l, vendors: reads() });
+    expect(declared).toEqual([{ runId: out.runId, body: { produced: [], consumed: [{ outcomeKey: "email_found", subjectService: "apollo-service", subjectId: "verif-12" }] } }]);
+  });
+
+  it("is declared once beside a handed Unit of the same subject, and beside other handed Units", async () => {
+    await add("conversation", "dy_both", `
+export default function run(ctx) {
+  const held = ctx.get("lead_found");
+  ctx.consume("lead_found", { service: "lead-service", id: "lead-9" });
+  ctx.consume("email_found", { service: "apollo-service", id: "verif-12" });
+  return { content: { email: held.content.email } };
+}`);
+    const { l, declared } = ledger();
+    await runStoredScript(db, { outcome: "conversation", dynasty: "dy_both", subject: lead, units: { lead_found: { content: { email: "a@staff.test" }, subject: lead } } }, who, { ledger: l, vendors: vendors().v });
+    expect((declared[0]!.body as { consumed: unknown }).consumed).toEqual([
+      { outcomeKey: "lead_found", subjectService: "lead-service", subjectId: "lead-9" },
+      { outcomeKey: "email_found", subjectService: "apollo-service", subjectId: "verif-12" },
+    ]);
+  });
+
+  it("a subject that is not {service, id} stops the run by name; nothing declared", async () => {
+    for (const [call, why] of [
+      [`ctx.consume("email_found", "verif-12")`, "ctx.consume(email_found, subject): subject is {service, id}"],
+      [`ctx.consume("email_found", { service: "apollo-service" })`, "ctx.consume(email_found, subject): subject is {service, id}"],
+      [`ctx.consume("email_found")`, "ctx.consume(email_found, subject): subject is {service, id}"],
+    ] as const) {
+      const fresh = await freshDb();
+      db = fresh;
+      await add("conversation", "dy_bad", `export default function run(ctx) { ${call}; return { content: {} }; }`);
+      const { l, declared } = ledger();
+      const failed = await runStoredScript(db, { outcome: "conversation", dynasty: "dy_bad", subject: lead, units: {} }, who, { ledger: l, vendors: vendors().v }).catch((e) => e);
+      expect(failed).toBeInstanceOf(ScriptRunFailed);
+      expect((failed as ScriptRunFailed).result).toMatchObject({ status: "stopped", error: expect.stringContaining(why) });
+      expect(declared).toEqual([]);
+    }
+  }, 60_000);
+
+  it("names its outcome with a literal at store; it is neither a material to hand nor an asked Engine", async () => {
+    await expect(validateSource(`export default function run(ctx) { const o = "email_found"; ctx.consume(o, { service: "a", id: "b" }); return null; }`)).rejects.toThrow("every ctx.consume(outcome, subject) must name its outcome with a literal string");
+    await expect(validateSource(`export default function run(ctx) { ctx.consume(ctx.tactics.used); return null; }`)).rejects.toThrow("every ctx.consume(outcome, subject)");
+    await expect(validateSource(`export default function run(ctx) { ctx.consume("", { service: "a", id: "b" }); return null; }`)).rejects.toThrow("every ctx.consume(outcome, subject)");
+    const ok = `export default function run(ctx) { ctx.consume("email_found", { service: "a", id: "b" }); return null; }`;
+    expect((await validateSource(ok)).materials).toEqual([]);
+    expect(readMaterials(ok)).toEqual([]);
+    expect(readAsks(ok)).toEqual([]);
+    expect(asksOf({ tactics: {}, code: ok })).toEqual([]);
+    expect(unitsToHand({ code: ok, tactics: {}, materials: (await validateSource(ok)).materials })).toEqual([]);
+  });
+
+  it("a recorded case replays it: acknowledged, no call of the record spent on it", async () => {
+    const c: ReplayCase = {
+      id: "fictional-consume",
+      subject: "lead-9",
+      units: {},
+      calls: [
+        { name: "provider:email_sent", args: { query: { leadId: "lead-9" } }, answer: { ok: true, data: {} } },
+        { name: "provider:email_found", args: { query: { leadId: "lead-9" } }, answer: { ok: true, data: { subject: verification } } },
+      ],
+      expect: { content: { sentBefore: true } },
+    };
+    expect(await replayCase(reuse, c)).toEqual({ id: c.id, match: true, diffs: [] });
+  });
+
+  it("a script that never calls it declares exactly what it did before", async () => {
+    await add("conversation", "dy_reader", `export default function run(ctx) { const f = ctx.get("lead_found", { params: { brandId: ctx.brand } }); return { content: { total: f.data.total } }; }`);
+    const { l, declared } = ledger();
+    const out = await runStoredScript(db, { outcome: "conversation", dynasty: "dy_reader", subject: lead, units: {} }, who, { ledger: l, vendors: vendors().v });
+    expect(declared).toEqual([{ runId: out.runId, body: { produced: [{ outcomeKey: "conversation", subjectService: "lead-service", subjectId: "lead-9" }], consumed: [] } }]);
   });
 });

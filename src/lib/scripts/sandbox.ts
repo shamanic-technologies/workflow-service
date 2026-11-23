@@ -6,7 +6,7 @@
  * the host, a vendor call, does not count; `SCRIPT_WALL_MS` bounds the whole run). The engine holds the language's
  * built-ins and nothing of Node: no require, no process, no env, no fetch, no timers, no file system, no socket, no
  * database handle, no object of this process. The script sees one object, its context (subject, brand, day, tactics,
- * Request, its Engine's storage, `get` on its materials or from a Provider, `ask`, the vendor, `accounts`, `wait`), built inside the
+ * Request, its Engine's storage, `get` on its materials or from a Provider, `ask`, `consume`, the vendor, `accounts`, `wait`), built inside the
  * engine from copied JSON; every call it makes crosses ONE host function that takes and returns text. So whatever a
  * stored script does, it reaches the outside only through the bridge the host hands it, which answers for the run's
  * own org and identity only (src/lib/scripts/script-runner.ts).
@@ -29,7 +29,7 @@ export const SCRIPT_MEMORY_MB = 64;
 export const SCRIPT_MAX_HOST_CALLS = 500;
 
 /** What a script asks the host for, one call at a time (JSON in, JSON out). */
-export type BridgeOp = "get" | "ask" | "vendor" | "wait" | "accounts" | "storage.get" | "storage.set" | "storage.delete" | "storage.count" | "storage.claim";
+export type BridgeOp = "get" | "ask" | "consume" | "vendor" | "wait" | "accounts" | "storage.get" | "storage.set" | "storage.delete" | "storage.count" | "storage.claim";
 /** The host's answer: a value, or a stop (the run cannot go on now: a piece is missing, it waits). */
 export type BridgeAnswer = { v: unknown } | { stop: string };
 export type Bridge = (op: BridgeOp, args: unknown[]) => BridgeAnswer | Promise<BridgeAnswer>;
@@ -133,6 +133,7 @@ var __make = (function (host) {
         if (typeof request === "string") return deep(call("ask", [request, inputs === undefined ? null : inputs]));
         call("ask", [request === undefined ? null : request]);
       },
+      consume: function (outcome, subject) { call("consume", [outcome === undefined ? null : outcome, subject === undefined ? null : subject]); },
       vendor: freeze({ call: function (name, args) { return deep(call("vendor", [name, args === undefined ? null : args])); } }),
       accounts: function (channel, role) { return deep(call("accounts", [channel, role])); },
       wait: function (days) { call("wait", [days]); throw new Error("wait"); },
@@ -253,6 +254,11 @@ export async function validateSource(source: string): Promise<{ materials: strin
   // ENGINE-GET-ASK-1123: the direct ask names its Engine the same way (the one-argument Request form is untouched).
   if (callsOf(source, "ask").some((c) => c.many && !LITERAL_OUTCOME.test(c.first))) {
     throw new ScriptSourceError("every ctx.ask(outcome, inputs) must name its outcome with a literal string, so the Engines it asks can be read from the code");
+  }
+  // Step 2a: a Unit the script declares used (`ctx.consume(outcome, subject)`) names its outcome the same way. It is
+  // neither a material to hand nor an asked Engine.
+  if (callsOf(source, "consume").some((c) => !LITERAL_OUTCOME.test(c.first))) {
+    throw new ScriptSourceError("every ctx.consume(outcome, subject) must name its outcome with a literal string, so what a script may declare used can be read from the code");
   }
   const checked = await evaluate(`${BOOT}${moduleOf(js)}JSON.stringify(null);`, () => ({ stop: "a script calls nothing while it loads" }));
   if (checked.kind !== "done") throw new ScriptSourceError(checked.kind === "error" ? checked.message : checked.reason);
