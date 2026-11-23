@@ -13,6 +13,7 @@
  * none); otherwise not callable, with the reason. A listing that offered an Engine every campaign refuses
  * (`engine_not_live`) would hand Distry a tool that only ever fails (DISTRY-CALL-IS-CAMPAIGN-1121 AC, 2026-11-21).
  */
+import { asksOf } from "./sandbox.js";
 import { inArray } from "drizzle-orm";
 import { engineReasons, scripts, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
@@ -73,9 +74,8 @@ export interface EngineListing {
 }
 
 /** The materials a script needs handed: what its code reads minus what it asks another Engine for (tactic `asks`). */
-export function unitsToHand(row: Pick<ScriptRow, "materials" | "tactics">): string[] {
-  const asks = ((row.tactics ?? {}) as Record<string, unknown>).asks;
-  const asked = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+export function unitsToHand(row: Pick<ScriptRow, "materials" | "tactics"> & { code?: string | null }): string[] {
+  const asked = asksOf(row);
   return [...new Set((row.materials ?? []).filter((m) => !asked.includes(m)))].sort();
 }
 

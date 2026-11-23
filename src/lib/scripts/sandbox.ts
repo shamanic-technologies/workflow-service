@@ -6,7 +6,7 @@
  * the host, a vendor call, does not count; `SCRIPT_WALL_MS` bounds the whole run). The engine holds the language's
  * built-ins and nothing of Node: no require, no process, no env, no fetch, no timers, no file system, no socket, no
  * database handle, no object of this process. The script sees one object, its context (subject, brand, day, tactics,
- * Request, its Engine's storage, `get` on its materials, `ask`, the vendor, `accounts`, `wait`), built inside the
+ * Request, its Engine's storage, `get` on its materials or from a Provider, `ask`, the vendor, `accounts`, `wait`), built inside the
  * engine from copied JSON; every call it makes crosses ONE host function that takes and returns text. So whatever a
  * stored script does, it reaches the outside only through the bridge the host hands it, which answers for the run's
  * own org and identity only (src/lib/scripts/script-runner.ts).
@@ -128,8 +128,11 @@ var __make = (function (host) {
         count: function (t) { return call("storage.count", [t]); },
         claim: function (t, k, v) { return deep(call("storage.claim", [t, k, v === undefined ? null : v])); },
       }),
-      get: function (outcome) { return deep(call("get", [outcome])); },
-      ask: function (request) { call("ask", [request === undefined ? null : request]); },
+      get: function (outcome, filters) { return deep(arguments.length > 1 ? call("get", [outcome, filters === undefined ? null : filters]) : call("get", [outcome])); },
+      ask: function (request, inputs) {
+        if (typeof request === "string") return deep(call("ask", [request, inputs === undefined ? null : inputs]));
+        call("ask", [request === undefined ? null : request]);
+      },
       vendor: freeze({ call: function (name, args) { return deep(call("vendor", [name, args === undefined ? null : args])); } }),
       accounts: function (channel, role) { return deep(call("accounts", [channel, role])); },
       wait: function (days) { call("wait", [days]); throw new Error("wait"); },
@@ -151,10 +154,74 @@ const moduleOf = (js: string) =>
   `var __run = (function () { var module = { exports: {} }; (function (module, exports) {\n${js}\n})(module, module.exports); return module.exports.default || module.exports; })();\n` +
   `if (typeof __run !== "function") throw new Error("a script's default export must be its run(ctx) function");\n`;
 
-/** The outcomes a script's code asks its Providers for (`ctx.get("...")`, literals): its materials. */
+/**
+ * The outcomes a script's code must be HANDED (`ctx.get("...")` with the outcome alone, literals): its materials.
+ * ENGINE-GET-ASK-1123: `ctx.get("x", filters)` reads x from its Provider, so it is no material.
+ */
 export function readMaterials(source: string): string[] {
   const out: string[] = [];
-  for (const m of source.matchAll(/(?<!storage)\.get\(\s*["'`]([a-z0-9_:.-]+)["'`]\s*\)/gi)) if (!out.includes(m[1]!)) out.push(m[1]!);
+  for (const m of source.matchAll(/(?<!storage)\.get\(\s*["'`]([a-z0-9_:.-]+)["'`]\s*,?\s*\)/gi)) if (!out.includes(m[1]!)) out.push(m[1]!);
+  return out;
+}
+
+const LITERAL_OUTCOME = /^["'`]([a-z0-9_:.-]+)["'`]$/i;
+
+/** Each `.<method>(...)` call of a text: its first argument as written, and whether it states more than one. */
+function callsOf(source: string, method: string): Array<{ first: string; many: boolean }> {
+  const out: Array<{ first: string; many: boolean }> = [];
+  for (const m of source.matchAll(new RegExp(`\\.${method}\\s*\\(`, "g"))) {
+    const start = m.index! + m[0].length;
+    let depth = 0;
+    let comma = -1;
+    let end = -1;
+    for (let i = start; i < source.length; i++) {
+      const ch = source[i]!;
+      if (ch === '"' || ch === "'" || ch === "`") {
+        let j = i + 1;
+        while (j < source.length && source[j] !== ch) j += source[j] === "\\" ? 2 : 1;
+        i = j;
+      } else if (ch === "/" && source[i + 1] === "/") {
+        const nl = source.indexOf("\n", i);
+        if (nl < 0) break;
+        i = nl;
+      } else if (ch === "/" && source[i + 1] === "*") {
+        const close = source.indexOf("*/", i + 2);
+        if (close < 0) break;
+        i = close + 1;
+      } else if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}") {
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+        depth--;
+      } else if (ch === "," && depth === 0 && comma < 0) comma = i;
+    }
+    // A call the scan cannot close is left alone (never a refusal invented by the scan).
+    if (end < 0) continue;
+    out.push({ first: source.slice(start, comma >= 0 ? comma : end).trim(), many: comma >= 0 && source.slice(comma + 1, end).trim() !== "" });
+  }
+  return out;
+}
+
+/**
+ * ENGINE-GET-ASK-1123: the Engines a script's code asks for a Unit directly (`ctx.ask("<outcome>", inputs)`, literals).
+ * The same effect as tactic `asks` naming them.
+ */
+export function readAsks(source: string): string[] {
+  const out: string[] = [];
+  for (const c of callsOf(source, "ask")) {
+    const m = LITERAL_OUTCOME.exec(c.first);
+    if (m && !out.includes(m[1]!)) out.push(m[1]!);
+  }
+  return out;
+}
+
+/** The Engines a script asks: its tactic `asks`, and those its code asks directly. */
+export function asksOf(row: { tactics?: unknown; code?: string | null }): string[] {
+  const stated = ((row.tactics ?? {}) as Record<string, unknown>).asks;
+  const out = Array.isArray(stated) ? stated.filter((a): a is string => typeof a === "string") : [];
+  for (const a of row.code ? readAsks(row.code) : []) if (!out.includes(a)) out.push(a);
   return out;
 }
 
@@ -181,8 +248,12 @@ export async function validateSource(source: string): Promise<{ materials: strin
     throw new ScriptSourceError(e instanceof Error ? e.message : String(e));
   }
   const calls = (source.match(/\.get\s*\(/g) ?? []).length - (source.match(/storage\.get\s*\(/g) ?? []).length;
-  const literal = (source.match(/(?<!storage)\.get\s*\(\s*["'`][a-z0-9_]+["'`]\s*\)/g) ?? []).length;
+  const literal = (source.match(/(?<!storage)\.get\s*\(\s*["'`][a-z0-9_]+["'`]\s*[,)]/g) ?? []).length;
   if (literal !== calls) throw new ScriptSourceError("every ctx.get(...) must name its outcome with a literal string, so the materials can be read from the code");
+  // ENGINE-GET-ASK-1123: the direct ask names its Engine the same way (the one-argument Request form is untouched).
+  if (callsOf(source, "ask").some((c) => c.many && !LITERAL_OUTCOME.test(c.first))) {
+    throw new ScriptSourceError("every ctx.ask(outcome, inputs) must name its outcome with a literal string, so the Engines it asks can be read from the code");
+  }
   const checked = await evaluate(`${BOOT}${moduleOf(js)}JSON.stringify(null);`, () => ({ stop: "a script calls nothing while it loads" }));
   if (checked.kind !== "done") throw new ScriptSourceError(checked.kind === "error" ? checked.message : checked.reason);
   return { materials: readMaterials(source), vendors: readVendors(source) };

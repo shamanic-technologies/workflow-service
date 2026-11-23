@@ -18,6 +18,7 @@
  *    their runs' chains reached per dollar; its order is the run's fall-through order. Unreadable = throws: the run
  *    makes nothing and is retried, never a default script. No rating rule lives here.
  */
+import { asksOf } from "./sandbox.js";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
@@ -438,8 +439,7 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     if (kept && !kept.has(row.dynasty)) continue;
     // A material the script ASKS another Engine for (tactic `asks`: `ctx.ask(request)` then `ctx.get(<outcome>)`, a
     // child run of that Engine) is not one the run must hold.
-    const asks = (row.tactics as Record<string, unknown>)?.asks;
-    const provided = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+    const provided = asksOf(row);
     if (!(row.materials ?? []).every((m) => input.servable.includes(m) || provided.includes(m))) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
