@@ -210,6 +210,10 @@ export async function runStoredScript(
   // ONE-WRITER-N-MODELS-1116: the Units asked children made, consumed by this run even when its own Unit is declared
   // by the owning service (`recordedBy`): only this run knows it asked them.
   const askedConsumed: OccurrenceInput[] = [];
+  // ENGINE-GET-ASK-1123 (owner 2026-11-23, option A): the Units the SCRIPT says it used (`ctx.consume`), e.g. one it
+  // read from a Provider and reused. A read alone declares nothing; like the asked ones, only this run knows them, so
+  // they are declared here even when its own Unit is declared by the owning service (`recordedBy`).
+  const usedConsumed: OccurrenceInput[] = [];
   const vendorCalls: ScriptRunResult["vendorCalls"] = [];
   const trace: NonNullable<ScriptRunResult["trace"]> = [];
 
@@ -308,6 +312,16 @@ export async function runStoredScript(
       asked = request as Record<string, unknown>;
       return { v: null };
     }
+    if (op === "consume") {
+      const outcome = typeof args[0] === "string" ? args[0].trim() : "";
+      if (!outcome) return { stop: "ctx.consume(outcome, subject): outcome is the Unit's outcome, a literal string" };
+      const sub = subjectOf(args[1]);
+      if (!sub) return { stop: `ctx.consume(${outcome}, subject): subject is {service, id}, the subject the Unit is declared under on the ledger (as its Provider states it)` };
+      if (!usedConsumed.some((c) => c.outcomeKey === outcome && c.subjectService === sub.service && c.subjectId === sub.id)) {
+        usedConsumed.push({ outcomeKey: outcome, subjectService: sub.service, subjectId: sub.id });
+      }
+      return { v: null };
+    }
     if (op === "accounts") return { stop: "ctx.accounts: connected accounts are not served to stored scripts yet" };
     if (op === "wait") {
       const days = Number(args[0]);
@@ -344,7 +358,7 @@ export async function runStoredScript(
     }
   }
   if (input.recordedBy) consumed.length = 0;
-  for (const c of askedConsumed) {
+  for (const c of [...askedConsumed, ...usedConsumed]) {
     if (!consumed.some((x) => x.outcomeKey === c.outcomeKey && x.subjectService === c.subjectService && x.subjectId === c.subjectId)) consumed.push(c);
   }
 
