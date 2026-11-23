@@ -5,6 +5,8 @@
  * `--apply` writes. Run inside the workflow-service container with a real staff identity (who decided):
  *   docker exec -i -e ORG_ID=… -e USER_ID=… -e STAFF_EMAIL=… distribute-workflow-service-1 node scripts/post-catalogue-ops.mjs [--apply]
  * `merge` {absorbed, places, reason} (ONE-WRITER-N-MODELS-1116: POST /internal/scripts/merges; already merged = skipped).
+ * `upgrade` {outcome, dynasty, fromVersion, code, tactics?, skipIfIncludes} (VERIFY-BEFORE-WRITE-1124: ONE dynasty's next
+ * version, generated from its active version `fromVersion`; another active version = refused, nothing written).
  * `upgradeWithCases` {outcome, dynasty, code, tactics?, description?, source, cases} (ONE-WRITER-N-MODELS-1116-OTHERS:
  * a port's upgrade with its cases restated; the dry run replays them server-side and writes nothing).
  * Ops: `create` {body} (409 = already stored: UPGRADED to the generator's code/tactics/description unless the active version already is); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
@@ -86,6 +88,29 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       console.log(`  upgrade ${b.outcome}/${b.dynasty}: ${u.status} ${u.status === 201 ? `v${u.json.version}` : JSON.stringify(u.json).slice(0, 300)}`);
       if (u.status !== 201) failed++;
     } else if (r.status !== 201) failed++;
+    continue;
+  }
+  if (op.op === "upgrade") {
+    // VERIFY-BEFORE-WRITE-1124: one dynasty's next version, its code generated from the active version the op names.
+    const active = (await activeOf(op.outcome, op.dynasty)).find((s) => s.dynasty === op.dynasty);
+    const full = active ? await call("GET", `/scripts/${active.id}`) : null;
+    if (!full || full.status !== 200) throw new Error(`read ${op.outcome}/${op.dynasty}: ${full ? full.status : "no active version"}`);
+    if (op.skipIfIncludes && full.json.code.includes(op.skipIfIncludes)) {
+      console.log(`upgrade ${op.outcome}/${op.dynasty} v${active.version}: already done, skipped`);
+      continue;
+    }
+    if (active.version !== op.fromVersion) {
+      console.log(`upgrade ${op.outcome}/${op.dynasty}: generated from v${op.fromVersion}, the active version is v${active.version}, NOT upgraded`);
+      failed++;
+      continue;
+    }
+    if (!apply) {
+      console.log(`upgrade ${op.outcome}/${op.dynasty} v${active.version} -> v${active.version + 1} (${op.code.length} chars${op.tactics ? ", tactics stated" : ""}) (dry run)`);
+      continue;
+    }
+    const r = await call("POST", `/scripts/dynasty/${op.outcome}/${op.dynasty}/upgrade`, { code: op.code, ...(op.tactics ? { tactics: op.tactics } : {}) });
+    console.log(`upgrade ${op.outcome}/${op.dynasty}: ${r.status} ${r.status === 201 ? `v${r.json.version} replay=${JSON.stringify(r.json.replay ?? null)}` : JSON.stringify(r.json).slice(0, 300)}`);
+    if (r.status !== 201) failed++;
     continue;
   }
   if (op.op === "upgradeWithCases") {
