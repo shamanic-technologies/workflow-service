@@ -107,7 +107,16 @@ export async function fetchServiceList(
     );
   }
 
-  return res.json() as Promise<Array<{ service: string }>>;
+  // The registry answers `{services: [{name, baseUrl, openapiUrl}]}` (read in prod 2026-11-24); this function had
+  // typed it as a bare array, which only held while every caller ignored the answer (ENGINE-GET-ASK-1123).
+  const body = (await res.json()) as { services?: unknown };
+  if (!body || !Array.isArray(body.services)) {
+    throw new Error("api-registry error: GET /services answered no `services` list");
+  }
+  return body.services
+    .map((s) => (s && typeof s === "object" ? (s as { name?: unknown }).name : null))
+    .filter((n): n is string => typeof n === "string" && n.length > 0)
+    .map((service) => ({ service }));
 }
 
 /** Fetch OpenAPI specs for multiple services (deduplicated). Returns Map<serviceName, spec> */
