@@ -112,8 +112,22 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
     diffs.push(why);
     return { stop: REPLAY_STOP };
   };
+  /** The next recorded call must be this one: its answer, the request compared when it was recorded. */
+  const fromRecord = (name: string, sent: unknown) => {
+    const rec = c.calls[next];
+    if (!rec) return stop(`call ${next + 1} ${name}: the record made no more calls`);
+    if (rec.name !== name) return stop(`call ${next + 1}: called ${name}, the record called ${rec.name}`);
+    if (rec.args !== undefined && !sameJson(sent, rec.args)) diffs.push(`call ${next + 1} ${name}: ${firstDiff("request", sent, rec.args)}`);
+    next++;
+    return { v: rec.answer };
+  };
   const bridge: Bridge = (op, args) => {
-    if (op === "get") {
+    // ENGINE-GET-ASK-1123: a Provider read (`ctx.get(outcome, filters)`) is a recorded call named `provider:<outcome>`,
+    // its filters the request; a direct ask (`ctx.ask(outcome, inputs)`) is the pair in one: its inputs among the
+    // asks, its Unit the case's next held one.
+    if (op === "get" && args.length > 1) return fromRecord(`provider:${String(args[0])}`, (args[1] ?? {}) as Record<string, unknown>);
+    if (op === "ask" && typeof args[0] === "string") asked.push(args[1] ?? {});
+    if (op === "get" || (op === "ask" && typeof args[0] === "string")) {
       const outcome = String(args[0]);
       const held = c.units[outcome];
       if (held === undefined) return stop(`asked for ${outcome}, which the case does not hold`);
@@ -122,16 +136,7 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
       const list = Array.isArray(held) ? held : [held];
       return { v: { id: `${c.id}:${outcome}:${n}`, outcome, subject: c.subject ?? "", ageDays: 0, content: list[Math.min(n, list.length - 1)] } };
     }
-    if (op === "vendor") {
-      const name = String(args[0]);
-      const rec = c.calls[next];
-      if (!rec) return stop(`call ${next + 1} ${name}: the record made no more calls`);
-      if (rec.name !== name) return stop(`call ${next + 1}: called ${name}, the record called ${rec.name}`);
-      const sent = (args[1] ?? {}) as Record<string, unknown>;
-      if (rec.args !== undefined && !sameJson(sent, rec.args)) diffs.push(`call ${next + 1} ${name}: ${firstDiff("request", sent, rec.args)}`);
-      next++;
-      return { v: rec.answer };
-    }
+    if (op === "vendor") return fromRecord(String(args[0]), (args[1] ?? {}) as Record<string, unknown>);
     if (op === "ask") {
       asked.push(args[0]);
       return { v: null };

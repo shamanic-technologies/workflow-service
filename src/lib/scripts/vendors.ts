@@ -11,6 +11,7 @@
 import type { VendorAnswer } from "./replay.js";
 import { longRequest } from "./long-request.js";
 import { PERSON_THREAD_DEFAULT_QUERY } from "../person-thread-query.js";
+import { productionProviderReads, providerTag, type ProviderReads } from "./provider-index.js";
 
 export interface VendorDeps {
   /** chat-service `POST /complete` on the run (its own key + the given headers). */
@@ -38,6 +39,11 @@ export interface VendorDeps {
    * days in the person's timezone: `{bookingUrl, timezone, slots, calendarId?, degraded?, degradedReason?}`.
    */
   readBookingSlots?(bookingUrl: string, timezone: string): Promise<Record<string, unknown>>;
+  /**
+   * ENGINE-GET-ASK-1123: the read(s) the Provider of an outcome documents (operations of a served OpenAPI tagged
+   * `provider:<outcome>`), for `ctx.get(outcome, filters)`.
+   */
+  providerReads?(outcome: string): Promise<ProviderReads>;
   /** Waits between two asks of a run door's bounded poll (a vendor wait, never the script's compute). */
   sleep?(ms: number): Promise<void>;
 }
@@ -61,6 +67,8 @@ export interface VendorCallContext {
   callerRunId?: string;
   /** The outcome of the script's Engine (a door with `outcomeInBody` declares the Unit under it). */
   outcome?: string;
+  /** The Engines the script asks (tactic `asks` and its code's `ctx.ask("<outcome>", ...)`); absent = the tactic alone. */
+  asks?: string[];
 }
 
 /** The headers of a platform call: only whose work it is (the script's run), as chat-service's platform doors read. */
@@ -656,6 +664,35 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
   }
 }
 
+/**
+ * ENGINE-GET-ASK-1123, `ctx.get(outcome, filters)`: read Units of an outcome from its Provider, the service that owns
+ * them, through the read that service documents itself (provider-index.ts). `filters` is that route's own request,
+ * `{params?, query?, body?}` as its doc states it (+ `route`, the operationId, when the Provider documents several);
+ * the call is made AS the script's run, like every run door, and answered like one: the Provider's whole body, a
+ * refusal included (`ok: false`, `{error, status, code, body}`). A read nobody documents, or an ask that does not say
+ * which of several, is a stop naming it: never a guess, never another outcome's read. Nothing is declared consumed.
+ */
+export async function readProvider(outcome: string, filters: unknown, ctx: VendorCallContext, deps: VendorDeps): Promise<{ answer: VendorAnswer } | { stop: string }> {
+  if (filters !== null && filters !== undefined && !plainRecord(filters)) return { stop: `ctx.get(${outcome}, filters): filters is an object ({params?, query?, body?}, as the Provider's route documents them)` };
+  const { route, ...request } = (filters ?? {}) as Record<string, unknown>;
+  if (route !== undefined && typeof route !== "string") return { stop: `ctx.get(${outcome}, filters): filters.route is the operationId of the read` };
+  if (!deps.providerReads) return { stop: `ctx.get(${outcome}, filters): Provider reads are not served here` };
+  const { operations, unread } = await deps.providerReads(outcome);
+  const listed = operations.map((o) => `${o.operationId ?? "(no operationId)"} = ${o.service} ${o.method} ${o.path}`).join("; ");
+  if (operations.length === 0) {
+    return { stop: `no Provider read is documented for ${outcome} (no served operation carries the tag ${providerTag(outcome)}${unread.length > 0 ? `; specs not read: ${unread.join(", ")}` : ""})` };
+  }
+  let op = operations[0]!;
+  if (route !== undefined) {
+    const named = operations.filter((o) => o.operationId === route);
+    if (named.length !== 1) return { stop: `ctx.get(${outcome}, filters): no Provider read of ${outcome} is named ${route} (documented: ${listed})` };
+    op = named[0]!;
+  } else if (operations.length > 1) {
+    return { stop: `ctx.get(${outcome}, filters): several Provider reads are documented for ${outcome}, name one in filters.route (${listed})` };
+  }
+  return { answer: await runDoor(providerTag(outcome), { service: op.service, method: op.method, path: op.path, asRun: true }, request, ctx, deps) };
+}
+
 /** Which Engine and call a writing choice is for: the script's own Engine, or one it asks (tactic `asks`). */
 function pickTarget(name: string, args: Record<string, unknown>, ctx: VendorCallContext): { outcome: string; place: string } | { error: string } {
   const q = plainRecord(args.query) ? args.query : {};
@@ -667,7 +704,7 @@ function pickTarget(name: string, args: Record<string, unknown>, ctx: VendorCall
   if (named && named !== own) {
     // The Engine that makes the call: the script's own, or one it asks for a Unit (the asked Engine's script makes the
     // call with the asker's LLM, e.g. the cold email hands its writer LLM to message_written).
-    const asks = Array.isArray(ctx.tactics.asks) ? (ctx.tactics.asks as unknown[]) : [];
+    const asks = ctx.asks ?? (Array.isArray(ctx.tactics.asks) ? (ctx.tactics.asks as unknown[]) : []);
     if (!asks.includes(named)) return { error: `${name}: ${named} is neither this script's Engine nor one it asks (tactic asks)` };
     outcome = named;
   }
@@ -806,6 +843,7 @@ export function productionVendorDeps(): VendorDeps {
       }
       return { status: res.status, body: parsed };
     },
+    providerReads: productionProviderReads,
     async readBookingSlots(bookingUrl, timezone) {
       // The same reader the old answering step ran (a public page, free, no credential), loaded once as a module.
       const { readBookingSlotsCode } = await import("../booking-slots.js");

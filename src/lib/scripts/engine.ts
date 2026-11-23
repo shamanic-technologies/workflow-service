@@ -18,6 +18,7 @@
  *    their runs' chains reached per dollar; its order is the run's fall-through order. Unreadable = throws: the run
  *    makes nothing and is retried, never a default script. No rating rule lives here.
  */
+import { asksOf } from "./sandbox.js";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
 import { activeVersion, caseCount, type AnyPgDb } from "./script-catalogue.js";
@@ -60,8 +61,18 @@ export async function engineState(db: AnyPgDb, outcome: string, orgId: string | 
       ),
     )
     .orderBy(desc(scriptSwitches.switchedAt));
-  const own = orgId ? rows.find((r) => r.orgId === orgId) : undefined;
+  const latestOwn = orgId ? rows.find((r) => r.orgId === orgId) : undefined;
   const fleet = rows.find((r) => r.orgId === null);
+  // An org's own row wins over the fleet row, EXCEPT an org row stopped BEFORE the fleet was switched on: switching every
+  // client is the later decision and covers that org too (ENGINE-STALE-ORG-ROLLBACK-1122: the staff test org's lead_found
+  // row, rolled back by the guard on 2026-11-06 18:05, outlived the fleet switch of 21:34 and refused every launch of a
+  // Lead Sourcing funnel there for 16 days while every other client ran the Engine). A hold placed AFTER the fleet
+  // switch still wins; an org switched on alone still runs when the fleet row is off.
+  const staleOwn =
+    latestOwn?.state === "rolled_back" &&
+    fleet?.state === "switched" &&
+    (latestOwn.rolledBackAt ?? latestOwn.switchedAt).getTime() < fleet.switchedAt.getTime();
+  const own = staleOwn ? undefined : latestOwn;
   const deciding = own ?? fleet;
   return {
     outcome,
@@ -428,8 +439,7 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
     if (kept && !kept.has(row.dynasty)) continue;
     // A material the script ASKS another Engine for (tactic `asks`: `ctx.ask(request)` then `ctx.get(<outcome>)`, a
     // child run of that Engine) is not one the run must hold.
-    const asks = (row.tactics as Record<string, unknown>)?.asks;
-    const provided = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+    const provided = asksOf(row);
     if (!(row.materials ?? []).every((m) => input.servable.includes(m) || provided.includes(m))) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
