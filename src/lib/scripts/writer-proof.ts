@@ -45,7 +45,8 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { scripts, writerCases, writerProofEngines, writerProofs, type ScriptRow, type WriterProofRow } from "../../db/schema.js";
-import { runScript, type Bridge } from "./sandbox.js";
+import { asksOf, runScript, type Bridge } from "./sandbox.js";
+import { providerTag } from "./provider-index.js";
 import { CHAT_COMPLETE, JEV_NOUL, LLM_COMPLETE, LLM_PICK, TEMPLATE_PICK, TO_PERSON_DOORS, callVendor, writesToPerson, type VendorDeps } from "./vendors.js";
 import { sameJson, type VendorAnswer } from "./replay.js";
 import type { AnyPgDb } from "./script-catalogue.js";
@@ -91,13 +92,12 @@ export function callsCompletion(code: string): boolean {
 }
 
 /** A script that asks the LLM completion Engine for its model (tactic `asks`). */
-export function asksCompletion(row: Pick<ScriptRow, "tactics">): boolean {
-  const asks = ((row.tactics ?? {}) as Record<string, unknown>).asks;
-  return Array.isArray(asks) && asks.includes(LLM_COMPLETION_OUTCOME);
+export function asksCompletion(row: Pick<ScriptRow, "tactics"> & { code?: string | null }): boolean {
+  return asksOf(row).includes(LLM_COMPLETION_OUTCOME);
 }
 
 /** The person-facing paths of its Unit a writer that asks its model states (tactic `personFields`); null = none stated. */
-export function pairWriterFields(row: Pick<ScriptRow, "tactics">): string[] | null {
+export function pairWriterFields(row: Pick<ScriptRow, "tactics"> & { code?: string | null }): string[] | null {
   const fields = ((row.tactics ?? {}) as Record<string, unknown>)[PERSON_FIELDS_TACTIC];
   if (!asksCompletion(row) || !Array.isArray(fields)) return null;
   const paths = fields.filter((f): f is string => typeof f === "string" && f.trim() !== "");
@@ -132,6 +132,8 @@ export interface WriterCaseBody {
   calls: RecordedCall[];
   /** What an asked Engine answered (`ctx.ask` then `ctx.get(<outcome>)`), by outcome. */
   asked: Record<string, unknown>;
+  /** ENGINE-GET-ASK-1123: the Units its direct asks (`ctx.ask(outcome, inputs)`) got, in order. Absent = none made. */
+  orders?: Array<{ outcome: string; unit: unknown }>;
 }
 
 export const codeMd5 = (code: string) => createHash("md5").update(code).digest("hex");
@@ -169,8 +171,7 @@ export async function recordWriterCase(db: AnyPgDb, row: ScriptRow, input: { run
 
 /** The materials a version must be HANDED (what it asks another Engine for, tactic `asks`, is not). */
 function neededMaterials(row: ScriptRow): string[] {
-  const asks = (row.tactics as Record<string, unknown>)?.asks;
-  const provided = Array.isArray(asks) ? asks.filter((a): a is string => typeof a === "string") : [];
+  const provided = asksOf(row);
   return (row.materials ?? []).filter((m) => !provided.includes(m));
 }
 
@@ -300,7 +301,27 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
     return c.calls[at]!.answer;
   };
 
+  const ordered = new Map<string, number>();
   const bridge: Bridge = async (op, args) => {
+    if (op === "get" && args.length > 1) {
+      // ENGINE-GET-ASK-1123: a Provider read is answered from the record, like every read the case made.
+      const name = providerTag(String(args[0]));
+      return { v: fromRecord(name, args[1] ?? null) ?? (reachedWriter ? { ok: true, data: {} } : { ok: false, data: { error: `${name}: not recorded in this case` } }) };
+    }
+    if (op === "ask" && typeof args[0] === "string") {
+      // ENGINE-GET-ASK-1123, a direct ask: the pair's model answers live, any other Engine's Unit comes from the record.
+      const outcome = args[0];
+      const inputs = args[1] && typeof args[1] === "object" && !Array.isArray(args[1]) ? (args[1] as Record<string, unknown>) : {};
+      if (completion && outcome === LLM_COMPLETION_OUTCOME) return await completeLive(inputs);
+      const made = (c.orders ?? []).filter((o) => o.outcome === outcome);
+      const n = ordered.get(outcome) ?? 0;
+      if (n < made.length) {
+        ordered.set(outcome, n + 1);
+        return { v: made[n]!.unit };
+      }
+      if (outcome in (c.asked ?? {})) return { v: c.asked[outcome] };
+      return { stop: `the case holds no ${outcome}` };
+    }
     if (op === "get") {
       const outcome = String(args[0]);
       const held = c.units[outcome] as Record<string, unknown> | Array<Record<string, unknown>> | undefined;

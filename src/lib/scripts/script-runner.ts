@@ -16,8 +16,9 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import { scriptRuns, scriptStorage, scripts, type ScriptRow } from "../../db/schema.js";
-import { runScript, type Bridge, type ScriptResult } from "./sandbox.js";
-import { callVendor, type VendorDeps } from "./vendors.js";
+import { asksOf, runScript, type Bridge, type ScriptResult } from "./sandbox.js";
+import { callVendor, readProvider, type VendorDeps } from "./vendors.js";
+import { providerTag } from "./provider-index.js";
 import { ScriptCatalogueError, activeVersion, caseCount, dynastyVersions, type AnyPgDb } from "./script-catalogue.js";
 import { needsOfAsk, pickScript } from "./engine.js";
 import { recordWriterCase, type RecordedCall } from "./writer-proof.js";
@@ -217,27 +218,48 @@ export async function runStoredScript(
   // PROVEN-BEFORE-PEOPLE-1116: what this run saw, kept as a case of its Engine when its script writes to a person.
   const recorded: RecordedCall[] = [];
   const askedUnits: Record<string, unknown> = {};
+  // ENGINE-GET-ASK-1123: the Units the direct asks (`ctx.ask(outcome, inputs)`) got, in order (a case replays them so).
+  const orders: Array<{ outcome: string; unit: unknown }> = [];
+  const asks = asksOf(row);
+
+  /** Order ONE new Unit of an outcome from its Engine (the Rating's pick, a child run), consumed by this run. */
+  const order = async (outcome: string, request: Record<string, unknown>) => {
+    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
+    if ("v" in provided) {
+      askedUnits[outcome] = provided.v;
+      // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
+      // writer, a written message by its sender), so the ledger's chain links them and the child is credited with
+      // what the asker's work led to.
+      const made = provided.v as { content?: unknown; run?: { unit?: { subject?: SubjectRef | null } | null } | null };
+      const sub = made.content ? made.run?.unit?.subject : null;
+      if (sub && !askedConsumed.some((c) => c.outcomeKey === outcome && c.subjectService === sub.service && c.subjectId === sub.id)) {
+        askedConsumed.push({ outcomeKey: outcome, subjectService: sub.service, subjectId: sub.id });
+      }
+    }
+    return provided;
+  };
 
   const bridge: Bridge = async (op, args) => {
+    if (op === "get" && args.length > 1) {
+      // ENGINE-GET-ASK-1123, `ctx.get(outcome, filters)`: READ Units that exist, from the outcome's Provider.
+      const outcome = String(args[0]);
+      const name = providerTag(outcome);
+      const t = Date.now();
+      const read = await readProvider(outcome, args[1], { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome }, deps.vendors);
+      if ("stop" in read) return read;
+      const answer = read.answer;
+      vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }) });
+      recorded.push({ name, args: args[1] ?? null, answer });
+      if (input.trace) trace.push({ name, args: args[1] ?? null, answer });
+      return { v: answer };
+    }
     if (op === "get") {
       const outcome = String(args[0]);
       const held = input.units[outcome];
       if (held === undefined && asked) {
         const request = asked;
         asked = null;
-        const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
-        if ("v" in provided) {
-          askedUnits[outcome] = provided.v;
-          // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
-          // writer, a written message by its sender), so the ledger's chain links them and the child is credited with
-          // what the asker's work led to.
-          const made = provided.v as { content?: unknown; run?: { unit?: { subject?: SubjectRef | null } | null } | null };
-          const sub = made.content ? made.run?.unit?.subject : null;
-          if (sub && !askedConsumed.some((c) => c.outcomeKey === outcome && c.subjectService === sub.service && c.subjectId === sub.id)) {
-            askedConsumed.push({ outcomeKey: outcome, subjectService: sub.service, subjectId: sub.id });
-          }
-        }
-        return provided;
+        return order(outcome, request);
       }
       if (held === undefined) return { stop: `the script asked for ${outcome}, which this step was not handed (materials: ${Object.keys(input.units).join(", ") || "none"})` };
       const n = gotten.get(outcome) ?? 0;
@@ -255,7 +277,7 @@ export async function runStoredScript(
       const answer = await callVendor(
         name,
         (args[1] ?? null) as Record<string, unknown> | null,
-        { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
+        { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome, asks, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
         deps.vendors,
       );
       // BRAND-TOOLS-EVERY-SCRIPT-1109: how many brand tool calls a completion made, on the run's record (any vendor that serves it).
@@ -267,6 +289,17 @@ export async function runStoredScript(
     }
     if (op === "storage.get" || op === "storage.set" || op === "storage.delete" || op === "storage.count" || op === "storage.claim") {
       return { v: await storageOp(db, who.orgId, row.outcome, op, args) };
+    }
+    if (op === "ask" && typeof args[0] === "string") {
+      // ENGINE-GET-ASK-1123, `ctx.ask(outcome, inputs)`: MAKE one new Unit now and hand it back. The same order as
+      // `ctx.ask(request)` then `ctx.get(outcome)`; `inputs` is that Request as stated, no `units` = none handed.
+      const outcome = args[0];
+      const inputs = args[1] ?? {};
+      if (typeof inputs !== "object" || Array.isArray(inputs)) return { stop: `ctx.ask(${outcome}, inputs): inputs is one object (what that Engine's scripts take)` };
+      const request = inputs as Record<string, unknown>;
+      const provided = await order(outcome, request.units === undefined || request.units === null ? { ...request, units: {} } : request);
+      if ("v" in provided) orders.push({ outcome, unit: provided.v });
+      return provided;
     }
     if (op === "ask") {
       const request = args[0];
@@ -360,7 +393,7 @@ export async function runStoredScript(
     await recordWriterCase(db, row, {
       runId,
       orgId: who.orgId,
-      body: { units: input.units, request: input.request ?? null, tactics: input.tactics ?? {}, subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day, calls: recorded, asked: askedUnits },
+      body: { units: input.units, request: input.request ?? null, tactics: input.tactics ?? {}, subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day, calls: recorded, asked: askedUnits, ...(orders.length > 0 ? { orders } : {}) },
       made: finalStatus === "made",
     });
   } catch (e) {
