@@ -220,7 +220,8 @@ export async function runStoredScript(
   const askedUnits: Record<string, unknown> = {};
   // ENGINE-GET-ASK-1123: the Units the direct asks (`ctx.ask(outcome, inputs)`) got, in order (a case replays them so).
   const orders: Array<{ outcome: string; unit: unknown }> = [];
-  const asks = asksOf(row);
+  // The run's own tactics (the row's, then what the caller stated), as every vendor call reads them.
+  const asks = asksOf({ tactics, code: row.code });
 
   /** Order ONE new Unit of an outcome from its Engine (the Rating's pick, a child run), consumed by this run. */
   const order = async (outcome: string, request: Record<string, unknown>) => {
