@@ -347,6 +347,8 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       const subject = (unit.subject as { id?: string } | undefined)?.id ?? "";
       return { v: { id: `proof:${outcome}:${n}`, outcome, subject, ageDays: 0, content: unit.content } };
     }
+    // ENGINE-GET-ASK-1123: a proof declares nothing on the ledger, so a Unit the script declares used is acknowledged.
+    if (op === "consume") return { v: null };
     if (op === "ask") {
       asked = true;
       const r = args[0];

@@ -141,6 +141,9 @@ export async function replayCase(source: string, c: ReplayCase): Promise<ReplayR
       asked.push(args[0]);
       return { v: null };
     }
+    // ENGINE-GET-ASK-1123: a Unit the script declares used (`ctx.consume`) is no call to the world: acknowledged. A case
+    // records no consumed Units, so none is compared (as for the handed and asked ones).
+    if (op === "consume") return { v: null };
     if (op === "accounts") return { v: (c.accounts ?? []).filter((a) => a.channel === args[0] && a.role === args[1]) };
     if (op === "wait") return stop(`asked to wait ${String(args[0])} days`);
     const key = `${String(args[0])}\u0000${String(args[1])}`;
