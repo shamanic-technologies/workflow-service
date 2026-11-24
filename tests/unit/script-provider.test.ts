@@ -351,7 +351,21 @@ export default function run(ctx) {
     expect(end).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
   });
 
-  it("stops the asking script with the child's reason when the child fails or would wait", async () => {
+  it("stops the asking script with the child's reason when the child fails", async () => {
+    await addScript("conversation", "dy_cold", PARENT, { asks: ["message_written"] });
+    await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); throw new Error("the writer broke"); }`);
+    const w = world();
+    const { runId } = await runOnce(dispatch({ outcome: "conversation" }), w);
+    const rows = await db.select().from(scriptRuns);
+    const parentRow = rows.find((x) => x.runId === runId)!;
+    const childRow = rows.find((x) => x.runId !== runId)!;
+    expect(childRow.status).toBe("failed");
+    expect(parentRow.status).toBe("stopped");
+    expect(parentRow.error).toMatch(/message_written\/dy_writer\/v1 \(asked for message_written\) failed: .*the writer broke/);
+    expect(w.closed.find((c) => c.runId === childRow.runId)?.status).toBe("failed");
+  });
+
+  it("an asked child that waits makes the Engine run wait too: one wait kept, nothing failed (HUMAN-VALIDATED-1124)", async () => {
     await addScript("conversation", "dy_cold", PARENT, { asks: ["message_written"] });
     await addScript("message_written", "dy_writer", `export default function run(ctx) { ctx.get("brand_context"); ctx.wait(3); return null; }`);
     const w = world();
@@ -359,10 +373,12 @@ export default function run(ctx) {
     const rows = await db.select().from(scriptRuns);
     const parentRow = rows.find((x) => x.runId === runId)!;
     const childRow = rows.find((x) => x.runId !== runId)!;
-    expect(childRow.status).toBe("stopped");
-    expect(parentRow.status).toBe("stopped");
-    expect(parentRow.error).toMatch(/message_written\/dy_writer\/v1 \(asked for message_written\) stopped: .*does not wait/);
-    expect(w.closed.find((c) => c.runId === childRow.runId)?.status).toBe("failed");
+    expect(childRow.status).toBe("waiting");
+    expect(parentRow.status).toBe("waiting");
+    expect(w.closed.find((c) => c.runId === childRow.runId)?.status).toBe("completed");
+    const waits = await db.select().from(engineWaits);
+    expect(waits).toHaveLength(1);
+    expect(w.calls.find((c) => c.path === "/end-run")!.body).toEqual({ success: true, stopCampaign: false, noWorkAvailable: true });
   });
 });
 
