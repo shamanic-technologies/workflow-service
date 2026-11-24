@@ -3185,7 +3185,25 @@ export const EngineListingSchema = z
       })
       .describe("ENGINE-GET-ASK-1123: the same question as `callable`, for a direct ask outside a campaign (an org's model may still narrow the pick at run time; a script needing something its run lacks stops with a plain reason)."),
     inputs: z.array(z.object({ units: z.array(z.string()), channel: z.string().nullable() })).describe("Each way to call it: the Units (by outcome) to hand in `units`, the `channel` to state (null = any)."),
-    scripts: z.array(z.object({ dynasty: z.string(), name: z.string().nullable(), version: z.number().int(), units: z.array(z.string()), channel: z.string().nullable() })),
+    scripts: z
+      .array(
+        z.object({
+          dynasty: z.string(),
+          name: z.string().nullable(),
+          version: z.number().int(),
+          units: z.array(z.string()),
+          channel: z.string().nullable(),
+          requestFields: z
+            .array(z.string())
+            .describe(
+              "The top-level fields of `request` this script's code reads (`ctx.request.<field>`), read off its code like its Units are: state these in the `request` of an ask (`POST /internal/engines/{outcome}/make`). Empty = it reads none itself; a script that hands its whole Request to the Engine it asks reads none here (the fields are the asked script's).",
+            ),
+          requestHandedOn: z
+            .boolean()
+            .describe("The code also uses its whole `request` as one value (handed to the Engine it asks, to a vendor call, or walked key by key): fields beyond `requestFields` may count, they are read by whoever receives it (for a script that asks another Engine, that Engine's scripts' `requestFields`)."),
+        }),
+      )
+      .describe("The runnable scripts the Rating draws among: what each must be handed (`units`, `channel`) and which `request` fields it reads (`requestFields`)."),
     counts: z
       .object({ scripts: z.number().int(), live: z.number().int(), runnable: z.number().int() })
       .describe("`runnable` = the live scripts the Rating can draw."),

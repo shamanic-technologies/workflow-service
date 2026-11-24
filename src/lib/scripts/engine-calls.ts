@@ -19,6 +19,7 @@
  * runnable (the campaign switch is not read: no campaign is involved), and what the caller must hand or state.
  */
 import { asksOf } from "./sandbox.js";
+import { readRequest } from "./request-fields.js";
 import { inArray } from "drizzle-orm";
 import { engineReasons, scripts, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
@@ -79,7 +80,8 @@ export interface EngineListing {
   /** Each way to call it: the Units to hand (none = nothing to hand) and the channel to state (null = any). */
   inputs: EngineInputOption[];
   /** The runnable scripts the Rating draws among (their client-readable names). */
-  scripts: Array<{ dynasty: string; name: string | null; version: number; units: string[]; channel: string | null }>;
+  /** `requestFields` = the Request fields its code reads (`ctx.request.<field>`), read off the code: what an ask states in `request`; `requestHandedOn` = it also hands its whole Request on. */
+  scripts: Array<{ dynasty: string; name: string | null; version: number; units: string[]; channel: string | null; requestFields: string[]; requestHandedOn: boolean }>;
   /** `runnable` = the live scripts the Rating can draw. */
   counts: { scripts: number; live: number; runnable: number };
 }
@@ -89,6 +91,12 @@ export function unitsToHand(row: Pick<ScriptRow, "materials" | "tactics"> & { co
   const asked = asksOf(row);
   return [...new Set((row.materials ?? []).filter((m) => !asked.includes(m)))].sort();
 }
+
+/** What an ask states in `request` for this code: the fields it reads, and whether it hands its whole Request on. */
+const requestOf = (code: string): { requestFields: string[]; requestHandedOn: boolean } => {
+  const read = readRequest(code);
+  return { requestFields: read.fields, requestHandedOn: read.whole };
+};
 
 const channelOf = (row: Pick<ScriptRow, "tactics">): string | null => {
   const c = ((row.tactics ?? {}) as Record<string, unknown>).channel;
@@ -230,7 +238,7 @@ export async function listEngines(db: AnyPgDb, orgId: string | null = null): Pro
           : notRunnable(),
       ask: { possible: runnable.length > 0, needsNothing: runnable.length > 0 && askNeeds === null, reason: runnable.length > 0 ? askNeeds : notRunnable() },
       inputs: ways,
-      scripts: runnable.map((r) => ({ dynasty: r.dynasty, name: r.name ?? null, version: r.version, units: unitsToHand(r), channel: channelOf(r) })),
+      scripts: runnable.map((r) => ({ dynasty: r.dynasty, name: r.name ?? null, version: r.version, units: unitsToHand(r), channel: channelOf(r), ...requestOf(r.code) })),
       counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length },
     });
   }
