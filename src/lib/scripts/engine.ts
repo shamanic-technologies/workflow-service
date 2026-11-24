@@ -202,7 +202,23 @@ export interface PickInput {
    * drawn: every run it would make 400s. Absent / all false = not asked.
    */
   needs?: LlmNeeds;
+  /**
+   * PLAN-RECURSIVE-PER-ENGINE-1124 (owner 2026-11-24: « À chaque Engine en partant de la fin (Target), on demande à Jev
+   * de filtrer les scripts possibles et puis le Rating nous donne le meilleur parmi la liste possible. Et ainsi de suite
+   * récursivement »): the Engines already asked above this pick, the top one first. A script needing a Unit the run does
+   * not hold is a candidate when that Unit's Engine can make it for the same campaign (its own candidates, one level
+   * deeper, recursively); an Engine already in the chain, or this one, is never asked again (no loop).
+   */
+  chain?: string[];
+  /**
+   * Internal to the recursion: a reachability look one level deeper, never a draw. It waits for no proof (a version
+   * whose proof is still running counts as reachable: the draw itself will wait for it).
+   */
+  reachOnly?: boolean;
 }
+
+/** PURE: the Engines a pick for `outcome` under `chain` may not ask again (the chain, then itself). */
+export const askedAbove = (outcome: string, chain: readonly string[] | undefined): string[] => [...(chain ?? []), outcome];
 
 /** Request features a pick must see honoured, as chat-service judges them (`GET /internal/local-llm/served-llms`). */
 export interface LlmNeeds {
@@ -435,16 +451,49 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
   const out: ScriptRow[] = [];
   // Rows held back only by a proof running right now (NEW-WRITER-FIRST-RUN-1121): waited for when nothing else is drawable.
   const awaiting: Array<{ row: ScriptRow; proof: Promise<unknown> }> = [];
+  // PLAN-RECURSIVE-PER-ENGINE-1124: whether a Unit the run does not hold can be asked of its Engine for this campaign
+  // (one look per outcome per pick). The deeper look reads the same campaign's strategy for THAT Engine, holds no Unit,
+  // and carries the chain, so a loop ends unreachable instead of recursing.
+  const above = askedAbove(input.outcome, input.chain);
+  const reach = new Map<string, Promise<boolean>>();
+  const reachable = (m: string, asker: ScriptRow): Promise<boolean> => {
+    if (above.includes(m)) return Promise.resolve(false);
+    let r = reach.get(m);
+    if (!r) {
+      r = candidatesOf(db, {
+        outcome: m,
+        servable: [],
+        channel: input.channel,
+        campaignId: input.campaignId ?? null,
+        orgId: input.orgId ?? null,
+        askedBy: `${input.outcome}/${asker.dynasty}`,
+        chain: above,
+        reachOnly: true,
+      }).then((c) => c.length > 0);
+      reach.set(m, r);
+    }
+    return r;
+  };
   for (const row of rows) {
     if (kept && !kept.has(row.dynasty)) continue;
     // A material the script ASKS another Engine for (tactic `asks`: `ctx.ask(request)` then `ctx.get(<outcome>)`, a
-    // child run of that Engine) is not one the run must hold.
+    // child run of that Engine) is not one the run must hold; one it reads without asking is asked of its Engine by the
+    // run itself (script-runner) when that Engine can make it here.
     const provided = asksOf(row);
-    if (!(row.materials ?? []).every((m) => input.servable.includes(m) || provided.includes(m))) continue;
+    let fed = true;
+    for (const m of row.materials ?? []) {
+      if (input.servable.includes(m) || provided.includes(m)) continue;
+      if (!(await reachable(m, row))) {
+        fed = false;
+        break;
+      }
+    }
+    if (!fed) continue;
     const channel = (row.tactics as Record<string, unknown>)?.channel;
     if (typeof channel === "string" && channel !== input.channel) continue;
     if (!(await provenness(db, row)).runnable) continue;
-    if (await proofAllows(row)) out.push(row);
+    if (await proofAllows(row, !input.reachOnly)) out.push(row);
+    else if (input.reachOnly && pendingProof(row, null)) out.push(row);
   }
   // A version whose proof is still running is not refused: when nothing else can be drawn, the pick waits for those
   // proofs (bounded by the proof's own ceiling) and draws whatever passed, never "no script" for a new version.
