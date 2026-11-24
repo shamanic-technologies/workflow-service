@@ -63,7 +63,7 @@ export const ASK_PAGE_JUDGMENT_SCRIPTS: Array<{ outcome: string; dynasty: string
 ];
 
 const PLATFORM_BILLED =
-  "runs platform-billed through POST /internal/scripts/run, so its Jev call is chat-service's PLATFORM door (/internal/platform-judgments); the Judgment made script asks the ORG door (/orgs/judgments) as a run of an org: asking it would change who pays, and refuse a run with no org";
+  "runs platform-billed through POST /internal/scripts/run, so its Jev call is chat-service's PLATFORM door; the Judgment made script asks the ORG door (/orgs/judgments) as a run of an org: asking it would change who pays, and refuse a run with no org";
 export const NOT_MIGRATED: Array<{ outcome: string; dynasty: string; reason: string }> = [
   { outcome: "lead_identified", dynasty: "dy_screen_reveal", reason: `lead-service's candidate decision ${PLATFORM_BILLED}` },
   { outcome: "email_reply_received", dynasty: "dy_orphan_reply", reason: `instantly-service's orphan reply judgment ${PLATFORM_BILLED}` },
