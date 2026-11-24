@@ -269,6 +269,11 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // once (cross-org, billed under the caller's run), each NEW row declared as one Unit under the Engine's outcome.
   "brand.proof.employers.store": { service: "brand", method: "PUT", path: "/orgs/brands/{brandId}/proof/employers", asRun: true, outcomeInBody: "outcomeKey" },
   "brand.proof.press.store": { service: "brand", method: "PUT", path: "/orgs/brands/{brandId}/proof/press-features", asRun: true, outcomeInBody: "outcomeKey" },
+  // REELS-1124: a long recorded video put into text on our own box (chat-service, $0: no vendor, no cost row). The POST
+  // answers a job at once (the same job for the same idempotency key); the GET is its state, and once completed its
+  // transcript in pieces (`include=segments,words`, `fromSeconds`, `toSeconds`). chat-service declares no Unit.
+  "chat.media.transcribe": { service: "chat", method: "POST", path: "/orgs/media-transcriptions", asRun: true },
+  "chat.media.transcription": { service: "chat", method: "GET", path: "/orgs/media-transcriptions/{id}", asRun: true },
   // The follow-ups (MIGRATE-1105 S4b): the figures a campaign's brief asks for, read for the person (figure-reader.ts).
   "workflow.figures.read": { service: "workflow", method: "POST", path: "/orgs/figures/read", asRun: true },
 };
