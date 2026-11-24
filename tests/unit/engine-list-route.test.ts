@@ -11,7 +11,7 @@ import { createScript, type AnyPgDb } from "../../src/lib/scripts/script-catalog
 import { scripts } from "../../src/db/schema.js";
 import { switchEngine, switchEngineOff } from "../../src/lib/scripts/engine.js";
 
-// DISTRY-PRINCIPAL-1119: the Engine list. DISTRY-CALL-IS-CAMPAIGN-1121: every Distry call to an Engine is a campaign,
+// DISTRY-PRINCIPAL-1119: the Engine list. DISTRY-CALL-IS-CAMPAIGN-1121 (lifted 2026-11-23, ENGINE-GET-ASK-1123: an ask can be direct),
 // so the direct call route is gone and no script is held out for "needing a campaign".
 const MIGRATIONS = join(__dirname, "../../drizzle");
 const holder = vi.hoisted(() => ({ db: null as unknown }));
@@ -170,6 +170,28 @@ describe("GET /internal/engines", () => {
     expect(row(res)).toMatchObject({ callable: true });
     res = await request(app).get("/internal/engines?orgId=org-a").set("x-api-key", KEY);
     expect(row(res)).toMatchObject({ callable: false, liveForCampaigns: false, reason: "Switched off for campaigns: the guard rolled it back." });
+  });
+
+  it("a direct ask outside a campaign: possible as soon as a script is runnable, with what to hand (ENGINE-GET-ASK-1123)", async () => {
+    await add(OUTCOME, "dy_finds", MAKES); // never switched on for campaigns
+    await add("email_sent", "dy_reads_lead", READS_LEAD);
+    await add("email_sent", "dy_channel_only", MAKES, { channel: "sales-cold-email-outreach" });
+    const res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    const by = new Map<string, Record<string, unknown>>(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
+    // `callable` keeps its meaning (a campaign); the ask does not read the campaign switch.
+    expect(by.get(OUTCOME)).toMatchObject({ callable: false, liveForCampaigns: false, ask: { possible: true, needsNothing: true, reason: null } });
+    expect(by.get("email_sent")).toMatchObject({
+      callable: false,
+      ask: { possible: true, needsNothing: false, reason: "A direct ask must hand nothing and state channel sales-cold-email-outreach, or hand lead_found in units." },
+    });
+    expect(by.get("meeting_booked")).toMatchObject({ ask: { possible: false, needsNothing: false, reason: "No script makes this outcome yet." } });
+    expect(res.body).toMatchObject({ callable: 0, askable: 2, total: 3 });
+  });
+
+  it("what a direct ask must hand, in plain words", () => {
+    expect(calls.askNeedsReason([])).toBeNull();
+    expect(calls.askNeedsReason([{ units: [], channel: null }, { units: ["lead_found"], channel: null }])).toBeNull();
+    expect(calls.askNeedsReason([{ units: ["email_found", "message_written"], channel: "x" }])).toBe("A direct ask must hand email_found and message_written in units and state channel x.");
   });
 
   it("plain reasons for live scripts that cannot run", () => {

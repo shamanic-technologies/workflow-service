@@ -148,6 +148,73 @@ describe("POST /internal/engines/{outcome}/make", () => {
   });
 });
 
+// ENGINE-GET-ASK-1123 (owner 2026-11-23: an ask « peut être hors campaign »): the ask door needs no campaign.
+describe("an Engine's ask outside a campaign", () => {
+  const NEEDS_NOTHING = `
+export default function run(ctx) {
+  return { content: { topic: ctx.request.topic, at: ctx.request.now }, subject: { service: "social-service", id: "acct-1" } };
+}`;
+  // Claims a person on the campaign its run is for: a run naming no campaign has none to state.
+  const NEEDS_CAMPAIGN = `
+export default function run(ctx) {
+  const r = ctx.vendor.call("lead.followup.claim", { params: { campaignId: ctx.request.campaignId }, body: {} });
+  if (!r.ok) throw new Error(r.data.error);
+  return { content: { r: r.data }, subject: { service: "lead-service", id: "lead-x" } };
+}`;
+  const ask = (outcome: string, body: Record<string, unknown>, headers: Record<string, string>) =>
+    request(app).post(`/internal/engines/${outcome}/make`).set("x-api-key", KEY).set(headers).send(body);
+
+  it("a script needing nothing campaign-bound makes its Unit with no campaign named anywhere", async () => {
+    await createScript(db, { outcome: "x_account_found", dynasty: "dy_finds", code: NEEDS_NOTHING, description: "x", tactics: {} }, author, known);
+    engine.setScriptPickReader(fakeScriptPick({ dy_finds: 1 }));
+    const res = await ask("x_account_found", { units: {}, request: { topic: "b2b sales", now: "2026-11-24T10:00:00Z" } }, { "x-run-id": "distry-run-1", "x-org-id": "org-a" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "made", unit: { outcome: "x_account_found", content: { topic: "b2b sales", at: "2026-11-24T10:00:00Z" } }, pick: { dynasty: "dy_finds" } });
+    // No campaign read for the pick, none on the run opened.
+    expect(pickSpy.mock.calls[0]![1]).not.toHaveProperty("campaignId");
+    const created = ledgerCalls[0]![1] as Record<string, unknown>;
+    expect(created).toMatchObject({ parentRunId: "distry-run-1", orgId: "org-a" });
+    expect(JSON.stringify(created)).not.toMatch(/campaign/i);
+    expect(ledgerCalls.map((c) => c[0])).toEqual(["create", "declare", "close"]);
+  });
+
+  it("a script naming no subject makes a Unit about the asking run (never a paid Unit refused for want of a subject)", async () => {
+    const NO_SUBJECT = `export default function run(ctx) { return { content: { email: ctx.request.email, verdict: "valid" } }; }`;
+    await createScript(db, { outcome: "x_account_found", dynasty: "dy_checks", code: NO_SUBJECT, description: "x", tactics: {} }, author, known);
+    engine.setScriptPickReader(fakeScriptPick({ dy_checks: 1 }));
+    const res = await ask("x_account_found", { units: {}, request: { email: "k.lourd+probe@smartdistribute.com" } }, { "x-run-id": "distry-run-2", "x-org-id": "org-a" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "made" });
+    const declared = ledgerCalls.find((c) => c[0] === "declare");
+    expect(JSON.stringify(declared)).toContain("distry-run-2");
+    expect(JSON.stringify(declared)).toContain("runs-service");
+  });
+
+  it("a script needing something its run lacks stops with a plain reason (a campaign, an org)", async () => {
+    await createScript(db, { outcome: "x_account_found", dynasty: "dy_claims", code: NEEDS_CAMPAIGN, description: "x", tactics: {} }, author, known);
+    engine.setScriptPickReader(fakeScriptPick({ dy_claims: 1 }));
+    const noCampaign = await ask("x_account_found", { units: {}, request: {} }, { "x-run-id": "distry-run-1", "x-org-id": "org-a" });
+    expect(noCampaign.status).toBe(502);
+    expect(noCampaign.body.error).toContain("lead.followup.claim needs params.campaignId");
+    expect(noCampaign.body.details).toMatchObject({ status: "failed", pick: { dynasty: "dy_claims" } });
+    const noOrg = await ask("x_account_found", { units: {}, request: { campaignId: "c-1" } }, { "x-run-id": "distry-run-1" });
+    expect(noOrg.status).toBe(502);
+    expect(noOrg.body.error).toContain("lead.followup.claim acts only as a run of an org");
+  });
+
+  it("the served OpenAPI documents the ask door under the tag an agent finds it by, and the Engine list", () => {
+    const spec = JSON.parse(readFileSync(join(__dirname, "../../openapi.json"), "utf8")) as { paths: Record<string, Record<string, { tags: string[]; description: string }>> };
+    const door = spec.paths["/internal/engines/{outcome}/make"]!.post!;
+    expect(door.tags).toContain("engine:ask");
+    for (const word of ["x-run-id", "x-org-id", "billing", "units", "request", "No campaign"]) expect(door.description).toContain(word);
+    const tagged = Object.entries(spec.paths).flatMap(([path, ops]) => Object.values(ops).filter((o) => (o.tags ?? []).includes("engine:ask")).map(() => path));
+    expect(tagged).toEqual(["/internal/engines/{outcome}/make"]);
+    const list = spec.paths["/internal/engines"]!.get!;
+    expect(list.tags).toContain("engine:list");
+    expect(list.description).toContain("`ask`");
+  });
+});
+
 describe("POST /internal/engines/{outcome}/pick serves the picked script's tactics", () => {
   it("what the picked script writes with (a preview writes with the template and LLM its picked script states)", async () => {
     const row = await addDraftScript("dy_fields_draft", FIELD_DRAFT_LLMS.deepseekFlash);

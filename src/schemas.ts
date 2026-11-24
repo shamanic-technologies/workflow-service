@@ -3148,22 +3148,26 @@ export const EngineMakeRequestSchema = z
   .object({
     units: z
       .record(z.string(), z.union([MaterialUnitSchema, z.array(MaterialUnitSchema)]))
-      .describe("The materials, by outcome (as on `POST /internal/scripts/run`). Their keys are what the run can serve: a script asking for another material is not a candidate."),
-    request: z.record(z.string(), z.unknown()).nullable().optional(),
+      .describe("The Units the caller hands, by outcome (`{}` = none; as on `POST /internal/scripts/run`). Their keys are what the run can serve: a script reading another Unit is not a candidate. `GET /internal/engines` lists, per Engine, what to hand (`inputs`, `ask`)."),
+    request: z
+      .record(z.string(), z.unknown())
+      .nullable()
+      .optional()
+      .describe("The Request the script reads as `ctx.request`: what the caller asks for, in the fields the picked script reads (e.g. `now`, `brandIds`, a topic). Absent = none."),
     keptDynasties: z
       .array(ScriptSlugSchema)
       .min(1)
       .optional()
       .describe("The dynasties a strategy keeps (features-service `GET /internal/script-strategy`), when the caller has one. Absent = no strategy: every runnable script of the Engine is a candidate."),
     channel: z.string().min(1).nullable().optional().describe("The channel the work is for: a script stating a tactic `channel` runs only for it. Absent = none."),
-    subject: SubjectRefSchema.optional(),
+    subject: SubjectRefSchema.optional().describe("What the Unit is about (`{service, id}`), when the script names none itself."),
     recordedBy: RunScriptRequestSchema.shape.recordedBy,
     trace: z.boolean().optional(),
     billing: z.enum(["org", "platform"]).optional().describe("Who pays the chat vendors, as the calling service's own code did (default platform; org needs `x-org-id`)."),
   })
   .openapi("EngineMakeRequest");
 
-// DISTRY-PRINCIPAL-1119: the Engine list (every Distry call to an Engine is a campaign, DISTRY-CALL-IS-CAMPAIGN-1121).
+// DISTRY-PRINCIPAL-1119: the Engine list. `callable` = by a campaign; `ask` = by a direct ask outside a campaign (ENGINE-GET-ASK-1123).
 export const EngineListingSchema = z
   .object({
     outcome: z.string(),
@@ -3172,7 +3176,14 @@ export const EngineListingSchema = z
       .boolean()
       .describe("A campaign of the org asked can make it now: switched on for its campaigns and one runnable script needs no Unit handed (an org's model or a campaign's strategy may still narrow it at run time)."),
     liveForCampaigns: z.boolean().describe("Switched on for campaigns of the org asked (its own row, else the fleet's; no `orgId` = the fleet's)."),
-    reason: z.string().nullable().describe("Plain words: why no Unit can be asked now. Null when callable."),
+    reason: z.string().nullable().describe("Plain words: why no campaign can make it now. Null when callable."),
+    ask: z
+      .object({
+        possible: z.boolean().describe("A direct ask (`POST /internal/engines/{outcome}/make`, no campaign) can be made now: at least one script is runnable. The campaign switch is not read."),
+        needsNothing: z.boolean().describe("One runnable script reads no handed Unit and states no channel: an ask with `units: {}` finds a script."),
+        reason: z.string().nullable().describe("Plain words: why no direct ask is possible, or what it must hand in `units` / state as `channel`. Null when an ask handing nothing works."),
+      })
+      .describe("ENGINE-GET-ASK-1123: the same question as `callable`, for a direct ask outside a campaign (an org's model may still narrow the pick at run time; a script needing something its run lacks stops with a plain reason)."),
     inputs: z.array(z.object({ units: z.array(z.string()), channel: z.string().nullable() })).describe("Each way to call it: the Units (by outcome) to hand in `units`, the `channel` to state (null = any)."),
     scripts: z.array(z.object({ dynasty: z.string(), name: z.string().nullable(), version: z.number().int(), units: z.array(z.string()), channel: z.string().nullable() })),
     counts: z
@@ -3185,13 +3196,13 @@ registry.registerPath({
   method: "get",
   path: "/internal/engines",
   request: { query: z.object({ orgId: z.string().optional().describe("The org whose campaigns would run it (absent = the fleet's switch only).") }) },
-  summary: "Every Engine of the live catalogue: callable now or why not, and what a caller hands (service key only)",
+  summary: "Every Engine of the live catalogue: callable by a campaign, askable directly, or why not, and what a caller hands (service key only)",
   description:
-    "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = a campaign of `orgId` can make it now: switched on for its campaigns AND a runnable script (active, proven when a port, past its writing proof when it writes to people) needing no Unit handed; `reason` says why not, in words the dashboard shows as-is. Read only: nothing spent, no proof started.",
-  tags: ["Engines"],
+    "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = a campaign of `orgId` can make it now: switched on for its campaigns AND a runnable script (active, proven when a port, past its writing proof when it writes to people) needing no Unit handed; `reason` says why not, in words the dashboard shows as-is. `ask` (ENGINE-GET-ASK-1123) = the same for a direct ask outside a campaign (`POST /internal/engines/{outcome}/make`): possible as soon as one script is runnable, with what the caller must hand (`inputs`: the Units by outcome and the channel of each way to call it). The caller states nothing but an optional `orgId`; it gets every Engine, the counts `callable` / `askable` / `total`. Read only: nothing spent, no proof started.",
+  tags: ["Engines", "engine:list"],
   security: [{ apiKey: [] }],
   responses: {
-    200: { description: "The Engines", content: { "application/json": { schema: z.object({ engines: z.array(EngineListingSchema), callable: z.number().int(), total: z.number().int() }) } } },
+    200: { description: "The Engines", content: { "application/json": { schema: z.object({ engines: z.array(EngineListingSchema), callable: z.number().int(), askable: z.number().int().describe("Engines a direct ask can be made to now."), total: z.number().int() }) } } },
     502: { description: "`engine_list_unreadable`: the catalogue could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
@@ -3315,10 +3326,11 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/internal/engines/{outcome}/make",
-  summary: "Make one Unit of an Engine for a service waiting on it: the Rating picks the script, the script runs (service key only)",
+  summary: "Ask an Engine for one Unit, outside a campaign: the Rating picks the script, the script runs, the Unit comes back (service key only)",
   description:
-    "SCRIPT-VALUE-RATING-1113-WF3 (owner 2026-11-13 « un pick = toujours un script »). For a service whose client waits on the result (brand-service's offer/brand field drafts): the SAME `pickScript` a campaign run calls (features-service's script pick among the runnable dynasties, narrowed by `keptDynasties` when the caller has a strategy), then that script runs synchronously on its own runs-service run, a child of the caller's run (`x-run-id`, required), as `POST /internal/scripts/run` runs it (`x-org-id` optional: none = a platform run; `billing` as the caller's own code paid). The answer is the run's (`RunScriptResponse`) plus the `pick`. The LLM the script writes with is its tactic: competing LLMs are competing dynasties. 404 `no_runnable_script`; 502 `script_pick_unreadable` (nothing ran); 502 with the run's `details` when the script failed or stopped.",
-  tags: ["Engines"],
+    "ENGINE-GET-ASK-1123 (owner 2026-11-23: an ask « peut être hors campaign »): an Engine's ASK, the same gesture as a Script's `ctx.ask`, for any caller waiting on one Unit (a service, Distry). The caller states: its OWN run in `x-run-id` (required; the script runs on a child of it, so its spend lands under the caller's work), its org in `x-org-id` (optional: none = a platform run), `billing` (who pays the model calls: `org` needs `x-org-id`, default `platform`), the Units it hands in `units` (by outcome, `{}` = none; `GET /internal/engines` says what each Engine needs), the `request` the script reads, optionally `channel`, `subject`, `keptDynasties`. No campaign is named or read. It gets back the run (`status` made / unmade / nothing, the `unit` made, `runId`) plus the `pick` (which script ran). A script needing something its run lacks stops with its own plain reason (502, the run in `details`). SCRIPT-VALUE-RATING-1113-WF3 (owner 2026-11-13 « un pick = toujours un script »). For a service whose client waits on the result (brand-service's offer/brand field drafts): the SAME `pickScript` a campaign run calls (features-service's script pick among the runnable dynasties, narrowed by `keptDynasties` when the caller has a strategy), then that script runs synchronously on its own runs-service run, a child of the caller's run (`x-run-id`, required), as `POST /internal/scripts/run` runs it (`x-org-id` optional: none = a platform run; `billing` as the caller's own code paid). The answer is the run's (`RunScriptResponse`) plus the `pick`. The LLM the script writes with is its tactic: competing LLMs are competing dynasties. 404 `no_runnable_script`; 502 `script_pick_unreadable` (nothing ran); 502 with the run's `details` when the script failed or stopped.",
+  // `engine:ask` is the tag an agent finds this door by, as `provider:<outcome>` names a Provider read.
+  tags: ["Engines", "engine:ask"],
   security: [{ apiKey: [] }],
   request: { params: z.object({ outcome: z.string() }), body: { required: true, content: { "application/json": { schema: EngineMakeRequestSchema } } } },
   responses: {

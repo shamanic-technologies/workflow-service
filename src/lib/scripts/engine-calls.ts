@@ -12,6 +12,11 @@
  * that org's campaigns (its own row, else the fleet's) AND one runnable script needs no Unit handed (a campaign hands
  * none); otherwise not callable, with the reason. A listing that offered an Engine every campaign refuses
  * (`engine_not_live`) would hand Distry a tool that only ever fails (DISTRY-CALL-IS-CAMPAIGN-1121 AC, 2026-11-21).
+ *
+ * ENGINE-GET-ASK-1123 (owner 2026-11-23: an ask « peut être hors campaign », the 11-21 rule is lifted): Distry asks an
+ * Engine like a Script does, through `POST /internal/engines/{outcome}/make`, with no campaign. `callable` keeps its
+ * meaning (a campaign); `ask` says the same for a direct ask, from the same reads: possible as soon as one script is
+ * runnable (the campaign switch is not read: no campaign is involved), and what the caller must hand or state.
  */
 import { asksOf } from "./sandbox.js";
 import { inArray } from "drizzle-orm";
@@ -65,6 +70,12 @@ export interface EngineListing {
   liveForCampaigns: boolean;
   /** Plain words: why no Unit can be asked now. Null when callable. */
   reason: string | null;
+  /**
+   * A DIRECT ask (`POST /internal/engines/{outcome}/make`, no campaign): `possible` = one script is runnable now;
+   * `needsNothing` = one of them reads no handed Unit and states no channel; `reason` = plain words, why not possible or
+   * what the caller must hand / state (null when an ask handing nothing works).
+   */
+  ask: { possible: boolean; needsNothing: boolean; reason: string | null };
   /** Each way to call it: the Units to hand (none = nothing to hand) and the channel to state (null = any). */
   inputs: EngineInputOption[];
   /** The runnable scripts the Rating draws among (their client-readable names). */
@@ -133,6 +144,16 @@ export function notForCampaignsReason(input: { live: boolean; rollbackReason: st
   return `Each of its scripts needs Units a campaign does not hand (${input.unitsNeeded.join(", ")}): another Engine asks it inside its own run.`;
 }
 
+/**
+ * PURE: what a direct ask must hand or state, read off the ways the runnable scripts can be called (`inputs`). Null when
+ * one of them takes nothing; no way at all = null too (the caller says why nothing is runnable).
+ */
+export function askNeedsReason(inputs: EngineInputOption[]): string | null {
+  if (inputs.length === 0 || inputs.some((i) => i.units.length === 0 && i.channel === null)) return null;
+  const ways = inputs.map((i) => `${i.units.length ? `hand ${i.units.join(" and ")} in units` : "hand nothing"}${i.channel ? ` and state channel ${i.channel}` : ""}`);
+  return `A direct ask must ${ways.join(", or ")}.`;
+}
+
 /** Every Engine of the live catalogue, callable by a campaign of `orgId` (no org = the fleet's) or not and why. Read only. */
 export async function listEngines(db: AnyPgDb, orgId: string | null = null): Promise<EngineListing[]> {
   const outcomes = (await catalogueOutcomes()).filter((o) => o.key !== START_OUTCOME);
@@ -182,6 +203,17 @@ export async function listEngines(db: AnyPgDb, orgId: string | null = null): Pro
     const state = await engineState(db, o.key, orgId);
     const needNothing = runnable.some((r) => unitsToHand(r).length === 0);
     const callable = runnable.length > 0 && state.live && needNothing;
+    const ways = [...inputs.values()].sort((a, b) => a.units.length - b.units.length || JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const notRunnable = () =>
+      notCallableReason({
+        scripts: dynasties.size,
+        live: live.length,
+        unprovenPorts,
+        awaitingWriterProof,
+        stated: stated.get(o.key) ?? null,
+        movedTo: movedTo([...dynasties], o.key, liveHome, nameOf),
+      });
+    const askNeeds = askNeedsReason(ways);
     out.push({
       outcome: o.key,
       name: o.name,
@@ -195,15 +227,9 @@ export async function listEngines(db: AnyPgDb, orgId: string | null = null): Pro
               rollbackReason: state.rollbackReason,
               unitsNeeded: [...new Set(runnable.flatMap((r) => unitsToHand(r)))].sort(),
             })
-          : notCallableReason({
-              scripts: dynasties.size,
-              live: live.length,
-              unprovenPorts,
-              awaitingWriterProof,
-              stated: stated.get(o.key) ?? null,
-              movedTo: movedTo([...dynasties], o.key, liveHome, nameOf),
-            }),
-      inputs: [...inputs.values()].sort((a, b) => a.units.length - b.units.length || JSON.stringify(a).localeCompare(JSON.stringify(b))),
+          : notRunnable(),
+      ask: { possible: runnable.length > 0, needsNothing: runnable.length > 0 && askNeeds === null, reason: runnable.length > 0 ? askNeeds : notRunnable() },
+      inputs: ways,
       scripts: runnable.map((r) => ({ dynasty: r.dynasty, name: r.name ?? null, version: r.version, units: unitsToHand(r), channel: channelOf(r) })),
       counts: { scripts: dynasties.size, live: live.length, runnable: runnable.length },
     });
