@@ -1,0 +1,224 @@
+function s(v) {
+  return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+}
+function addr(v) {
+  const t = typeof v === "string" ? v : v && typeof v === "object" ? String(v.email || v.address || "") : "";
+  const m = t.match(/<([^<>]+)>/);
+  const a = (m ? m[1] : t).trim().toLowerCase();
+  return /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(a) ? a : null;
+}
+function addrs(v) {
+  const l = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+  return l.map(addr).filter(Boolean);
+}
+function uniq(l) {
+  return l.filter(function (x, i) { return l.indexOf(x) === i; });
+}
+function undash(t) {
+  return String(t || "").replace(/(\d)\s*[–—]\s*(?=\d)/g, "$1-").replace(/\s*[–—]\s*/g, ", ").trim();
+}
+
+// Writes the one answer a lead gets (ONE-WRITER-N-MODELS-1116-ANSWERER): reads what its sender read, decides once with
+// the model the Rating picks (asked from the LLM completion Engine, never named here), hands back the message or its
+// decision. Calls no door: the sender acts.
+export default function run(ctx) {
+  const handed = ctx.get("answer_requested");
+  const a = handed.content || {};
+  const req = a.request || {};
+  const trigger = a.trigger || {};
+  const now = a.now;
+  const brandId = a.brandId;
+  const lead = a.lead;
+  const email = a.email;
+  const phone = a.phone;
+  const brand = a.brand;
+  const economics = a.economics;
+  const fields = a.fields;
+  const answers = a.answers;
+  const voice = a.voice;
+  const bookingUrl = a.bookingUrl;
+  const booking = a.booking;
+  const slots = a.slots;
+  const merged = a.merged;
+  const open = a.open;
+  const last = a.last;
+  const n = a.n;
+  const replied = a.replied;
+  const reach = a.reach;
+  const labels = {};
+  (merged || []).forEach(function (m) { if (m && m.label) labels[m.label] = m; });
+  const subject = a.leadId ? { service: "lead-service", id: a.leadId } : null;
+  // 5. DECIDE once.
+  const factLines = [];
+  const f = fields.fields || {};
+  Object.keys(f).forEach(function (k) {
+    const v = f[k];
+    if (v && v.provenance === "confirmed" && v.value !== null && v.value !== undefined) factLines.push("- " + k + ": " + (typeof v.value === "string" ? v.value : JSON.stringify(v.value)));
+  });
+  (Array.isArray(answers.answers) ? answers.answers : []).forEach(function (a) {
+    const text = String(a.answer || "");
+    factLines.push("- " + a.question + " " + (/^\s*PLACEHOLDER/.test(text) ? "(not answered by our client yet)" : text));
+  });
+  const threadLines = merged.slice(-40).map(function (m) {
+    const who = m.kind !== "message" ? "EVENT" : m.direction === "outbound" ? "US" : "THEM";
+    const text = String(m.text || (m.event && m.event.text) || m.subject || "").slice(0, 2000);
+    const head = m.label
+      ? " label " + m.label + ", from " + (m.from.join(", ") || "?") + " to " + (m.to.join(", ") || "?") + (m.cc.length > 0 ? " cc " + m.cc.join(", ") : "") + (m.bcc.length > 0 ? " bcc " + m.bcc.join(", ") : "") + (s(m.subject) ? ", subject: " + m.subject : "")
+      : "";
+    return "[" + String(m.at) + "] " + who + " (" + String(m.channel || m.source || "") + ")" + head + ": " + text;
+  });
+  // On WhatsApp the writer IS the sending line's persona (crm-service states it on the reach answer); none = as before.
+  const persona = reach ? senderPersona(reach) : null;
+  const both = open.length > 1;
+  const mediumLines = [].concat.apply([], open.map(function (c) { return (both ? ["ON " + c.toUpperCase() + ":"] : []).concat(K.MEDIUM[c]); }));
+  const personaBlock = persona ? (both ? ["WHEN YOU WRITE ON WHATSAPP:"] : []).concat(personaLines(persona, String(brand.name || ""))) : [];
+  const system = [voice.content].concat(personaBlock, K.GAME, [s(req.goal) ? "WHAT THIS ANSWER WORKS TOWARD (the campaign's Target):\n" + req.goal : ""], mediumLines, [s(req.brief) ? "THE CAMPAIGN'S BRIEF (from the client):\n" + req.brief : ""]).filter(Boolean).join("\n\n");
+  const message = [
+    "THEIR LOCAL TIME:\n" + localTimeLines(now, { timezone: lead.timezone, city: lead.city, country: lead.country, phone: phone, places: s(lead.state) ? [{ label: "their state or region", value: lead.state }] : [] }).join("\n"),
+    "THE PERSON: " + [lead.firstName, lead.lastName].filter(Boolean).join(" ") + (s(lead.headline) ? ", " + lead.headline : "") + (email ? ", " + email : ""),
+    "THE BRAND: " + String(brand.name || "") + (s(economics.name) ? ". What we sell: " + economics.name : ""),
+    ...(a.salesRep && s(a.salesRep.email) ? ["THE BRAND'S SALES REP (a person of the brand, never the person you answer): " + [s(a.salesRep.firstName), s(a.salesRep.role)].filter(Boolean).join(", ") + ", " + s(a.salesRep.email)] : []),
+    "THE FACTS:\n" + (factLines.join("\n") || "(none stated)"),
+    "BOOKING LINK: " + (bookingUrl || "none"),
+    "OPEN TIMES (" + String(booking.timezone || "UTC") + "):\n" + (slots.length > 0 ? slots.join("\n") : "(none read)"),
+    "WHAT JUST HAPPENED: " + JSON.stringify(trigger.item || {}).slice(0, 1500),
+    "THE CHANNELS OPEN: " + open.join(", ") + (last ? " (their last message came on " + String(last.channel || last.source || "") + ")" : "") + (open.indexOf("email") >= 0 && n === 0 ? ". Email: " + (replied ? "a reply in the thread they answered" : "a follow-up in their last email thread") : ""),
+    "THE THREAD (oldest first):\n" + (threadLines.join("\n") || "(empty)"),
+  ].join("\n\n");
+  // The model is the LLM completion Engine's: the Rating picks it for this writer (askedBy), never named here.
+  const schema = JSON.parse(JSON.stringify(K.SCHEMA));
+  schema.properties.channel.enum = open.slice();
+  schema.properties.replyTo.enum = Object.keys(labels).concat([""]);
+  ctx.ask({ units: {}, ...(subject ? { subject: subject } : {}), request: { systemPrompt: system, message: message, responseFormat: "json", responseSchema: schema, brandTools: { brandId: brandId } } });
+  const done = ctx.get("llm_completion");
+  if (!done.content) throw new Error("no model may write for this writer: " + String(done.unmade || "none"));
+  const draft = done.content.answer || {};
+  const writtenWith = done.content.llm || null;
+  const d = draft.json || {};
+  // What the writer looked up or did through the brand's tools, on the run's output (each call is an event on the
+  // completion's run); absent when the brand plugged no server, so those outputs are unchanged.
+  const tools = typeof draft.brandToolCalls === "number" ? { brandToolCalls: draft.brandToolCalls } : {};
+  const toolsNote = typeof draft.brandToolCalls === "number" ? " (brand tool calls: " + draft.brandToolCalls + ")" : "";
+  const nextAt = s(d.nextFollowUpAt);
+  const nextOk = nextAt && Date.parse(nextAt) > Date.parse(now) && Date.parse(nextAt) <= Date.parse(now) + K.MAX_DAYS * 86400000;
+
+  // A decision that sends nothing is handed back to the sender (no Unit): it sets the date, stops, or alerts the rep.
+  const handBack = (answer, why) => ({ unmade: answer.decision + ": " + why + toolsNote, decided: "done", answer: Object.assign(answer, { writtenWith: writtenWith }, tools) });
+  if (d.decision === "stop") return handBack({ decision: "stop", reason: String(d.reason || "their own words").slice(0, 500) }, String(d.reason || "their own words"));
+  if (!nextOk) throw new Error("the writer gave no usable next date: " + JSON.stringify(nextAt));
+  if (d.decision === "later") return handBack({ decision: "later", nextFollowUpAt: nextAt, nextFollowUpWhy: String(d.nextFollowUpWhy || "later").slice(0, 500) }, String(d.nextFollowUpWhy || ""));
+  if (d.decision === "escalate") return handBack({ decision: "escalate", question: String(d.question || ""), nextFollowUpAt: nextAt }, String(d.question || ""));
+  if (d.decision !== "write") throw new Error("the writer answered an unknown decision " + JSON.stringify(d.decision));
+  const medium = s(d.channel);
+  if (!medium || open.indexOf(medium) < 0) throw new Error("the writer chose a channel that is not open: " + JSON.stringify(d.channel) + " (open: " + open.join(", ") + ")");
+  // Who it goes to, as the writer chose (email). Addresses are cleaned (trimmed, lowercased, deduped), never added.
+  const to = uniq(addrs(d.to));
+  // The address it goes to is never also copied: the writer's own To, else the person (the sender's default To).
+  const sentTo = to.length > 0 ? to : email ? [email] : [];
+  const cc = uniq(addrs(d.cc)).filter(function (a) { return sentTo.indexOf(a) < 0; });
+  const bcc = uniq(addrs(d.bcc)).filter(function (a) { return sentTo.indexOf(a) < 0 && cc.indexOf(a) < 0; });
+  const chosen = { ...(to.length > 0 ? { to: to } : {}), ...(cc.length > 0 ? { cc: cc } : {}), ...(bcc.length > 0 ? { bcc: bcc } : {}) };
+  const label = medium === "email" ? s(d.replyTo) : null;
+  const target = label ? labels[label] : null;
+  if (label && !target) throw new Error("the writer answers an email that is not in the thread: " + JSON.stringify(label));
+  const text = undash(d.message);
+  if (!text) throw new Error("the writer chose write with an empty message");
+  return {
+    content: {
+      decision: "write",
+      channel: medium,
+      replyTo: label || "",
+      to: to,
+      cc: cc,
+      bcc: bcc,
+      message: text,
+      subject: undash(d.subject),
+      bookSlot: s(d.bookSlot) || "",
+      bookedMessage: undash(d.bookedMessage),
+      nextFollowUpAt: nextAt,
+      nextFollowUpWhy: String(d.nextFollowUpWhy || "next look").slice(0, 500),
+      writtenWith: writtenWith,
+      ...tools,
+    },
+    ...(subject ? { subject: subject } : {}),
+  };
+}
+function senderPersona(reach) {
+  const p = reach && typeof reach === "object" && reach.persona && typeof reach.persona === "object" ? reach.persona : null;
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  if (!p || !s(p.name)) return null;
+  return { name: s(p.name), role: s(p.role), instructions: s(p.instructions) };
+}
+
+function personaLines(persona, brandName) {
+  return [
+    "WHO YOU ARE: you are " + persona.name + (persona.role ? ", " + persona.role : "") + " at " + brandName + ". You write from " + brandName + "'s WhatsApp number as yourself, " + persona.name + ": never as anyone else, never imitating how someone else at " + brandName + " writes.",
+    "Present yourself exactly as your role says. If your role says you are an AI or an assistant, never say or imply you are a human, and if they ask, say plainly what you are.",
+    "Messages in the thread typed by someone else at " + brandName + " are part of the history, never a model of how you write. Where a line says to write the way the owner or the founder would, write as yourself, in your own voice, keeping the relationship and its language.",
+    ...(persona.instructions ? ["YOUR OWN INSTRUCTIONS (how you write and present yourself; they win over any other line about style or tone):", persona.instructions] : []),
+  ];
+}
+function localTimeLines(nowIso, clues) {
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const city = [s(clues?.city), s(clues?.country)].filter(Boolean).join(", ");
+  const places = [...(city ? [{ label: "their city", value: city }] : []), ...(Array.isArray(clues?.places) ? clues.places : [])];
+  return nowLines(nowIso, { timezone: clues?.timezone, places, phone: clues?.phone });
+}
+function validTimeZone(tz) {
+  if (typeof tz !== "string" || tz.trim() === "") return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz.trim() }).format(new Date(0));
+    return tz.trim();
+  } catch {
+    return null;
+  }
+}
+function utcOffsetOf(at, tz) {
+  const parts = {};
+  for (const p of new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(at)) {
+    parts[p.type] = p.value;
+  }
+  const asUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));
+  const minutes = Math.round((asUtc - Math.floor(at.getTime() / 1000) * 1000) / 60000);
+  const abs = Math.abs(minutes);
+  return "UTC" + (minutes < 0 ? "-" : "+") + String(Math.floor(abs / 60)).padStart(2, "0") + ":" + String(abs % 60).padStart(2, "0");
+}
+function fullDateTime(at, tz) {
+  const zone = validTimeZone(tz);
+  const day = (z) => new Intl.DateTimeFormat("en-US", { timeZone: z, weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(at);
+  if (!zone) {
+    const hm = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
+    return day("UTC") + ", " + hm + " UTC";
+  }
+  const hm = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit", hour12: true }).format(at);
+  return day(zone) + ", " + hm + " " + zone + " (" + utcOffsetOf(at, zone) + ")";
+}
+function stampAt(iso, tz) {
+  const at = new Date(String(iso ?? ""));
+  return Number.isFinite(at.getTime()) ? fullDateTime(at, tz) : null;
+}
+function nowLines(nowIso, clues) {
+  const parsed = new Date(String(nowIso ?? ""));
+  const at = Number.isFinite(parsed.getTime()) ? parsed : new Date();
+  const zone = validTimeZone(clues?.timezone);
+  if (zone) {
+    return ["Now, where they are: " + fullDateTime(at, zone) + ". In UTC: " + fullDateTime(at, null) + "."];
+  }
+  const s = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const held = [
+    ...(Array.isArray(clues?.places) ? clues.places : []).filter((p) => s(p?.value)).map((p) => p.label + ": " + s(p.value)),
+    s(clues?.timezone) ? "timezone as written (not a zone we can read): " + s(clues.timezone) : null,
+    s(clues?.phone) ? "phone: " + s(clues.phone) : null,
+  ].filter(Boolean);
+  return [
+    "Now, in UTC: " + fullDateTime(at, null) + ".",
+    "Their timezone is unknown: nothing we hold states it.",
+    held.length
+      ? "Where they may be, from what we hold: " + held.join("; ") + ". Work out their likely timezone from these, and write any day or time you give them in it, naming the zone. Never assume UTC."
+      : "Nothing we hold says where they are (no city, no company location, no phone). Judge it from the hours they write at in the conversation, and name the zone of any time you give them. Never assume UTC.",
+  ];
+}
+const K = {"GAME":["You answer ONE person on behalf of the brand below. Others on our side may write to them too (a person of our team by hand, another of our messages, on email or on WhatsApp): THE THREAD shows every message we sent them, on every channel, whoever sent it. They get one answer per thing they said: answer only what nobody on our side answered yet.","THE GAME. Get them to the next step of their path with the least effort for them: answer what they asked first, from the FACTS only; when they want to talk, give them two concrete OPEN TIMES in their timezone, or the booking link when no time fits; when their last message picks a time, book it (bookSlot) and confirm it in one short line, nothing else; when the meeting is booked, the next message is the reminder before it. Never a pitch they did not ask for, never a menu of options, never a question that leaves them where they are.","THE FACTS are what the brand stated. Never invent a figure, a price, a date, a promise or a status. A fact marked as not answered yet is unknown. When they ask for something the FACTS do not hold, answer what the FACTS do hold, say plainly that you do not have the rest to give here, and make the next step the call or the booking link where the team gives it to them.","WHERE IT GOES. You choose the channel, who it goes to and the thread, from THE THREAD, the way a person of the brand would. Answer whoever wrote to us and is waiting for us, where they wrote: every email in THE THREAD shows its label (M1, M2...), who wrote it and who was on it, and the one who wrote may be someone else than THE PERSON (a colleague who answered in their thread is waiting for our answer too). Copy the people a person would copy: the others already on that conversation who should read the answer. Bcc only someone who must see it without the others knowing. When their last message came on a channel that is not in THE CHANNELS OPEN, the conversation lives there: when someone on our side already answered it there, or is talking with them there, decide later and never repeat it on another channel; answer it here only when nobody on our side answered it there. A new email thread only when no conversation fits what you write. Email: never re-introduce us, never restate the thread, no signature (ours is added). WhatsApp: short bubbles, one empty line between them, the way a person types.","WHEN THEY ALREADY USE SOMEONE ELSE. When they say they already use, test or work with another company, tool or team for what we offer, a pitch is wasted: someone fully happy there has no reason to switch, and only what is missing there makes us worth their time. So learn before you sell. Ask ONE short, friendly question that finds out whether it fully works for them: what one result costs them there, in the unit of what we offer (per meeting booked, per client, per lead), or what they miss with it. That question is the next step of their path and the one question the message ends on: no comparison yet, no list of what we do better, no call or link to push. Once they answer, compare their result with what the FACTS say we can do for that result, and propose the step that fits only if we do better. When they also asked us to stop, it is a stop like any other. When they say our product or offer was hard to understand or to start, own it in one plain sentence, never defend it and never make it their fault, and offer the easiest way in that the FACTS or the thread hold (we set it up for them, when the FACTS say we do). When they name no one else, none of this applies: never ask who they use.","A NEW FACT DECIDES AGAIN. A next date stated before what just happened (by us, by another campaign, by an earlier look) holds nothing: decide the next date now, from everything the thread, the events and the event below say. When they booked a meeting with us, the goal is that they come to it: the next message is a short, friendly reminder before the meeting starts (the day before or a few hours before), naming the day and time of the meeting in their timezone, in the thread where they last wrote. Write it now only when now is that moment; otherwise set decision to later with nextFollowUpAt before the meeting starts, never after it. Nothing pushy: no new pitch, nothing they must answer. Say in nextFollowUpWhy that it is the reminder for that meeting.","WHY WE WRITE NOW names the fact that made this message due: what this person did with us, and, when its settings name a step they have not reached since, what they have not done yet (and how long we waited). Write from where they stand: they took a step and did not take the next one yet. Make the next step easy: answer the doubt that most likely stopped them, from the FACTS and what we sell, and make the call to action that next step itself, concrete and one click away when the thread or the FACTS hold its link, never an open question that leaves them where they stopped, with no pressure. Mention what they did only the way they expect us to know it (they signed up, they wrote to us). Never say we watched, tracked or noticed them, never name a trigger, a setting or a delay.","WHO THIS PERSON IS TO US decides how you write, before anything else. Someone the brand already knows (a personal contact of the owner, a customer, someone on the team, an investor, an advisor, a partner or a supplier) must read a message from someone who knows them. Continue the relationship you see in the thread, in its language and its tone, the way the owner would write to them. Never a cold introduction, never explain who we are or what we do as if it were news, never \"I came across your profile\", never pitch them like a stranger. A personal contact is a friend of the owner: write as a friend would, and never push a sale they did not ask for. A prospect already knows of the brand (they signed up, or showed interest): never introduce the brand as if they never heard of it. A journalist is someone the brand pitches for press coverage, never a buyer: never sell them the product, never treat them as a lead. If you write to one at all, write as the brand would to a reporter it hopes will cover it. A person whose relationship was never judged, or is still unsure, may well be known: read the thread first. If anything in it shows they know us, write as someone who knows them. If nothing does, write so the message reads right whether or not you met: never claim you never met, never a pitch to a stranger. Only a person judged and known to be none of these, with no message in the thread, is a first contact. Never mention these tags, and never say that anyone classified them.","Write in the language of their own last message. Never use an em dash or an en dash.","When they ask to stop, are not interested, or are not the right person, set decision to stop with their words in reason; nothing is sent."],"MEDIUM":{"email":["THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.\nIt is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an automated email), or when what this email would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, leave subject and bodyHtml empty, and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).\nIt IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: the email is a reply in the thread they wrote in last, so never re-introduce us and never repeat what the thread already says.\nlater is never the end: the person stays followed up at the date you choose.","THE NEXT DATE. Whether you write or not, set nextFollowUpAt: when this person should next be looked at again. There is no fixed schedule. Decide it from the history: how many times we already wrote and how recently, whether they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many emails (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). ISO 8601 date-time in UTC, strictly after NOW, at most 365 days away. Say why in nextFollowUpWhy.","THEIR LOCAL TIME. A email reaches them the moment it is sent. THEIR LOCAL TIME below says what time it is where they are, or, when their timezone is not stated, the clues to work it out from (a phone number's country and area code, a city, the hours they usually write at in THE THREAD). Work out their local time first. Their local hour and weekday never delay a message: when it is the right moment to write, write now, at any hour, any day. Their local time only shapes how you write (a greeting that fits their evening, any day or time you name). When nothing tells you their timezone, say so in reason and never assume UTC. Any day or time you put in the email is in their timezone, never UTC."],"whatsapp":["THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.\nIt is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an automated message), or when what this WhatsApp message would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, leave message empty, and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).\nIt IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: the message continues the WhatsApp conversation we already have with them, from the same number, so never re-introduce us and never repeat what the thread already says.\nlater is never the end: the person stays followed up at the date you choose.","THE NEXT DATE. Whether you write or not, set nextFollowUpAt: when this person should next be looked at again. There is no fixed schedule. Decide it from the history: how many times we already wrote and how recently, whether they did anything since (a click, a visit or a signup means they are warm: sooner), long silence after many messages (wait longer, weeks or months), and anything they or we said about timing (honour it exactly). ISO 8601 date-time in UTC, strictly after NOW, at most 365 days away. Say why in nextFollowUpWhy.","THEIR LOCAL TIME. A WhatsApp message reaches them the moment it is sent. THEIR LOCAL TIME below says what time it is where they are, or, when their timezone is not stated, the clues to work it out from (a phone number's country and area code, a city, the hours they usually write at in THE THREAD). Work out their local time first. Their local hour and weekday never delay a message: when it is the right moment to write, write now, at any hour, any day. Their local time only shapes how you write (a greeting that fits their evening, any day or time you name). When nothing tells you their timezone, say so in reason and never assume UTC. Any day or time you put in the WhatsApp message is in their timezone, never UTC."]},"SCHEMA":{"type":"object","additionalProperties":false,"required":["decision","channel","replyTo","to","cc","bcc","message","subject","bookSlot","bookedMessage","nextFollowUpAt","nextFollowUpWhy","question","reason"],"properties":{"decision":{"type":"string","enum":["write","later","stop"]},"channel":{"type":"string","enum":["email","whatsapp"],"description":"When decision is write: one of THE CHANNELS OPEN. Otherwise the channel you would use."},"replyTo":{"type":"string","description":"Email only: the LABEL of the email you answer, exactly as THE THREAD shows it after \"email\" (for example M2): never its subject or an address. Empty = a new email thread (give it a subject)."},"to":{"type":"array","items":{"type":"string"},"description":"Email only: the addresses it goes to. Empty = the person named in THE PERSON."},"cc":{"type":"array","items":{"type":"string"},"description":"Email only: the addresses copied, never the address it goes to. Empty = nobody is copied."},"bcc":{"type":"array","items":{"type":"string"},"description":"Email only: the addresses copied without the others seeing it, never the address it goes to. Usually empty."},"message":{"type":"string","description":"The message to send when decision is write: plain text on WhatsApp (bubbles split by one empty line), simple HTML <p> paragraphs on email. Empty otherwise."},"subject":{"type":"string","description":"Email only, when there is no thread to answer in: a short plain subject. Empty otherwise."},"bookSlot":{"type":"string","description":"When their last message picks one of the OPEN TIMES below: that time copied exactly as listed. Empty otherwise."},"bookedMessage":{"type":"string","description":"When bookSlot is set: the short confirmation sent once the meeting is booked (same format as message). Empty otherwise."},"nextFollowUpAt":{"type":"string","description":"ISO 8601 UTC: when to look at this person again. Empty only when decision is stop."},"nextFollowUpWhy":{"type":"string"},"question":{"type":"string","description":"When decision is escalate: what they asked, in their words. Empty otherwise."},"reason":{"type":"string"}}},"MAX_DAYS":365};
+
+
+
