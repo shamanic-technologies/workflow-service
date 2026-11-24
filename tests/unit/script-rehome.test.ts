@@ -115,8 +115,9 @@ describe("re-homing a dynasty onto its fine outcome", () => {
     await db.insert(scriptRuns).values({ scriptId: family.id, orgId: "org-a", runId: "r1", parentRunId: "p1", status: "made" });
     await rehomeScript(db, "post_published", "dy_thread", { toOutcome: "threads_post_published" }, author, deps);
     expect(await servesChannel(db, "threads_post_published", "threads-post")).toBe(true);
-    // The family Engine still serves only its channel.
-    expect(await servesChannel(db, "post_published", "social-post")).toBe(false);
+    // The family Engine keeps its own version (a re-home leaves it active), and a channel no longer gates who runs
+    // (PLAN-RECURSIVE-PER-ENGINE-1124): the campaign's strategy decides.
+    expect(await servesChannel(db, "post_published", "social-post")).toBe(true);
     const picks = fakeScriptPick();
     setScriptPickReader(picks);
     const pick = await pickScript(db, { outcome: "threads_post_published", servable: [], channel: "threads-post" });

@@ -1,0 +1,263 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+/** A path toward Paid client by intros (INTRO-BOARDY-1114): asks for the intro first email, records it, carries the conversation. */
+
+const BRIEF_HEADER = "";
+
+const console = { log: (..._a: unknown[]) => {}, error: (..._a: unknown[]) => {} };
+/** The sandbox ships no URL class: the one thing the steps read off a URL is its host name (throws like URL on garbage). */
+const URL = function (this: { hostname: string; href: string }, u: string) {
+  const m = /^[a-z][a-z0-9+.-]*:[/][/](?:[^@/?#]*@)?([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(String(u));
+  if (!m) throw new TypeError("Invalid URL: " + String(u));
+  this.hostname = m[1]!.toLowerCase();
+  this.href = String(u);
+} as unknown as new (u: string) => { hostname: string; href: string };
+type Answer = { ok: boolean; data: Record<string, any> };
+function must(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (!r.ok) throw new Error(name + " failed (" + String(r.data.status ?? "") + "): " + String(r.data.error ?? "").slice(0, 500));
+  return r.data;
+}
+function tolerated(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (r.ok) return r.data;
+  return { ok: false, status: r.data.status ?? null, error: r.data.body && Object.keys(r.data.body).length ? JSON.stringify(r.data.body) : String(r.data.error ?? "") };
+}
+/** The campaign's brief on a chat-service completion: appended to the system prompt (campaign-brief.ts, verbatim). */
+function withBrief(body: Record<string, any>, brief: string): Record<string, any> {
+  if (!brief) return body;
+  const sys = typeof body.systemPrompt === "string" ? body.systemPrompt : "";
+  const msg = typeof body.message === "string" ? body.message : "";
+  if (sys.includes(brief) || msg.includes(brief)) return body;
+  return { ...body, systemPrompt: (sys ? sys + "\n\n" : "") + BRIEF_HEADER + "\n" + brief };
+}
+
+const RESEARCH_PROMPT = "You research ONE person and their company, so an AI that makes introductions can write to them with facts they can check.\nSearch the web: their company site, their LinkedIn or X posts, articles, podcasts, launches, client stories. The material below (their profile and their own site) comes first.\nReturn only facts you read on a page, each with that page's URL. A good fact is precise and recent: a number, a launch, a client named, a post they wrote and what it said, a problem they described in their own words. Quote their own words when you have them.\nNever a guess, never an opinion, never an adjective about them. A fact you could not tie to a page is left out.\nsells: what their company sells, in plain words. sellsTo: to whom (kind of company, size, market).\nlooksFor: what they visibly look for (customers of a kind, partners, hires, advice), each from a fact. canBring: what they could bring to someone else, each from a fact.\nWhen you find nothing beyond the material, return what the material states, with the site's URL.";
+const RESEARCH_SCHEMA = {"type":"object","additionalProperties":false,"required":["sells","sellsTo","facts","looksFor","canBring"],"properties":{"sells":{"type":"string"},"sellsTo":{"type":"string"},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fact","url"],"properties":{"fact":{"type":"string"},"url":{"type":"string"}}}},"looksFor":{"type":"array","items":{"type":"string"}},"canBring":{"type":"array","items":{"type":"string"}}}};
+const MATCH_PROMPT = "You are an AI superconnector. You stand on BOTH sides: an introduction is made only when it is good for both people, and you say no when it is not a fit.\nYou get ONE reader and a numbered list of candidates, each with facts. Pick the ONE candidate the reader would most want to meet AND who would most want to meet the reader: one sells or brings what the other visibly looks for, at a matching size and market, with a concrete reason from the facts on BOTH sides.\nWhen no candidate gives both people a concrete reason, answer -1. A vague reason (both are founders, both do B2B) is no reason.\nforReader: why meeting them is good for the reader, from the facts only. forThem: why meeting the reader is good for them, from the facts only. Both empty when you answer -1. Never a word about money, price or cost in either.";
+const MATCH_SCHEMA = {"type":"object","additionalProperties":false,"required":["pick","forReader","forThem"],"properties":{"pick":{"type":"integer"},"forReader":{"type":"string"},"forThem":{"type":"string"}}};
+const SITE_MAX_CHARS = 12000;
+
+const s = (v: any): string => (typeof v === "string" && v.trim() !== "" ? v.trim() : "");
+/** Plain text whatever the writer returned (it may mirror the HTML of the thread): paragraphs kept, tags dropped. */
+const plain = (t: any): string => String(t ?? "")
+  .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, String.fromCharCode(34)).replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+const undash = (t: any): string => plain(t).replace(/(\d)\s*[\u2013\u2014]\s*(?=\d)/g, "$1-").replace(/\s*[\u2013\u2014]\s*/g, ", ").trim();
+const escapeHtml = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const toHtml = (t: string): string => t.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => "<p>" + escapeHtml(p).replace(/\n/g, "<br>") + "</p>").join("");
+const hostOf = (u: any): string => { try { return new URL(String(u)).hostname.replace(/^www\./, ""); } catch (_e) { return ""; } };
+const emailOf = (v: any): string => { const a = s(v).toLowerCase(); return /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(a) ? a : ""; };
+
+/** A short, stable key for a brief (no crypto in the sandbox: FNV-1a over the text). */
+function briefKey(brief: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < brief.length; i++) { h ^= brief.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return "brief:" + h.toString(16) + ":" + brief.length;
+}
+
+
+function complete(ctx: any, place: string, systemPrompt: string, message: string, schema: any, extra?: Record<string, unknown>): any {
+  const a = askCompletionData(ctx, { systemPrompt, message, responseFormat: "json", responseSchema: schema, ...(extra ?? {}) });
+  if (!a.json || typeof a.json !== "object") throw new Error("llm.complete (" + place + ") answered no JSON: " + String(a.content ?? "").slice(0, 300));
+  return a.json;
+}
+
+/** One served person, in the plain shape every intro step reads. */
+function personOf(lead: any): any {
+  const d = lead?.data ?? {};
+  const o = d.organization ?? {};
+  const website = s(o.websiteUrl) || (emailOf(lead?.email) ? "https://" + emailOf(lead.email).split("@")[1] : "");
+  return {
+    leadId: s(lead?.leadId) || null,
+    email: emailOf(lead?.email) || null,
+    firstName: s(d.firstName),
+    lastName: s(d.lastName),
+    title: s(d.currentTitle),
+    headline: s(d.headline),
+    linkedinUrl: s(d.linkedinUrl),
+    city: s(d.city),
+    country: s(d.country),
+    company: {
+      name: s(o.name),
+      domain: hostOf(website),
+      website,
+      industry: s(o.industry),
+      size: o.estimatedNumEmployees ?? null,
+      description: s(o.shortDescription) || s(o.seoDescription),
+      city: s(o.city),
+      country: s(o.country),
+      linkedinUrl: s(o.linkedinUrl),
+      foundedYear: o.foundedYear ?? null,
+    },
+  };
+}
+
+/** Who writes: the persona tactic and the signature appended after the text (both tactics, never a rule in a prompt). */
+function whoYouAre(t: any): string {
+  const sig = s(t?.signature).split("\n").map((l: string) => l.trim()).filter(Boolean).join(", ");
+  return "WHO YOU ARE: " + s(t?.persona?.name) + ", " + s(t?.persona?.says) + "." + (sig ? " Your signature, added after your text, reads: " + sig : "");
+}
+
+function nameOf(p: any): string {
+  return [s(p?.firstName), s(p?.lastName)].filter(Boolean).join(" ");
+}
+
+function profileLines(p: any): string {
+  const c = p.company ?? {};
+  return [
+    "Name: " + (nameOf(p) || "(unknown)"),
+    p.title ? "Title: " + p.title : "",
+    p.headline ? "Headline: " + p.headline : "",
+    p.linkedinUrl ? "LinkedIn: " + p.linkedinUrl : "",
+    [p.city, p.country].filter(Boolean).length ? "Lives in: " + [p.city, p.country].filter(Boolean).join(", ") : "",
+    c.name ? "Company: " + c.name + (c.domain ? " (" + c.domain + ")" : "") : "",
+    c.industry ? "Industry: " + c.industry : "",
+    c.size ? "Company size: " + String(c.size) + " people" : "",
+    c.description ? "Company description: " + c.description : "",
+    c.foundedYear ? "Founded: " + String(c.foundedYear) : "",
+    [c.city, c.country].filter(Boolean).length ? "Company based in: " + [c.city, c.country].filter(Boolean).join(", ") : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** Research ONE person: their own site (raw) + the web (checkable facts with their URL). */
+function research(ctx: any, p: any, brandId: string, campaignId: string): any {
+  const site = p.company?.website ? tolerated(ctx, "scraping.page", { body: { url: p.company.website, enrich: false, brandIds: [brandId], campaignId } }) : { ok: false };
+  const siteText = String(site?.result?.rawMarkdown ?? "").slice(0, SITE_MAX_CHARS);
+  const r = complete(ctx, "research", RESEARCH_PROMPT, [
+    "THE PERSON",
+    profileLines(p),
+    "",
+    "THEIR OWN SITE (" + (p.company?.website || "none") + ")",
+    siteText || "(could not be read)",
+  ].join("\n"), RESEARCH_SCHEMA, { webSearch: true });
+  const facts = (Array.isArray(r.facts) ? r.facts : []).filter((f: any) => s(f?.fact) && s(f?.url)).slice(0, 12).map((f: any) => ({ fact: undash(f.fact), url: s(f.url) }));
+  return {
+    sells: s(r.sells),
+    sellsTo: s(r.sellsTo),
+    facts,
+    looksFor: (Array.isArray(r.looksFor) ? r.looksFor : []).map(s).filter(Boolean).slice(0, 6),
+    canBring: (Array.isArray(r.canBring) ? r.canBring : []).map(s).filter(Boolean).slice(0, 6),
+  };
+}
+
+function factLines(p: any): string {
+  const r = p.research ?? {};
+  return [
+    profileLines(p),
+    r.sells ? "Sells: " + r.sells + (r.sellsTo ? " (to " + r.sellsTo + ")" : "") : "",
+    (r.looksFor ?? []).length ? "Looks for: " + r.looksFor.join("; ") : "",
+    (r.canBring ?? []).length ? "Can bring: " + r.canBring.join("; ") : "",
+    (r.facts ?? []).length ? "Facts (each with where it was read):\n" + r.facts.map((f: any) => "- " + f.fact + " [" + f.url + "]").join("\n") : "Facts: none found beyond the profile.",
+  ].filter(Boolean).join("\n");
+}
+
+/** The one person among the candidates good for BOTH sides, or null (the match LLM). */
+function matchOne(ctx: any, reader: any, candidates: any[], wanted?: string): any {
+  if (!candidates.length) return null;
+  const m = complete(ctx, "match", MATCH_PROMPT, [
+    "THE READER",
+    factLines(reader),
+    wanted ? "\nWHAT THE READER ASKED FOR: " + wanted : "",
+    "",
+    "CANDIDATES",
+    candidates.map((c: any, i: number) => "#" + i + "\n" + factLines(c)).join("\n\n"),
+  ].join("\n"), MATCH_SCHEMA);
+  const i = typeof m.pick === "number" ? m.pick : -1;
+  if (i < 0 || i >= candidates.length) return null;
+  return { person: candidates[i], index: i, forReader: s(m.forReader), forThem: s(m.forThem) };
+}
+
+/** Serve one fresh person of our lead search (lead-service), or null with the reason. */
+function serveOne(ctx: any, serve: any): { lead: any } | { none: string; again?: boolean; final?: boolean } {
+  const a = ctx.vendor.call("lead.serve", serve ?? {});
+  if (!a.ok) throw new Error("lead.serve failed: " + String(a.data && a.data.error));
+  const d: any = a.data;
+  if (d.found !== true || !d.lead) {
+    const reason = s(d.reason) || "nobody";
+    return { none: reason, again: reason === "serve_timed_out" && d.final !== false, final: d.final === true };
+  }
+  return { lead: d.lead };
+}
+
+/** Does this campaign's brief ask for intros? Judged once per brief (Jev), kept in the Engine's storage. */
+function briefAsksIntros(ctx: any, brief: string, question: string, now: string): boolean {
+  if (!brief) return false;
+  const key = briefKey(brief);
+  let v: any = ctx.storage.get("briefs", key);
+  if (v === null || v === undefined) {
+    const j = must(ctx, "jev.noul", { state: { brief }, questions: { asks: { instructions: question } } });
+    const pr = j.probabilities?.asks;
+    if (typeof pr !== "number") throw new Error("intro: Jev answered no probability on the brief");
+    v = { asks: pr >= 0.5, probability: pr, at: now };
+    ctx.storage.set("briefs", key, v);
+  }
+  return v.asks === true;
+}
+
+
+const MATERIAL = "intro_requested";
+
+function forward(answer: any): any {
+  return { unmade: String(answer.unmade), ...(answer.decided === "done" || answer.decided === "idle" ? { decided: answer.decided } : {}), ...(answer.run && answer.run.again === true ? { again: true } : {}) };
+}
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const R: any = ctx.request;
+  if (!R) return { unmade: "no_request" };
+  const now = s(R.now);
+  if (!now) throw new Error("intro path: the run states no clock (request.now)");
+  const t: any = ctx.tactics ?? {};
+  const question = s(t.briefQuestion);
+  if (!question) throw new Error("intro path: the script states no briefQuestion (tactic): nothing is asked");
+  const trigger = R.trigger && typeof R.trigger === "object" ? R.trigger : null;
+  const asks = briefAsksIntros(ctx, s(R.brief), question, now);
+
+  if (!asks) {
+    // A campaign that asks for no intros: a proactive tick has nothing to do here (the next script is tried); a lead who
+    // writes gets the one answer every lead gets, exactly as dy_answer_lead_pull asks it.
+    if (!trigger) return null;
+    ctx.ask({ units: {}, request: R, recordedBy: "sender" });
+    const answer: any = ctx.get("message_sent");
+    if (answer && typeof answer.unmade === "string") return forward(answer);
+    return { content: { answered: answer.content } };
+  }
+
+  if (trigger) {
+    // A Lead event: the next step of that person's intro conversation (the intro answerer only reads this material).
+    ctx.ask({ units: { [MATERIAL]: { content: { step: "answer" } } }, request: R, recordedBy: "sender" });
+    const answer: any = ctx.get("message_sent");
+    if (answer && typeof answer.unmade === "string") return forward(answer);
+    return { content: { answered: answer.content } };
+  }
+
+  // A proactive tick: ONE intro first email (an intro script of the Email sent Engine, the Rating picks which).
+  ctx.ask({ units: { [MATERIAL]: { content: { step: "first_email" } } }, request: R, recordedBy: "instantly" });
+  const sent: any = ctx.get("email_sent");
+  if (sent && typeof sent.unmade === "string") return forward(sent);
+  // Recorded where the conversation goes on (the Message sent Engine's notes): who was proposed to whom, and the hold.
+  ctx.ask({ units: { [MATERIAL]: { content: { step: "record", sent: sent.content } } }, request: R, recordedBy: "sender" });
+  const recorded: any = ctx.get("message_sent");
+  return { content: { intro: sent.content, recorded: recorded && typeof recorded.unmade === "string" ? recorded.unmade : "recorded" } };
+}
+
+/**
+ * ONE-WRITER-N-MODELS-1116: this script names no model. Each completion it needs is ASKED of the LLM completion
+ * Engine (the Rating picks the model for this script); the request is the call as written, minus the model.
+ */
+function askCompletion(ctx: any, call: Record<string, unknown>): { ok: true; data: Record<string, any> } {
+  const request: Record<string, unknown> = {};
+  for (const k of Object.keys(call)) if (k !== "provider" && k !== "model") request[k] = call[k];
+  ctx.ask({ units: {}, request });
+  const done: any = ctx.get("llm_completion");
+  if (!done || !done.content) throw new Error("llm_completion: " + String((done && done.unmade) || "no completion") + ". Nothing is written: the run is retried later.");
+  return { ok: true, data: done.content.answer };
+}
+function askCompletionData(ctx: any, call: Record<string, unknown>): any {
+  return askCompletion(ctx, call).data;
+}
+/** A JSON answer, read as chat.complete read it: the parsed object, else a refusal. */
+function askChatCompletion(ctx: any, call: Record<string, unknown>): { ok: boolean; data: Record<string, any> } {
+  const json = askCompletion(ctx, call).data.json;
+  if (!json || typeof json !== "object" || Array.isArray(json)) return { ok: false, data: { error: "chat.complete: the model answered no JSON object" } };
+  return { ok: true, data: json };
+}

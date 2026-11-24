@@ -1,0 +1,194 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+/** Press feature found: articles quoting the brand, read off its org's connected mailbox, judged by Jev, kept by brand-service (BRAND-PROOF-LOGOS-1121). */
+
+const console = { log: (..._a: unknown[]) => {}, error: (..._a: unknown[]) => {} };
+/** The sandbox ships no URL class: the one thing the steps read off a URL is its host name (throws like URL on garbage). */
+const URL = function (this: { hostname: string; href: string }, u: string) {
+  const m = /^[a-z][a-z0-9+.-]*:[/][/](?:[^@/?#]*@)?([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(String(u));
+  if (!m) throw new TypeError("Invalid URL: " + String(u));
+  this.hostname = m[1]!.toLowerCase();
+  this.href = String(u);
+} as unknown as new (u: string) => { hostname: string; href: string };
+type Answer = { ok: boolean; data: Record<string, any> };
+function must(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (!r.ok) throw new Error(name + " failed (" + String(r.data.status ?? "") + "): " + String(r.data.error ?? "").slice(0, 500));
+  return r.data;
+}
+function tolerated(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (r.ok) return r.data;
+  return { ok: false, status: r.data.status ?? null, error: r.data.body && Object.keys(r.data.body).length ? JSON.stringify(r.data.body) : String(r.data.error ?? "") };
+}
+/** The campaign's brief on a chat-service completion: appended to the system prompt (campaign-brief.ts, verbatim). */
+function withBrief(body: Record<string, any>, brief: string): Record<string, any> {
+  if (!brief) return body;
+  const sys = typeof body.systemPrompt === "string" ? body.systemPrompt : "";
+  const msg = typeof body.message === "string" ? body.message : "";
+  if (sys.includes(brief) || msg.includes(brief)) return body;
+  return { ...body, systemPrompt: (sys ? sys + "\n\n" : "") + BRIEF_HEADER + "\n" + brief };
+}
+
+
+const ARTICLE_READ_SCHEMA = {"type":"object","properties":{"articleUrl":{"type":"string","description":"The link to the published piece, copied exactly from the email's links; empty when none of them is."},"outlet":{"type":"string","description":"The publication's name as the email states it (a magazine, a newsletter, a site, a podcast)."},"outletDomain":{"type":"string","description":"The publication's OWN website domain (example.com) when it has one; empty when the piece is hosted on a platform that is not the publication (a LinkedIn newsletter, a Substack, a Medium page)."},"title":{"type":"string","description":"The piece's title as the email states it (never a link or a URL slug); empty when it states none."},"publishedAt":{"type":"string","description":"The date it went live, YYYY-MM-DD, when the email states one; empty otherwise."}},"required":["articleUrl","outlet","outletDomain","title","publishedAt"],"additionalProperties":false};
+const ANNOUNCES_QUESTION = "Does this email tell the mailbox's owner that a published piece (an article, a newsletter issue, a podcast or video page) has gone live with their own words, quote or insights in it? Yes only for something already published. No for an invitation or request to contribute, a pitch, a newsletter that is only about a topic, a product or event launch, a receipt, or anything else.";
+const QUOTES_BRAND_QUESTION = "Does this published piece quote or feature THE BRAND described in the state, or a person speaking for it (its founder or its team)? The mailbox may belong to someone who speaks for several brands: answer yes only when the piece, or the email announcing it, ties the words to this brand (its name, its website, or a person presented as working on it). When the piece could not be read, judge on the email alone.";
+const ARTICLE_READ_PROMPT = "You read one email announcing that a published piece went live with the reader's words in it.\nAnswer which of the email's links is the published piece itself (copy it exactly; never a link to the sending platform's own site, a sign-in, a share or an unsubscribe link), the publication's name and its own website when it has one, the piece's title and the date it went live.\nUse only what the email states. An unknown field is an empty string.";
+const MAIL_MAX_CHARS = 8000;
+const PAGE_MAX_CHARS = 16000;
+const PAGE_OPENING_CHARS = 4000;
+const PASSAGE_RADIUS_CHARS = 1200;
+
+/** The article's opening, then each passage naming one of the brand's words (merged when they overlap), capped. */
+function articleView(text, words) {
+  if (text.length <= PAGE_MAX_CHARS) return text;
+  const low = text.toLowerCase();
+  const spans = [[0, PAGE_OPENING_CHARS]];
+  for (const w of words.map((x) => String(x || "").toLowerCase()).filter((x) => x.length > 2)) {
+    for (let i = low.indexOf(w); i >= 0; i = low.indexOf(w, i + w.length)) spans.push([Math.max(0, i - PASSAGE_RADIUS_CHARS), Math.min(text.length, i + w.length + PASSAGE_RADIUS_CHARS)]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const sp of spans) {
+    const last = merged[merged.length - 1];
+    if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+    else merged.push([sp[0], sp[1]]);
+  }
+  let out = "";
+  for (const [a, b] of merged) {
+    const piece = (a > 0 ? "[...] " : "") + text.slice(a, b);
+    if (out.length + piece.length > PAGE_MAX_CHARS) { out += piece.slice(0, Math.max(0, PAGE_MAX_CHARS - out.length)); break; }
+    out += piece + "\n";
+  }
+  return out;
+}
+const JUDGED_TABLE = "judged_v3";
+
+/**
+ * The outlet as brand-service keys it: its own site when it has one; a stated null domain = hosted on a platform (a
+ * LinkedIn newsletter, a Substack), kept by its name; neither known = left out (brand-service reads the article's host).
+ */
+function outletOf(name: string, domain: string): Record<string, unknown> {
+  if (domain) return { outlet: { name: name || null, domain } };
+  if (name) return { outlet: { name, domain: null } };
+  return {};
+}
+
+function probability(j: any, key: string, what: string): number {
+  const p = j && j.probabilities ? j.probabilities[key] : undefined;
+  if (typeof p !== "number") throw new Error("press-mailbox: Jev answered no probability on " + what);
+  return p;
+}
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const R: any = ctx.request ?? {};
+  const now = typeof R.now === "string" ? R.now : "";
+  if (!/^\d{4}-\d{2}-\d{2}/.test(now)) throw new Error("press-mailbox: the run states no clock (request.now): " + JSON.stringify(R.now));
+  const brandId = Array.isArray(R.brandIds) && R.brandIds.length ? String(R.brandIds[0]) : String((ctx as any).brand ?? "");
+  if (!brandId) throw new Error("press-mailbox: no brand on this run");
+  const t: any = ctx.tactics ?? {};
+  const phrases: string[] = (Array.isArray(t.searchPhrases) ? t.searchPhrases : []).map((p: any) => String(p ?? "").trim()).filter((p: string) => p.length > 2);
+  if (!phrases.length) throw new Error("press-mailbox: the script states no searchPhrases (tactic: what an announcing email says)");
+  const maxJudged = Number.isInteger(t.maxJudgedPerRun) && t.maxJudgedPerRun > 0 && t.maxJudgedPerRun <= 40 ? t.maxJudgedPerRun : 25;
+
+  const brand: any = (must(ctx, "brand.profile", { params: { id: brandId } }).brand) || {};
+  const brandName = String(brand.name ?? "").trim();
+  const brandDomain = String(brand.domain ?? "").trim();
+  if (!brandName) throw new Error("press-mailbox: the brand states no name");
+
+  // Every message already judged for this brand, never judged twice (kept per brand in the Engine's storage).
+  const judged: Record<string, string> = (ctx.storage.get(JUDGED_TABLE, brandId) as any) ?? {};
+  // Articles kept while their outlet's notoriety could not be judged: stored again (idempotent) so it is judged now.
+  let pending: any[] = (ctx.storage.get("pending_notoriety", brandId) as any) ?? [];
+  if (pending.length) {
+    const again = tolerated(ctx, "brand.proof.press.store", { params: { brandId }, body: { features: pending.slice(0, 200) } });
+    if (again.ok !== false) { pending = pending.slice(200); ctx.storage.set("pending_notoriety", brandId, pending); }
+  }
+  const candidates: any[] = [];
+  let searched = 0;
+  let cursor: string | null = null;
+  for (let page = 0; page < 10 && candidates.length < maxJudged; page++) {
+    const found = must(ctx, "google.mail.search", { body: { phrases, limit: 50, ...(cursor ? { cursor } : {}) } });
+    if (found.reason) return { unmade: "no_mailbox: " + String(found.reason) + " (the brand's organization connected no mailbox)" };
+    const messages: any[] = Array.isArray(found.messages) ? found.messages : [];
+    searched += messages.length;
+    for (const m of messages) {
+      const id = String(m.id ?? "");
+      if (!id || judged[id]) continue;
+      candidates.push(m);
+      if (candidates.length >= maxJudged) break;
+    }
+    cursor = typeof found.nextCursor === "string" && found.nextCursor ? found.nextCursor : null;
+    if (!cursor) break;
+  }
+  if (!candidates.length) return { unmade: "no_new_message: no message of the brand's mailbox saying one of the phrases is left to judge (" + searched + " found, all judged)" };
+
+  const brandState = { name: brandName, website: brandDomain || null };
+  const kept: any[] = [];
+  const counts = { judged: 0, notAnnouncing: 0, notThisBrand: 0, kept: 0 };
+  for (const m of candidates) {
+    const id = String(m.id);
+    const email = {
+      from: [m.fromName, m.fromEmail].filter(Boolean).join(" ") || null,
+      to: Array.isArray(m.to) ? m.to : [],
+      subject: m.subject ?? null,
+      sentAt: m.sentAt ?? null,
+      text: String(m.bodyText ?? m.snippet ?? "").slice(0, MAIL_MAX_CHARS),
+      links: (Array.isArray(m.links) ? m.links : []).slice(0, 60).map((l: any) => ({ url: String(l.url ?? ""), text: l.text ?? null })).filter((l: any) => l.url),
+    };
+    counts.judged++;
+    const a = must(ctx, "jev.noul", { state: { mailboxOf: "the brand's own organization", email }, questions: { announces: { instructions: ANNOUNCES_QUESTION } } });
+    if (probability(a, "announces", "the announcement") < 0.5) {
+      judged[id] = "not_announcing";
+      counts.notAnnouncing++;
+      ctx.storage.set(JUDGED_TABLE, brandId, judged);
+      continue;
+    }
+    const links: string[] = email.links.map((l: any) => String(l.url));
+    ctx.ask({ units: {}, request: { message: JSON.stringify(email), systemPrompt: ARTICLE_READ_PROMPT, maxTokens: 800, responseFormat: "json", responseSchema: ARTICLE_READ_SCHEMA, strictResponseSchema: ARTICLE_READ_SCHEMA } });
+    const done: any = ctx.get("llm_completion");
+    if (!done.content) throw new Error("llm_completion: " + String(done.unmade ?? "no completion"));
+    const r: any = (done.content.answer && done.content.answer.json) || {};
+    const articleUrl = links.includes(String(r.articleUrl ?? "").trim()) ? String(r.articleUrl).trim() : "";
+    const outlet = String(r.outlet ?? "").trim();
+    const outletDomain = String(r.outletDomain ?? "").trim().toLowerCase().replace(/^https?:[/][/]/, "").replace(/^www[.]/, "").split("/")[0];
+    const title = String(r.title ?? "").trim();
+    const publishedAt = /^\d{4}-\d{2}-\d{2}$/.test(String(r.publishedAt ?? "").trim()) ? String(r.publishedAt).trim() : "";
+
+    let pageText = "";
+    if (articleUrl) {
+      const page = tolerated(ctx, "scraping.page", { body: { url: articleUrl, enrich: false, brandIds: [brandId] } });
+      pageText = articleView(String(page.result?.rawMarkdown ?? ""), [brandName, brandDomain]);
+    }
+    const q = must(ctx, "jev.noul", {
+      state: { brand: brandState, email, article: articleUrl ? { url: articleUrl, outlet, title, text: pageText || "(the page could not be read)" } : "(the email links to no published piece)" },
+      questions: { quotesBrand: { instructions: QUOTES_BRAND_QUESTION } },
+    });
+    const pq = probability(q, "quotesBrand", "the brand");
+    if (pq < 0.5) {
+      judged[id] = "not_this_brand";
+      counts.notThisBrand++;
+      ctx.storage.set(JUDGED_TABLE, brandId, judged);
+      continue;
+    }
+    if (!articleUrl) {
+      judged[id] = "no_article_link";
+      counts.notThisBrand++;
+      ctx.storage.set(JUDGED_TABLE, brandId, judged);
+      continue;
+    }
+    const feature = { articleUrl, title: title || null, publishedAt: publishedAt || (/^\d{4}-\d{2}-\d{2}/.test(String(m.sentAt ?? "")) ? String(m.sentAt).slice(0, 10) : null), ...outletOf(outlet, outletDomain) };
+    const stored = tolerated(ctx, "brand.proof.press.store", { params: { brandId }, body: { features: [feature] } });
+    if (stored.ok === false && !String(stored.error).includes("notoriety_unavailable")) throw new Error("brand.proof.press.store" + " failed (" + String(stored.status ?? "") + "): " + String(stored.error).slice(0, 500));
+    // Stored either way; a failed notoriety judgment is retried by storing it again on a later run.
+    if (stored.ok === false) pending.push(feature);
+    judged[id] = "kept";
+    counts.kept++;
+    ctx.storage.set(JUDGED_TABLE, brandId, judged);
+    ctx.storage.set("pending_notoriety", brandId, pending);
+    const u: any = stored.ok === false ? null : (Array.isArray(stored.units) ? stored.units[0] : null);
+    kept.push({ outlet, articleUrl, title: title || null, publishedAt: feature.publishedAt, newUnit: u ? u.newUnit === true : null, notoriety: u?.notoriety?.score ?? null });
+  }
+  if (!kept.length) return { unmade: "no_press_feature: none of the " + counts.judged + " messages judged announces a piece quoting the brand (" + counts.notAnnouncing + " announce nothing, " + counts.notThisBrand + " not this brand)" };
+  return { content: { ...counts, kept } };
+}
