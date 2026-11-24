@@ -259,14 +259,15 @@ export default function run(ctx) {
     expect(await pickScript(db, { outcome: "conversation", servable: [], channel: null })).toBeNull();
   });
 
-  it("refuses a get of an outcome not held and not asked for", async () => {
+  it("a get of an outcome not held and not asked first is asked of its Engine (PLAN-RECURSIVE-PER-ENGINE-1124)", async () => {
     await addScript("conversation", "dy_cold", `export default function run(ctx) { ctx.get("message_written"); return null; }`, { asks: ["message_written"] });
     await addScript("message_written", "dy_writer", WRITER);
     const w = world();
     const { runId } = await runOnce(dispatch({ outcome: "conversation" }), w);
     const [r] = await db.select().from(scriptRuns).where(eq(scriptRuns.runId, runId));
-    expect(r!.status).toBe("stopped");
-    expect(r!.error).toMatch(/not handed/);
+    // Its only writer reads brand_context, which no Engine makes: nothing to ask, the script ends unmade, named.
+    expect(r!.status).toBe("unmade");
+    expect(r!.error).toMatch(/^no_script: /);
     expect(w.runs.some((x) => x.taskName.startsWith("script:message_written"))).toBe(false);
   });
 
