@@ -119,6 +119,8 @@ export interface ScriptRunResult {
   status: "made" | "nothing" | "unmade" | "waiting" | "stopped" | "failed";
   unit: { outcome: string; subject: SubjectRef | null; content: Record<string, unknown>; found?: string } | null;
   error: string | null;
+  /** On `waiting`: the days the script (or a script it asked) asked to wait. */
+  waitDays?: number;
   /** On `unmade`: the script said the look did not finish (ask again soon, never idle). */
   again?: boolean;
   /** On `unmade`: the script's own decision (`done` = completed look, `idle` = nothing to do now), never a refusal. */
@@ -195,7 +197,14 @@ export async function runStoredScript(
   who: RunIdentity,
   deps: { ledger: LedgerDeps; vendors: VendorDeps },
   owned?: OwnedRun,
+  /**
+   * HUMAN-VALIDATED-1124: the wait hook of the run that ASKED this one (an Engine run's `onWait`, handed down ask by
+   * ask). An asked script may then wait: the hook records the ONE wait, this run ends `waiting`, and so does every asker
+   * above it. Absent on a run nothing can resume (a step, a direct make): its wait is refused as before.
+   */
+  waiter?: (days: number) => Promise<void>,
 ): Promise<ScriptRunResult> {
+  const waitHook = owned?.onWait ?? waiter;
   const row = await resolveVersion(db, input);
   const scriptSlug = `${row.outcome}/${row.dynasty}/v${row.version}`;
   const runId =
@@ -243,7 +252,7 @@ export async function runStoredScript(
 
   /** Order ONE new Unit of an outcome from its Engine (the Rating's pick, a child run), consumed by this run. */
   const order = async (outcome: string, request: Record<string, unknown>) => {
-    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, chain, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
+    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, chain, billing: input.billing, ...(waitHook ? { waiter: waitHook } : {}), ...(input.trace ? { trace } : {}) }, deps);
     if ("v" in provided) {
       askedUnits[outcome] = provided.v;
       // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
@@ -352,9 +361,9 @@ export async function runStoredScript(
     if (op === "accounts") return { stop: "ctx.accounts: connected accounts are not served to stored scripts yet" };
     if (op === "wait") {
       const days = Number(args[0]);
-      if (!owned) return { stop: `the script asked to wait ${String(args[0])} days: a stored script step does not wait` };
+      if (!waitHook) return { stop: `the script asked to wait ${String(args[0])} days: a stored script step does not wait` };
       if (!Number.isFinite(days) || days < 0 || days > 365) return { stop: `ctx.wait takes 0 to 365 days, not ${String(args[0])}` };
-      await owned.onWait(days);
+      await waitHook(days);
       return { stop: `${WAIT_STOP}${days}` };
     }
     return { stop: `${String(op)} is not a script context call` };
@@ -411,6 +420,7 @@ export async function runStoredScript(
         ? { outcome: row.outcome, subject, content: made.content, ...(made.found ? { found: made.found } : {}) }
         : null,
     error,
+    ...(finalStatus === "waiting" && out.kind === "stopped" ? { waitDays: Number(out.reason.slice(WAIT_STOP.length)) } : {}),
     ...(finalStatus === "unmade" && made?.again === true ? { again: true } : {}),
     ...(finalStatus === "unmade" && (made?.decided === "done" || made?.decided === "idle") ? { decided: made.decided } : {}),
     ...(finalStatus === "unmade" && made?.answer && typeof made.answer === "object" && !Array.isArray(made.answer) ? { answer: made.answer } : {}),
@@ -456,8 +466,11 @@ export async function runStoredScript(
  * The Request: `units` (the child's materials, `{<outcome>: {content, subject?}}`), optional `request` (its
  * `ctx.request`), `tactics`, `subject`, `recordedBy`, `trace` (as `POST /orgs/scripts/run` takes them).
  * No candidate = an answer `unmade: "no_script: ..."` the asking script reads (never a fallback script). A child that
- * fails or stops stops the asking script with the child's reason (unmade / nothing = an answer); a child cannot wait (no nested waits
- * yet: its `ctx.wait` is refused like a step's). The Unit read back carries `run` = the child's whole result (the
+ * fails or stops stops the asking script with the child's reason (unmade / nothing = an answer). A child MAY wait when the run
+ * that asked it can (HUMAN-VALIDATED-1124: the asker's wait hook is handed down; the child's `ctx.wait` records the ONE
+ * wait through it, the child ends `waiting`, its run closed completed, and the asker stops `waiting` for the same days,
+ * up to the Engine run, which is resumed later and asks again from the top); with no hook above (a step, a direct make)
+ * its `ctx.wait` is refused like a step's. The Unit read back carries `run` = the child's whole result (the
  * `POST /orgs/scripts/run` answer), so a recording service can store and declare it on the child's run.
  */
 /** The code an asked Engine answers when no script of it may run for this campaign. */
@@ -484,6 +497,8 @@ async function provide(
      * asked model made (ONE-WRITER-N-MODELS-1116: the writer asks a completion, it calls no LLM itself).
      */
     trace?: NonNullable<ScriptRunResult["trace"]>;
+    /** The asking run's wait hook (its Engine run's, handed down): the child may wait through it. */
+    waiter?: (days: number) => Promise<void>;
   },
   deps: { ledger: LedgerDeps; vendors: VendorDeps },
 ): Promise<{ v: unknown } | { stop: string }> {
@@ -534,6 +549,8 @@ async function provide(
       },
       { orgId: parent.orgId, userId: parent.userId, parentRunId: parent.runId, headers },
       deps,
+      undefined,
+      parent.waiter,
     );
   } catch (e) {
     if (e instanceof ScriptRunFailed) {
@@ -543,6 +560,9 @@ async function provide(
     return { stop: `ctx.get(${outcome}): ${e instanceof Error ? e.message : String(e)}` };
   }
   if (parent.trace && child.trace) parent.trace.push(...child.trace);
+  // HUMAN-VALIDATED-1124: the child waits (its bridge already recorded the one wait through the hook): the asker waits
+  // too, for the same days, without recording it again.
+  if (child.status === "waiting") return { stop: `${WAIT_STOP}${child.waitDays ?? 0}` };
   // A child that made no Unit for a reason the world gave (`unmade`, or nothing) is an ANSWER the asking script reads
   // (`{outcome, unmade, run}`, no content) and decides on, e.g. by returning `{unmade}` itself: a stop would fail the
   // asking run and the campaign would redeliver its occurrence, re-running the child for the same verdict.
