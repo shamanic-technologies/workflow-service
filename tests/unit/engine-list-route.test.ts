@@ -188,6 +188,17 @@ describe("GET /internal/engines", () => {
     expect(res.body).toMatchObject({ callable: 0, askable: 2, total: 3 });
   });
 
+  it("each runnable script says which request fields its code reads (ENGINE-GET-ASK-1123)", async () => {
+    await add(OUTCOME, "dy_finds", MAKES);
+    await add("email_sent", "dy_reads_lead", READS_LEAD);
+    const res = await request(app).get("/internal/engines").set("x-api-key", KEY);
+    const by = new Map<string, { scripts: Array<Record<string, unknown>> }>(res.body.engines.map((e: { outcome: string }) => [e.outcome, e]));
+    expect(by.get(OUTCOME)!.scripts).toEqual([{ dynasty: "dy_finds", name: expect.any(String), version: 1, units: [], channel: null, requestFields: ["brandIds", "now", "topic"], requestHandedOn: false }]);
+    expect(by.get("email_sent")!.scripts[0]).toMatchObject({ dynasty: "dy_reads_lead", units: ["lead_found"], requestFields: [] });
+    const spec = JSON.parse(readFileSync(join(__dirname, "../../openapi.json"), "utf8"));
+    expect(spec.components.schemas.EngineListing.properties.scripts.items.properties.requestFields.description).toContain("ctx.request.<field>");
+  });
+
   it("what a direct ask must hand, in plain words", () => {
     expect(calls.askNeedsReason([])).toBeNull();
     expect(calls.askNeedsReason([{ units: [], channel: null }, { units: ["lead_found"], channel: null }])).toBeNull();
