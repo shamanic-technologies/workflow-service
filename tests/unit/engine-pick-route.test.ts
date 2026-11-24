@@ -112,10 +112,10 @@ describe("POST /internal/engines/{outcome}/pick", () => {
     // The script asks for a material the caller does not hand.
     const unfed = await pick("message_written", { keptDynasties: ["dy_good"], servable: [] });
     expect(unfed.status).toBe(404);
-    // A channel the script is not for.
+    // A stated channel no longer gates who runs (PLAN-RECURSIVE-PER-ENGINE-1124): the kept list decides.
     await addScript("message_written", "dy_wa", { channel: "cold-whatsapp-outreach" });
-    const wrongChannel = await pick("message_written", { keptDynasties: ["dy_wa"], servable: ["lead_identified"], channel: "cold-email" });
-    expect(wrongChannel.status).toBe(404);
+    const otherChannel = await pick("message_written", { keptDynasties: ["dy_wa"], servable: ["lead_identified"], channel: "cold-email" });
+    expect(otherChannel.status).toBe(200);
   });
 
   it("refuses an empty kept list and a missing key", async () => {
