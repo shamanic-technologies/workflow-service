@@ -74,6 +74,11 @@ export interface RunScriptInput {
    * sweep with no org request, billed as that service's own code was: chat-service's platform doors, on this run).
    */
   billing?: "org" | "platform";
+  /**
+   * PLAN-RECURSIVE-PER-ENGINE-1124: the Engines asked above this run, the top one first (absent = this run is the top).
+   * A Unit this run reads without holding it is asked of its Engine, never one already in the chain (nor this one).
+   */
+  askChain?: string[];
 }
 
 export interface RunIdentity {
@@ -148,6 +153,11 @@ export interface OwnedRun {
 }
 
 const WAIT_STOP = "__wait__:";
+/** An asked Engine made nothing for a Unit the script read without holding it: the script ends `unmade` with that reason. */
+const UNMADE_STOP = "__unmade__:";
+
+/** The code a run states when a Unit it reads would be asked of an Engine already asked above it (a loop). */
+export const ASK_CYCLE = "ask_cycle";
 
 async function resolveVersion(db: AnyPgDb, input: RunScriptInput): Promise<ScriptRow> {
   let row: ScriptRow | null;
@@ -219,6 +229,8 @@ export async function runStoredScript(
 
   // The Request this run hands the next piece it orders (`ctx.ask`), consumed by that `ctx.get`.
   let asked: Record<string, unknown> | null = null;
+  // PLAN-RECURSIVE-PER-ENGINE-1124: the Units asked of their Engine because the script read them without holding them.
+  const implicit = new Map<string, unknown>();
   // PROVEN-BEFORE-PEOPLE-1116: what this run saw, kept as a case of its Engine when its script writes to a person.
   const recorded: RecordedCall[] = [];
   const askedUnits: Record<string, unknown> = {};
@@ -226,10 +238,12 @@ export async function runStoredScript(
   const orders: Array<{ outcome: string; unit: unknown }> = [];
   // The run's own tactics (the row's, then what the caller stated), as every vendor call reads them.
   const asks = asksOf({ tactics, code: row.code });
+  // PLAN-RECURSIVE-PER-ENGINE-1124: the Engines asked down to this run (this one last): never asked again below it.
+  const chain = [...(input.askChain ?? []), row.outcome];
 
   /** Order ONE new Unit of an outcome from its Engine (the Rating's pick, a child run), consumed by this run. */
   const order = async (outcome: string, request: Record<string, unknown>) => {
-    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
+    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, chain, billing: input.billing, ...(input.trace ? { trace } : {}) }, deps);
     if ("v" in provided) {
       askedUnits[outcome] = provided.v;
       // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
@@ -266,7 +280,20 @@ export async function runStoredScript(
         asked = null;
         return order(outcome, request);
       }
-      if (held === undefined) return { stop: `the script asked for ${outcome}, which this step was not handed (materials: ${Object.keys(input.units).join(", ") || "none"})` };
+      if (held === undefined) {
+        // PLAN-RECURSIVE-PER-ENGINE-1124: a Unit this run does not hold is asked of its Engine (the Rating's pick among
+        // what the campaign's strategy keeps there, one level deeper; its own missing Units the same way), once per
+        // outcome; an Engine already asked above never again. Made nothing = this script makes nothing, for that reason.
+        if (chain.includes(outcome)) return { stop: `${UNMADE_STOP}${ASK_CYCLE}: ${outcome} is already asked above this run (${chain.join(" > ")})` };
+        if (!implicit.has(outcome)) {
+          const got = await order(outcome, { units: {} });
+          if ("stop" in got) return got;
+          const unit = got.v as { content?: unknown; unmade?: unknown };
+          if (!unit.content) return { stop: `${UNMADE_STOP}${typeof unit.unmade === "string" && unit.unmade ? unit.unmade : `${outcome} made nothing`}` };
+          implicit.set(outcome, got.v);
+        }
+        return { v: implicit.get(outcome) };
+      }
       const n = gotten.get(outcome) ?? 0;
       const list = Array.isArray(held) ? held : [held];
       if (n >= list.length) return { stop: `the script asked for ${outcome} a ${n + 1}th time; this step holds ${list.length}` };
@@ -337,10 +364,11 @@ export async function runStoredScript(
   const out = await runScript(row.code, { subject: input.subject?.id ?? null, brand: who.headers["x-brand-id"] ?? "", day, tactics, request: input.request ?? null }, bridge);
   const made = out.kind === "done" && out.result !== null && typeof out.result === "object" ? (out.result as NonNullable<ScriptResult>) : null;
   const waited = out.kind === "stopped" && out.reason.startsWith(WAIT_STOP);
-  let status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : waited ? "waiting" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
+  const unmadeBelow = out.kind === "stopped" && out.reason.startsWith(UNMADE_STOP) ? out.reason.slice(UNMADE_STOP.length) : null;
+  let status: ScriptRunResult["status"] = out.kind === "error" ? "failed" : waited ? "waiting" : unmadeBelow !== null ? "unmade" : out.kind === "stopped" ? "stopped" : made && made.content ? "made" : made && typeof made.unmade === "string" && made.unmade ? "unmade" : "nothing";
   // The subject a Unit is about: the run's, else the one the Unit names (an Engine run that found its own subject).
   const subject: SubjectRef | null = input.subject ?? subjectOf(made?.subject) ?? input.fallbackSubject ?? null;
-  let error: string | null = out.kind === "error" ? out.message : waited ? `waits ${out.reason.slice(WAIT_STOP.length)} days` : out.kind === "stopped" ? out.reason : status === "unmade" ? made!.unmade! : null;
+  let error: string | null = out.kind === "error" ? out.message : waited ? `waits ${out.reason.slice(WAIT_STOP.length)} days` : unmadeBelow !== null ? unmadeBelow : out.kind === "stopped" ? out.reason : status === "unmade" ? made!.unmade! : null;
   if (status === "made" && !input.recordedBy && !subject) {
     status = "failed";
     error = "the script made a Unit without naming who it is about (`subject: {service, id}` in its result): nothing can be declared on the ledger";
@@ -447,6 +475,8 @@ async function provide(
     subject: SubjectRef | null;
     headers: Record<string, string>;
     askedBy: string;
+    /** The Engines asked down to the asking run (it last): the child carries it, and none of them is asked again. */
+    chain: string[];
     billing?: RunScriptInput["billing"];
     /**
      * The asking run's trace, when it is traced: the child is traced too and its calls land in it, in order, so a
@@ -467,7 +497,9 @@ async function provide(
     }
     units[k] = v as MaterialUnit | MaterialUnit[];
   }
-  const pick = await pickScript(db, { outcome, servable: Object.keys(units), handed: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null, orgId: parent.headers["x-org-id"] ?? null, askedBy: parent.askedBy, needs: needsOfAsk(request) });
+  // PLAN-RECURSIVE-PER-ENGINE-1124: an Engine already asked above is never asked again: an answer, never a loop.
+  if (parent.chain.includes(outcome)) return { v: { id: `${parent.runId}:${outcome}:${ASK_CYCLE}`, outcome, subject: "", ageDays: 0, content: null, unmade: `${ASK_CYCLE}: ${outcome} is already asked above this run (${parent.chain.join(" > ")})`, run: null } };
+  const pick = await pickScript(db, { outcome, servable: Object.keys(units), handed: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null, orgId: parent.headers["x-org-id"] ?? null, askedBy: parent.askedBy, needs: needsOfAsk(request), chain: parent.chain });
   // No script of that Engine this campaign may run (none live, or its strategy keeps none): an ANSWER the asking script
   // reads (`unmade: "no_script: ..."`, no content, no child run), never a fallback script and never a stop: the asker
   // decides (MIGRATE-1105 S1b: the answering script asks for a rep call, and a campaign whose strategy keeps no call
@@ -496,6 +528,7 @@ async function provide(
         ...(typeof request.recordedBy === "string" ? { recordedBy: request.recordedBy } : {}),
         ...(request.trace === true || parent.trace ? { trace: true } : {}),
         consumesHanded: true,
+        askChain: parent.chain,
         // A child bills as its asker does (a platform-billed run's asked completion is platform-billed too).
         ...(parent.billing ? { billing: parent.billing } : {}),
       },
