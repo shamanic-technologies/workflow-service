@@ -12,8 +12,7 @@
  * 2. THE RATING: which script runs, among every live dynasty of the Engine (one active version per dynasty, so the pick
  *    is a dynasty and its head runs). Only a script the run can feed is a candidate: every material its code asks for
  *    (`ctx.get(...)`, read from the code) is one the run holds, or one its Engine can make for the same campaign
- *    (PLAN-RECURSIVE-PER-ENGINE-1124: asked one level deeper, recursively, never an Engine already asked above), a tactic
- *    `channel` it states is the campaign's, and the
+ *    (PLAN-RECURSIVE-PER-ENGINE-1124: asked one level deeper, recursively, never an Engine already asked above), and the
  *    campaign's STRATEGY keeps it (features-service judges each script's tactics, `GET /internal/script-strategy`).
  *    WHICH candidate runs is features-service's Rating (SCRIPT-VALUE-RATING-1113-WF2, owner 2026-11-13: « un pick =
  *    toujours un script »): `GET /internal/script-pick?outcome=&dynasties=` draws once among the candidates on the value
@@ -491,8 +490,6 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
       }
     }
     if (!fed) continue;
-    const channel = (row.tactics as Record<string, unknown>)?.channel;
-    if (typeof channel === "string" && channel !== input.channel) continue;
     if (!(await provenness(db, row)).runnable) continue;
     if (await proofAllows(row, !input.reachOnly)) out.push(row);
     else if (input.reachOnly && pendingProof(row, null)) out.push(row);
@@ -532,8 +529,6 @@ export async function servesChannel(db: AnyPgDb, outcome: string, channel: strin
   const kept = campaignId && rows.length > 0 ? new Set(await scriptStrategy(campaignId, outcome)) : null;
   for (const row of rows) {
     if (kept && !kept.has(row.dynasty)) continue;
-    const stated = (row.tactics as Record<string, unknown>)?.channel;
-    if (typeof stated === "string" && stated !== channel) continue;
     if ((await provenness(db, row)).runnable) return true;
   }
   return false;
