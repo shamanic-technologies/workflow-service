@@ -244,7 +244,10 @@ router.post("/internal/engines/:outcome/make", requireApiKey, async (req, res) =
         version: pick.script.version,
         units: body.units,
         ...(body.request !== undefined ? { request: body.request } : {}),
-        ...(body.subject ? { subject: body.subject } : {}),
+        // An ask naming no subject, whose script names none either (an address checked, a draft), makes a Unit about
+        // the ASKING run, as `ctx.ask` does: never a paid Unit refused for want of a subject (2026-11-24, Distry's
+        // email check: the verifier ran, the asker got a 502).
+        ...(body.subject ? { subject: body.subject } : { fallbackSubject: { service: "runs-service", id: parentRunId } }),
         ...(body.recordedBy ? { recordedBy: body.recordedBy } : {}),
         ...(body.trace ? { trace: true } : {}),
         billing: orgId && body.billing === "org" ? "org" : "platform",

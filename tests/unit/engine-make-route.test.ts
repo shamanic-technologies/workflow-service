@@ -178,6 +178,18 @@ export default function run(ctx) {
     expect(ledgerCalls.map((c) => c[0])).toEqual(["create", "declare", "close"]);
   });
 
+  it("a script naming no subject makes a Unit about the asking run (never a paid Unit refused for want of a subject)", async () => {
+    const NO_SUBJECT = `export default function run(ctx) { return { content: { email: ctx.request.email, verdict: "valid" } }; }`;
+    await createScript(db, { outcome: "x_account_found", dynasty: "dy_checks", code: NO_SUBJECT, description: "x", tactics: {} }, author, known);
+    engine.setScriptPickReader(fakeScriptPick({ dy_checks: 1 }));
+    const res = await ask("x_account_found", { units: {}, request: { email: "k.lourd+probe@smartdistribute.com" } }, { "x-run-id": "distry-run-2", "x-org-id": "org-a" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "made" });
+    const declared = ledgerCalls.find((c) => c[0] === "declare");
+    expect(JSON.stringify(declared)).toContain("distry-run-2");
+    expect(JSON.stringify(declared)).toContain("runs-service");
+  });
+
   it("a script needing something its run lacks stops with a plain reason (a campaign, an org)", async () => {
     await createScript(db, { outcome: "x_account_found", dynasty: "dy_claims", code: NEEDS_CAMPAIGN, description: "x", tactics: {} }, author, known);
     engine.setScriptPickReader(fakeScriptPick({ dy_claims: 1 }));
