@@ -6,7 +6,7 @@
  *   POST /internal/engines/{outcome}/switch     switch it on for one org, or every org (staff / the migration steps)
  *   POST /internal/engines/{outcome}/off        switch it off for one org, or every org
  *   POST /internal/engines/{outcome}/pick       the Rating's pick among kept dynasties, outside a run (a preview)
- *   POST /internal/engines/{outcome}/make       the Rating's pick, RUN for a service waiting on its Unit (a field draft)
+ *   POST /internal/engines/{outcome}/make       an Engine's ASK outside a campaign: the Rating's pick, RUN for a caller waiting on its Unit
  *   GET  /internal/engines                      every Engine of the live catalogue: callable now or why not (Distry, dashboard)
  *
  * Mounted before the identity gate: the execute route checks its own headers (and never needs `x-workflow-slug`).
@@ -199,6 +199,9 @@ function servedPick(outcome: string, pick: NonNullable<Awaited<ReturnType<typeof
 // for it instead of calling an LLM it picked itself: the SAME `pickScript` a run calls, then the picked script runs on
 // its own run, a child of the caller's, exactly as `/internal/scripts/run` runs it. One pick, one script, no fall-through
 // (the client is waiting), never a default script.
+// ENGINE-GET-ASK-1123 (owner 2026-11-23: an ask « peut être hors campaign »): this is the door Distry asks an Engine
+// through, like a Script's `ctx.ask`, with no campaign. Nothing here reads a campaign; a script needing something its
+// run lacks stops with its own plain reason (502, the run in `details`).
 router.post("/internal/engines/:outcome/make", requireApiKey, async (req, res) => {
   const outcome = outcomeOf(req, res);
   if (!outcome) return;
@@ -241,7 +244,10 @@ router.post("/internal/engines/:outcome/make", requireApiKey, async (req, res) =
         version: pick.script.version,
         units: body.units,
         ...(body.request !== undefined ? { request: body.request } : {}),
-        ...(body.subject ? { subject: body.subject } : {}),
+        // An ask naming no subject, whose script names none either (an address checked, a draft), makes a Unit about
+        // the ASKING run, as `ctx.ask` does: never a paid Unit refused for want of a subject (2026-11-24, Distry's
+        // email check: the verifier ran, the asker got a 502).
+        ...(body.subject ? { subject: body.subject } : { fallbackSubject: { service: "runs-service", id: parentRunId } }),
         ...(body.recordedBy ? { recordedBy: body.recordedBy } : {}),
         ...(body.trace ? { trace: true } : {}),
         billing: orgId && body.billing === "org" ? "org" : "platform",
@@ -272,7 +278,7 @@ router.get("/internal/engines", requireApiKey, async (req, res) => {
   const orgId = typeof req.query.orgId === "string" && req.query.orgId ? req.query.orgId : null;
   try {
     const engines = await listEngines(db, orgId);
-    res.json({ engines, callable: engines.filter((e) => e.callable).length, total: engines.length });
+    res.json({ engines, callable: engines.filter((e) => e.callable).length, askable: engines.filter((e) => e.ask.possible).length, total: engines.length });
   } catch (err) {
     console.error("[workflow-service] engine list:", err);
     res.status(502).json({ code: "engine_list_unreadable", error: err instanceof Error ? err.message : String(err) });

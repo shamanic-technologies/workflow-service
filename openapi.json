@@ -4155,7 +4155,31 @@
           "reason": {
             "type": "string",
             "nullable": true,
-            "description": "Plain words: why no Unit can be asked now. Null when callable."
+            "description": "Plain words: why no campaign can make it now. Null when callable."
+          },
+          "ask": {
+            "type": "object",
+            "properties": {
+              "possible": {
+                "type": "boolean",
+                "description": "A direct ask (`POST /internal/engines/{outcome}/make`, no campaign) can be made now: at least one script is runnable. The campaign switch is not read."
+              },
+              "needsNothing": {
+                "type": "boolean",
+                "description": "One runnable script reads no handed Unit and states no channel: an ask with `units: {}` finds a script."
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true,
+                "description": "Plain words: why no direct ask is possible, or what it must hand in `units` / state as `channel`. Null when an ask handing nothing works."
+              }
+            },
+            "required": [
+              "possible",
+              "needsNothing",
+              "reason"
+            ],
+            "description": "ENGINE-GET-ASK-1123: the same question as `callable`, for a direct ask outside a campaign (an org's model may still narrow the pick at run time; a script needing something its run lacks stops with a plain reason)."
           },
           "inputs": {
             "type": "array",
@@ -4242,6 +4266,7 @@
           "callable",
           "liveForCampaigns",
           "reason",
+          "ask",
           "inputs",
           "scripts",
           "counts"
@@ -4550,14 +4575,15 @@
                 }
               ]
             },
-            "description": "The materials, by outcome (as on `POST /internal/scripts/run`). Their keys are what the run can serve: a script asking for another material is not a candidate."
+            "description": "The Units the caller hands, by outcome (`{}` = none; as on `POST /internal/scripts/run`). Their keys are what the run can serve: a script reading another Unit is not a candidate. `GET /internal/engines` lists, per Engine, what to hand (`inputs`, `ask`)."
           },
           "request": {
             "type": "object",
             "nullable": true,
             "additionalProperties": {
               "nullable": true
-            }
+            },
+            "description": "The Request the script reads as `ctx.request`: what the caller asks for, in the fields the picked script reads (e.g. `now`, `brandIds`, a topic). Absent = none."
           },
           "keptDynasties": {
             "type": "array",
@@ -4589,7 +4615,8 @@
             "required": [
               "service",
               "id"
-            ]
+            ],
+            "description": "What the Unit is about (`{service, id}`), when the script names none itself."
           },
           "recordedBy": {
             "type": "string",
@@ -12389,10 +12416,11 @@
     },
     "/internal/engines": {
       "get": {
-        "summary": "Every Engine of the live catalogue: callable now or why not, and what a caller hands (service key only)",
-        "description": "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = a campaign of `orgId` can make it now: switched on for its campaigns AND a runnable script (active, proven when a port, past its writing proof when it writes to people) needing no Unit handed; `reason` says why not, in words the dashboard shows as-is. Read only: nothing spent, no proof started.",
+        "summary": "Every Engine of the live catalogue: callable by a campaign, askable directly, or why not, and what a caller hands (service key only)",
+        "description": "DISTRY-PRINCIPAL-1119. One row per outcome of features-service's live catalogue (never a hard-coded list). `callable` = a campaign of `orgId` can make it now: switched on for its campaigns AND a runnable script (active, proven when a port, past its writing proof when it writes to people) needing no Unit handed; `reason` says why not, in words the dashboard shows as-is. `ask` (ENGINE-GET-ASK-1123) = the same for a direct ask outside a campaign (`POST /internal/engines/{outcome}/make`): possible as soon as one script is runnable, with what the caller must hand (`inputs`: the Units by outcome and the channel of each way to call it). The caller states nothing but an optional `orgId`; it gets every Engine, the counts `callable` / `askable` / `total`. Read only: nothing spent, no proof started.",
         "tags": [
-          "Engines"
+          "Engines",
+          "engine:list"
         ],
         "security": [
           {
@@ -12428,6 +12456,10 @@
                     "callable": {
                       "type": "integer"
                     },
+                    "askable": {
+                      "type": "integer",
+                      "description": "Engines a direct ask can be made to now."
+                    },
                     "total": {
                       "type": "integer"
                     }
@@ -12435,6 +12467,7 @@
                   "required": [
                     "engines",
                     "callable",
+                    "askable",
                     "total"
                   ]
                 }
@@ -12904,10 +12937,11 @@
     },
     "/internal/engines/{outcome}/make": {
       "post": {
-        "summary": "Make one Unit of an Engine for a service waiting on it: the Rating picks the script, the script runs (service key only)",
-        "description": "SCRIPT-VALUE-RATING-1113-WF3 (owner 2026-11-13 « un pick = toujours un script »). For a service whose client waits on the result (brand-service's offer/brand field drafts): the SAME `pickScript` a campaign run calls (features-service's script pick among the runnable dynasties, narrowed by `keptDynasties` when the caller has a strategy), then that script runs synchronously on its own runs-service run, a child of the caller's run (`x-run-id`, required), as `POST /internal/scripts/run` runs it (`x-org-id` optional: none = a platform run; `billing` as the caller's own code paid). The answer is the run's (`RunScriptResponse`) plus the `pick`. The LLM the script writes with is its tactic: competing LLMs are competing dynasties. 404 `no_runnable_script`; 502 `script_pick_unreadable` (nothing ran); 502 with the run's `details` when the script failed or stopped.",
+        "summary": "Ask an Engine for one Unit, outside a campaign: the Rating picks the script, the script runs, the Unit comes back (service key only)",
+        "description": "ENGINE-GET-ASK-1123 (owner 2026-11-23: an ask « peut être hors campaign »): an Engine's ASK, the same gesture as a Script's `ctx.ask`, for any caller waiting on one Unit (a service, Distry). The caller states: its OWN run in `x-run-id` (required; the script runs on a child of it, so its spend lands under the caller's work), its org in `x-org-id` (optional: none = a platform run), `billing` (who pays the model calls: `org` needs `x-org-id`, default `platform`), the Units it hands in `units` (by outcome, `{}` = none; `GET /internal/engines` says what each Engine needs), the `request` the script reads, optionally `channel`, `subject`, `keptDynasties`. No campaign is named or read. It gets back the run (`status` made / unmade / nothing, the `unit` made, `runId`) plus the `pick` (which script ran). A script needing something its run lacks stops with its own plain reason (502, the run in `details`). SCRIPT-VALUE-RATING-1113-WF3 (owner 2026-11-13 « un pick = toujours un script »). For a service whose client waits on the result (brand-service's offer/brand field drafts): the SAME `pickScript` a campaign run calls (features-service's script pick among the runnable dynasties, narrowed by `keptDynasties` when the caller has a strategy), then that script runs synchronously on its own runs-service run, a child of the caller's run (`x-run-id`, required), as `POST /internal/scripts/run` runs it (`x-org-id` optional: none = a platform run; `billing` as the caller's own code paid). The answer is the run's (`RunScriptResponse`) plus the `pick`. The LLM the script writes with is its tactic: competing LLMs are competing dynasties. 404 `no_runnable_script`; 502 `script_pick_unreadable` (nothing ran); 502 with the run's `details` when the script failed or stopped.",
         "tags": [
-          "Engines"
+          "Engines",
+          "engine:ask"
         ],
         "security": [
           {
