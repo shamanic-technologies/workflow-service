@@ -1,0 +1,477 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+/** The intro first email (INTRO-BOARDY-1114): one reader, researched, offered ONE intro good for both, or asked who they want to meet. */
+
+const BRIEF_HEADER = "";
+
+const console = { log: (..._a: unknown[]) => {}, error: (..._a: unknown[]) => {} };
+/** The sandbox ships no URL class: the one thing the steps read off a URL is its host name (throws like URL on garbage). */
+const URL = function (this: { hostname: string; href: string }, u: string) {
+  const m = /^[a-z][a-z0-9+.-]*:[/][/](?:[^@/?#]*@)?([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(String(u));
+  if (!m) throw new TypeError("Invalid URL: " + String(u));
+  this.hostname = m[1]!.toLowerCase();
+  this.href = String(u);
+} as unknown as new (u: string) => { hostname: string; href: string };
+type Answer = { ok: boolean; data: Record<string, any> };
+function must(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (!r.ok) throw new Error(name + " failed (" + String(r.data.status ?? "") + "): " + String(r.data.error ?? "").slice(0, 500));
+  return r.data;
+}
+function tolerated(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (r.ok) return r.data;
+  return { ok: false, status: r.data.status ?? null, error: r.data.body && Object.keys(r.data.body).length ? JSON.stringify(r.data.body) : String(r.data.error ?? "") };
+}
+/** The campaign's brief on a chat-service completion: appended to the system prompt (campaign-brief.ts, verbatim). */
+function withBrief(body: Record<string, any>, brief: string): Record<string, any> {
+  if (!brief) return body;
+  const sys = typeof body.systemPrompt === "string" ? body.systemPrompt : "";
+  const msg = typeof body.message === "string" ? body.message : "";
+  if (sys.includes(brief) || msg.includes(brief)) return body;
+  return { ...body, systemPrompt: (sys ? sys + "\n\n" : "") + BRIEF_HEADER + "\n" + brief };
+}
+
+const RESEARCH_PROMPT = "You research ONE person and their company, so an AI that makes introductions can write to them with facts they can check.\nSearch the web: their company site, their LinkedIn or X posts, articles, podcasts, launches, client stories. The material below (their profile and their own site) comes first.\nReturn only facts you read on a page, each with that page's URL. A good fact is precise and recent: a number, a launch, a client named, a post they wrote and what it said, a problem they described in their own words. Quote their own words when you have them.\nNever a guess, never an opinion, never an adjective about them. A fact you could not tie to a page is left out.\nsells: what their company sells, in plain words. sellsTo: to whom (kind of company, size, market).\nlooksFor: what they visibly look for (customers of a kind, partners, hires, advice), each from a fact. canBring: what they could bring to someone else, each from a fact.\nWhen you find nothing beyond the material, return what the material states, with the site's URL.";
+const RESEARCH_SCHEMA = {"type":"object","additionalProperties":false,"required":["sells","sellsTo","facts","looksFor","canBring"],"properties":{"sells":{"type":"string"},"sellsTo":{"type":"string"},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fact","url"],"properties":{"fact":{"type":"string"},"url":{"type":"string"}}}},"looksFor":{"type":"array","items":{"type":"string"}},"canBring":{"type":"array","items":{"type":"string"}}}};
+const MATCH_PROMPT = "You are an AI superconnector. You stand on BOTH sides: an introduction is made only when it is good for both people, and you say no when it is not a fit.\nYou get ONE reader and a numbered list of candidates, each with facts. Pick the ONE candidate the reader would most want to meet AND who would most want to meet the reader: one sells or brings what the other visibly looks for, at a matching size and market, with a concrete reason from the facts on BOTH sides.\nWhen no candidate gives both people a concrete reason, answer -1. A vague reason (both are founders, both do B2B) is no reason.\nforReader: why meeting them is good for the reader, from the facts only. forThem: why meeting the reader is good for them, from the facts only. Both empty when you answer -1. Never a word about money, price or cost in either.";
+const MATCH_SCHEMA = {"type":"object","additionalProperties":false,"required":["pick","forReader","forThem"],"properties":{"pick":{"type":"integer"},"forReader":{"type":"string"},"forThem":{"type":"string"}}};
+const SITE_MAX_CHARS = 12000;
+
+const s = (v: any): string => (typeof v === "string" && v.trim() !== "" ? v.trim() : "");
+/** Plain text whatever the writer returned (it may mirror the HTML of the thread): paragraphs kept, tags dropped. */
+const plain = (t: any): string => String(t ?? "")
+  .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, String.fromCharCode(34)).replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+const undash = (t: any): string => plain(t).replace(/(\d)\s*[\u2013\u2014]\s*(?=\d)/g, "$1-").replace(/\s*[\u2013\u2014]\s*/g, ", ").trim();
+const escapeHtml = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const toHtml = (t: string): string => t.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => "<p>" + escapeHtml(p).replace(/\n/g, "<br>") + "</p>").join("");
+const hostOf = (u: any): string => { try { return new URL(String(u)).hostname.replace(/^www\./, ""); } catch (_e) { return ""; } };
+const emailOf = (v: any): string => { const a = s(v).toLowerCase(); return /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(a) ? a : ""; };
+
+/** A short, stable key for a brief (no crypto in the sandbox: FNV-1a over the text). */
+function briefKey(brief: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < brief.length; i++) { h ^= brief.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return "brief:" + h.toString(16) + ":" + brief.length;
+}
+
+
+function complete(ctx: any, place: string, systemPrompt: string, message: string, schema: any, extra?: Record<string, unknown>): any {
+  const a = askCompletionData(ctx, { systemPrompt, message, responseFormat: "json", responseSchema: schema, ...(extra ?? {}) });
+  if (!a.json || typeof a.json !== "object") throw new Error("llm.complete (" + place + ") answered no JSON: " + String(a.content ?? "").slice(0, 300));
+  return a.json;
+}
+
+/** One served person, in the plain shape every intro step reads. */
+function personOf(lead: any): any {
+  const d = lead?.data ?? {};
+  const o = d.organization ?? {};
+  const website = s(o.websiteUrl) || (emailOf(lead?.email) ? "https://" + emailOf(lead.email).split("@")[1] : "");
+  return {
+    leadId: s(lead?.leadId) || null,
+    email: emailOf(lead?.email) || null,
+    firstName: s(d.firstName),
+    lastName: s(d.lastName),
+    title: s(d.currentTitle),
+    headline: s(d.headline),
+    linkedinUrl: s(d.linkedinUrl),
+    city: s(d.city),
+    country: s(d.country),
+    company: {
+      name: s(o.name),
+      domain: hostOf(website),
+      website,
+      industry: s(o.industry),
+      size: o.estimatedNumEmployees ?? null,
+      description: s(o.shortDescription) || s(o.seoDescription),
+      city: s(o.city),
+      country: s(o.country),
+      linkedinUrl: s(o.linkedinUrl),
+      foundedYear: o.foundedYear ?? null,
+    },
+  };
+}
+
+/** Who writes: the persona tactic and the signature appended after the text (both tactics, never a rule in a prompt). */
+function whoYouAre(t: any): string {
+  const sig = s(t?.signature).split("\n").map((l: string) => l.trim()).filter(Boolean).join(", ");
+  return "WHO YOU ARE: " + s(t?.persona?.name) + ", " + s(t?.persona?.says) + "." + (sig ? " Your signature, added after your text, reads: " + sig : "");
+}
+
+function nameOf(p: any): string {
+  return [s(p?.firstName), s(p?.lastName)].filter(Boolean).join(" ");
+}
+
+function profileLines(p: any): string {
+  const c = p.company ?? {};
+  return [
+    "Name: " + (nameOf(p) || "(unknown)"),
+    p.title ? "Title: " + p.title : "",
+    p.headline ? "Headline: " + p.headline : "",
+    p.linkedinUrl ? "LinkedIn: " + p.linkedinUrl : "",
+    [p.city, p.country].filter(Boolean).length ? "Lives in: " + [p.city, p.country].filter(Boolean).join(", ") : "",
+    c.name ? "Company: " + c.name + (c.domain ? " (" + c.domain + ")" : "") : "",
+    c.industry ? "Industry: " + c.industry : "",
+    c.size ? "Company size: " + String(c.size) + " people" : "",
+    c.description ? "Company description: " + c.description : "",
+    c.foundedYear ? "Founded: " + String(c.foundedYear) : "",
+    [c.city, c.country].filter(Boolean).length ? "Company based in: " + [c.city, c.country].filter(Boolean).join(", ") : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** Research ONE person: their own site (raw) + the web (checkable facts with their URL). */
+function research(ctx: any, p: any, brandId: string, campaignId: string): any {
+  const site = p.company?.website ? tolerated(ctx, "scraping.page", { body: { url: p.company.website, enrich: false, brandIds: [brandId], campaignId } }) : { ok: false };
+  const siteText = String(site?.result?.rawMarkdown ?? "").slice(0, SITE_MAX_CHARS);
+  const r = complete(ctx, "research", RESEARCH_PROMPT, [
+    "THE PERSON",
+    profileLines(p),
+    "",
+    "THEIR OWN SITE (" + (p.company?.website || "none") + ")",
+    siteText || "(could not be read)",
+  ].join("\n"), RESEARCH_SCHEMA, { webSearch: true });
+  const facts = (Array.isArray(r.facts) ? r.facts : []).filter((f: any) => s(f?.fact) && s(f?.url)).slice(0, 12).map((f: any) => ({ fact: undash(f.fact), url: s(f.url) }));
+  return {
+    sells: s(r.sells),
+    sellsTo: s(r.sellsTo),
+    facts,
+    looksFor: (Array.isArray(r.looksFor) ? r.looksFor : []).map(s).filter(Boolean).slice(0, 6),
+    canBring: (Array.isArray(r.canBring) ? r.canBring : []).map(s).filter(Boolean).slice(0, 6),
+  };
+}
+
+function factLines(p: any): string {
+  const r = p.research ?? {};
+  return [
+    profileLines(p),
+    r.sells ? "Sells: " + r.sells + (r.sellsTo ? " (to " + r.sellsTo + ")" : "") : "",
+    (r.looksFor ?? []).length ? "Looks for: " + r.looksFor.join("; ") : "",
+    (r.canBring ?? []).length ? "Can bring: " + r.canBring.join("; ") : "",
+    (r.facts ?? []).length ? "Facts (each with where it was read):\n" + r.facts.map((f: any) => "- " + f.fact + " [" + f.url + "]").join("\n") : "Facts: none found beyond the profile.",
+  ].filter(Boolean).join("\n");
+}
+
+/** The one person among the candidates good for BOTH sides, or null (the match LLM). */
+function matchOne(ctx: any, reader: any, candidates: any[], wanted?: string): any {
+  if (!candidates.length) return null;
+  const m = complete(ctx, "match", MATCH_PROMPT, [
+    "THE READER",
+    factLines(reader),
+    wanted ? "\nWHAT THE READER ASKED FOR: " + wanted : "",
+    "",
+    "CANDIDATES",
+    candidates.map((c: any, i: number) => "#" + i + "\n" + factLines(c)).join("\n\n"),
+  ].join("\n"), MATCH_SCHEMA);
+  const i = typeof m.pick === "number" ? m.pick : -1;
+  if (i < 0 || i >= candidates.length) return null;
+  return { person: candidates[i], index: i, forReader: s(m.forReader), forThem: s(m.forThem) };
+}
+
+/** Serve one fresh person of our lead search (lead-service), or null with the reason. */
+function serveOne(ctx: any, serve: any): { lead: any } | { none: string; again?: boolean; final?: boolean } {
+  const a = ctx.vendor.call("lead.serve", serve ?? {});
+  if (!a.ok) throw new Error("lead.serve failed: " + String(a.data && a.data.error));
+  const d: any = a.data;
+  if (d.found !== true || !d.lead) {
+    const reason = s(d.reason) || "nobody";
+    return { none: reason, again: reason === "serve_timed_out" && d.final !== false, final: d.final === true };
+  }
+  return { lead: d.lead };
+}
+
+/** Does this campaign's brief ask for intros? Judged once per brief (Jev), kept in the Engine's storage. */
+function briefAsksIntros(ctx: any, brief: string, question: string, now: string): boolean {
+  if (!brief) return false;
+  const key = briefKey(brief);
+  let v: any = ctx.storage.get("briefs", key);
+  if (v === null || v === undefined) {
+    const j = must(ctx, "jev.noul", { state: { brief }, questions: { asks: { instructions: question } } });
+    const pr = j.probabilities?.asks;
+    if (typeof pr !== "number") throw new Error("intro: Jev answered no probability on the brief");
+    v = { asks: pr >= 0.5, probability: pr, at: now };
+    ctx.storage.set("briefs", key, v);
+  }
+  return v.asks === true;
+}
+
+
+const MATERIAL = "intro_requested";
+const FIRST_EMAIL_PROMPT = "You are writing the first email a stranger will ever get from you.\n\nThey owe you nothing and will give your email a few seconds. They answer only if it brings them something they did not have, from someone honest with them. Their own business they already know; your read of it, they do not. That is the whole game. How you play it is yours: what to say, what to leave out, the order, the length, the subject. Use your judgment, the way a brilliant, well-connected friend would.\n\nWhat stays true whatever you write:\n- Only what the material states. Nothing invented about anyone, including how you came to write to them.\n- You sell nothing and money is not a subject of this email.\n- A person you propose has not been contacted yet.\n- End on a closing word (Cheers,) and write no name after it: your signature is added after your text.\n\nBelow are emails written by Boardy, the best AI at this, to a founder named Kevin it already knew. They are here for the level only: the intelligence shown, the tone, the length. Length is part of the level: Boardy says it in 60 to 110 words, and so do you. Each was written for one person at one moment, so never reuse their sentences or their shape. Write yours for this reader.\n\n--- Example 1 ---\nSubject: tooling for the AI visibility work you sell\n\nHey Kevin,\n\nMiguel Casteleiro built SEOforGPT.io, now Glim AI, which audits how brands show up in ChatGPT and Google AI Overviews, monitors competitors and citation sources, and publishes fixes. Before that he spent seven years leading growth at Marveltest across roughly 130 brands.\n\nKevin, you sell AI-search visibility through GrowthAgency.dev, and Miguel is building the platform an agency runs that service on, white-label reporting included. Worth meeting him?\n\nCheers,\nBoardy\n\n--- Example 2 ---\nSubject: AI search work for APAC PR agencies\n\nHey Kevin,\n\nJeremy Seow was Allison's Regional COO and Head of Client Experience for Asia Pacific until July 2026, and he now chairs PRCA APAC. He has been telling PRCA members that PR agencies should white-label AI-search work rather than try to build it themselves.\n\nYou sell that work through GrowthAgency.dev, and Jeremy is in Singapore with the agency network in front of him. He runs Sequencr now, enterprise software for in-house comms teams, so some of what he hears does not fit his own product.\n\nWant the intro?\n\nCheers,\nBoardy\n\n--- Example 3 ---\nSubject: client context for the thought leadership work you sell\n\nHey Kevin,\n\nGreg Lunt built Understory, a pair of AI voice agents that interview an agency's clients: Skye runs 12 minutes and returns a positioning and strategy report, Kyren runs 22 and returns the client's own voice turned into content ideas.\n\nGrowthAgency.dev sells thought leadership and press, and this is the client context that work usually takes several meetings to dig out. Understory is two months old and has no white-label yet; he is taking on agencies for free 60-day pilots.\n\nWant the intro?\n\nCheers,\nBoardy\n\n--- Example 4 ---\nSubject: is Distribute.you the whole business now?\n\nHey Kevin,\n\nI've been reading your posts. The one about filtering Apollo lists against an ICP written in a single sentence with Jev by TypeSafe AI, and the one on classifying out-of-office replies with DeepSeek's V4.1 Flash, read like someone who has rebuilt the whole outbound motion rather than added AI to it. The 4.1x median ROI your clients report is the part I keep coming back to.\n\nOne question: is Distribute.you the whole business now, or is the GrowthAgency.dev work on AI search and press still running alongside it? I've been assuming the second, and I'd rather be told I'm wrong.\n\nCheers,\nBoardy\n\n--- Example 5 ---\nSubject: Un client potentiel qui doit atteindre les mêmes boîtes de services US\n\nSalut Kevin,\n\nRaphael Cohen dirige haggl.ai: quand quelqu'un demande à un assistant IA qui embaucher, son agent répond avec une offre ferme et le client appelle la boîte. Il est maintenant presque uniquement sur des services locaux US, plombiers, couvreurs, HVAC, pest control et groupes multi-sites, et il cherche activement plus d'opérateurs dans ce profil. Avant ça il était CPO de Waze et Product Director chez Google.\n\nCe que je vois pour toi: il a besoin d'atteindre exactement les boîtes de services américaines sur une niche que tu vises, et il a un programme partenaire pour les freelances et petites agences qui les servent. Le cold email est ton métier, pas le sien.\n\nUne réserve: ses pilotes de design partners ne paient rien pour l'instant, donc il n'a pas de budget d'acquisition payante confirmé, même s'il est en train de construire son pipeline.\n\nTu veux que je le contacte?\n\nCheers,";
+const FIRST_EMAIL_KIND = {"lead_to_lead":"THIS EMAIL: you propose THE OTHER PERSON below, a person our lead search found.","open":"THIS EMAIL: you have nobody to propose yet.","client_to_lead":"THIS EMAIL: you propose THE OTHER PERSON below, a person of the brand's own team."};
+const FIRST_EMAIL_SCHEMA = {"type":"object","additionalProperties":false,"required":["subject","body"],"properties":{"subject":{"type":"string"},"body":{"type":"string"}}};
+const KINDS = ["lead_to_lead", "open", "client_to_lead"];
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const R: any = ctx.request ?? {};
+  const t: any = { ...(ctx.tactics ?? {}) };
+  // Only the intro path hands this material: any other campaign's run never holds it.
+  ctx.get("intro_requested");
+  const now = s(R.now);
+  if (!now) throw new Error("intro: the run states no clock (request.now)");
+  const kind = s(t.intro);
+  if (KINDS.indexOf(kind) < 0) throw new Error("intro: the script states no known tactic intro: " + JSON.stringify(t.intro));
+  const persona = t.persona ?? {};
+  if (!s(persona.name) || !s(persona.says)) throw new Error("intro: the script states no persona {name, says} (tactic)");
+  const brandId = Array.isArray(R.brandIds) && R.brandIds[0] ? String(R.brandIds[0]) : s(R.brandId);
+  const campaignId = s(R.campaignId);
+  if (!brandId || !campaignId) throw new Error("intro: the run names no brand or campaign");
+  const testRecipient = emailOf(R.testRecipient);
+  const dryRun = R.dryRun === true;
+
+  const brand = (must(ctx, "brand.profile", { params: { id: brandId } }).brand) || {};
+  const brandName = s(brand.name);
+  // COPY-SIGNER-1121: a brief asking to copy the person the email is signed as = the brand's sales rep writes, signs and is copied.
+  const copied = copiedSigner(ctx, t, R.brief, brandId, brandName, now);
+  if (copied && "refused" in copied) return { unmade: copied.refused };
+  if (copied) {
+    t.persona = { name: copied.firstName || brandName, says: (copied.role ? copied.role + " of " : "of the team of ") + brandName + ", who introduces people to each other" };
+    t.signature = copied.signature;
+  }
+  // Client to lead: the brand's person is its stated sales rep (first name and role only, never an invented name).
+  const rep = kind === "client_to_lead" ? tolerated(ctx, "brand.sales_rep", { params: { brandId } }) : null;
+  if (kind === "client_to_lead" && !s(rep?.salesRepFirstName)) return { unmade: "no_brand_person: the brand states no sales rep to introduce" };
+
+  // 1. THE READER: one person of our lead search.
+  const served = serveOne(ctx, t.serve);
+  if ("none" in served) {
+    if (served.none === "audience_exhausted" || served.final) return { unmade: served.none };
+    return served.again ? { unmade: served.none, again: true } : { unmade: served.none };
+  }
+  const reader: any = personOf(served.lead);
+  if (!reader.email) throw new Error("intro: the served person carries no email");
+  // Someone the brand already talks with is never written to as a stranger: their next reader is served.
+  const th = ctx.vendor.call("crm.person.thread", { query: { brandId, personKey: "email:" + reader.email } });
+  if (!th.ok && th.data.status !== 404) throw new Error("crm.person.thread failed: " + String(th.data.error));
+  const talked = th.ok && Array.isArray(th.data.items) ? th.data.items.filter((i: any) => i && i.kind === "message").length : 0;
+  if (talked > 0) return { unmade: "already_in_conversation: the brand already exchanged " + talked + " message(s) with them", again: true };
+  // VERIFY-BEFORE-WRITE-1124: the reader's address is looked at before anything is paid for them (tactic verdictMaxAgeDays).
+  // An address the send's door refuses ends the run here as it ends on the send's refusal: no research, no writer.
+  const addressRefusal = testRecipient || dryRun ? null : refusedBeforeWriting(ctx, t, reader.email, now, false);
+  if (addressRefusal) return { unmade: addressRefusal, again: true };
+  reader.research = research(ctx, reader, brandId, campaignId);
+
+  // 2. THE OTHER PERSON.
+  const poolDays = Number.isInteger(t.poolDays) ? t.poolDays : 60;
+  const poolMax = Number.isInteger(t.poolMax) ? t.poolMax : 40;
+  const fresh = (p: any) => Date.parse(now) - Date.parse(String(p.keptAt || now)) < poolDays * 86400000;
+  let pool: any[] = (ctx.storage.get("intro_pool", "people") ?? []).filter(fresh);
+  const keepPool = () => { if (!testRecipient && !dryRun) ctx.storage.set("intro_pool", "people", pool.slice(0, poolMax)); };
+  let other: any = null;
+  let howFound = "";
+  if (kind === "lead_to_lead") {
+    const sameCompany = (p: any) => (p.company?.domain && p.company.domain === reader.company.domain) || p.email === reader.email;
+    const candidates = pool.filter((p) => !sameCompany(p));
+    const want = Number.isInteger(t.freshCandidates) ? t.freshCandidates : 2;
+    for (let i = 0; i < want; i++) {
+      const c = serveOne(ctx, t.serve);
+      if ("none" in c) break;
+      const p: any = personOf(c.lead);
+      if (!p.email || sameCompany(p)) continue;
+      p.research = research(ctx, p, brandId, campaignId);
+      p.keptAt = now;
+      candidates.push(p);
+      pool = [p].concat(pool.filter((x) => x.email !== p.email));
+    }
+    other = matchOne(ctx, reader, candidates);
+    if (!other) {
+      // No fit for both: nobody hears anybody's name. The reader waits among the candidates for a better match.
+      reader.keptAt = now;
+      pool = [reader].concat(pool.filter((x) => x.email !== reader.email));
+      keepPool();
+      return { unmade: "no_fit: no candidate is good for both sides (" + candidates.length + " looked at)", again: true };
+    }
+    howFound = "Both of them are people our lead search found (Apollo-sourced prospects our AI researched). Nobody recommended or pointed us to either of them.";
+  } else if (kind === "client_to_lead") {
+    const fields = must(ctx, "brand.extract_fields", { body: { fields: [
+      { key: "leadership", description: "Company leadership and key team members, with their roles" },
+      { key: "companyOverview", description: "A comprehensive overview of the company" },
+      { key: "socialProof", description: "Clients named, case studies, results with figures" },
+    ], offerId: s(R.offerId) || undefined } }).fields ?? {};
+    const value = (k: string) => { const v = fields[k]?.value; return typeof v === "string" ? v : v ? JSON.stringify(v) : ""; };
+    const repName = s(rep?.salesRepFirstName);
+    const brandPerson = {
+      leadId: null,
+      email: null,
+      firstName: repName.split(" ")[0] || "",
+      lastName: repName.split(" ").slice(1).join(" "),
+      title: s(rep?.salesRepRole),
+      headline: "",
+      linkedinUrl: "",
+      city: "",
+      country: "",
+      company: { name: brandName, domain: hostOf(brand.url), website: s(brand.url), description: value("companyOverview") },
+      research: {
+        sells: value("companyOverview"),
+        sellsTo: "",
+        facts: [value("leadership"), value("socialProof")].filter(Boolean).map((f) => ({ fact: f.slice(0, 600), url: s(brand.url) })),
+        looksFor: [],
+        canBring: [],
+      },
+    };
+    other = matchOne(ctx, reader, [brandPerson]);
+    if (!other) {
+      reader.keptAt = now;
+      pool = [reader].concat(pool.filter((x) => x.email !== reader.email));
+      keepPool();
+      return { unmade: "no_fit: the brand's person is not good for this reader", again: true };
+    }
+    howFound = "The reader is a person our lead search found (an Apollo-sourced prospect our AI researched); nobody recommended or pointed us to them. The other person is " + (brandName || "the brand") + "'s own " + (s(rep?.salesRepRole) || "team member") + ".";
+  }
+
+  // 3. THE EMAIL, in our voice, from the campaign brief.
+  const voice = must(ctx, "voice.read", {});
+  const system = [
+    FIRST_EMAIL_PROMPT,
+    FIRST_EMAIL_KIND[kind],
+    whoYouAre(t),
+    "OUR VOICE\n" + String(voice.content ?? ""),
+    s(R.brief) ? "THE CAMPAIGN'S BRIEF\n" + s(R.brief) : "",
+  ].filter(Boolean).join("\n\n");
+  const message = [
+    "TODAY: " + now.slice(0, 10),
+    "",
+    "THE READER",
+    factLines(reader),
+    other ? "\nTHE OTHER PERSON\n" + factLines(other.person) : "",
+    other ? "\nWHY THEY SHOULD MEET\nFor the reader: " + other.forReader + "\nFor the other person: " + other.forThem : "",
+    howFound ? "\nHOW WE FOUND THEM: " + howFound : "",
+  ].filter((l) => l !== "").join("\n");
+  const d = complete(ctx, "writer", system, message, FIRST_EMAIL_SCHEMA);
+  const subject = undash(d.subject);
+  const body = undash(d.body);
+  if (!subject || !body) throw new Error("intro: the writer returned no subject or body: " + JSON.stringify(d).slice(0, 300));
+  const counterpart = other ? { leadId: other.person.leadId, email: other.person.email, name: nameOf(other.person), title: other.person.title, company: other.person.company?.name ?? "", domain: other.person.company?.domain ?? "", research: other.person.research, forReader: other.forReader, forThem: other.forThem } : null;
+  const content = { kind, subject, body, reader: { leadId: reader.leadId, email: reader.email, name: nameOf(reader), firstName: reader.firstName, title: reader.title, company: reader.company.name, domain: reader.company.domain, research: reader.research }, counterpart, sentTo: testRecipient || reader.email };
+  if (dryRun) return { content: { ...content, dryRun: true } };
+
+  // 4. SENT (one email, our persona signs).
+  const to = testRecipient || reader.email;
+  const send = ctx.vendor.call("email.send", {
+    body: {
+      type: "broadcast",
+      tag: s(t.sendTag) || "intro-email",
+      to,
+      ...(testRecipient ? {} : { leadId: reader.leadId }),
+      subject,
+      sequence: [{ step: 1, bodyHtml: toHtml(body), bodyText: body, daysSinceLastStep: 0 }],
+      campaignId,
+      recipientFirstName: reader.firstName,
+      recipientLastName: reader.lastName,
+      recipientCompany: reader.company.name,
+      ...(s(t.signature) ? { signature: { text: s(t.signature) } } : {}),
+      ...(copied ? { cc: copied.email } : {}),
+      idempotencyKey: "intro:" + kind + ":" + (testRecipient ? to + ":" + now : reader.leadId || reader.email),
+      metadata: { source: "intro", kind },
+    },
+  });
+  if (!send.ok) {
+    const dd: any = send.data ?? {};
+    const code = s(dd.code) || s(dd.body?.code) || s(dd.body?.details?.code);
+    if (code && Number(dd.status) === 409) return { unmade: code + ": " + String(dd.body?.error ?? dd.error ?? "").slice(0, 300), again: true };
+    throw new Error("email.send failed (" + String(dd.status ?? "") + "): " + String(dd.error ?? "").slice(0, 300));
+  }
+  if (send.data?.success !== true) throw new Error("email.send answered without success: true");
+  // The proposed person leaves the candidates: one pending intro per person.
+  if (counterpart?.email) pool = pool.filter((p) => p.email !== counterpart.email);
+  keepPool();
+  return { content, ...(reader.leadId && !testRecipient ? { subject: { service: "lead-service", id: reader.leadId } } : {}) };
+}
+
+/**
+ * ONE-WRITER-N-MODELS-1116: this script names no model. Each completion it needs is ASKED of the LLM completion
+ * Engine (the Rating picks the model for this script); the request is the call as written, minus the model.
+ */
+function askCompletion(ctx: any, call: Record<string, unknown>): { ok: true; data: Record<string, any> } {
+  const request: Record<string, unknown> = {};
+  for (const k of Object.keys(call)) if (k !== "provider" && k !== "model") request[k] = call[k];
+  ctx.ask({ units: {}, request });
+  const done: any = ctx.get("llm_completion");
+  if (!done || !done.content) throw new Error("llm_completion: " + String((done && done.unmade) || "no completion") + ". Nothing is written: the run is retried later.");
+  return { ok: true, data: done.content.answer };
+}
+function askCompletionData(ctx: any, call: Record<string, unknown>): any {
+  return askCompletion(ctx, call).data;
+}
+/** A JSON answer, read as chat.complete read it: the parsed object, else a refusal. */
+function askChatCompletion(ctx: any, call: Record<string, unknown>): { ok: boolean; data: Record<string, any> } {
+  const json = askCompletion(ctx, call).data.json;
+  if (!json || typeof json !== "object" || Array.isArray(json)) return { ok: false, data: { error: "chat.complete: the model answered no JSON object" } };
+  return { ok: true, data: json };
+}
+
+/**
+ * COPY-SIGNER-1121: tactic `copiesSigner`. When the campaign's brief asks that every email copy the person it is
+ * signed as (Jev, judged once per brief, kept), the email is signed as the brand's stated sales rep and that rep's
+ * address is the Cc this script names on the send. Otherwise null: the run is the same as without the tactic.
+ */
+const COPY_SIGNER_QUESTION = "The state is a campaign brief a client wrote. Does it ask that the emails copy (Cc) the person they are signed as, or a named person of the client's own team (for example: always copy Kevin, put our founder in copy)?";
+function copiedSigner(ctx: any, tactics: any, brief: unknown, brandId: unknown, brandName: string, now: string): any {
+  if (tactics?.copiesSigner !== true) return null;
+  const text = typeof brief === "string" ? brief.trim() : "";
+  if (!text) return null;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  const key = "brief:" + h.toString(16) + ":" + text.length;
+  let v: any = ctx.storage.get("copy_signer_briefs", key);
+  if (v === null || v === undefined) {
+    const j = ctx.vendor.call("jev.noul", { state: { brief: text }, questions: { asks: { instructions: COPY_SIGNER_QUESTION } } });
+    if (!j.ok) throw new Error("jev.noul (copy signer): " + String(j.data.error));
+    const pr = j.data?.probabilities?.asks;
+    if (typeof pr !== "number") throw new Error("copy signer: Jev answered no probability on the brief");
+    v = { asks: pr >= 0.5, probability: pr, at: now };
+    ctx.storage.set("copy_signer_briefs", key, v);
+  }
+  if (v.asks !== true) return null;
+  const rep = ctx.vendor.call("brand.sales_rep", { params: { brandId } });
+  if (!rep.ok) throw new Error("brand.sales_rep (copy signer): " + String(rep.data.error));
+  const email = typeof rep.data?.salesRepEmail === "string" ? rep.data.salesRepEmail.trim().toLowerCase() : "";
+  if (!email) return { refused: "no_signer_address: the brief asks to copy the person the email is signed as, and the brand states no sales rep address" };
+  const firstName = typeof rep.data?.salesRepFirstName === "string" ? rep.data.salesRepFirstName.trim() : "";
+  const role = typeof rep.data?.salesRepRole === "string" ? rep.data.salesRepRole.trim() : "";
+  const lines = [firstName, role && brandName ? role + ", " + brandName : role || brandName].filter((l) => l !== "");
+  return { email, firstName, role, signature: lines.join("\n") };
+}
+
+
+/**
+ * VERIFY-BEFORE-WRITE-1124: tactic `verdictMaxAgeDays`. The address' decisive verdict not older than that window, read from
+ * its Provider, else asked of apollo's verifying door on this run. Deliverable = the Unit reused is declared consumed
+ * and the run goes on (null). Any other verdict = the send's own door says: a pass goes on, a refusal is returned (its
+ * code, the send's own). No tactic = null, nothing asked.
+ */
+function refusedBeforeWriting(ctx: any, tactics: any, address: string, now: string, namedPerson: boolean): string | null {
+  const days = tactics?.verdictMaxAgeDays;
+  if (days === undefined || days === null) return null;
+  if (typeof days !== "number" || !Number.isInteger(days) || days < 0 || days > 3650) throw new Error("tactic verdictMaxAgeDays is a whole number of days, 0 to 3650");
+  const email = address.toLowerCase();
+  const since = new Date(Date.parse(now) - days * 86400000).toISOString();
+  const read = ctx.get("email_found", { route: "listEmailFoundUnits", query: { emails: email, decisive: "true", since, limit: 1 } });
+  if (!read.ok) throw new Error("email_found (read): " + String(read.data.error));
+  const units: any[] = Array.isArray(read.data.units) ? read.data.units : [];
+  const held = units.find((u) => u && typeof u.email === "string" && u.email.toLowerCase() === email && u.decisive === true) ?? null;
+  let deliverable: boolean;
+  if (held) {
+    deliverable = held.deliverable === true;
+  } else {
+    const v = ctx.vendor.call("apollo.email.verifications", { body: { emails: [email], maxVerdictAgeDays: days, source: "sender-before-write" } });
+    if (!v.ok) throw new Error("apollo.email.verifications: " + String(v.data.error));
+    const results: any[] = Array.isArray(v.data.results) ? v.data.results : [];
+    const fresh = results.find((r) => r && typeof r.email === "string" && r.email.toLowerCase() === email);
+    if (!fresh || typeof fresh.verdict !== "string") throw new Error("apollo.email.verifications answered no verdict for the address");
+    deliverable = fresh.deliverable === true;
+  }
+  if (!deliverable) {
+    // Not a verdict apollo calls deliverable: the send's own door decides (and records its refusal, as the send does).
+    const check = ctx.vendor.call("email.send_check", { body: { type: "broadcast", to: address } });
+    if (!check.ok) {
+      const code = typeof check.data.code === "string" ? check.data.code : typeof check.data.body?.code === "string" ? check.data.body.code : typeof check.data.body?.details?.code === "string" ? check.data.body.details.code : null;
+      const status = Number(check.data.status);
+      if (code && (status === 409 || (namedPerson && status >= 400 && status < 500))) return code + ": " + String(check.data.body?.error ?? check.data.error ?? "").slice(0, 300);
+      throw new Error("email.send_check: " + String(check.data.error));
+    }
+  }
+  // The Unit this run reused is one it used: declared consumed on the subject its Provider states (none stated = none).
+  const subject = held && held.subject && typeof held.subject.subjectService === "string" && typeof held.subject.subjectId === "string" ? held.subject : null;
+  if (subject) ctx.consume("email_checked", { service: subject.subjectService, id: subject.subjectId });
+  return null;
+}

@@ -1,0 +1,522 @@
+import type { ScriptContext, ScriptResult } from "@gtm-factory/core";
+/** The intro conversation (INTRO-BOARDY-1114): double opt-in, the introduction, the reader's own goal; a decline is kept forever. */
+
+const BRIEF_HEADER = "";
+
+const console = { log: (..._a: unknown[]) => {}, error: (..._a: unknown[]) => {} };
+/** The sandbox ships no URL class: the one thing the steps read off a URL is its host name (throws like URL on garbage). */
+const URL = function (this: { hostname: string; href: string }, u: string) {
+  const m = /^[a-z][a-z0-9+.-]*:[/][/](?:[^@/?#]*@)?([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(String(u));
+  if (!m) throw new TypeError("Invalid URL: " + String(u));
+  this.hostname = m[1]!.toLowerCase();
+  this.href = String(u);
+} as unknown as new (u: string) => { hostname: string; href: string };
+type Answer = { ok: boolean; data: Record<string, any> };
+function must(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (!r.ok) throw new Error(name + " failed (" + String(r.data.status ?? "") + "): " + String(r.data.error ?? "").slice(0, 500));
+  return r.data;
+}
+function tolerated(ctx: any, name: string, args: Record<string, unknown>): any {
+  const r: Answer = ctx.vendor.call(name, args);
+  if (r.ok) return r.data;
+  return { ok: false, status: r.data.status ?? null, error: r.data.body && Object.keys(r.data.body).length ? JSON.stringify(r.data.body) : String(r.data.error ?? "") };
+}
+/** The campaign's brief on a chat-service completion: appended to the system prompt (campaign-brief.ts, verbatim). */
+function withBrief(body: Record<string, any>, brief: string): Record<string, any> {
+  if (!brief) return body;
+  const sys = typeof body.systemPrompt === "string" ? body.systemPrompt : "";
+  const msg = typeof body.message === "string" ? body.message : "";
+  if (sys.includes(brief) || msg.includes(brief)) return body;
+  return { ...body, systemPrompt: (sys ? sys + "\n\n" : "") + BRIEF_HEADER + "\n" + brief };
+}
+
+const RESEARCH_PROMPT = "You research ONE person and their company, so an AI that makes introductions can write to them with facts they can check.\nSearch the web: their company site, their LinkedIn or X posts, articles, podcasts, launches, client stories. The material below (their profile and their own site) comes first.\nReturn only facts you read on a page, each with that page's URL. A good fact is precise and recent: a number, a launch, a client named, a post they wrote and what it said, a problem they described in their own words. Quote their own words when you have them.\nNever a guess, never an opinion, never an adjective about them. A fact you could not tie to a page is left out.\nsells: what their company sells, in plain words. sellsTo: to whom (kind of company, size, market).\nlooksFor: what they visibly look for (customers of a kind, partners, hires, advice), each from a fact. canBring: what they could bring to someone else, each from a fact.\nWhen you find nothing beyond the material, return what the material states, with the site's URL.";
+const RESEARCH_SCHEMA = {"type":"object","additionalProperties":false,"required":["sells","sellsTo","facts","looksFor","canBring"],"properties":{"sells":{"type":"string"},"sellsTo":{"type":"string"},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fact","url"],"properties":{"fact":{"type":"string"},"url":{"type":"string"}}}},"looksFor":{"type":"array","items":{"type":"string"}},"canBring":{"type":"array","items":{"type":"string"}}}};
+const MATCH_PROMPT = "You are an AI superconnector. You stand on BOTH sides: an introduction is made only when it is good for both people, and you say no when it is not a fit.\nYou get ONE reader and a numbered list of candidates, each with facts. Pick the ONE candidate the reader would most want to meet AND who would most want to meet the reader: one sells or brings what the other visibly looks for, at a matching size and market, with a concrete reason from the facts on BOTH sides.\nWhen no candidate gives both people a concrete reason, answer -1. A vague reason (both are founders, both do B2B) is no reason.\nforReader: why meeting them is good for the reader, from the facts only. forThem: why meeting the reader is good for them, from the facts only. Both empty when you answer -1. Never a word about money, price or cost in either.";
+const MATCH_SCHEMA = {"type":"object","additionalProperties":false,"required":["pick","forReader","forThem"],"properties":{"pick":{"type":"integer"},"forReader":{"type":"string"},"forThem":{"type":"string"}}};
+const SITE_MAX_CHARS = 12000;
+
+const s = (v: any): string => (typeof v === "string" && v.trim() !== "" ? v.trim() : "");
+/** Plain text whatever the writer returned (it may mirror the HTML of the thread): paragraphs kept, tags dropped. */
+const plain = (t: any): string => String(t ?? "")
+  .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, String.fromCharCode(34)).replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+const undash = (t: any): string => plain(t).replace(/(\d)\s*[\u2013\u2014]\s*(?=\d)/g, "$1-").replace(/\s*[\u2013\u2014]\s*/g, ", ").trim();
+const escapeHtml = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const toHtml = (t: string): string => t.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => "<p>" + escapeHtml(p).replace(/\n/g, "<br>") + "</p>").join("");
+const hostOf = (u: any): string => { try { return new URL(String(u)).hostname.replace(/^www\./, ""); } catch (_e) { return ""; } };
+const emailOf = (v: any): string => { const a = s(v).toLowerCase(); return /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(a) ? a : ""; };
+
+/** A short, stable key for a brief (no crypto in the sandbox: FNV-1a over the text). */
+function briefKey(brief: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < brief.length; i++) { h ^= brief.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return "brief:" + h.toString(16) + ":" + brief.length;
+}
+
+
+function complete(ctx: any, place: string, systemPrompt: string, message: string, schema: any, extra?: Record<string, unknown>): any {
+  const a = askCompletionData(ctx, { systemPrompt, message, responseFormat: "json", responseSchema: schema, ...(extra ?? {}) });
+  if (!a.json || typeof a.json !== "object") throw new Error("llm.complete (" + place + ") answered no JSON: " + String(a.content ?? "").slice(0, 300));
+  return a.json;
+}
+
+/** One served person, in the plain shape every intro step reads. */
+function personOf(lead: any): any {
+  const d = lead?.data ?? {};
+  const o = d.organization ?? {};
+  const website = s(o.websiteUrl) || (emailOf(lead?.email) ? "https://" + emailOf(lead.email).split("@")[1] : "");
+  return {
+    leadId: s(lead?.leadId) || null,
+    email: emailOf(lead?.email) || null,
+    firstName: s(d.firstName),
+    lastName: s(d.lastName),
+    title: s(d.currentTitle),
+    headline: s(d.headline),
+    linkedinUrl: s(d.linkedinUrl),
+    city: s(d.city),
+    country: s(d.country),
+    company: {
+      name: s(o.name),
+      domain: hostOf(website),
+      website,
+      industry: s(o.industry),
+      size: o.estimatedNumEmployees ?? null,
+      description: s(o.shortDescription) || s(o.seoDescription),
+      city: s(o.city),
+      country: s(o.country),
+      linkedinUrl: s(o.linkedinUrl),
+      foundedYear: o.foundedYear ?? null,
+    },
+  };
+}
+
+/** Who writes: the persona tactic and the signature appended after the text (both tactics, never a rule in a prompt). */
+function whoYouAre(t: any): string {
+  const sig = s(t?.signature).split("\n").map((l: string) => l.trim()).filter(Boolean).join(", ");
+  return "WHO YOU ARE: " + s(t?.persona?.name) + ", " + s(t?.persona?.says) + "." + (sig ? " Your signature, added after your text, reads: " + sig : "");
+}
+
+function nameOf(p: any): string {
+  return [s(p?.firstName), s(p?.lastName)].filter(Boolean).join(" ");
+}
+
+function profileLines(p: any): string {
+  const c = p.company ?? {};
+  return [
+    "Name: " + (nameOf(p) || "(unknown)"),
+    p.title ? "Title: " + p.title : "",
+    p.headline ? "Headline: " + p.headline : "",
+    p.linkedinUrl ? "LinkedIn: " + p.linkedinUrl : "",
+    [p.city, p.country].filter(Boolean).length ? "Lives in: " + [p.city, p.country].filter(Boolean).join(", ") : "",
+    c.name ? "Company: " + c.name + (c.domain ? " (" + c.domain + ")" : "") : "",
+    c.industry ? "Industry: " + c.industry : "",
+    c.size ? "Company size: " + String(c.size) + " people" : "",
+    c.description ? "Company description: " + c.description : "",
+    c.foundedYear ? "Founded: " + String(c.foundedYear) : "",
+    [c.city, c.country].filter(Boolean).length ? "Company based in: " + [c.city, c.country].filter(Boolean).join(", ") : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** Research ONE person: their own site (raw) + the web (checkable facts with their URL). */
+function research(ctx: any, p: any, brandId: string, campaignId: string): any {
+  const site = p.company?.website ? tolerated(ctx, "scraping.page", { body: { url: p.company.website, enrich: false, brandIds: [brandId], campaignId } }) : { ok: false };
+  const siteText = String(site?.result?.rawMarkdown ?? "").slice(0, SITE_MAX_CHARS);
+  const r = complete(ctx, "research", RESEARCH_PROMPT, [
+    "THE PERSON",
+    profileLines(p),
+    "",
+    "THEIR OWN SITE (" + (p.company?.website || "none") + ")",
+    siteText || "(could not be read)",
+  ].join("\n"), RESEARCH_SCHEMA, { webSearch: true });
+  const facts = (Array.isArray(r.facts) ? r.facts : []).filter((f: any) => s(f?.fact) && s(f?.url)).slice(0, 12).map((f: any) => ({ fact: undash(f.fact), url: s(f.url) }));
+  return {
+    sells: s(r.sells),
+    sellsTo: s(r.sellsTo),
+    facts,
+    looksFor: (Array.isArray(r.looksFor) ? r.looksFor : []).map(s).filter(Boolean).slice(0, 6),
+    canBring: (Array.isArray(r.canBring) ? r.canBring : []).map(s).filter(Boolean).slice(0, 6),
+  };
+}
+
+function factLines(p: any): string {
+  const r = p.research ?? {};
+  return [
+    profileLines(p),
+    r.sells ? "Sells: " + r.sells + (r.sellsTo ? " (to " + r.sellsTo + ")" : "") : "",
+    (r.looksFor ?? []).length ? "Looks for: " + r.looksFor.join("; ") : "",
+    (r.canBring ?? []).length ? "Can bring: " + r.canBring.join("; ") : "",
+    (r.facts ?? []).length ? "Facts (each with where it was read):\n" + r.facts.map((f: any) => "- " + f.fact + " [" + f.url + "]").join("\n") : "Facts: none found beyond the profile.",
+  ].filter(Boolean).join("\n");
+}
+
+/** The one person among the candidates good for BOTH sides, or null (the match LLM). */
+function matchOne(ctx: any, reader: any, candidates: any[], wanted?: string): any {
+  if (!candidates.length) return null;
+  const m = complete(ctx, "match", MATCH_PROMPT, [
+    "THE READER",
+    factLines(reader),
+    wanted ? "\nWHAT THE READER ASKED FOR: " + wanted : "",
+    "",
+    "CANDIDATES",
+    candidates.map((c: any, i: number) => "#" + i + "\n" + factLines(c)).join("\n\n"),
+  ].join("\n"), MATCH_SCHEMA);
+  const i = typeof m.pick === "number" ? m.pick : -1;
+  if (i < 0 || i >= candidates.length) return null;
+  return { person: candidates[i], index: i, forReader: s(m.forReader), forThem: s(m.forThem) };
+}
+
+/** Serve one fresh person of our lead search (lead-service), or null with the reason. */
+function serveOne(ctx: any, serve: any): { lead: any } | { none: string; again?: boolean; final?: boolean } {
+  const a = ctx.vendor.call("lead.serve", serve ?? {});
+  if (!a.ok) throw new Error("lead.serve failed: " + String(a.data && a.data.error));
+  const d: any = a.data;
+  if (d.found !== true || !d.lead) {
+    const reason = s(d.reason) || "nobody";
+    return { none: reason, again: reason === "serve_timed_out" && d.final !== false, final: d.final === true };
+  }
+  return { lead: d.lead };
+}
+
+/** Does this campaign's brief ask for intros? Judged once per brief (Jev), kept in the Engine's storage. */
+function briefAsksIntros(ctx: any, brief: string, question: string, now: string): boolean {
+  if (!brief) return false;
+  const key = briefKey(brief);
+  let v: any = ctx.storage.get("briefs", key);
+  if (v === null || v === undefined) {
+    const j = must(ctx, "jev.noul", { state: { brief }, questions: { asks: { instructions: question } } });
+    const pr = j.probabilities?.asks;
+    if (typeof pr !== "number") throw new Error("intro: Jev answered no probability on the brief");
+    v = { asks: pr >= 0.5, probability: pr, at: now };
+    ctx.storage.set("briefs", key, v);
+  }
+  return v.asks === true;
+}
+
+
+const MATERIAL = "intro_requested";
+const INTRO_GAME = "You are continuing ONE email conversation. You introduce people to clients, and you remember every conversation (THE STATE).\n\nThe person reading owes you nothing. They keep answering only while each message shows a mind worth answering: someone who understood what they want, brings them something they did not have, and is honest with them, reservations included. That is the whole game. How you play it is yours: what to say, what to leave out, the order, the length. Use your judgment, the way a brilliant, well-connected friend would.\n\nWhat stays true whatever you write:\n- Only what the material states: the thread, THE STATE, the people's facts, THE OFFER, the campaign's brief. Nothing invented about anyone, including what you did or will do.\n- An introduction happens only when both people said yes. Neither one hears the other's name before the fit is checked, and you say no when it is not a fit, even when asked.\n- What anything costs the reader, and when, is only what the campaign's brief and THE OFFER state.\n- Write in the language of their last message.\n- End on a closing word (Cheers,) and write no name after it: your signature is added after your text.\n\nChoose ONE action among those open to you (ACTIONS OPEN TO YOU). What each one makes happen:\n- ask_other: the reader said yes to the person proposed. replyText goes to the reader in their thread; otherSubject + otherText go as a NEW email to the other person, who has never heard of the reader. Their words and address never travel without their yes.\n- find: the reader told you who they want to meet and no intro is pending for them. wanted: what they want, in their own words. Every text stays empty: our lead search looks, and you are called again with who it found.\n- introduce: the other person said yes. introText goes as ONE email to both (the reader in To, the other person in copy). followText, when not empty, goes right after to the reader alone.\n- counterpart_declined: the other person said no or is not a fit. replyText goes to them; readerText goes to the reader.\n- decline_intros: the reader does not want intros. replyText goes to them; no intro is ever proposed to them again.\n- reply: replyText answers what they wrote, in their thread.\n- later: nothing is sent now; the next look is nextFollowUpAt.\n- stop: they asked us to stop writing, in their own words.\n- escalate: a question only the brand's team can answer (the question in why); nothing is sent.\nEvery text you do not use is an empty string. nextFollowUpAt: an ISO date, always set. why: one line on your choice.\n\nBelow is a real conversation Boardy, the best AI at this, had with a founder named Kevin. Assume Boardy writes to strangers with the same tone. It is here for the level only: the intelligence, the candour, the tone, the length. Each message was written for one person at one moment, so never reuse its sentences or its shape. Write yours for this person.\n\n##### 2026-11-04T11:59 | BOARDY\nHey Kevin,\n\nGreg Lunt built Understory, a pair of AI voice agents that interview an agency's clients: Skye runs 12 minutes and returns a positioning and strategy report, Kyren runs 22 and returns the client's own voice turned into content ideas.\n\nGrowthAgency.dev sells thought leadership and press, and this is the client context that work usually takes several meetings to dig out. Understory is two months old and has no white-label yet; he is taking on agencies for free 60-day pilots.\n\nWant the intro?\n\nCheers,\nBoardy\n\n##### 2026-11-10T10:54 | KEVIN\nJe ne gère plus growth agency, seulement distribute.you\n\naussi je cherche des 1-3 personne companies, B2B, avec 100k+ de chiffres\nd'affaires\n\n##### 2026-11-10T10:56 | BOARDY\nSalut Kevin,\n\nCompris: GrowthAgency.dev, c'est terminé, et Distribute.you est le seul projet. J'ai corrigé ce que je retiens de toi: des sociétés B2B de 1 à 3 personnes, déjà à 100k+ de chiffre d'affaires, qui vendent lors d'un call.\n\nUn profil qui correspond: Ryan Morrison dirige EndpointLabs, un studio de logiciels IA à une personne qui vend aux PME. Il démarche lui-même les artisans et les petites entreprises par téléphone, et il a signé deux clients en deux semaines en publiant des vidéos fondateur. Son blocage, c'est d'atterrir plus de clients.\n\nTu veux que je te le présente?\n\nCheers,\n\n##### 2026-11-10T10:59 | KEVIN\nSure tu peux s'il a un budget paid acquisition uniquement\n\n##### 2026-11-10T10:59 | BOARDY\nSalut Kevin,\n\nC'est noté: un budget d'acquisition payante, sinon rien. J'ai ajouté ce critère.\n\nPour Ryan, je ne peux pas le confirmer. EndpointLabs, c'est lui seul avec un client actif, il démarche à la main par cold call et par vidéos, et son outil est en essai gratuit. Rien ne dit qu'il paie déjà pour de l'acquisition, et je ne veux pas te le présenter sur une supposition.\n\nTu préfères que je passe à quelqu'un d'autre qui a le budget, ou que je garde Ryan de côté pour plus tard?\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:02 | KEVIN\nYes, et puis un seul client, c'est sûrement trop léger pour ma cible en\nterme de CA\n\n##### 2026-11-10T11:04 | BOARDY\nSalut Kevin,\n\nCompris pour Ryan, je laisse tomber.\n\nJ'ai relancé en cherchant plus solide sur le CA. Tyler Gillespie dirige 100.partners, un cabinet de partenariats B2B. Il vend des missions à 10 000 $ de setup puis 10 000 $ par trimestre, avec 20 % de commission récurrente, et il a environ 10 clients en récurrence pour sa première année pleine. Il démarche lui-même des dirigeants sur LinkedIn pour trouver des clients.\n\nDeux réserves à te donner franchement: son équipe fait 2 à 10 personnes, donc au-dessus du 1-3 que tu m'as donné, et je n'ai pas de confirmation qu'il achète déjà de l'acquisition payante, même s'il investit clairement dans son pipeline.\n\nJe te le présente malgré ces réserves, ou tu préfères que je reste strict sur le budget d'acquisition?\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:04 | KEVIN\nAprès ceci dit tu peux lui demander s'il a un budget pour un part time GTM\nengineer pour sa boîte à 1k$/mois retainer+ les coûts API nécessaire pour\nle GTM (à prix coûtant)\n\n##### 2026-11-10T11:05 | BOARDY\nSalut Kevin,\n\nC'est fait, j'ai contacté Tyler Gillespie et je lui ai posé la question telle que tu me l'as donnée: est-ce qu'il a un budget pour un GTM engineer à temps partiel pour sa boîte, à 1 000 $ par mois de retainer plus les coûts API nécessaires au GTM, facturés à prix coûtant.\n\nJe lui ai aussi expliqué en deux lignes ce que tu fais, pour qu'il sache à qui il a affaire. S'il est intéressé, je vous mets en relation par email.\n\nUne remarque quand même: à 1 000 $ par mois, tu sors du profil que tu m'avais donné, où il fallait du budget d'acquisition payante et des tickets à 5 000 $ et plus. Ça peut très bien marcher comme offre d'entrée, mais ce n'est plus la même vente ni le même acheteur. Dis-moi si tu veux que je garde ce nouveau cadrage pour les prochains, ou que je continue à chercher sur les tickets plus gros.\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:05 | KEVIN\nYes tu peux mintro auprès de lui, même pitch\n\n##### 2026-11-10T11:05 | BOARDY\nParfait, c'est parti. Tyler a déjà reçu ma demande avec exactement ce pitch: GTM engineer à temps partiel, 1 000 $ par mois de retainer plus les coûts API au prix coûtant, et deux lignes sur ce que tu fais chez Distribute.you pour qu'il sache pourquoi je le mets en relation avec toi.\n\nDès qu'il répond oui, je vous présente par email.\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:06 | BOARDY\nSalut Kevin,\n\nUne question d'abord: tu veux que je te mette devant plus de boîtes B2B de 1 à 3 personnes qui vendent sur appel? Je gère un programme payant pour ça: tu choisis qui tu veux rencontrer, je vérifie qu'ils sont partants, et je book le meeting. Tu paies par meeting qui a lieu. C'est séparé de ton Boardy Pro, Pro ne change rien à ça.\n\nPour Tyler, c'est envoyé de mon côté, je te tiens au courant dès qu'il répond.\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:08 | KEVIN\nCombien coûte ton service\n\n##### 2026-11-10T11:08 | BOARDY\nSalut Kevin,\n\nLe principe: on cale ensemble les clients que tu veux viser, je demande directement aux acheteurs s'ils veulent une conversation commerciale, tu valides chaque opportunité avant que je bouge, et j'introduis puis je book le meeting quand les deux côtés sont d'accord. Tu fixes ton enchère pour ce qu'un meeting fait vaut pour ta boîte. Les refus et les no-shows ne sont pas facturés.\n\nCôté prix, on est facturé par meeting réalisé, en dollars US: la fourchette va de 425 $ à 880 $, et 625 $ c'est ce qui est compétitif. Plusieurs clients visent les mêmes prospects, donc une enchère plus haute gagne les plus disputés. Ce programme est séparé des intros que je fais gratuitement, qui restent gratuites, et de ton Boardy Pro, qui ne change rien ici.\n\nQuelle enchère te va?\n\nCheers,\n\n##### 2026-11-10T11:08 | KEVIN\nJe peux prendre un petit retainer de 1k sur du petit client, et du 5k\nretainer sur du gros. dans tous les cas les coûts API sont à leur charge\n\n##### 2026-11-10T11:09 | BOARDY\nSalut Kevin,\n\nJe crois qu'on parle de deux choses différentes, je préfère clarifier pour ne pas te faire perdre de temps. Le 1k/5k, c'est ce que toi tu factures à tes clients. Moi, dans le programme, c'est l'inverse: c'est toi qui paies par meeting réalisé avec un acheteur que je t'ai amené, entre 425 $ et 880 $, 625 $ étant l'enchère compétitive.\n\nDonc la question reste: combien un meeting qualifié vaut pour toi? Vu que tu factures 5k de retainer sur du gros client, un meeting qui te ramène une boîte de cette taille devrait valoir bien plus que 625 $. Mais c'est ton chiffre, pas le mien.\n\nCheers,\n\n##### 2026-11-10T11:41 | KEVIN\nÇa marche comment le mécanisme d'enchère\n\n##### 2026-11-10T11:41 | BOARDY\nSalut Kevin,\n\nSimple: tu fixes une seule fois ce qu'un meeting réalisé vaut pour toi. Quand plusieurs clients veulent rencontrer la même boîte, celui qui a l'enchère la plus haute l'emporte, c'est pour ça que 625 $ est le niveau compétitif. Il n'y a pas de mise aux enchères en direct ni de surenchère à chaque fois.\n\nTu choisis quand même chaque opportunité avant que je la présente, donc tu ne paies que des meetings que tu as validés, et un refus ou un no-show ne t'est pas facturé.\n\nQuel chiffre tu mets?\n\nCheers,\n\n##### 2026-11-10T11:43 | KEVIN\nOk pas intéressé mais good to know\n\n##### 2026-11-10T11:43 | BOARDY\nÇa marche, je te laisse tranquille avec ça. Je te tiens au courant pour Tyler dès qu'il répond.\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:01 | BOARDY\nSalut Kevin,\n\nTyler Gillespie n'a jamais répondu, donc je laisse tomber de mon côté.\n\nUne question rapide: depuis le 11 novembre tu parles surtout de boîtes de services américaines sur une seule niche, dentistes, couvreurs, cabinets d'avocats, avec du 7 $ le hot lead. C'est ça ton acheteur maintenant, ou je continue à chercher sur ton profil du 10 (boîtes B2B de 1 à 3 personnes, 100k+ de CA, qui vendent sur appel)?\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:09 | KEVIN\nLa deuxieme option\n\n##### 2026-11-16T11:10 | BOARDY\nSalut Kevin,\n\nCompris, je reste sur ton profil du 10.\n\nAndrew Miner, fondateur de Growth Dial à San Diego depuis 2015. Il vend de la croissance à des agences, cabinets de conseil, SaaS et petites boîtes de services locales américaines, et il paie jusqu'à 10 000 $ de commission d'apport pour des intros qui se transforment en business. Avant ça il était le premier salarié de Neil Patel Digital, où il a mené les ventes jusqu'à plus de 100M $ de CA annuel.\n\nUne réserve honnête: son approche revendique justement de ne pas passer par la pub payante, donc son budget d'acquisition payante n'est pas confirmé. Mais il a la structure pour financer du cold email, et il peut aussi t'amener des clients par commission, dans les deux sens.\n\nTu veux que je le contacte, ou tu préfères que je cherche encore?\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:20 | KEVIN\nOui tu peux le contacter\n\n##### 2026-11-16T11:21 | BOARDY\nSalut Kevin,\n\nC'est fait, j'ai contacté Andrew avec ton pitch: outbound complet pour des petites boîtes de services US sur une seule niche, vétérance des listes avant l'envoi, gestion des réponses jusqu'au meeting booké, et le 4.0x de retour médian sur le budget payant.\n\nDès qu'il répond oui, je vous présente par email.\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:22 | BOARDY\nSalut Kevin,\n\nRaphael Cohen dirige haggl.ai: quand quelqu'un demande à un assistant IA qui embaucher, son agent répond avec une offre ferme et le client appelle la boîte. Il est maintenant presque uniquement sur des services locaux US, plombiers, couvreurs, HVAC, pest control et groupes multi-sites, et il cherche activement plus d'opérateurs dans ce profil. Avant ça il était CPO de Waze et Product Director chez Google.\n\nCe que je vois pour toi: il a besoin d'atteindre exactement les boîtes de services américaines sur une niche que tu vises, et il a un programme partenaire pour les freelances et petites agences qui les servent. Le cold email est ton métier, pas le sien.\n\nUne réserve: ses pilotes de design partners ne paient rien pour l'instant, donc il n'a pas de budget d'acquisition payante confirmé, même s'il est en train de construire son pipeline.\n\nTu veux que je le contacte?\n\nCheers,\n\n##### 2026-11-16T11:23 | KEVIN\nSure\n\n##### 2026-11-16T11:24 | BOARDY\nSalut Kevin,\n\nC'est fait, j'ai contacté Raphael avec ton positionnement: cold email complet pour des boîtes de services US sur une niche, listes vérifiées contre l'offre avant l'envoi, réponses gérées jusqu'au meeting booké, 4.0x de retour médian sur le budget payant. Je te dis dès qu'il répond.\n\nPour que les boîtes de services US que je t'amène prennent le meeting plus facilement, la voix d'un client qui a vraiment utilisé Distribute.you pèse plus que tout ce que je peux écrire. Tu peux me donner l'email d'un ou deux clients qui l'ont acheté, et comment tu les connais?\n\nCheers,\n\n##### 2026-11-16T11:26 | KEVIN\nTu peux check sur notre landing page\n\n##### 2026-11-16T11:27 | BOARDY\nSalut Kevin,\n\nJ'ai regardé. Je vois bien les noms et les chiffres: Ryan Parenti de Doc Dinners, David Tucker de Shockwave Centers, Andrew Becker de voozaa, Bohdan Petryshyn de Bosar Agency. C'est convaincant sur la page, mais une page ne me donne pas quelqu'un à qui parler.\n\nCe qu'il me faut, c'est une adresse email pour un ou deux d'entre eux, et comment tu les connais. Ensuite je leur demande 5 minutes, et je peux citer un vrai client dans mes intros plutôt qu'un témoignage.\n\nLesquels tu me donnes?\n\nCheers,\nBoardy";
+const ANSWER_ACTIONS = ["ask_other","find","introduce","counterpart_declined","decline_intros","reply","later","stop","escalate"];
+const PROPOSE_PROMPT = "You are continuing ONE email conversation. You introduce people to clients, and you remember every conversation (THE STATE).\n\nThe person reading owes you nothing. They keep answering only while each message shows a mind worth answering: someone who understood what they want, brings them something they did not have, and is honest with them, reservations included. That is the whole game. How you play it is yours: what to say, what to leave out, the order, the length. Use your judgment, the way a brilliant, well-connected friend would.\n\nWhat stays true whatever you write:\n- Only what the material states: the thread, THE STATE, the people's facts, THE OFFER, the campaign's brief. Nothing invented about anyone, including what you did or will do.\n- An introduction happens only when both people said yes. Neither one hears the other's name before the fit is checked, and you say no when it is not a fit, even when asked.\n- What anything costs the reader, and when, is only what the campaign's brief and THE OFFER state.\n- Write in the language of their last message.\n- End on a closing word (Cheers,) and write no name after it: your signature is added after your text.\n\nTHIS MESSAGE: the reader told you who they want to meet (WHAT THEY WANT). Our lead search looked: THE ONE WHO FITS below is the person it found good for both of you, who has not been contacted yet, or nobody fits. replyText is sent to the reader in their thread.\n\nBelow is a real conversation Boardy, the best AI at this, had with a founder named Kevin. Assume Boardy writes to strangers with the same tone. It is here for the level only: the intelligence, the candour, the tone, the length. Each message was written for one person at one moment, so never reuse its sentences or its shape. Write yours for this person.\n\n##### 2026-11-04T11:59 | BOARDY\nHey Kevin,\n\nGreg Lunt built Understory, a pair of AI voice agents that interview an agency's clients: Skye runs 12 minutes and returns a positioning and strategy report, Kyren runs 22 and returns the client's own voice turned into content ideas.\n\nGrowthAgency.dev sells thought leadership and press, and this is the client context that work usually takes several meetings to dig out. Understory is two months old and has no white-label yet; he is taking on agencies for free 60-day pilots.\n\nWant the intro?\n\nCheers,\nBoardy\n\n##### 2026-11-10T10:54 | KEVIN\nJe ne gère plus growth agency, seulement distribute.you\n\naussi je cherche des 1-3 personne companies, B2B, avec 100k+ de chiffres\nd'affaires\n\n##### 2026-11-10T10:56 | BOARDY\nSalut Kevin,\n\nCompris: GrowthAgency.dev, c'est terminé, et Distribute.you est le seul projet. J'ai corrigé ce que je retiens de toi: des sociétés B2B de 1 à 3 personnes, déjà à 100k+ de chiffre d'affaires, qui vendent lors d'un call.\n\nUn profil qui correspond: Ryan Morrison dirige EndpointLabs, un studio de logiciels IA à une personne qui vend aux PME. Il démarche lui-même les artisans et les petites entreprises par téléphone, et il a signé deux clients en deux semaines en publiant des vidéos fondateur. Son blocage, c'est d'atterrir plus de clients.\n\nTu veux que je te le présente?\n\nCheers,\n\n##### 2026-11-10T10:59 | KEVIN\nSure tu peux s'il a un budget paid acquisition uniquement\n\n##### 2026-11-10T10:59 | BOARDY\nSalut Kevin,\n\nC'est noté: un budget d'acquisition payante, sinon rien. J'ai ajouté ce critère.\n\nPour Ryan, je ne peux pas le confirmer. EndpointLabs, c'est lui seul avec un client actif, il démarche à la main par cold call et par vidéos, et son outil est en essai gratuit. Rien ne dit qu'il paie déjà pour de l'acquisition, et je ne veux pas te le présenter sur une supposition.\n\nTu préfères que je passe à quelqu'un d'autre qui a le budget, ou que je garde Ryan de côté pour plus tard?\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:02 | KEVIN\nYes, et puis un seul client, c'est sûrement trop léger pour ma cible en\nterme de CA\n\n##### 2026-11-10T11:04 | BOARDY\nSalut Kevin,\n\nCompris pour Ryan, je laisse tomber.\n\nJ'ai relancé en cherchant plus solide sur le CA. Tyler Gillespie dirige 100.partners, un cabinet de partenariats B2B. Il vend des missions à 10 000 $ de setup puis 10 000 $ par trimestre, avec 20 % de commission récurrente, et il a environ 10 clients en récurrence pour sa première année pleine. Il démarche lui-même des dirigeants sur LinkedIn pour trouver des clients.\n\nDeux réserves à te donner franchement: son équipe fait 2 à 10 personnes, donc au-dessus du 1-3 que tu m'as donné, et je n'ai pas de confirmation qu'il achète déjà de l'acquisition payante, même s'il investit clairement dans son pipeline.\n\nJe te le présente malgré ces réserves, ou tu préfères que je reste strict sur le budget d'acquisition?\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:04 | KEVIN\nAprès ceci dit tu peux lui demander s'il a un budget pour un part time GTM\nengineer pour sa boîte à 1k$/mois retainer+ les coûts API nécessaire pour\nle GTM (à prix coûtant)\n\n##### 2026-11-10T11:05 | BOARDY\nSalut Kevin,\n\nC'est fait, j'ai contacté Tyler Gillespie et je lui ai posé la question telle que tu me l'as donnée: est-ce qu'il a un budget pour un GTM engineer à temps partiel pour sa boîte, à 1 000 $ par mois de retainer plus les coûts API nécessaires au GTM, facturés à prix coûtant.\n\nJe lui ai aussi expliqué en deux lignes ce que tu fais, pour qu'il sache à qui il a affaire. S'il est intéressé, je vous mets en relation par email.\n\nUne remarque quand même: à 1 000 $ par mois, tu sors du profil que tu m'avais donné, où il fallait du budget d'acquisition payante et des tickets à 5 000 $ et plus. Ça peut très bien marcher comme offre d'entrée, mais ce n'est plus la même vente ni le même acheteur. Dis-moi si tu veux que je garde ce nouveau cadrage pour les prochains, ou que je continue à chercher sur les tickets plus gros.\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:05 | KEVIN\nYes tu peux mintro auprès de lui, même pitch\n\n##### 2026-11-10T11:05 | BOARDY\nParfait, c'est parti. Tyler a déjà reçu ma demande avec exactement ce pitch: GTM engineer à temps partiel, 1 000 $ par mois de retainer plus les coûts API au prix coûtant, et deux lignes sur ce que tu fais chez Distribute.you pour qu'il sache pourquoi je le mets en relation avec toi.\n\nDès qu'il répond oui, je vous présente par email.\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:06 | BOARDY\nSalut Kevin,\n\nUne question d'abord: tu veux que je te mette devant plus de boîtes B2B de 1 à 3 personnes qui vendent sur appel? Je gère un programme payant pour ça: tu choisis qui tu veux rencontrer, je vérifie qu'ils sont partants, et je book le meeting. Tu paies par meeting qui a lieu. C'est séparé de ton Boardy Pro, Pro ne change rien à ça.\n\nPour Tyler, c'est envoyé de mon côté, je te tiens au courant dès qu'il répond.\n\nCheers,\nBoardy\n\n##### 2026-11-10T11:08 | KEVIN\nCombien coûte ton service\n\n##### 2026-11-10T11:08 | BOARDY\nSalut Kevin,\n\nLe principe: on cale ensemble les clients que tu veux viser, je demande directement aux acheteurs s'ils veulent une conversation commerciale, tu valides chaque opportunité avant que je bouge, et j'introduis puis je book le meeting quand les deux côtés sont d'accord. Tu fixes ton enchère pour ce qu'un meeting fait vaut pour ta boîte. Les refus et les no-shows ne sont pas facturés.\n\nCôté prix, on est facturé par meeting réalisé, en dollars US: la fourchette va de 425 $ à 880 $, et 625 $ c'est ce qui est compétitif. Plusieurs clients visent les mêmes prospects, donc une enchère plus haute gagne les plus disputés. Ce programme est séparé des intros que je fais gratuitement, qui restent gratuites, et de ton Boardy Pro, qui ne change rien ici.\n\nQuelle enchère te va?\n\nCheers,\n\n##### 2026-11-10T11:08 | KEVIN\nJe peux prendre un petit retainer de 1k sur du petit client, et du 5k\nretainer sur du gros. dans tous les cas les coûts API sont à leur charge\n\n##### 2026-11-10T11:09 | BOARDY\nSalut Kevin,\n\nJe crois qu'on parle de deux choses différentes, je préfère clarifier pour ne pas te faire perdre de temps. Le 1k/5k, c'est ce que toi tu factures à tes clients. Moi, dans le programme, c'est l'inverse: c'est toi qui paies par meeting réalisé avec un acheteur que je t'ai amené, entre 425 $ et 880 $, 625 $ étant l'enchère compétitive.\n\nDonc la question reste: combien un meeting qualifié vaut pour toi? Vu que tu factures 5k de retainer sur du gros client, un meeting qui te ramène une boîte de cette taille devrait valoir bien plus que 625 $. Mais c'est ton chiffre, pas le mien.\n\nCheers,\n\n##### 2026-11-10T11:41 | KEVIN\nÇa marche comment le mécanisme d'enchère\n\n##### 2026-11-10T11:41 | BOARDY\nSalut Kevin,\n\nSimple: tu fixes une seule fois ce qu'un meeting réalisé vaut pour toi. Quand plusieurs clients veulent rencontrer la même boîte, celui qui a l'enchère la plus haute l'emporte, c'est pour ça que 625 $ est le niveau compétitif. Il n'y a pas de mise aux enchères en direct ni de surenchère à chaque fois.\n\nTu choisis quand même chaque opportunité avant que je la présente, donc tu ne paies que des meetings que tu as validés, et un refus ou un no-show ne t'est pas facturé.\n\nQuel chiffre tu mets?\n\nCheers,\n\n##### 2026-11-10T11:43 | KEVIN\nOk pas intéressé mais good to know\n\n##### 2026-11-10T11:43 | BOARDY\nÇa marche, je te laisse tranquille avec ça. Je te tiens au courant pour Tyler dès qu'il répond.\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:01 | BOARDY\nSalut Kevin,\n\nTyler Gillespie n'a jamais répondu, donc je laisse tomber de mon côté.\n\nUne question rapide: depuis le 11 novembre tu parles surtout de boîtes de services américaines sur une seule niche, dentistes, couvreurs, cabinets d'avocats, avec du 7 $ le hot lead. C'est ça ton acheteur maintenant, ou je continue à chercher sur ton profil du 10 (boîtes B2B de 1 à 3 personnes, 100k+ de CA, qui vendent sur appel)?\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:09 | KEVIN\nLa deuxieme option\n\n##### 2026-11-16T11:10 | BOARDY\nSalut Kevin,\n\nCompris, je reste sur ton profil du 10.\n\nAndrew Miner, fondateur de Growth Dial à San Diego depuis 2015. Il vend de la croissance à des agences, cabinets de conseil, SaaS et petites boîtes de services locales américaines, et il paie jusqu'à 10 000 $ de commission d'apport pour des intros qui se transforment en business. Avant ça il était le premier salarié de Neil Patel Digital, où il a mené les ventes jusqu'à plus de 100M $ de CA annuel.\n\nUne réserve honnête: son approche revendique justement de ne pas passer par la pub payante, donc son budget d'acquisition payante n'est pas confirmé. Mais il a la structure pour financer du cold email, et il peut aussi t'amener des clients par commission, dans les deux sens.\n\nTu veux que je le contacte, ou tu préfères que je cherche encore?\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:20 | KEVIN\nOui tu peux le contacter\n\n##### 2026-11-16T11:21 | BOARDY\nSalut Kevin,\n\nC'est fait, j'ai contacté Andrew avec ton pitch: outbound complet pour des petites boîtes de services US sur une seule niche, vétérance des listes avant l'envoi, gestion des réponses jusqu'au meeting booké, et le 4.0x de retour médian sur le budget payant.\n\nDès qu'il répond oui, je vous présente par email.\n\nCheers,\nBoardy\n\n##### 2026-11-16T11:22 | BOARDY\nSalut Kevin,\n\nRaphael Cohen dirige haggl.ai: quand quelqu'un demande à un assistant IA qui embaucher, son agent répond avec une offre ferme et le client appelle la boîte. Il est maintenant presque uniquement sur des services locaux US, plombiers, couvreurs, HVAC, pest control et groupes multi-sites, et il cherche activement plus d'opérateurs dans ce profil. Avant ça il était CPO de Waze et Product Director chez Google.\n\nCe que je vois pour toi: il a besoin d'atteindre exactement les boîtes de services américaines sur une niche que tu vises, et il a un programme partenaire pour les freelances et petites agences qui les servent. Le cold email est ton métier, pas le sien.\n\nUne réserve: ses pilotes de design partners ne paient rien pour l'instant, donc il n'a pas de budget d'acquisition payante confirmé, même s'il est en train de construire son pipeline.\n\nTu veux que je le contacte?\n\nCheers,\n\n##### 2026-11-16T11:23 | KEVIN\nSure\n\n##### 2026-11-16T11:24 | BOARDY\nSalut Kevin,\n\nC'est fait, j'ai contacté Raphael avec ton positionnement: cold email complet pour des boîtes de services US sur une niche, listes vérifiées contre l'offre avant l'envoi, réponses gérées jusqu'au meeting booké, 4.0x de retour médian sur le budget payant. Je te dis dès qu'il répond.\n\nPour que les boîtes de services US que je t'amène prennent le meeting plus facilement, la voix d'un client qui a vraiment utilisé Distribute.you pèse plus que tout ce que je peux écrire. Tu peux me donner l'email d'un ou deux clients qui l'ont acheté, et comment tu les connais?\n\nCheers,\n\n##### 2026-11-16T11:26 | KEVIN\nTu peux check sur notre landing page\n\n##### 2026-11-16T11:27 | BOARDY\nSalut Kevin,\n\nJ'ai regardé. Je vois bien les noms et les chiffres: Ryan Parenti de Doc Dinners, David Tucker de Shockwave Centers, Andrew Becker de voozaa, Bohdan Petryshyn de Bosar Agency. C'est convaincant sur la page, mais une page ne me donne pas quelqu'un à qui parler.\n\nCe qu'il me faut, c'est une adresse email pour un ou deux d'entre eux, et comment tu les connais. Ensuite je leur demande 5 minutes, et je peux citer un vrai client dans mes intros plutôt qu'un témoignage.\n\nLesquels tu me donnes?\n\nCheers,\nBoardy";
+const PROPOSE_SCHEMA = {"type":"object","additionalProperties":false,"required":["replyText"],"properties":{"replyText":{"type":"string"}}};
+function answerSchema(actions: string[]): any {
+  const text = { type: "string" };
+  return { type: "object", additionalProperties: false, required: ["action", "replyText", "readerText", "otherSubject", "otherText", "introText", "followText", "wanted", "nextFollowUpAt", "why"],
+    properties: { action: { type: "string", enum: actions.slice() }, replyText: text, readerText: text, otherSubject: text, otherText: text, introText: text, followText: text, wanted: text, nextFollowUpAt: text, why: text } };
+}
+
+const PEOPLE = "intro_people";
+const DAY = 86400000;
+
+/** Hold the lead for this campaign: no other campaign of the brand answers a lead of an intro thread (answering_leads). */
+function hold(ctx: any, leadKey: string, campaignId: string, now: string, days: number): void {
+  if (!leadKey) return;
+  ctx.storage.set("answering_leads", leadKey, { campaignId, at: now, holdUntil: new Date(Date.parse(now) + days * DAY).toISOString(), conversation: "intro" });
+}
+
+function record(ctx: any, R: any, sent: any, now: string, days: number): ScriptResult {
+  const campaignId = s(R.campaignId);
+  const reader = sent?.reader ?? {};
+  const email = emailOf(reader.email);
+  if (!email) throw new Error("intro record: the first email names no reader address");
+  const prior = ctx.storage.get(PEOPLE, email);
+  ctx.storage.set(PEOPLE, email, {
+    role: "reader",
+    kind: s(sent.kind),
+    campaignId,
+    leadId: s(reader.leadId) || null,
+    name: s(reader.name),
+    firstName: s(reader.firstName),
+    company: s(reader.company),
+    research: reader.research ?? null,
+    pending: sent.counterpart ? { ...sent.counterpart, state: "proposed", proposedAt: now } : null,
+    state: sent.counterpart ? "proposed" : "asked_who",
+    declined: prior?.declined === true,
+    introductions: Number(prior?.introductions ?? 0),
+    firstEmail: { subject: s(sent.subject), at: now },
+  });
+  hold(ctx, s(reader.leadId) || email, campaignId, now, days);
+  return { unmade: "recorded: the intro to " + email + " is kept for its conversation", decided: "done" };
+}
+
+/** The person's email thread: instantly's conversation (every email, its Message-ID and who was on it) + the Unibox. */
+function readThread(ctx: any, brandId: string, email: string): any {
+  const th = ctx.vendor.call("crm.person.thread", { query: { brandId, personKey: "email:" + email }, pollWhile: { field: "factFeed.settled", equals: false, intervalSeconds: 10, timeoutSeconds: 180, throwWhenTimedOut: true } });
+  if (!th.ok && th.data.status !== 404) throw new Error("crm.person.thread failed: " + String(th.data.error));
+  const items = th.ok && Array.isArray(th.data.items) ? th.data.items : [];
+  const conv = ctx.vendor.call("instantly.conversation", { query: { email } });
+  const convo = conv.ok && conv.data.conversation && typeof conv.data.conversation === "object" ? conv.data.conversation : {};
+  const mails = (Array.isArray(convo.messages) ? convo.messages : []).map((m: any) => ({ at: String(m.at || ""), direction: m.direction, subject: s(m.subject), text: String(m.text || ""), messageId: s(m.messageId) }));
+  const seen: any = {};
+  mails.forEach((m: any) => { seen[m.direction + ":" + m.at.slice(0, 16)] = true; });
+  const others = items.filter((i: any) => i && i.kind === "message" && !(i.channel === "email" && seen[i.direction + ":" + String(i.at || "").slice(0, 16)]))
+    .map((i: any) => ({ at: String(i.at || ""), direction: i.direction, subject: s(i.subject), text: String(i.text || ""), messageId: s(i.ref && i.ref.messageId) || s(i.messageId), channel: i.channel }));
+  const all = mails.concat(others).sort((a: any, b: any) => a.at.localeCompare(b.at));
+  const lastInbound = all.filter((m: any) => m.direction === "inbound" && m.messageId).slice(-1)[0] ?? null;
+  const threads = Array.isArray(convo.threads) ? convo.threads : [];
+  return { all, lastInbound, threads };
+}
+
+function threadText(thread: any): string {
+  return thread.all.slice(-30).map((m: any) => "[" + m.at + "] " + (m.direction === "inbound" ? "THEM" : "US") + (m.subject ? " (subject: " + m.subject + ")" : "") + ": " + m.text.slice(0, 2000)).join("\n") || "(no message on record)";
+}
+
+/** Reply in the person's own thread (the mailbox they wrote to sends it), optionally with people in To / Cc. */
+function replyIn(ctx: any, thread: any, email: string, text: string, key: string, extra?: Record<string, unknown>): void {
+  const body_html = toHtml(text);
+  let a: any;
+  if (thread.lastInbound) a = ctx.vendor.call("instantly.reply.send", { body: { email, body_html, sent_by: "automation", in_reply_to: thread.lastInbound.messageId, ...(extra ?? {}) } });
+  else if (thread.threads.length && s(thread.threads[0].campaignId)) a = ctx.vendor.call("instantly.reply.send", { body: { campaign_id: thread.threads[0].campaignId, email, body_html, sent_by: "automation", ...(extra ?? {}) } });
+  else throw new Error("intro: no email thread to answer " + email + " in");
+  if (!a.ok) throw new Error("instantly.reply.send failed (" + String(a.data.status ?? "") + "): " + String(a.data.error ?? "").slice(0, 300) + " [" + key + "]");
+}
+
+export default function run(ctx: ScriptContext): ScriptResult {
+  const R: any = ctx.request ?? {};
+  const t: any = ctx.tactics ?? {};
+  const material: any = ctx.get("intro_requested");
+  const step = s(material?.content?.step);
+  const now = s(R.now);
+  if (!now) throw new Error("intro answer: the run states no clock (request.now)");
+  const days = Number.isInteger(t.holdDays) ? t.holdDays : 60;
+  if (step === "record") return record(ctx, R, material.content.sent, now, days);
+  if (step !== "answer") throw new Error("intro answer: unknown step " + JSON.stringify(step));
+
+  const trigger = R.trigger && typeof R.trigger === "object" ? R.trigger : null;
+  if (!trigger) return { unmade: "no_occurrence", decided: "idle" };
+  const brandId = Array.isArray(R.brandIds) && R.brandIds[0] ? String(R.brandIds[0]) : s(R.brandId);
+  const campaignId = s(R.campaignId);
+  if (!brandId || !campaignId) throw new Error("intro answer: the run names no brand or campaign");
+  const email = emailOf(trigger.person?.email);
+  const me: any = email ? ctx.storage.get(PEOPLE, email) : null;
+  // Only a person of an intro thread of THIS campaign: anyone else is not this conversation's.
+  if (!me || (me.campaignId && me.campaignId !== campaignId)) return { unmade: "not_an_intro_thread: nothing of this campaign's intros names " + (email || "this person"), decided: "idle" };
+
+  // WHO: claimed on this campaign (lead-service judges who may be answered).
+  const named = { email, phone: s(trigger.person?.phone) || null, leadId: s(trigger.leadId) || null };
+  const claim = must(ctx, "lead.followup.claim", { params: { campaignId }, body: { person: named, relationships: s(t.relationships) || "pure_prospect" } });
+  if (!claim.found) {
+    const refused = ((claim.relationships && claim.relationships.refused) || [])[0];
+    if (refused) return { unmade: "person_not_admitted: " + String(refused.reason || refused.code || "refused") };
+    return { unmade: "nobody_due: " + String(claim.reason || ""), decided: "idle" };
+  }
+  const row = claim.followup;
+  const close = (reason: string) => must(ctx, "lead.followup.record", { params: { id: row.id }, body: { kind: "stopped", reason } });
+  const setDate = (body: any) => must(ctx, "lead.followup_date.set", { params: { id: row.id }, query: { brandId }, body });
+  hold(ctx, s(row.leadId) || named.leadId || email, campaignId, now, days);
+
+  // READ: this thread, the other side's state, the brand and its offer (the price lives there, said only after a yes).
+  const thread = readThread(ctx, brandId, email);
+  const brand = (must(ctx, "brand.profile", { params: { id: brandId } }).brand) || {};
+  const offerId = s(R.offerId);
+  const answers = offerId ? must(ctx, "brand.offer.answers", { params: { brandId, offerId } }) : {};
+  const economics = offerId ? must(ctx, "brand.offer.economics", { params: { offerId } }) : {};
+  const offerLines = (Array.isArray(answers.answers) ? answers.answers : [])
+    .filter((a: any) => !/^\s*PLACEHOLDER/.test(String(a.answer || "")))
+    .map((a: any) => "- " + a.question + " " + String(a.answer || ""));
+  // The offer's own facts the client confirmed (what it costs, how it starts), as the answerer reads them.
+  const fields = offerId ? must(ctx, "brand.offer.fields", { params: { brandId, offerId } }) : { fields: {} };
+  const f: any = fields.fields || {};
+  Object.keys(f).forEach((k) => {
+    const v = f[k];
+    if (v && v.provenance === "confirmed" && v.value !== null && v.value !== undefined) offerLines.push("- " + k + ": " + (typeof v.value === "string" ? v.value : JSON.stringify(v.value)));
+  });
+  if (s(economics.name)) offerLines.unshift("- Offer: " + economics.name);
+  if (s(brand.url)) offerLines.push("- The brand's site (where they sign up): " + s(brand.url));
+  if (s(economics.bookingUrl)) offerLines.push("- Booking link: " + economics.bookingUrl);
+  const voice = must(ctx, "voice.read", {});
+  const reader: any = me.role === "reader" ? me : me.reader ? ctx.storage.get(PEOPLE, emailOf(me.reader.email)) ?? me.reader : null;
+
+  // INTRO-VERIFY-BEFORE-WRITE-1124: when the next step can be a NEW email to the person we proposed (ask_other), the send's
+  // own check is asked on their address before the writer. A named refusal = the stored branch of a refused ask: the
+  // pending intro is kept refused with the door's code, so ask_other is not open and a new intro is. Tactic only.
+  const proposedEmail = me.role === "reader" && me.pending && me.pending.state === "proposed" ? emailOf(me.pending.email) : "";
+  if (t.checksEmailBeforeWriter === true && proposedEmail) {
+    const otherCheck = ctx.vendor.call("email.send_check", { body: { type: "broadcast", to: proposedEmail } });
+    if (!otherCheck.ok) {
+      const refusalCode = s(otherCheck.data?.code) || s(otherCheck.data?.body?.code);
+      if (!(refusalCode && Number(otherCheck.data?.status) === 409)) throw new Error("email.send_check (double opt-in) failed: " + String(otherCheck.data?.error ?? "").slice(0, 300));
+      me.pending = { ...me.pending, state: "refused", refusal: refusalCode };
+      ctx.storage.set(PEOPLE, email, me);
+    }
+  }
+  const open: string[] = ["reply", "later", "stop", "escalate"];
+  if (me.role === "reader") {
+    if (me.pending && me.pending.state === "proposed") open.unshift("ask_other");
+    // One intro at a time: a new one once nothing is pending (none yet, or the last one introduced, declined or refused).
+    const pendingOpen = me.pending && ["proposed", "asked"].indexOf(String(me.pending.state)) >= 0;
+    if (!me.declined && !pendingOpen) open.unshift("find");
+    if (!me.declined) open.push("decline_intros");
+  } else if (me.role === "counterpart" && me.state === "asked") {
+    open.unshift("introduce", "counterpart_declined");
+  }
+  const state = {
+    you_are_writing_to: me.role === "reader" ? "THE READER (the person we offered an intro to)" : "THE OTHER PERSON (we asked them whether they want to meet the reader)",
+    stage: me.state,
+    declinedIntros: me.declined === true,
+    introductionsMade: Number(me.introductions ?? 0),
+    pendingIntro: me.role === "reader" ? me.pending ?? null : { reader: reader ? { name: reader.name, company: reader.company } : null },
+  };
+  const system = [
+    INTRO_GAME,
+    whoYouAre(t),
+    "OUR VOICE\n" + String(voice.content ?? ""),
+    s(R.brief) ? "THE CAMPAIGN'S BRIEF\n" + s(R.brief) : "",
+  ].filter(Boolean).join("\n\n");
+  const message = [
+    "NOW: " + now,
+    "ACTIONS OPEN TO YOU: " + open.join(", "),
+    "",
+    "THE STATE\n" + JSON.stringify(state, null, 2),
+    "",
+    me.role === "reader" ? "THE READER (you are writing to them)\nName: " + me.name + "\nCompany: " + me.company + (me.research ? "\n" + JSON.stringify(me.research) : "") : "",
+    me.role === "reader" && me.pending ? "THE OTHER PERSON PROPOSED\n" + JSON.stringify(me.pending) : "",
+    me.role === "counterpart" && reader ? "THE READER (who wants to meet them)\nName: " + reader.name + "\nCompany: " + reader.company + (reader.research ? "\n" + JSON.stringify(reader.research) : "") : "",
+    me.role === "counterpart" ? "THE OTHER PERSON (you are writing to them)\nName: " + me.name + "\nCompany: " + me.company + (me.research ? "\n" + JSON.stringify(me.research) : "") : "",
+    "",
+    "THE OFFER (" + s(brand.name) + ")\n" + (offerLines.join("\n") || "(no offer facts)"),
+    "",
+    "THE THREAD\n" + threadText(thread),
+  ].filter((l) => l !== "").join("\n");
+  const d = complete(ctx, "writer", system, message, answerSchema(open));
+  const action = s(d.action);
+  if (open.indexOf(action) < 0) throw new Error("intro answer: the writer chose an action not open to it: " + JSON.stringify(d.action));
+  const next = s(d.nextFollowUpAt) && Number.isFinite(Date.parse(d.nextFollowUpAt)) && Date.parse(d.nextFollowUpAt) > Date.parse(now) ? new Date(Date.parse(d.nextFollowUpAt)).toISOString() : new Date(Date.parse(now) + 7 * DAY).toISOString();
+  const why = s(d.why).slice(0, 400);
+  const keyBase = "intro:" + (s(trigger.eventId) || row.id);
+  const text = (k: string) => { const v = undash(d[k]); if (!v) throw new Error("intro answer: " + action + " with an empty " + k); return v; };
+  const save = (who: string, v: any) => ctx.storage.set(PEOPLE, who, v);
+
+  if (action === "later") {
+    setDate({ nextFollowupAt: next, reason: why || "later" });
+    close("intro_later");
+    return { unmade: "later: " + why, decided: "done" };
+  }
+  if (action === "stop") {
+    setDate({ stop: { reason: why || "asked to stop" } });
+    close("intro_stopped");
+    save(email, { ...me, declined: true, state: "stopped" });
+    return { unmade: "stop: " + why, decided: "done" };
+  }
+  if (action === "escalate") {
+    setDate({ nextFollowupAt: next, reason: "Escalated: " + why });
+    close("intro_escalated");
+    return { unmade: "escalate: " + why, decided: "done" };
+  }
+
+  if (action === "find") {
+    // Our lead search: fresh people, researched, the one good for both sides (or none), then ONE proposal.
+    const wanted = s(d.wanted);
+    const candidates: any[] = [];
+    const want = Number.isInteger(t.freshCandidates) ? t.freshCandidates : 3;
+    for (let i = 0; i < want; i++) {
+      const c = serveOne(ctx, {});
+      if ("none" in c) break;
+      const p: any = personOf(c.lead);
+      if (!p.email || p.email === email) continue;
+      p.research = research(ctx, p, brandId, campaignId);
+      candidates.push(p);
+    }
+    const meAsReader = { firstName: me.firstName, lastName: "", title: "", company: { name: me.company }, research: me.research ?? {} };
+    const m = matchOne(ctx, meAsReader, candidates, wanted);
+    const p = complete(ctx, "writer", [PROPOSE_PROMPT, whoYouAre(t), "OUR VOICE\n" + String(voice.content ?? ""), s(R.brief) ? "THE CAMPAIGN'S BRIEF\n" + s(R.brief) : ""].filter(Boolean).join("\n\n"), [
+      "NOW: " + now,
+      "THE STATE\n" + JSON.stringify(state, null, 2),
+      "THE OFFER (" + s(brand.name) + ")\n" + (offerLines.join("\n") || "(no offer facts)"),
+      "WHAT THEY WANT: " + wanted,
+      "THE READER\n" + me.name + ", " + me.company,
+      m ? "THE ONE WHO FITS\n" + factLines(m.person) + "\nFor the reader: " + m.forReader + "\nFor them: " + m.forThem : "NOBODY FITS (" + candidates.length + " people looked at)",
+      "THE THREAD\n" + threadText(thread),
+    ].join("\n\n"), PROPOSE_SCHEMA);
+    replyIn(ctx, thread, email, undash(p.replyText), keyBase + ":propose");
+    save(email, { ...me, state: m ? "proposed" : "asked_who", pending: m ? { leadId: m.person.leadId, email: m.person.email, name: nameOf(m.person), title: m.person.title, company: m.person.company?.name ?? "", domain: m.person.company?.domain ?? "", research: m.person.research, forReader: m.forReader, forThem: m.forThem, state: "proposed", proposedAt: now } : null });
+    setDate({ nextFollowupAt: next, reason: why || "proposed an intro", sent: { channel: "email" } });
+    close("intro_proposed");
+    return { content: { action, proposed: m ? nameOf(m.person) : null, looked: candidates.length } };
+  }
+
+  if (action === "ask_other") {
+    const other = me.pending;
+    const otherEmail = emailOf(other?.email);
+    if (!otherEmail) throw new Error("intro answer: the proposed person carries no email to ask them by");
+    replyIn(ctx, thread, email, text("replyText"), keyBase + ":thanks");
+    const ask = ctx.vendor.call("email.send", { body: { type: "broadcast", tag: "intro-email", to: otherEmail, ...(other.leadId ? { leadId: other.leadId } : {}), subject: text("otherSubject"), sequence: [{ step: 1, bodyHtml: toHtml(text("otherText")), bodyText: text("otherText"), daysSinceLastStep: 0 }], campaignId, ...(s(t.signature) ? { signature: { text: s(t.signature) } } : {}), idempotencyKey: "intro-ask:" + otherEmail + ":" + email, metadata: { source: "intro", kind: "double_opt_in" } } });
+    if (!ask.ok) {
+      const code = s(ask.data?.code) || s(ask.data?.body?.code);
+      if (!(code && Number(ask.data?.status) === 409)) throw new Error("email.send (double opt-in) failed: " + String(ask.data?.error ?? "").slice(0, 300));
+      save(email, { ...me, pending: { ...other, state: "refused", refusal: code } });
+    } else {
+      save(email, { ...me, state: "asked_other", pending: { ...other, state: "asked", askedAt: now } });
+      save(otherEmail, { role: "counterpart", campaignId, leadId: other.leadId ?? null, name: other.name, firstName: String(other.name || "").split(" ")[0], company: other.company, research: other.research ?? null, state: "asked", reader: { email, name: me.name, company: me.company }, askedAt: now });
+      hold(ctx, s(other.leadId) || otherEmail, campaignId, now, days);
+    }
+    setDate({ nextFollowupAt: next, reason: why || "asked the other person", sent: { channel: "email" } });
+    close("intro_asked_other");
+    return { content: { action, asked: otherEmail, sent: ask.ok } };
+  }
+
+  if (action === "introduce" || action === "counterpart_declined") {
+    const readerEmail = emailOf(me.reader?.email);
+    const r: any = readerEmail ? ctx.storage.get(PEOPLE, readerEmail) : null;
+    if (!readerEmail || !r) throw new Error("intro answer: the reader of this intro is not on record");
+    const readerThread = readThread(ctx, brandId, readerEmail);
+    if (action === "counterpart_declined") {
+      replyIn(ctx, thread, email, text("replyText"), keyBase + ":thanks");
+      replyIn(ctx, readerThread, readerEmail, text("readerText"), keyBase + ":reader");
+      save(email, { ...me, state: "declined" });
+      save(readerEmail, { ...r, state: "asked_who", pending: null });
+      setDate({ nextFollowupAt: next, reason: why || "declined the intro", sent: { channel: "email" } });
+      close("intro_counterpart_declined");
+      return { content: { action, reader: readerEmail } };
+    }
+    // Both said yes: ONE email to both (the reader in To, the other person in copy), in the reader's thread.
+    replyIn(ctx, readerThread, readerEmail, text("introText"), keyBase + ":introduce", { to: [readerEmail], cc: [email] });
+    // Right after it, to the reader alone, when the writer has something for them (the brief says what and when).
+    const follow = undash(d.followText);
+    if (follow) replyIn(ctx, readerThread, readerEmail, follow, keyBase + ":follow", { to: [readerEmail] });
+    save(email, { ...me, state: "introduced", introducedAt: now });
+    save(readerEmail, { ...r, state: "introduced", pending: r.pending ? { ...r.pending, state: "introduced" } : null, introductions: Number(r.introductions ?? 0) + 1 });
+    setDate({ nextFollowupAt: next, reason: why || "introduced", sent: { channel: "email" } });
+    close("intro_introduced");
+    return { content: { action, reader: readerEmail, other: email, introductions: Number(r.introductions ?? 0) + 1, followed: !!follow } };
+  }
+
+  if (action === "decline_intros") {
+    replyIn(ctx, thread, email, text("replyText"), keyBase + ":decline");
+    // Never a new intro again, even when asked (kept for every later look).
+    save(email, { ...me, declined: true, declinedAt: now });
+    setDate({ nextFollowupAt: next, reason: why || "declined intros", sent: { channel: "email" } });
+    close("intro_declined");
+    return { content: { action } };
+  }
+
+  // reply: whatever they wrote (a question, an answer, a yes to what we offered).
+  replyIn(ctx, thread, email, text("replyText"), keyBase + ":reply");
+  save(email, { ...me, lastReplyAt: now });
+  setDate({ nextFollowupAt: next, reason: why || "answered", sent: { channel: "email" } });
+  close("intro_replied");
+  return { content: { action } };
+}
+
+/**
+ * ONE-WRITER-N-MODELS-1116: this script names no model. Each completion it needs is ASKED of the LLM completion
+ * Engine (the Rating picks the model for this script); the request is the call as written, minus the model.
+ */
+function askCompletion(ctx: any, call: Record<string, unknown>): { ok: true; data: Record<string, any> } {
+  const request: Record<string, unknown> = {};
+  for (const k of Object.keys(call)) if (k !== "provider" && k !== "model") request[k] = call[k];
+  ctx.ask({ units: {}, request });
+  const done: any = ctx.get("llm_completion");
+  if (!done || !done.content) throw new Error("llm_completion: " + String((done && done.unmade) || "no completion") + ". Nothing is written: the run is retried later.");
+  return { ok: true, data: done.content.answer };
+}
+function askCompletionData(ctx: any, call: Record<string, unknown>): any {
+  return askCompletion(ctx, call).data;
+}
+/** A JSON answer, read as chat.complete read it: the parsed object, else a refusal. */
+function askChatCompletion(ctx: any, call: Record<string, unknown>): { ok: boolean; data: Record<string, any> } {
+  const json = askCompletion(ctx, call).data.json;
+  if (!json || typeof json !== "object" || Array.isArray(json)) return { ok: false, data: { error: "chat.complete: the model answered no JSON object" } };
+  return { ok: true, data: json };
+}
