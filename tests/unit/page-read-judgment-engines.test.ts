@@ -170,14 +170,14 @@ describe("a page read", () => {
     expect(coded.error).toBe("credit_insufficient: Insufficient credits (402) for https://down.example");
   });
 
-  it("no URL, no answer at all, or a fresh read without its id fail the run by name", async () => {
+  it("no URL or a fresh read without its id fail the run by name; no answer at all makes no Unit", async () => {
     const w = world(() => ({ status: 200, body: fresh }));
     await expect(read({ page: "https://reed.example" }, w)).rejects.toThrow(/names no page to read \(request\.url/);
     expect(w.doors).toEqual([]);
     const down = world(() => {
       throw new Error("fetch failed");
     });
-    await expect(read({ url: "https://reed.example" }, down)).rejects.toThrow(/scraping\.page: .*fetch failed/);
+    expect((await read({ url: "https://reed.example" }, down)).error).toMatch(/^page_not_read: .*fetch failed/);
     await expect(read({ url: "https://reed.example" }, world(() => ({ status: 200, body: { cached: false, result: {} } })))).rejects.toThrow(/without its requestId/);
     expect(w.declared).toEqual([]);
     expect(down.declared).toEqual([]);
@@ -228,7 +228,7 @@ describe("a judgment", () => {
     expect(busy.error).toBe("judgment_not_made: judge saturated (429)");
   });
 
-  it("no question, nothing to judge, no judge stated, or no answer at all fail the run by name", async () => {
+  it("no question, nothing to judge or no judge stated fail the run by name; no answer at all makes no Unit", async () => {
     const w = world(() => ({ status: 200, body: answered }));
     await expect(judge({ state: "x" }, w)).rejects.toThrow(/asks no question \(request\.questions/);
     await expect(judge({ state: "x", questions: {} }, w)).rejects.toThrow(/asks no question/);
@@ -240,7 +240,7 @@ describe("a judgment", () => {
     const down = world(() => {
       throw new Error("fetch failed");
     });
-    await expect(judge({ state: "x", questions }, down)).rejects.toThrow(/chat\.judgment \(jev\): .*fetch failed/);
+    expect((await judge({ state: "x", questions }, down)).error).toMatch(/^judgment_not_made: .*fetch failed/);
     await expect(judge({ state: "x", questions }, world(() => ({ status: 200, body: {} })))).rejects.toThrow(/answered without answers/);
     expect(w.declared).toEqual([]);
   });

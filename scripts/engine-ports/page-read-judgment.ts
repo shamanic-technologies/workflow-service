@@ -17,7 +17,7 @@
  *   else the asking run.
  *
  * Neither checks, retries or rewrites an answer. A refusal the door ANSWERED (a status) is `unmade: "<code>: <words>"`,
- * its code when it names one; no answer at all fails the run. A Request that cannot be asked is a named throw.
+ * its code when it names one; no answer at all (the door was not reached) is `unmade` too, so an asker that tolerates the read goes on. A Request that cannot be asked is a named throw.
  */
 import { PORT_HEAD } from "./port-kit.js";
 
@@ -56,7 +56,8 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const a: Answer = ctx.vendor.call("scraping.page", { body });
   if (!a.ok) {
     const d: any = a.data ?? {};
-    if (typeof d.status !== "number") throw new Error("scraping.page: " + String(d.error ?? "no answer"));
+    // No answer at all (the reader was not reached): no page was read. An answer the asker reads, so a read it tolerates stays tolerated.
+    if (typeof d.status !== "number") return { unmade: "page_not_read: " + String(d.error ?? "no answer") };
     return { unmade: (typeof d.code === "string" && d.code ? d.code : "page_not_read") + ": " + String(d.error ?? "the reader answered " + d.status) + " (" + d.status + ") for " + url };
   }
   const page: any = a.data ?? {};
@@ -89,7 +90,8 @@ export default function run(ctx: ScriptContext): ScriptResult {
   const a: Answer = ctx.vendor.call("chat.judgment", { body });
   if (!a.ok) {
     const d: any = a.data ?? {};
-    if (typeof d.status !== "number") throw new Error("chat.judgment (" + t.judge + "): " + String(d.error ?? "no answer"));
+    // No answer at all (the judge was not reached): no judgment was made. An answer the asker reads (one that needs it throws itself).
+    if (typeof d.status !== "number") return { unmade: "judgment_not_made: " + String(d.error ?? "no answer") };
     return { unmade: (typeof d.code === "string" && d.code ? d.code : "judgment_not_made") + ": " + String(d.error ?? "the judge answered " + d.status) + " (" + d.status + ")" };
   }
   const out: any = a.data ?? {};
