@@ -11,7 +11,8 @@
  * a port's upgrade with its cases restated; the dry run replays them server-side and writes nothing).
  * Ops: `create` {body} (409 = already stored: UPGRADED to the generator's code/tactics/description unless the active version already is); `replace` {outcome, dynastyPrefix, from, to, skipIfIncludes}
  * (UPGRADE of every active dynasty of that prefix whose code holds `from` exactly once; `edits` [{from, to}] instead of
- * one pair = every anchor found exactly once, applied in order, in ONE upgrade); `tag` {outcome, dynastyPrefix,
+ * one pair = every anchor found exactly once, applied in order, in ONE upgrade; `dynasty` beside the prefix = that
+ * exact dynasty only, LEAD-EVENT-FOUNDER-HELLO-DOUBLE-1124); `tag` {outcome, dynastyPrefix,
  * tactics} (UPGRADE with the same code and the tactics merged in; skipped when already carried). `includeRetired: true`
  * also takes a RETIRED dynasty's highest version (LOCAL-TIME-ANSWERER-1115: the catalogue stores its upgrade retired
  * too, so nothing runs until someone restores the dynasty).
@@ -146,6 +147,8 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
     continue;
   }
   for (const s of await activeOf(op.outcome, op.dynastyPrefix, op.includeRetired === true)) {
+    // `dynasty` stated = that exact dynasty only (a prefix alone also takes every dynasty named after it).
+    if (typeof op.dynasty === "string" && s.dynasty !== op.dynasty) continue;
     const full = await call("GET", `/scripts/${s.id}`);
     if (full.status !== 200) throw new Error(`read ${s.dynasty}: ${full.status}`);
     const code = full.json.code;
