@@ -381,12 +381,12 @@ describe("a campaign run executes its Engine's script, with no workflow", () => 
 });
 
 describe("the Rating", () => {
-  it("only offers scripts the run can feed and whose channel is the campaign's", async () => {
+  it("only offers scripts the run can feed; a stated channel never gates who runs (PLAN-RECURSIVE-PER-ENGINE-1124)", async () => {
     await addScript("meeting_booked", "dy_answer", ANSWER);
     await addScript("meeting_booked", "dy_other_channel", ANSWER, { channel: "cold-whatsapp-outreach" });
     expect(await pickScript(db, { outcome: "meeting_booked", servable: [], channel: "ai-meeting-booking" })).toBeNull();
     const pick = await pickScript(db, { outcome: "meeting_booked", servable: ["conversation"], channel: "ai-meeting-booking" });
-    expect(pick!.draws.map((d) => d.dynasty)).toEqual(["dy_answer"]);
+    expect(pick!.draws.map((d) => d.dynasty)).toEqual(["dy_answer", "dy_other_channel"]);
   });
 
   it("a refusal stated as `<code>: <why>` reaches the occurrence as its code and its words", () => {
@@ -415,13 +415,11 @@ describe("the Rating", () => {
     expect(endRunBodyOf({ status: "unmade", error: "no_channel" }, true)).toEqual({ success: true, stopCampaign: false, delivery: { state: "refused", code: "no_channel", reason: "no_channel" } });
   });
 
-  it("an Engine serves a campaign's channel only when one of its scripts runs for it (else the campaign keeps its workflow)", async () => {
+  it("an Engine serves a campaign when one of its scripts runs, whatever channel it states (PLAN-RECURSIVE-PER-ENGINE-1124)", async () => {
     expect(await servesChannel(db, "conversation", "email-sending")).toBe(false);
     await addScript("conversation", "dy_hello", ANSWER, { channel: "founder-hello" });
-    expect(await servesChannel(db, "conversation", "email-sending")).toBe(false);
-    expect(await servesChannel(db, "conversation", "founder-hello")).toBe(true);
-    await addScript("conversation", "dy_any", ANSWER);
     expect(await servesChannel(db, "conversation", "email-sending")).toBe(true);
+    expect(await servesChannel(db, "conversation", null)).toBe(true);
   });
 
   it("runs the script features-service picks, among exactly the candidates the run can feed (SCRIPT-VALUE-RATING-1113-WF2)", async () => {
@@ -435,7 +433,7 @@ describe("the Rating", () => {
       expect(pick!.script.dynasty).toBe(winner);
       expect(pick!.ranked.map((r) => r.dynasty)).toEqual(pick!.draws.map((d) => d.dynasty));
       expect(pick!.basis).toBe("value_per_dollar");
-      expect(picks.calls).toEqual([{ outcome: "lead_found", dynasties: ["lead_found/dy_bad", "lead_found/dy_good"] }]);
+      expect(picks.calls).toEqual([{ outcome: "lead_found", dynasties: ["lead_found/dy_bad", "lead_found/dy_good", "lead_found/dy_other_channel"] }]);
     }
   });
 
