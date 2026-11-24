@@ -4228,6 +4228,17 @@
                 "channel": {
                   "type": "string",
                   "nullable": true
+                },
+                "requestFields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The top-level fields of `request` this script's code reads (`ctx.request.<field>`), read off its code like its Units are: state these in the `request` of an ask (`POST /internal/engines/{outcome}/make`). Empty = it reads none itself; a script that hands its whole Request to the Engine it asks reads none here (the fields are the asked script's)."
+                },
+                "requestHandedOn": {
+                  "type": "boolean",
+                  "description": "The code also uses its whole `request` as one value (handed to the Engine it asks, to a vendor call, or walked key by key): fields beyond `requestFields` may count, they are read by whoever receives it (for a script that asks another Engine, that Engine's scripts' `requestFields`)."
                 }
               },
               "required": [
@@ -4235,9 +4246,12 @@
                 "name",
                 "version",
                 "units",
-                "channel"
+                "channel",
+                "requestFields",
+                "requestHandedOn"
               ]
-            }
+            },
+            "description": "The runnable scripts the Rating draws among: what each must be handed (`units`, `channel`) and which `request` fields it reads (`requestFields`)."
           },
           "counts": {
             "type": "object",
