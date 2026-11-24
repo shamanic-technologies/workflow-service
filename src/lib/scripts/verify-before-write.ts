@@ -23,6 +23,12 @@
  *
  * Applied to the STORED code by anchored edits (`addVerifyBeforeWrite`, an UPGRADE of each dynasty); a moved anchor =
  * nothing generated. A port's recorded cases are restated under the rule (`restateCaseForVerifyBeforeWrite`).
+ *
+ * INTRO-VERIFY-BEFORE-WRITE-1124: the three intro first emails (`email_sent/dy_intro_*`, one code) take the SAME look,
+ * the same helper, through their own shape (`INTRO_FIRST_EMAIL_SHAPE`): after their free "already in conversation"
+ * read and before anything paid (the reader's research, the match, the writer). A refusal ends the run as their own
+ * send's refusal does (`{unmade: "<code>: <the door's words>", again: true}`). A staff test (`testRecipient`) or a dry
+ * run sends nothing to the reader, so it asks nothing about their address.
  */
 
 export const VERIFY_BEFORE_WRITE_SENDERS = [
@@ -55,7 +61,29 @@ const LOOK_LINES =
   "  const addressRefusal = refusedBeforeWriting(ctx, tactics, address, req.now, !!named);\n" +
   "  if (addressRefusal) return named ? { unmade: addressRefusal } : { unmade: addressRefusal, again: true };\n";
 
-const HELPER = `
+/** How a sender states the send's refusal: its bare code (cold senders), or its code and the door's words (intros). */
+export type RefusalForm = "code" | "codeAndWords";
+
+/** The stored code's own lines a look is anchored on, and the look itself: one per family of senders, the helper shared. */
+export interface LookShape {
+  /** The stored line the look goes in front of (found exactly once, else nothing is generated). */
+  anchor: string;
+  /** What the anchor is, in the error a moved anchor raises. */
+  anchorName: string;
+  /** Lines the look leans on, each stated before the anchor. */
+  needs: string[];
+  /** The stored branch the look's refusal reproduces (found exactly once, anywhere), when the shape names one. */
+  reproduces?: string;
+  look: string;
+  refusal: RefusalForm;
+}
+
+const REFUSAL_RETURN: Record<RefusalForm, string> = {
+  code: "code",
+  codeAndWords: 'code + ": " + String(check.data.body?.error ?? check.data.error ?? "").slice(0, 300)',
+};
+
+const helper = (refusal: RefusalForm) => `
 
 /**
  * ${MARK}: tactic \`verdictMaxAgeDays\`. The address' decisive verdict not older than that window, read from
@@ -90,7 +118,7 @@ function refusedBeforeWriting(ctx: any, tactics: any, address: string, now: stri
     if (!check.ok) {
       const code = typeof check.data.code === "string" ? check.data.code : typeof check.data.body?.code === "string" ? check.data.body.code : typeof check.data.body?.details?.code === "string" ? check.data.body.details.code : null;
       const status = Number(check.data.status);
-      if (code && (status === 409 || (namedPerson && status >= 400 && status < 500))) return code;
+      if (code && (status === 409 || (namedPerson && status >= 400 && status < 500))) return ${REFUSAL_RETURN[refusal]};
       throw new Error("email.send_check: " + String(check.data.error));
     }
   }
@@ -101,16 +129,57 @@ function refusedBeforeWriting(ctx: any, tactics: any, address: string, now: stri
 }
 `;
 
-/** The stored sender's code with the look before its writer. Throws when the anchor moved or the look is already in. */
-export function addVerifyBeforeWrite(code: string): string {
+/** The four cold email senders: the look in front of their person thread read, the refusal their send's own (its code). */
+export const COLD_SENDER_SHAPE: LookShape = {
+  anchor: THREAD_ANCHOR,
+  anchorName: "person thread",
+  needs: ["  const address = ", "const named = ", "const tactics = ", "const req = "],
+  look: LOOK_LINES,
+  refusal: "code",
+};
+
+export const INTRO_FIRST_EMAILS = [
+  { outcome: "email_sent", dynasty: "dy_intro_open" },
+  { outcome: "email_sent", dynasty: "dy_intro_lead_to_lead" },
+  { outcome: "email_sent", dynasty: "dy_intro_client_to_lead" },
+] as const;
+
+/**
+ * The intro first emails (one code): the look after their free "already in conversation" read, in front of the first
+ * thing they pay for about the reader (their research). Their send's own refusal is `{unmade: code + ": " + words,
+ * again: true}` on a 409 naming a code: the look ends the run the same way. Nothing is asked on a staff test or a dry
+ * run (no email goes to the reader, and the door's check records its refusal on a real person).
+ */
+export const INTRO_FIRST_EMAIL_SHAPE: LookShape = {
+  anchor: "  reader.research = research(ctx, reader, brandId, campaignId);\n",
+  anchorName: "reader research",
+  needs: ["  const now = s(R.now);", "  const t: any = ", "  const testRecipient = ", "  const dryRun = ", "  const reader: any = personOf(served.lead);"],
+  reproduces: '    if (code && Number(dd.status) === 409) return { unmade: code + ": " + String(dd.body?.error ?? dd.error ?? "").slice(0, 300), again: true };',
+  look:
+    `  // ${MARK}: the reader's address is looked at before anything is paid for them (tactic verdictMaxAgeDays).\n` +
+    "  // An address the send's door refuses ends the run here as it ends on the send's refusal: no research, no writer.\n" +
+    "  const addressRefusal = testRecipient || dryRun ? null : refusedBeforeWriting(ctx, t, reader.email, now, false);\n" +
+    "  if (addressRefusal) return { unmade: addressRefusal, again: true };\n",
+  refusal: "codeAndWords",
+};
+
+/**
+ * The stored sender's code with the look before its writer (`shape`: the cold senders' unless stated). Throws when the
+ * anchor moved or the look is already in.
+ */
+export function addVerifyBeforeWrite(code: string, shape: LookShape = COLD_SENDER_SHAPE): string {
   if (code.includes(MARK)) throw new Error("verify-before-write: the stored code already looks at the address before writing");
-  const at = code.indexOf(THREAD_ANCHOR);
-  if (at < 0 || code.indexOf(THREAD_ANCHOR, at + 1) >= 0) throw new Error(`verify-before-write: the person thread line is found ${at < 0 ? "nowhere" : "more than once"}: nothing generated`);
-  for (const needs of ["  const address = ", "const named = ", "const tactics = ", "const req = "]) {
+  const at = code.indexOf(shape.anchor);
+  if (at < 0 || code.indexOf(shape.anchor, at + 1) >= 0) throw new Error(`verify-before-write: the ${shape.anchorName} line is found ${at < 0 ? "nowhere" : "more than once"}: nothing generated`);
+  for (const needs of shape.needs) {
     const i = code.indexOf(needs);
-    if (i < 0 || i > at) throw new Error(`verify-before-write: the stored code does not state \`${needs.trim()}\` before the person thread: nothing generated`);
+    if (i < 0 || i > at) throw new Error(`verify-before-write: the stored code does not state \`${needs.trim()}\` before the ${shape.anchorName}: nothing generated`);
   }
-  return code.slice(0, at) + LOOK_LINES + code.slice(at) + HELPER;
+  if (shape.reproduces !== undefined) {
+    const r = code.indexOf(shape.reproduces);
+    if (r < 0 || code.indexOf(shape.reproduces, r + 1) >= 0) throw new Error(`verify-before-write: the send's own refusal branch the look reproduces is found ${r < 0 ? "nowhere" : "more than once"}: nothing generated`);
+  }
+  return code.slice(0, at) + shape.look + code.slice(at) + helper(shape.refusal);
 }
 
 /** The tactics: the window stated as data (a window the dynasty already states is kept). */
