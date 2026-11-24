@@ -11,7 +11,9 @@
  *
  * 2. THE RATING: which script runs, among every live dynasty of the Engine (one active version per dynasty, so the pick
  *    is a dynasty and its head runs). Only a script the run can feed is a candidate: every material its code asks for
- *    (`ctx.get(...)`, read from the code) is one the run holds, a tactic `channel` it states is the campaign's, and the
+ *    (`ctx.get(...)`, read from the code) is one the run holds, or one its Engine can make for the same campaign
+ *    (PLAN-RECURSIVE-PER-ENGINE-1124: asked one level deeper, recursively, never an Engine already asked above), a tactic
+ *    `channel` it states is the campaign's, and the
  *    campaign's STRATEGY keeps it (features-service judges each script's tactics, `GET /internal/script-strategy`).
  *    WHICH candidate runs is features-service's Rating (SCRIPT-VALUE-RATING-1113-WF2, owner 2026-11-13: « un pick =
  *    toujours un script »): `GET /internal/script-pick?outcome=&dynasties=` draws once among the candidates on the value

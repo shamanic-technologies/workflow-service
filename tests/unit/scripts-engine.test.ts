@@ -279,7 +279,7 @@ describe("a script run as a step: isolation and ledger declaration", () => {
     expect((failed as ScriptRunFailed).result).toMatchObject({ status: "failed", unit: null, error: expect.stringContaining("the ledger refused the declaration") });
   });
 
-  it("a material the step was not handed stops the run; storage is scoped to the org", async () => {
+  it("a material the step was not handed is asked of its Engine (none here: unmade); storage is scoped to the org", async () => {
     const storing = `export default function run(ctx) {
       var before = ctx.storage.get("notes", "k");
       ctx.storage.set("notes", "k", { by: ctx.tactics.who });
@@ -293,8 +293,9 @@ describe("a script run as a step: isolation and ledger declaration", () => {
     expect((await run("org-b", "b")).unit!.content).toEqual({ before: null, count: 1 });
 
     await createScript(db, { outcome: "message_written", dynasty: "dy_greedy", code: `export default function run(ctx) { ctx.get("email_found"); return null; }`, description: "x" }, author, deps);
-    const stopped = await runStoredScript(db, { ...input, dynasty: "dy_greedy" }, who, { ledger: ledger().deps, vendors: vendors().deps }).catch((e) => e);
-    expect((stopped as ScriptRunFailed).result).toMatchObject({ status: "stopped", error: expect.stringContaining("email_found, which this step was not handed") });
+    // PLAN-RECURSIVE-PER-ENGINE-1124: the Unit is asked of its Engine; an Engine with no script makes this one unmade.
+    const unmade = await runStoredScript(db, { ...input, dynasty: "dy_greedy" }, who, { ledger: ledger().deps, vendors: vendors().deps });
+    expect(unmade).toMatchObject({ status: "unmade", error: expect.stringMatching(/^no_script: /) });
   });
 
   it("storage.claim: the first note under a key wins, every later claim reads the winner's note back (SCRIPT-VALUE-RATING-1113-WF1)", async () => {
