@@ -55,9 +55,25 @@ function carry(ctx: any, extra: Record<string, unknown>): Record<string, unknown
 function passOn(u: any): any {
   const out: any = { unmade: typeof u.unmade === "string" && u.unmade ? u.unmade : "nothing" };
   if (u.decided === "done" || u.decided === "idle") out.decided = u.decided;
+  // An unfinished look below (a render, a download still running) is unfinished here too: asked again soon.
+  if (u.run && u.run.again === true) out.again = true;
   return out;
 }
+/** What a script keeps of a clip the clips service made (cut or hooked). */
+function slimClip(c: any): any {
+  return { id: String(c.id), kind: c.kind ?? null, url: c.url ?? null, text: c.text ?? null, start: c.start ?? null, end: c.end ?? null, durationSeconds: c.durationSeconds ?? null, hook: c.hook ?? null, videoId: c.videoId ?? null, parentClipId: c.parentClipId ?? null };
+}
+/** A door's answered refusal as a script's reason: its code, else the fallback, then its words. */
+function refusalOf(a: Answer, fallback: string): string {
+  const d: any = a.data ?? {};
+  const body: any = d.body ?? {};
+  const code = typeof d.code === "string" && d.code ? d.code : typeof body.errorCode === "string" && body.errorCode ? body.errorCode : fallback;
+  return String(code).toLowerCase() + ": " + String(d.error ?? "refused") + " (" + String(d.status) + ")";
+}
 `;
+
+/** Seconds one read waits on a job of the clips service (a download, a render): past it the look ends and is asked again. */
+export const CLIPS_WAIT_SECONDS = 60;
 
 /** « Video transcribed »: the brief's videos, one transcript per run, on our own box. */
 export function buildTranscriptSource(): string {
@@ -141,6 +157,248 @@ export default function run(ctx: ScriptContext): ScriptResult {
   return { unmade: "no_video_left: every video the brief gives is already transcribed", decided: "idle" };
 }
 ${COMPLETION_HELPERS}`;
+}
+
+/** « Video clip cut »: one strong moment of a transcribed video, cut into a vertical clip with captions. */
+export function buildClipSource(): string {
+  return `${HEAD}
+${CARRY_FN}
+const WAIT = ${CLIPS_WAIT_SECONDS};
+function sourceOf(ctx: any, id: string): any {
+  return ctx.storage.get("sources", id);
+}
+function saveSource(ctx: any, src: any): void {
+  ctx.storage.set("sources", String(src.transcriptId), src);
+}
+/** A moment is never cut twice (used) nor proposed again once the brand's person refused it (rejected). */
+function mark(ctx: any, transcriptId: any, index: any, what: "used" | "rejected"): void {
+  if (typeof transcriptId !== "string" || typeof index !== "number") return;
+  const src: any = sourceOf(ctx, transcriptId);
+  if (!src) return;
+  const flags: any = { ...(src[what] ?? {}) };
+  if (flags[String(index)] === true) return;
+  flags[String(index)] = true;
+  saveSource(ctx, { ...src, [what]: flags });
+}
+/** The next clip: a transcribed video with a moment left, its moments picked once by the asked model, one moment cut. */
+function makeClip(ctx: any, scope: string, feedback: any): any {
+  const r: any = ctx.request ?? {};
+  const brief = typeof r.brief === "string" && r.brief.trim() ? r.brief.trim() : null;
+  if (feedback && feedback.previous) mark(ctx, feedback.previous.transcriptId, feedback.previous.momentIndex, "rejected");
+  for (let turn = 0; turn < 6; turn++) {
+    const index: string[] = ctx.storage.get("sources_index", scope) ?? [];
+    let src: any = null;
+    for (const id of index) {
+      const s: any = sourceOf(ctx, id);
+      if (s && s.exhausted !== true) {
+        src = { ...s };
+        break;
+      }
+    }
+    if (!src) {
+      const u: any = ctx.ask("${VIDEO_TRANSCRIBED}", { request: carry(ctx, {}) });
+      if (!u.content) return passOn(u);
+      src = { transcriptId: String(u.content.transcriptId), videoUrl: String(u.content.videoUrl), used: {}, rejected: {} };
+      saveSource(ctx, src);
+      ctx.storage.set("sources_index", scope, [...index.filter((i) => i !== src.transcriptId), src.transcriptId]);
+    }
+    // The video on the clips service (fetched once per source), then its transcript handed over.
+    if (!src.videoId) {
+      const a: Answer = ctx.vendor.call("content.video.download", { body: { sourceUrl: src.videoUrl } });
+      if (!a.ok) {
+        if (typeof a.data.status !== "number" || a.data.status >= 500) throw new Error("content.video.download failed (" + String(a.data.status ?? "") + "): " + String(a.data.error ?? "").slice(0, 300));
+        saveSource(ctx, { ...src, exhausted: true, error: refusalOf(a, "video_refused") });
+        return { unmade: refusalOf(a, "video_refused") };
+      }
+      src.videoId = String(a.data.id);
+      saveSource(ctx, src);
+    }
+    const video: any = must(ctx, "content.video.read", { params: { id: src.videoId }, query: { waitSeconds: WAIT } });
+    if (video.status === "failed") {
+      const why = "video_download_failed: " + String(video.errorCode ?? "") + " " + String(video.error ?? "");
+      saveSource(ctx, { ...src, exhausted: true, error: why });
+      return { unmade: why };
+    }
+    if (video.status !== "ready") return { unmade: "downloading: the video is being fetched (" + String(video.stage ?? video.status) + ")", again: true };
+    if (src.transcriptAttached !== true) {
+      must(ctx, "content.video.transcript.attach", { params: { id: src.videoId }, body: { transcriptionId: src.transcriptId } });
+      src.transcriptAttached = true;
+      saveSource(ctx, src);
+    }
+    const transcript: any = must(ctx, "content.video.transcript", { params: { id: src.videoId }, query: { waitSeconds: WAIT, words: "false", from: 0, to: 1 } });
+    if (transcript.status === "failed") {
+      const why = "transcript_failed: " + String(transcript.error ?? "");
+      saveSource(ctx, { ...src, exhausted: true, error: why });
+      return { unmade: why };
+    }
+    if (transcript.status !== "done") return { unmade: "transcript_loading: the transcript is being read (" + String(transcript.status) + ")", again: true };
+    if (!Array.isArray(src.moments)) {
+      const ask: any = brief ? { brief } : {};
+      const request: any = must(ctx, "content.video.moments.request", { params: { id: src.videoId }, body: ask }).request;
+      const answer: any = askCompletion(ctx, request).data;
+      const picked: any = must(ctx, "content.video.moments", { params: { id: src.videoId }, body: { ...ask, completion: { request, answer } } });
+      src.moments = Array.isArray(picked.moments) ? picked.moments : [];
+      src.momentsId = picked.id ?? null;
+      saveSource(ctx, src);
+    }
+    const used: any = src.used ?? {};
+    const rejected: any = src.rejected ?? {};
+    let at = -1;
+    for (let i = 0; i < src.moments.length; i++) {
+      if (used[String(i)] !== true && rejected[String(i)] !== true) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) {
+      // Every moment of this video is cut or refused: the next video (another transcript is asked for on the next turn).
+      saveSource(ctx, { ...src, exhausted: true });
+      continue;
+    }
+    const moment: any = src.moments[at];
+    const cut: Answer = ctx.vendor.call("content.clip.cut", { body: { videoId: src.videoId, start: moment.start, end: moment.end, idempotencyKey: "clip:" + src.videoId + ":" + at } });
+    if (!cut.ok) {
+      if (typeof cut.data.status !== "number" || cut.data.status >= 500) throw new Error("content.clip.cut failed (" + String(cut.data.status ?? "") + "): " + String(cut.data.error ?? "").slice(0, 300));
+      mark(ctx, src.transcriptId, at, "rejected");
+      return { unmade: refusalOf(cut, "clip_refused"), again: true };
+    }
+    const clip: any = must(ctx, "content.clip.read", { params: { id: String(cut.data.id) }, query: { waitSeconds: WAIT } });
+    if (clip.status === "failed" || clip.status === "expired") {
+      mark(ctx, src.transcriptId, at, "rejected");
+      return { unmade: "clip_render_failed: " + String(clip.errorCode ?? clip.status) + " " + String(clip.error ?? ""), again: true };
+    }
+    if (clip.status !== "done") return { unmade: "rendering: the clip is being cut (" + String(clip.stage ?? clip.status) + ")", again: true };
+    return { proposal: { ...slimClip(clip), transcriptId: src.transcriptId, momentIndex: at, moment } };
+  }
+  return { unmade: "no_moment_left: no video of the brief has a moment left to cut", decided: "idle" };
+}
+/** Video clip cut (REELS-1124): one moment of a long video, cut vertical with its captions. */
+export default function run(ctx: ScriptContext): ScriptResult {
+  const r: any = ctx.request ?? {};
+  const scope = String(r.campaignId ?? "direct");
+  // A change the asking script hands down (the brand's person refused the clip it was shown): another moment.
+  const handed = typeof r.feedback === "string" && r.feedback.trim() ? { words: r.feedback.trim(), previous: r.previous ?? null, about: "own" } : null;
+  const v: any = validated(
+    ctx,
+    (feedback: any) => makeClip(ctx, scope, feedback ?? handed),
+    (p: any) => ({
+      what: "a short clip cut from your video" + (p.moment && p.moment.title ? ": " + String(p.moment.title) : ""),
+      facts: [
+        "Length: " + Math.round(Number(p.durationSeconds ?? 0)) + " seconds, taken at " + Math.round(Number(p.start ?? 0)) + " s of the video",
+        p.moment && p.moment.quote ? "It says: " + String(p.moment.quote) : "",
+        p.moment && p.moment.why ? "Why this moment: " + String(p.moment.why) : "",
+      ].filter(Boolean),
+      links: [p.url],
+      then: "a hook is added at its start, then it becomes a Reel",
+      own: "which moment of the video was cut",
+      source: "",
+    }),
+  );
+  if (!v || !v.proposal) return v;
+  const p: any = v.proposal;
+  mark(ctx, p.transcriptId, p.momentIndex, "used");
+  ctx.consume("${VIDEO_TRANSCRIBED}", { service: "chat-service", id: String(p.transcriptId) });
+  settle(ctx, v);
+  return { content: p, subject: { service: "content-generation-service", id: String(p.id) } };
+}
+${COMPLETION_HELPERS}
+${HUMAN_VALIDATION_FNS}`;
+}
+
+/** « Hook added »: a clip that opens on a hook. Where the hook comes from is the script's tactic \`hook\`. */
+export function buildHookSource(): string {
+  return `${HEAD}
+${CARRY_FN}
+const WAIT = ${CLIPS_WAIT_SECONDS};
+const OWN = "the hook: the first seconds that open the clip";
+const SOURCE = "the clip itself: which moment of the video was cut";
+/** The clips service's door of this script's kind of hook (tactic hook). */
+function hookDoor(ctx: any): string {
+  const kind = (ctx.tactics ?? {}).hook;
+  if (kind === "internal") return "content.clip.internal_hook";
+  if (kind === "external") return "content.clip.external_hook";
+  throw new Error("this script states no kind of hook (tactic hook: internal or external)");
+}
+/** A hooked clip in the making, kept across runs (the clip it got, the render it started) until it is a Unit. */
+function makeHook(ctx: any, base: string, feedback: any): any {
+  const r: any = ctx.request ?? {};
+  const door = hookDoor(ctx);
+  const wipKey = base + "|" + stableKey(feedback ? String(feedback.words) : "");
+  const wip: any = { ...(ctx.storage.get("wip", wipKey) ?? {}) };
+  if (!wip.clip) {
+    if (feedback && feedback.about === "own" && feedback.previous && feedback.previous.clip) {
+      // They asked for another hook: the same clip.
+      wip.clip = feedback.previous.clip;
+      wip.clipSubject = feedback.previous.clipSubject ?? null;
+    } else {
+      const u: any = ctx.ask("${VIDEO_CLIP_CUT}", { request: carry(ctx, feedback ? { feedback: feedback.words, previous: feedback.previous ? feedback.previous.clip : null } : {}) });
+      if (!u.content) return passOn(u);
+      wip.clip = u.content;
+      wip.clipSubject = u.run && u.run.unit ? u.run.unit.subject : null;
+    }
+    ctx.storage.set("wip", wipKey, wip);
+  }
+  if (!wip.hookedId) {
+    const lines = [typeof r.brief === "string" && r.brief.trim() ? r.brief.trim() : ""];
+    if (feedback && feedback.about === "own") {
+      lines.push("The brand's person saw a first hook on this clip and asked for a change. Their words: " + String(feedback.words));
+      if (feedback.previous && feedback.previous.hook) lines.push("The hook they refused: " + JSON.stringify(feedback.previous.hook));
+    }
+    const brief = lines.filter(Boolean).join("\\n\\n");
+    const ask: any = brief ? { brief } : {};
+    const request: any = must(ctx, door + ".request", { params: { id: String(wip.clip.id) }, body: ask }).request;
+    const answer: any = askCompletion(ctx, request).data;
+    const a: Answer = ctx.vendor.call(door, { params: { id: String(wip.clip.id) }, body: { ...ask, completion: { request, answer }, idempotencyKey: "hook:" + wipKey + ":" + String(wip.clip.id) } });
+    if (!a.ok) {
+      if (typeof a.data.status !== "number") throw new Error(door + ": " + String(a.data.error ?? "no answer"));
+      // The clip is gone (expired): this work starts again from a new clip.
+      if (a.data.status === 404 || a.data.status === 410) ctx.storage.delete("wip", wipKey);
+      return { unmade: refusalOf(a, "hook_refused"), again: true };
+    }
+    wip.hookedId = String(a.data.id);
+    ctx.storage.set("wip", wipKey, wip);
+  }
+  const hooked: any = must(ctx, "content.clip.read", { params: { id: wip.hookedId }, query: { waitSeconds: WAIT } });
+  if (hooked.status === "failed" || hooked.status === "expired") {
+    ctx.storage.set("wip", wipKey, { ...wip, hookedId: null });
+    return { unmade: "hook_render_failed: " + String(hooked.errorCode ?? hooked.status) + " " + String(hooked.error ?? ""), again: true };
+  }
+  if (hooked.status !== "done") return { unmade: "rendering: the hook is being added (" + String(hooked.stage ?? hooked.status) + ")", again: true };
+  return { proposal: { ...slimClip(hooked), clip: wip.clip, clipSubject: wip.clipSubject ?? null, wipKey } };
+}
+/** Hook added (REELS-1124): a clip whose first seconds are made to stop the scroll. */
+export default function run(ctx: ScriptContext): ScriptResult {
+  const r: any = ctx.request ?? {};
+  const base = String(r.campaignId ?? "direct") + "|" + stableKey(ctx.tactics ?? {});
+  // A change the asking script hands down: about the hook (the same clip, another hook) or about the clip (another clip).
+  const words = typeof r.feedback === "string" ? r.feedback.trim() : "";
+  const handed = words ? { words, previous: r.previous ?? null, about: changeIsAbout(ctx, words, OWN, SOURCE) } : null;
+  const v: any = validated(
+    ctx,
+    (feedback: any) => makeHook(ctx, base, feedback ?? handed),
+    (p: any) => ({
+      what: "a clip with its hook, ready to become a Reel",
+      facts: [
+        p.hook && p.hook.type === "external" ? "It opens on this line on screen: " + String(p.hook.text) : p.hook && p.hook.quote ? "It opens on its strongest seconds: " + String(p.hook.quote) : "",
+        p.hook && p.hook.why ? "Why this hook: " + String(p.hook.why) : "",
+        "Length: " + Math.round(Number(p.durationSeconds ?? 0)) + " seconds",
+      ].filter(Boolean),
+      links: [p.url],
+      then: "it goes on to be published as a Reel",
+      own: OWN,
+      source: SOURCE,
+    }),
+  );
+  if (!v || !v.proposal) return v;
+  const p: any = v.proposal;
+  if (p.clipSubject) ctx.consume("${VIDEO_CLIP_CUT}", p.clipSubject);
+  ctx.storage.delete("wip", String(p.wipKey));
+  settle(ctx, v);
+  const { wipKey: _w, ...content } = p;
+  return { content, subject: { service: "content-generation-service", id: String(p.id) } };
+}
+${COMPLETION_HELPERS}
+${HUMAN_VALIDATION_FNS}`;
 }
 
 /** « Instagram Reel published »: a hooked clip, its caption, published on the brand's Instagram. */
@@ -231,6 +489,23 @@ ${HUMAN_VALIDATION_FNS}`;
 
 const human = (tactics: Record<string, unknown>) => ({ ...tactics, [VALIDATION_TACTIC]: VALIDATED_BY_HUMAN });
 
+function clipAndHookScripts(): EngineScript[] {
+  const clip = buildClipSource();
+  const hook = buildHookSource();
+  const clipDescription = "Cuts one strong moment of a long video into a short vertical clip with its captions. Asks for the video's transcript, has the moments worth cutting picked once per video, and cuts the next one that was not cut yet. One clip per run.";
+  const internal = "Makes a clip open on its own strongest two seconds: asks for a clip, has the juiciest moment of its words picked, and plays it first, before the clip.";
+  const external = "Makes a clip open on a line proven elsewhere: asks for a clip, picks from a library of hooks that worked on other videos the one that fits it, and shows that line over its first seconds.";
+  const asks = ["llm_completion"];
+  return [
+    { outcome: VIDEO_CLIP_CUT, dynasty: "dy_clip_cut", name: "Automatic clip", description: clipDescription + " Nobody validates it first.", tactics: { asks }, code: clip },
+    { outcome: VIDEO_CLIP_CUT, dynasty: "dy_clip_cut_validated", name: "Clip you approve first", description: clipDescription + " " + VALIDATED_DESCRIPTION, tactics: human({ asks }), code: clip },
+    { outcome: HOOK_ADDED, dynasty: "dy_internal_hook", name: "Internal hook", description: internal + " Nobody validates it first.", tactics: { asks, hook: "internal" }, code: hook },
+    { outcome: HOOK_ADDED, dynasty: "dy_external_hook", name: "External hook", description: external + " Nobody validates it first.", tactics: { asks, hook: "external" }, code: hook },
+    { outcome: HOOK_ADDED, dynasty: "dy_internal_hook_validated", name: "Internal hook you approve first", description: internal + " " + VALIDATED_DESCRIPTION, tactics: human({ asks, hook: "internal" }), code: hook },
+    { outcome: HOOK_ADDED, dynasty: "dy_external_hook_validated", name: "External hook you approve first", description: external + " " + VALIDATED_DESCRIPTION, tactics: human({ asks, hook: "external" }), code: hook },
+  ];
+}
+
 /** The scripts stored for the Engines whose producers are live. An automatic script and its human-validated fork share one code. */
 export function engineScripts(): EngineScript[] {
   const post = buildReelPostSource();
@@ -244,6 +519,7 @@ export function engineScripts(): EngineScript[] {
       tactics: { asks: ["llm_completion"] },
       code: buildTranscriptSource(),
     },
+    ...clipAndHookScripts(),
     {
       outcome: INSTAGRAM_REEL_PUBLISHED,
       dynasty: "dy_reel_post",

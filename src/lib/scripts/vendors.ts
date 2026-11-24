@@ -274,6 +274,23 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // transcript in pieces (`include=segments,words`, `fromSeconds`, `toSeconds`). chat-service declares no Unit.
   "chat.media.transcribe": { service: "chat", method: "POST", path: "/orgs/media-transcriptions", asRun: true },
   "chat.media.transcription": { service: "chat", method: "GET", path: "/orgs/media-transcriptions/{id}", asRun: true },
+  // REELS-1124: a long video cut into vertical clips with hooks (content-generation, its own CPU, no vendor; it declares
+  // nothing: the script's run declares the Unit on the id it answers). Every job answers at once and is read with its own
+  // long-poll (`waitSeconds`). The model's picks (moments, hooks) are ASKED by the script: `<door>.request` answers the
+  // exact request, the script asks the LLM completion Engine, then hands `completion {request, answer}` to the door,
+  // which fills `completion.runId` with the script's run.
+  "content.video.download": { service: "content-generation", method: "POST", path: "/videos", asRun: true },
+  "content.video.read": { service: "content-generation", method: "GET", path: "/videos/{id}", asRun: true },
+  "content.video.transcript.attach": { service: "content-generation", method: "POST", path: "/videos/{id}/transcript", asRun: true },
+  "content.video.transcript": { service: "content-generation", method: "GET", path: "/videos/{id}/transcript", asRun: true },
+  "content.video.moments.request": { service: "content-generation", method: "POST", path: "/videos/{id}/moments/request", asRun: true },
+  "content.video.moments": { service: "content-generation", method: "POST", path: "/videos/{id}/moments", asRun: true, runIdInBody: "completion.runId" },
+  "content.clip.cut": { service: "content-generation", method: "POST", path: "/video-clips", asRun: true },
+  "content.clip.read": { service: "content-generation", method: "GET", path: "/video-clips/{id}", asRun: true },
+  "content.clip.internal_hook.request": { service: "content-generation", method: "POST", path: "/video-clips/{id}/internal-hook/request", asRun: true },
+  "content.clip.internal_hook": { service: "content-generation", method: "POST", path: "/video-clips/{id}/internal-hook", asRun: true, runIdInBody: "completion.runId" },
+  "content.clip.external_hook.request": { service: "content-generation", method: "POST", path: "/video-clips/{id}/external-hook/request", asRun: true },
+  "content.clip.external_hook": { service: "content-generation", method: "POST", path: "/video-clips/{id}/external-hook", asRun: true, runIdInBody: "completion.runId" },
   // The follow-ups (MIGRATE-1105 S4b): the figures a campaign's brief asks for, read for the person (figure-reader.ts).
   "workflow.figures.read": { service: "workflow", method: "POST", path: "/orgs/figures/read", asRun: true },
 };

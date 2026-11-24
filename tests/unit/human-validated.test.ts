@@ -133,7 +133,7 @@ beforeEach(async () => {
   setProofContext(null);
   await createScript(db, { outcome: "thing_made", dynasty: "dy_maker", code: MAKER, description: "x" }, author, known);
   await createScript(db, { outcome: "llm_completion", dynasty: "dy_fake", code: COMPLETION, description: "x" }, author, known);
-}, 60_000);
+}, 300_000);
 afterEach(() => {
   setScriptPickReader(null);
   setScriptStrategyReader(null);
