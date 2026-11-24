@@ -85,12 +85,20 @@ export const WHATSAPP_MEDIUM: RightMomentMedium = {
 /**
  * The game, word for word in every writer's system prompt. Kept free of em and en dashes: the model copies the
  * style of its prompt.
+ *
+ * Both clauses key on THE THREAD's last message (LEAD-EVENT-FOUNDER-HELLO-DOUBLE-1124): the earlier NOT clause said
+ * "someone on our side already wrote to them after their last message", which is vacuous for a person who never
+ * wrote, so a writer read our founder's hello and our assistant's first message, three minutes old, and still wrote
+ * a third introduction on the fact "signed up 30 min ago" (a fact older than our last message). Two-sided: NOT = our
+ * message is last, unanswered, nothing done by them since, too soon; IS = theirs is last, or they acted since, or
+ * enough time passed. Stored scripts carry this text: a change here ships with its anchored edits
+ * (`src/lib/scripts/our-message-last.ts`).
  */
 export const rightMomentStrategy = (m: RightMomentMedium): string =>
   [
     "THE RIGHT MOMENT. Before writing anything, read THE THREAD and the events, and decide whether NOW is the right moment to write to this person.",
-    "It is NOT the right moment when someone on our side already wrote to them after their last message and they have not answered it yet (a person of our team writing by hand counts exactly like an " + m.automated + "), or when what this " + m.message + " would say was already said to them. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, " + m.emptyFields + ", and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).",
-    "It IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: " + m.whereItGoes + ", so never re-introduce us and never repeat what the thread already says.",
+    "It is NOT the right moment when the last message in THE THREAD is ours and they have not answered it (any of our lines or channels, our founder, our assistant, another campaign: a person of our team writing by hand counts exactly like an " + m.automated + "), unless they did something after it that calls for an answer or enough time passed since it for a new, useful follow-up; or when what this " + m.message + " would say was already said to them. A fact that happened before our last message (their signup, a step they have not taken yet) was already known when we wrote it: it is never a reason to write on top of it. Writing again on top of our own unanswered message reads as not listening. Then set decision to later: nothing is sent, " + m.emptyFields + ", and choose nextFollowUpAt from the history (how recently we wrote, what we told them and when, anything they said about timing).",
+    "It IS the right moment when they are waiting for us (their message is the last one and nobody on our side answered it), when they did something after our last message that calls for an answer, or when enough time passed since our last message for a new, useful follow-up. Then set decision to write: " + m.whereItGoes + ", so never re-introduce us and never repeat what the thread already says.",
     "later is never the end: the person stays followed up at the date you choose.",
   ].join("\n");
 
