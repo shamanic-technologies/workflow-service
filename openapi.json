@@ -4539,6 +4539,143 @@
           "servable"
         ]
       },
+      "RequiredKeysResponse": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "The Target's Engine the Plan was read from."
+          },
+          "campaignId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The campaign whose strategy narrowed each Engine; null = before launch (the scripts kept with no campaign)."
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "description": "The provider, as key-service names it (e.g. `anthropic`, `apollo`)."
+                },
+                "domain": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Its domain, for a logo; null when unknown."
+                },
+                "held": {
+                  "type": "boolean",
+                  "description": "The org already holds its own key for it (key-service)."
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "Every script of some Engine on the Plan needs it; false = one choice among several (the Rating can run another script without it)."
+                },
+                "for": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "engine": {
+                        "type": "string"
+                      },
+                      "script": {
+                        "type": "string"
+                      },
+                      "scriptName": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "call": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "engine",
+                      "script",
+                      "scriptName",
+                      "call"
+                    ]
+                  },
+                  "description": "What it is for: the Engine, the script (dynasty + client-readable name), the call that needs it."
+                }
+              },
+              "required": [
+                "provider",
+                "domain",
+                "held",
+                "required",
+                "for"
+              ]
+            },
+            "description": "Every provider the Plan's scripts call, the musts first."
+          },
+          "engines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string"
+                },
+                "scripts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "dynasty": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "providers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "ready": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "dynasty",
+                      "name",
+                      "providers",
+                      "ready"
+                    ]
+                  }
+                },
+                "ready": {
+                  "type": "boolean",
+                  "description": "At least one of its scripts needs only keys the org holds."
+                }
+              },
+              "required": [
+                "outcome",
+                "scripts",
+                "ready"
+              ]
+            },
+            "description": "Each Engine of the Plan (the Target first, then what its scripts read or ask, recursively)."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Every Engine of the Plan has a script the org's keys already let run."
+          }
+        },
+        "required": [
+          "outcome",
+          "campaignId",
+          "keys",
+          "engines",
+          "ready"
+        ]
+      },
       "EngineMakeRequest": {
         "type": "object",
         "properties": {
@@ -12966,6 +13103,86 @@
                     "error",
                     "code"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/engines/{outcome}/required-keys": {
+      "get": {
+        "summary": "The keys a campaign's Plan needs (provider + what for), and which the org already holds (service key only)",
+        "description": "SOLO-PLAN-1125 (owner 2026-11-25): a founder launching a campaign without our paid plan brings their own keys; their AI asks for exactly these. `outcome` = the campaign's Target. From that Engine, the scripts the campaign's strategy keeps (`campaignId`; absent = before launch, the scripts kept with no campaign), runnable; the Units each reads or asks are asked of their own Engine, recursively. An LLM call needs the provider of each LLM its script states; any other call needs the providers key-service observed its endpoint requesting. `held` = key-service holds the org's own key (`GET /keys`, read as `x-org-id` + `x-user-id`). `required: false` = only some scripts of an Engine need it (one choice among several). Reads only. 502 when features-service (strategy) or key-service cannot answer.",
+        "tags": [
+          "Engines"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "campaignId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequiredKeysResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an outcome key, or no `x-org-id` / `x-user-id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`required_keys_unreadable`: the strategy or key-service could not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

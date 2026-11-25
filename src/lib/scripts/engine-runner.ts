@@ -26,7 +26,8 @@ import { and, asc, eq, lte, or, sql } from "drizzle-orm";
 import { engineWaits, scripts, workflowRuns, type EngineWaitRow, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 import { START_OUTCOME, pickScript } from "./engine.js";
-import { ScriptRunFailed, scriptTaskName, type LedgerDeps, type MaterialUnit, type RunScriptInput, type ScriptRunResult, type SubjectRef } from "./script-runner.js";
+import { ScriptRunFailed, scriptTaskName, type LedgerDeps, type MaterialUnit, type OwnedRun, type RunScriptInput, type ScriptRunResult, type SubjectRef } from "./script-runner.js";
+import { mergePending, storedPending } from "./pending-answer.js";
 
 /** An Engine run with no script it can run (nothing pushed it can use): named by its Engine, ends idle. */
 export const engineTaskName = (outcome: string) => `engine:${outcome}`;
@@ -65,7 +66,7 @@ export interface CampaignCallbacks {
 export interface EngineRunDeps {
   ledger: LedgerDeps;
   campaign: CampaignCallbacks;
-  runScript(input: RunScriptInput, who: { orgId: string; userId: string; parentRunId: string; headers: Record<string, string> }, owned: { runId: string; onWait(days: number): Promise<void> }): Promise<ScriptRunResult>;
+  runScript(input: RunScriptInput, who: { orgId: string; userId: string; parentRunId: string; headers: Record<string, string> }, owned: OwnedRun): Promise<ScriptRunResult>;
   /** After a script run (the roll-back guard watches its outcome). */
   noteScriptRun?(outcome: string): void;
 }
@@ -264,6 +265,8 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
               version: plan.script.version,
               ...(plan.wait.subject ? { subject: plan.wait.subject as SubjectRef } : {}),
               units: (plan.wait.units ?? {}) as Record<string, MaterialUnit>,
+              // SOLO-PLAN-1125: the LLM answers it waited on, each named again by the same call (none = byte for byte).
+              ...(storedPending(plan.wait.pendingAnswers).length > 0 ? { pendingAnswers: storedPending(plan.wait.pendingAnswers) } : {}),
             }
           : {
               outcome: plan.script.outcome,
@@ -291,8 +294,11 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
         try {
           out = await deps.runScript(scriptInput, { orgId: d.orgId, userId: d.userId, parentRunId: d.callerRunId, headers: { ...vendorHeaders, "x-run-id": scriptRunId, ...(othersFollow ? { [REFUSAL_NOT_FINAL_HEADER]: "true" } : {}) } }, {
             runId: scriptRunId,
-            onWait: async (days) => {
+            onWait: async (days, pending) => {
               await db.insert(engineWaits).values({
+                // SOLO-PLAN-1125: a wait on LLM answers still to come keeps every job of the run tree (the ones it resumed
+                // with too: the resumed script asks them again from its start); any other wait keeps none.
+                ...(pending ? { pendingAnswers: mergePending(scriptInput.pendingAnswers, pending.answers) } : {}),
                 orgId: d.orgId,
                 campaignId: d.campaignId,
                 outcome: d.outcome,

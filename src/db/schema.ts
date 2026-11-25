@@ -351,6 +351,8 @@ export const engineWaits = pgTable(
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     fromRunId: text("from_run_id").notNull(),
     resumedRunId: text("resumed_run_id"),
+    /** SOLO-PLAN-1125 (migration 0060): the LLM calls this wait waits on (`[{key, jobId, since}]`), null for any other wait. */
+    pendingAnswers: jsonb("pending_answers"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_engine_waits_due").on(table.orgId, table.campaignId, table.outcome, table.status, table.dueAt)]

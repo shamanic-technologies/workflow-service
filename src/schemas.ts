@@ -3135,6 +3135,37 @@ export const EnginePickRequestSchema = z
   })
   .openapi("EnginePickRequest");
 
+// SOLO-PLAN-1125: the keys a campaign's Plan needs, and which the org already holds.
+export const RequiredKeysResponseSchema = z
+  .object({
+    outcome: z.string().describe("The Target's Engine the Plan was read from."),
+    campaignId: z.string().nullable().describe("The campaign whose strategy narrowed each Engine; null = before launch (the scripts kept with no campaign)."),
+    keys: z
+      .array(
+        z.object({
+          provider: z.string().describe("The provider, as key-service names it (e.g. `anthropic`, `apollo`)."),
+          domain: z.string().nullable().describe("Its domain, for a logo; null when unknown."),
+          held: z.boolean().describe("The org already holds its own key for it (key-service)."),
+          required: z.boolean().describe("Every script of some Engine on the Plan needs it; false = one choice among several (the Rating can run another script without it)."),
+          for: z
+            .array(z.object({ engine: z.string(), script: z.string(), scriptName: z.string().nullable(), call: z.string() }))
+            .describe("What it is for: the Engine, the script (dynasty + client-readable name), the call that needs it."),
+        }),
+      )
+      .describe("Every provider the Plan's scripts call, the musts first."),
+    engines: z
+      .array(
+        z.object({
+          outcome: z.string(),
+          scripts: z.array(z.object({ dynasty: z.string(), name: z.string().nullable(), providers: z.array(z.string()), ready: z.boolean() })),
+          ready: z.boolean().describe("At least one of its scripts needs only keys the org holds."),
+        }),
+      )
+      .describe("Each Engine of the Plan (the Target first, then what its scripts read or ask, recursively)."),
+    ready: z.boolean().describe("Every Engine of the Plan has a script the org's keys already let run."),
+  })
+  .openapi("RequiredKeysResponse");
+
 export const EnginePickResponseSchema = z
   .object({
     outcome: z.string(),
@@ -3345,6 +3376,26 @@ registry.registerPath({
     200: { description: "The pick", content: { "application/json": { schema: EnginePickResponseSchema } } },
     400: { description: "Not an outcome key, or an invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: { description: "`no_runnable_script`: no kept dynasty can run", content: { "application/json": { schema: z.object({ error: z.string(), code: z.literal("no_runnable_script") }) } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/engines/{outcome}/required-keys",
+  summary: "The keys a campaign's Plan needs (provider + what for), and which the org already holds (service key only)",
+  description:
+    "SOLO-PLAN-1125 (owner 2026-11-25): a founder launching a campaign without our paid plan brings their own keys; their AI asks for exactly these. `outcome` = the campaign's Target. From that Engine, the scripts the campaign's strategy keeps (`campaignId`; absent = before launch, the scripts kept with no campaign), runnable; the Units each reads or asks are asked of their own Engine, recursively. An LLM call needs the provider of each LLM its script states; any other call needs the providers key-service observed its endpoint requesting. `held` = key-service holds the org's own key (`GET /keys`, read as `x-org-id` + `x-user-id`). `required: false` = only some scripts of an Engine need it (one choice among several). Reads only. 502 when features-service (strategy) or key-service cannot answer.",
+  tags: ["Engines"],
+  security: [{ apiKey: [] }],
+  request: {
+    params: z.object({ outcome: z.string() }),
+    query: z.object({ campaignId: z.string().optional() }),
+    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+  },
+  responses: {
+    200: { description: "The keys", content: { "application/json": { schema: RequiredKeysResponseSchema } } },
+    400: { description: "Not an outcome key, or no `x-org-id` / `x-user-id`", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "`required_keys_unreadable`: the strategy or key-service could not answer", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
