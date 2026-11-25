@@ -8,13 +8,16 @@
  * `{outcome, tactics}` per line, from the box) and prints the first cold email path of every Engine reached by answering
  * a lead, plus the public paths (upgraded so an occurrence run is refused, by who).
  * `--public-act-paths <jsonl> <steps json> [--restore]` (WF3 B1): the paths through a public act (`publicActPaths`),
- * created RETIRED; `--restore` prints only the status ops that put them live.
+ * created RETIRED; `--restore` prints only the status ops that put them live; `--only <engine,...>` narrows to the paths
+ * asking those Engines (each group restored once features-service's opt-in tactic for it exists).
  */
 import { readFileSync } from "node:fs";
 import { buildDraftSource, buildPathSource, buildReplySource, type CatalogueStep, DRAFTS, ENGINE_REASONS, firstEmailPaths, occurrenceActPaths, PATHS, PRODUCERS, publicActPaths, REPLIES } from "./distry-engines.js";
 import { readRequestFields } from "../../src/lib/scripts/request-fields.js";
 
 const out = (o: unknown) => console.log(JSON.stringify(o));
+// `--only <engine,engine>`: the paths asking those Engines only (a group restored once its opt-in tactic exists).
+const only = process.argv.includes("--only") ? new Set(String(process.argv[process.argv.indexOf("--only") + 1] ?? "").split(",").filter(Boolean)) : null;
 const pathOp = (p: (typeof PATHS)[number]) => ({ op: "create", body: { outcome: p.outcome, dynasty: p.dynasty, name: p.name, code: buildPathSource(p.asks, { answersNobody: p.answersNobody === true }), description: p.description, tactics: p.tactics } });
 if (process.argv.includes("--first-email-paths")) {
   const file = process.argv[process.argv.indexOf("--first-email-paths") + 1];
@@ -30,7 +33,7 @@ if (process.argv.includes("--first-email-paths")) {
   const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null });
   const steps = (JSON.parse(readFileSync(stepsFile, "utf8")) as { rows: CatalogueStep[] }).rows;
   const status = process.argv.includes("--restore") ? "active" : "deprecated";
-  for (const p of publicActPaths(rows, steps)) {
+  for (const p of publicActPaths(rows, steps).filter((x) => only === null || only.has(x.asks))) {
     if (status === "deprecated") out(pathOp(p));
     out({ op: "status", outcome: p.outcome, dynasty: p.dynasty, status, reason: status === "deprecated" ? "Stored retired until features-service states the opt-in tactic of the act it works through (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1)" : "Restored: the opt-in tactic of its act is live (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1)" });
   }
@@ -43,7 +46,7 @@ if (process.argv.includes("--first-email-paths")) {
   const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null; code: string });
   const steps = (JSON.parse(readFileSync(stepsFile, "utf8")) as { rows: CatalogueStep[] }).rows;
   const status = process.argv.includes("--restore") ? "active" : "deprecated";
-  for (const p of occurrenceActPaths(rows, steps, readRequestFields)) {
+  for (const p of occurrenceActPaths(rows, steps, readRequestFields).filter((x) => only === null || only.has(x.asks))) {
     if (status === "deprecated") out(pathOp(p));
     out({ op: "status", outcome: p.outcome, dynasty: p.dynasty, status, reason: status === "deprecated" ? "Stored retired until features-service states the opt-in tactic of the Engine it answers through (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4)" : "Restored: the opt-in tactic of the Engine it answers through is live (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4)" });
   }
