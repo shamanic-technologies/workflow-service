@@ -305,6 +305,62 @@ export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<st
   return out;
 }
 
+/**
+ * PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4: a campaign aimed at a person's outcome whose brief answers an OCCURRENCE
+ * through another Engine (sends the email the client pushed, an AI proposal on a hot lead, a follow-up of a lead the
+ * brand already wrote to) reaches that Engine from its Target. One code (`buildPathSource`, the occurrence passed as
+ * stated, never refused), one dynasty `dy_answer_through_<engine>` under each Engine reached by answering a lead, derived
+ * from the LIVE scripts' CODE (never a list of outcomes here):
+ *   - the Targets and their owner = `firstEmailPaths`' rule;
+ *   - the Engines = those holding a maker (not a single ask stating `askRecordedBy`) whose code reads the Request's
+ *     `trigger` (`readRequestFields`): it answers an occurrence; never an Engine that is itself a Target (reached by
+ *     answering a lead: it is reached directly);
+ *   - a Target already holding a script asking that Engine alone that does not refuse an occurrence gets none (the
+ *     answering path through Message sent).
+ * On a proactive tick the asked Engine's own script decides (nobody named = its own serve, or idle). Which campaigns keep
+ * one is features-service's opt-in script tactic per Engine, judged on the brief; stored RETIRED until it exists.
+ */
+export const ANSWER_THROUGH_PREFIX = "dy_answer_through_";
+
+export function occurrenceActPaths(
+  rows: Array<{ outcome: string; tactics: Record<string, unknown> | null; code: string }>,
+  steps: CatalogueStep[],
+  readsFields: (code: string) => string[],
+): PathSpec[] {
+  const asksOf = (t: Record<string, unknown> | null): string[] => (Array.isArray(t?.asks) ? (t!.asks as unknown[]).map(String) : []);
+  const isPath = (t: Record<string, unknown> | null): boolean => asksOf(t).length === 1 && typeof t?.askRecordedBy === "string";
+  const byOutcome = new Map<string, typeof rows>();
+  for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r]);
+  const step = new Map(steps.map((x) => [x.key, x]));
+  const isTarget = (list: typeof rows) => list.some((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === "message_sent");
+  const engines = [...byOutcome.entries()]
+    .filter(([, list]) => !isTarget(list) && list.some((r) => !isPath(r.tactics) && readsFields(r.code).includes("trigger")))
+    .map(([outcome]) => outcome)
+    .sort();
+  const out: PathSpec[] = [];
+  for (const [outcome, list] of [...byOutcome.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const answering = list.filter((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === "message_sent");
+    if (answering.length === 0) continue;
+    const owners = [...new Set(answering.map((r) => (typeof r.tactics?.recorded_by === "string" ? r.tactics.recorded_by : "")).filter(Boolean))];
+    if (owners.length !== 1) throw new Error(`answer-through path for ${outcome}: its answering scripts state ${owners.length === 0 ? "no" : "several"} owner (recorded_by: ${owners.join(", ")}): which service observes the outcome cannot be read`);
+    const target = step.get(outcome)?.name ?? outcome.replace(/_/g, " ");
+    for (const engine of engines) {
+      if (engine === outcome) continue;
+      if (list.some((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === engine && !r.code.includes(ANSWERS_NOBODY_REFUSAL))) continue;
+      const name = step.get(engine)?.name ?? engine.replace(/_/g, " ");
+      out.push({
+        outcome,
+        dynasty: ANSWER_THROUGH_PREFIX + engine,
+        name: `Answer through ${name}`.slice(0, 40),
+        asks: engine,
+        tactics: { asks: [engine], recorded_by: owners[0]! },
+        description: `Works toward ${target.toLowerCase()}: hands the person a fact names (or the run itself) to ${name.toLowerCase()}, whose script answers them its own way.`,
+      });
+    }
+  }
+  return out;
+}
+
 // ── 2. Drafts ─────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ScriptSpec {

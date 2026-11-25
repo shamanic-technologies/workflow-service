@@ -11,7 +11,8 @@
  * created RETIRED; `--restore` prints only the status ops that put them live.
  */
 import { readFileSync } from "node:fs";
-import { buildDraftSource, buildPathSource, buildReplySource, type CatalogueStep, DRAFTS, ENGINE_REASONS, firstEmailPaths, PATHS, PRODUCERS, publicActPaths, REPLIES } from "./distry-engines.js";
+import { buildDraftSource, buildPathSource, buildReplySource, type CatalogueStep, DRAFTS, ENGINE_REASONS, firstEmailPaths, occurrenceActPaths, PATHS, PRODUCERS, publicActPaths, REPLIES } from "./distry-engines.js";
+import { readRequestFields } from "../../src/lib/scripts/request-fields.js";
 
 const out = (o: unknown) => console.log(JSON.stringify(o));
 const pathOp = (p: (typeof PATHS)[number]) => ({ op: "create", body: { outcome: p.outcome, dynasty: p.dynasty, name: p.name, code: buildPathSource(p.asks, { answersNobody: p.answersNobody === true }), description: p.description, tactics: p.tactics } });
@@ -32,6 +33,19 @@ if (process.argv.includes("--first-email-paths")) {
   for (const p of publicActPaths(rows, steps)) {
     if (status === "deprecated") out(pathOp(p));
     out({ op: "status", outcome: p.outcome, dynasty: p.dynasty, status, reason: status === "deprecated" ? "Stored retired until features-service states the opt-in tactic of the act it works through (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1)" : "Restored: the opt-in tactic of its act is live (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1)" });
+  }
+} else if (process.argv.includes("--answer-through-paths")) {
+  // WF3 B2-B4: `--answer-through-paths <active scripts jsonl WITH code> <catalogue steps json> [--restore]`, created
+  // RETIRED (status op) until features-service's opt-in tactic per asked Engine exists.
+  const i = process.argv.indexOf("--answer-through-paths");
+  const [file, stepsFile] = [process.argv[i + 1], process.argv[i + 2]];
+  if (!file || !stepsFile) throw new Error("--answer-through-paths <active scripts jsonl with code> <catalogue steps json>");
+  const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null; code: string });
+  const steps = (JSON.parse(readFileSync(stepsFile, "utf8")) as { rows: CatalogueStep[] }).rows;
+  const status = process.argv.includes("--restore") ? "active" : "deprecated";
+  for (const p of occurrenceActPaths(rows, steps, readRequestFields)) {
+    if (status === "deprecated") out(pathOp(p));
+    out({ op: "status", outcome: p.outcome, dynasty: p.dynasty, status, reason: status === "deprecated" ? "Stored retired until features-service states the opt-in tactic of the Engine it answers through (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4)" : "Restored: the opt-in tactic of the Engine it answers through is live (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4)" });
   }
 } else if (process.argv.includes("--reasons")) {
   for (const [outcome, reason] of Object.entries(ENGINE_REASONS)) out({ outcome, reason });

@@ -12,6 +12,7 @@ import {
   buildPathSource,
   firstEmailPaths,
   publicActPaths,
+  occurrenceActPaths,
   FIRST_EMAIL_DYNASTY,
   buildPhoneRevealSource,
   buildReplySource,
@@ -371,5 +372,43 @@ describe("publicActPaths", () => {
   });
   it("a Target whose answering paths state several owners is refused, never guessed", () => {
     expect(() => publicActPaths([...ROWS, { outcome: "signup", tactics: { asks: ["message_sent"], recorded_by: "crm" } }], STEPS)).toThrow(/several owner/);
+  });
+});
+
+// PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4: a path that hands an occurrence (or the proactive run) to another Engine.
+describe("occurrenceActPaths", () => {
+  const STEPS = [
+    { key: "paid_client", name: "Paid client", subjectKind: "person", lifecycleRung: "paid_client", towardStep: null },
+    { key: "email_sent", name: "Email sent", subjectKind: null, lifecycleRung: "contacted", towardStep: "conversation" },
+    { key: "copilot_message_sent", name: "Copilot message sent", subjectKind: "object", lifecycleRung: "none", towardStep: null },
+  ];
+  const first = buildPathSource("email_sent", { answersNobody: true });
+  const reads = (code: string) => (code.includes("R.trigger") || code.includes("request.trigger") ? ["trigger"] : []);
+  const ROWS = [
+    { outcome: "paid_client", tactics: { asks: ["message_sent"], recorded_by: "lead" }, code: "ctx.request" },
+    { outcome: "paid_client", tactics: { asks: ["email_sent"], askRecordedBy: "instantly", recorded_by: "lead" }, code: first },
+    { outcome: "signup", tactics: { asks: ["message_sent"], recorded_by: "lead" }, code: "x" },
+    { outcome: "signup", tactics: { relationships: "current_client" }, code: "const R = ctx.request; R.trigger" },
+    { outcome: "email_sent", tactics: { recorded_by: "email-gateway" }, code: "const t = ctx.request.trigger" },
+    { outcome: "copilot_message_sent", tactics: { recorded_by: "chat" }, code: "R.trigger" },
+    { outcome: "x_post_published", tactics: { asks: ["llm_completion"] }, code: "no occurrence read" },
+    { outcome: "post_viewed", tactics: { asks: ["email_sent"], askRecordedBy: "social" }, code: "R.trigger" },
+  ];
+  it("one path per (Target, Engine whose maker reads the occurrence), never a Target, a path or a public act", () => {
+    const got = occurrenceActPaths(ROWS, STEPS, reads).map((p) => `${p.outcome}/${p.dynasty}`);
+    expect(got).toEqual([
+      "paid_client/dy_answer_through_copilot_message_sent",
+      // The first cold email path asks Email sent alone but refuses an occurrence: it does not cover answering.
+      "paid_client/dy_answer_through_email_sent",
+      "signup/dy_answer_through_copilot_message_sent",
+      "signup/dy_answer_through_email_sent",
+    ]);
+  });
+  it("passes the occurrence on (no refusal), states its Engine alone and the Target's owner", () => {
+    const p = occurrenceActPaths(ROWS, STEPS, reads).find((x) => x.dynasty === "dy_answer_through_email_sent" && x.outcome === "paid_client")!;
+    expect(p.tactics).toEqual({ asks: ["email_sent"], recorded_by: "lead" });
+    expect(p.answersNobody).toBeUndefined();
+    expect(buildPathSource(p.asks)).not.toContain(ANSWERS_NOBODY_REFUSAL);
+    expect(p.name).toBe("Answer through Email sent");
   });
 });
