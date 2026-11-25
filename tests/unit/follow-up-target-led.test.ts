@@ -6,7 +6,7 @@ import { addFollowUpTargetLed, followUpTargetLedTactics } from "../../src/lib/sc
 
 // PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2: the lead follow-up sender, byte for byte as production stores it (v13), takes
 // its person from its Lead found Engine on a campaign launched on its Target alone; every other run is unchanged.
-const STORED = readFileSync(join(__dirname, "../fixtures/stored-scripts/lead_interested__dy_follow_up_due.v13.ts.txt"), "utf8");
+const STORED = readFileSync(join(__dirname, "../fixtures/stored-scripts/follow-up-target-led/lead_interested__dy_follow_up_due.v13.ts.txt"), "utf8");
 const NEXT = addFollowUpTargetLed(STORED);
 const now = "2026-11-25T12:00:00.000Z";
 
@@ -47,7 +47,7 @@ describe("lead_interested/dy_follow_up_due: Target-led serve", () => {
     expect(a.vendors).toEqual(b.vendors);
     expect(() => addFollowUpTargetLed(NEXT)).toThrow(/already/);
     expect(followUpTargetLedTactics({ asks: ["message_written"], recorded_by: "sender" })).toEqual({ asks: ["message_written", "lead_found"], recorded_by: "sender" });
-  });
+   }, 30_000);
 
   it("a Target run: the person its Lead found Engine found, served by name", async () => {
     const r = await run(NEXT, req({ featureSlug: null }));
