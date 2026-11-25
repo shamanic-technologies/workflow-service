@@ -12,3 +12,5 @@ process.env.RUNS_SERVICE_API_KEY = "test-runs-svc-key";
 process.env.EMAIL_GATEWAY_SERVICE_URL = "http://localhost:6000";
 process.env.EMAIL_GATEWAY_SERVICE_API_KEY = "test-email-gw-key";
 process.env.NODE_ENV = "test";
+// Picks with no campaign read features-service's no-campaign strategy in production; a test that wants it swaps the reader.
+process.env.SCRIPT_STRATEGY_WITHOUT_CAMPAIGN = "off";

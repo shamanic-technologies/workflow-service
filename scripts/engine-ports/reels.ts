@@ -135,6 +135,12 @@ export default function run(ctx: ScriptContext): ScriptResult {
       ctx.storage.set("videos", key, st);
     }
     const job: any = must(ctx, "chat.media.transcription", { params: { id: st.jobId } });
+    if (job.status === "completed" && Number(job.wordCount ?? 0) === 0) {
+      // Nobody speaks in it: no transcript to cut a clip from, and transcribing it again would say the same.
+      ctx.storage.set("videos", key, { ...st, state: "failed", attempts: MAX_ATTEMPTS, error: "no_speech: nobody speaks in this video" });
+      failed = failed ?? "no_speech: nobody speaks in this video (" + url + ")";
+      continue;
+    }
     if (job.status === "completed") {
       ctx.storage.set("videos", key, { ...st, state: "done", doneAt: String(r.now ?? "") });
       return {
