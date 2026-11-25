@@ -8,7 +8,10 @@ import {
   buildDraftSource,
   buildEmailCheckSource,
   buildIndustryVideoSource,
+  ANSWERS_NOBODY_REFUSAL,
   buildPathSource,
+  firstEmailPaths,
+  FIRST_EMAIL_DYNASTY,
   buildPhoneRevealSource,
   buildReplySource,
   DRAFTS,
@@ -25,8 +28,24 @@ const brandIds = ["brand-reed"];
 const profile = { name: "Reed", domain: "reed.example" };
 const completion = (json: Record<string, unknown>) => ({ answer: { json }, llm: { provider: "deepseek", model: "flash" } });
 
+// The active scripts asking Message sent on 2026-11-25 (prod), plus scripts that must not count.
+const LIVE = [
+  { outcome: "paid_client", tactics: { asks: ["message_sent"] , recorded_by: "lead" } },
+  { outcome: "paid_client", tactics: { asks: ["email_sent", "message_sent", "llm_completion"], recorded_by: "billing" } },
+  { outcome: "paid_client", tactics: { relationships: "current_client" } },
+  { outcome: "meeting_booked", tactics: { asks: ["message_sent"], recorded_by: "crm" } },
+  { outcome: "meeting_attended", tactics: { asks: ["message_sent"], recorded_by: "crm" } },
+  { outcome: "signup", tactics: { asks: ["message_sent"], recorded_by: "lead" } },
+  { outcome: "signup", tactics: { asks: ["threads_post_published"], recorded_by: "lead" } },
+  { outcome: "conversation", tactics: { asks: ["message_sent"], recorded_by: "instantly" } },
+  { outcome: "conversation", tactics: { asks: ["email_sent"], askRecordedBy: "instantly", recorded_by: "instantly" } },
+  { outcome: "email_sent", tactics: { asks: ["message_written"] } },
+  { outcome: "x_post_published", tactics: null },
+];
+
 const ALL = [
-  ...PATHS.map((p) => ({ ...p, code: buildPathSource(p.asks) })),
+  ...PATHS.map((p) => ({ ...p, code: buildPathSource(p.asks, { answersNobody: p.answersNobody === true }) })),
+  ...firstEmailPaths(LIVE).map((p) => ({ ...p, code: buildPathSource(p.asks, { answersNobody: true }) })),
   ...DRAFTS.map((d) => ({ ...d, code: buildDraftSource() })),
   ...REPLIES.map((r) => ({ ...r, code: buildReplySource() })),
   ...PRODUCERS.map((p) => ({ ...p, code: p.build() })),
@@ -249,5 +268,57 @@ describe("the Engine list's reasons", () => {
       "Its scripts moved to Email queued, which make this work now: ask that Engine instead.",
     );
     expect(notCallableReason({ scripts: 1, live: 0, unprovenPorts: 0, awaitingWriterProof: 0, movedTo: [] })).toBe("Every script of this outcome is retired (1 stored).");
+  });
+});
+
+describe("a first cold email path toward every Engine reached by answering a lead (PLAN-RECURSIVE-PER-ENGINE-1124-WF2)", () => {
+  const paths = firstEmailPaths(LIVE);
+  const request = { now, brandIds, campaignId: "camp-1", trigger: null };
+
+  it("is derived from the live catalogue: one per answering Engine, its owner read off that Engine's answering scripts", () => {
+    expect(paths.map((p) => p.outcome)).toEqual(["meeting_attended", "meeting_booked", "paid_client", "signup"]);
+    for (const p of paths) {
+      expect(p.dynasty).toBe(FIRST_EMAIL_DYNASTY);
+      // features-service's opt-in tactic gates scripts stating askRecordedBy: it must stay
+      expect(p.tactics).toMatchObject({ asks: ["email_sent"], askRecordedBy: "instantly" });
+    }
+    expect(paths.find((p) => p.outcome === "meeting_booked")!.tactics.recorded_by).toBe("crm");
+    // Positive reply already holds its first email path: none twice
+    expect(paths.some((p) => p.outcome === "conversation")).toBe(false);
+    expect(() => firstEmailPaths([{ outcome: "x", tactics: { asks: ["message_sent"], recorded_by: "a" } }, { outcome: "x", tactics: { asks: ["message_sent"], recorded_by: "b" } }])).toThrow(/several owner/);
+  });
+
+  it("a proactive run asks Email sent with the run's Request as it is, recorded by the mailbox", async () => {
+    const p = paths.find((x) => x.outcome === "paid_client")!;
+    const c: ReplayCase = {
+      id: "first-email",
+      units: { email_sent: { sent: true } },
+      request,
+      tactics: p.tactics,
+      calls: [],
+      asks: [{ units: {}, request, recordedBy: "instantly" }],
+      expect: { content: { asked: "email_sent", unit: { sent: true } } },
+    };
+    expect((await replayCase(buildPathSource(p.asks, { answersNobody: true }), c)).diffs).toEqual([]);
+  });
+
+  it("a run answering an occurrence is refused by WHO (the next script answers), nothing asked", async () => {
+    const p = paths.find((x) => x.outcome === "paid_client")!;
+    const c: ReplayCase = {
+      id: "occurrence",
+      units: {},
+      request: { ...request, trigger: { eventId: "e1", leadId: "lead-1" } },
+      tactics: p.tactics,
+      calls: [],
+      asks: [],
+      expect: { end: { success: true, personNotAdmitted: { reason: ANSWERS_NOBODY_REFUSAL.slice("person_not_admitted: ".length) } } },
+    };
+    expect((await replayCase(buildPathSource(p.asks, { answersNobody: true }), c)).diffs).toEqual([]);
+    expect(ANSWERS_NOBODY_REFUSAL.startsWith("person_not_admitted: ")).toBe(true);
+  });
+
+  it("the answerer paths keep answering an occurrence (their code is unchanged)", () => {
+    const signup = PATHS.find((x) => x.outcome === "signup" && !x.answersNobody)!;
+    expect(buildPathSource(signup.asks, { answersNobody: signup.answersNobody === true })).toBe(buildPathSource(signup.asks));
   });
 });
