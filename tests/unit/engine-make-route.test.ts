@@ -126,6 +126,35 @@ describe("POST /internal/engines/{outcome}/make", () => {
     expect(chat[0]![1]).toMatchObject({ provider: "zai", model: "glm" });
   });
 
+  it("with no campaign and no strategy stated, only the scripts features-service keeps with no campaign are drawn (REELS-1124)", async () => {
+    await addDraftScript("dy_fields_draft", FIELD_DRAFT_LLMS.deepseekFlash);
+    await addDraftScript("dy_fields_draft__glm", FIELD_DRAFT_LLMS.glm);
+    const asked: string[] = [];
+    engine.setNoCampaignStrategyReader(async (outcome) => {
+      asked.push(outcome);
+      return ["dy_fields_draft__glm"];
+    });
+    try {
+      const res = await make({ units, recordedBy: "brand" });
+      expect(res.status).toBe(200);
+      expect(res.body.pick.dynasty).toBe("dy_fields_draft__glm");
+      expect(asked).toEqual([OUTCOME]);
+      // A caller stating its own strategy is not narrowed a second time.
+      asked.length = 0;
+      expect((await make({ units, recordedBy: "brand", keptDynasties: ["dy_fields_draft"] })).body.pick.dynasty).toBe("dy_fields_draft");
+      expect(asked).toEqual([]);
+      // Unreadable = nothing runs (never "any script").
+      engine.setNoCampaignStrategyReader(async () => {
+        throw new Error("features-service 503");
+      });
+      const down = await make({ units, recordedBy: "brand" });
+      expect(down.status).toBe(502);
+      expect(down.body.code).toBe("script_pick_unreadable");
+    } finally {
+      engine.setNoCampaignStrategyReader(async () => null);
+    }
+  });
+
   it("named refusals: no x-run-id, no runnable script, a pick unreadable, a script that fails", async () => {
     expect((await make({ units }, { "x-org-id": "org-a" })).status).toBe(400);
     const none = await make({ units });

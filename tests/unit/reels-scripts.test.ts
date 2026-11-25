@@ -38,7 +38,7 @@ const COMPLETION = `export default function run(ctx) {
 
 interface World {
   calls: Array<{ door: string; body: Record<string, unknown> | null }>;
-  job: { status: string; fraction?: number } | null;
+  job: { status: string; fraction?: number; words?: number } | null;
   accounts: Array<Record<string, unknown>>;
   publish: { status: number; body: Record<string, unknown> };
 }
@@ -51,7 +51,7 @@ function vendors(w: World): VendorDeps {
       const door = `${service} ${method} ${path.split("?")[0]}`;
       w.calls.push({ door, body });
       if (door === "chat POST /orgs/media-transcriptions") return { status: 202, body: { id: "tr-1", status: "downloading" } };
-      if (door === "chat GET /orgs/media-transcriptions/tr-1") return { status: 200, body: { id: "tr-1", status: w.job!.status, language: "en", durationSeconds: 3600, segmentCount: 400, wordCount: 9000, progress: { fraction: w.job!.fraction ?? 0 } } };
+      if (door === "chat GET /orgs/media-transcriptions/tr-1") return { status: 200, body: { id: "tr-1", status: w.job!.status, language: "en", durationSeconds: 3600, segmentCount: 400, wordCount: w.job!.words ?? 9000, progress: { fraction: w.job!.fraction ?? 0 } } };
       if (door === "social GET /orgs/social/accounts") return { status: 200, body: { accounts: w.accounts } };
       if (door === "social POST /orgs/social/accounts/acc-1/posts") return w.publish;
       throw new Error(`unexpected door ${door}`);
@@ -200,6 +200,18 @@ describe("Instagram Reel published", () => {
   });
 });
 
+describe("a video where nobody speaks", () => {
+  it("is no transcript: unmade no_speech, and it is not transcribed again", async () => {
+    w.job = { status: "completed", words: 0 };
+    const first = await run(VIDEO_TRANSCRIBED, "dy_box_transcript", { brief: BRIEF });
+    expect(first.result.status).toBe("unmade");
+    expect(String(first.result.error)).toMatch(/^no_speech: /);
+    const second = await run(VIDEO_TRANSCRIBED, "dy_box_transcript", { brief: BRIEF });
+    expect(second.result.status).toBe("unmade");
+    expect(w.calls.filter((c) => c.door === "chat POST /orgs/media-transcriptions")).toHaveLength(1);
+  });
+});
+
 describe("the whole chain, each Engine asking the one before it", () => {
   /** A fake of the clips service (content-generation) and of chat-service's transcription, as their contracts state them. */
   function chainVendors(state: { transcript: string; calls: string[]; bodies: Record<string, unknown>[]; judged: string[] }): VendorDeps {
@@ -213,7 +225,7 @@ describe("the whole chain, each Engine asking the one before it", () => {
         state.calls.push(door);
         state.bodies.push({ door, ...(body ?? {}) });
         if (door === "chat POST /orgs/media-transcriptions") return { status: 202, body: { id: "tr-1", status: "downloading" } };
-        if (door === "chat GET /orgs/media-transcriptions/tr-1") return { status: 200, body: { id: "tr-1", status: state.transcript, language: "en", durationSeconds: 3600, progress: { fraction: 0.5 } } };
+        if (door === "chat GET /orgs/media-transcriptions/tr-1") return { status: 200, body: { id: "tr-1", status: state.transcript, language: "en", durationSeconds: 3600, segmentCount: 400, wordCount: 9000, progress: { fraction: 0.5 } } };
         if (door === "chat POST /orgs/judgments") {
           const choice = state.judged.shift();
           if (!choice) throw new Error("no judgment scripted");
