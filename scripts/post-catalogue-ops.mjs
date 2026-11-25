@@ -4,6 +4,7 @@
  * service's own script routes on localhost (INTRO-BOARDY-1114). Dry run by default (prints what it would do);
  * `--apply` writes. Run inside the workflow-service container with a real staff identity (who decided):
  *   docker exec -i -e ORG_ID=… -e USER_ID=… -e STAFF_EMAIL=… distribute-workflow-service-1 node scripts/post-catalogue-ops.mjs [--apply]
+ * `status` {outcome, dynasty, status, reason} (PUT /scripts/dynasty/{o}/{d}/status: retire or restore a dynasty).
  * `merge` {absorbed, places, reason} (ONE-WRITER-N-MODELS-1116: POST /internal/scripts/merges; already merged = skipped).
  * `upgrade` {outcome, dynasty, fromVersion, code, tactics?, skipIfIncludes} (VERIFY-BEFORE-WRITE-1124: ONE dynasty's next
  * version, generated from its active version `fromVersion`; another active version = refused, nothing written).
@@ -95,6 +96,17 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       console.log(`  upgrade ${b.outcome}/${b.dynasty}: ${u.status} ${u.status === 201 ? `v${u.json.version}` : JSON.stringify(u.json).slice(0, 300)}`);
       if (u.status !== 201) failed++;
     } else if (r.status !== 201) failed++;
+    continue;
+  }
+  if (op.op === "status") {
+    // PLAN-RECURSIVE-PER-ENGINE-1124-WF3: a dynasty retired or restored, with its reason.
+    if (!apply) {
+      console.log(`status ${op.outcome}/${op.dynasty} -> ${op.status} (dry run)`);
+      continue;
+    }
+    const r = await call("PUT", `/scripts/dynasty/${op.outcome}/${op.dynasty}/status`, { status: op.status, reason: op.reason });
+    console.log(`status ${op.outcome}/${op.dynasty} -> ${op.status}: ${r.status}${r.status === 200 ? "" : " " + JSON.stringify(r.json).slice(0, 300)}`);
+    if (r.status !== 200) failed++;
     continue;
   }
   if (op.op === "upgrade") {
