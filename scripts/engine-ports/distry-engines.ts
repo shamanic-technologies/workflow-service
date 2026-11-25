@@ -243,6 +243,68 @@ export function firstEmailPaths(rows: Array<{ outcome: string; tactics: Record<s
   return out;
 }
 
+/**
+ * PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1 (owner 2026-11-24: « À chaque Engine en partant de la fin (Target) … récursivement »):
+ * a campaign aimed at a person's outcome (Signup, Paid client…) whose brief works through a PUBLIC act (an X post, a
+ * LinkedIn post, a Threads post, a reply under someone's post) reaches that act's Engine from its Target, the way
+ * `signup/dy_signup_threads_post` reached Threads. One code (`buildPathSource`, the act asked), one dynasty
+ * `dy_through_<act>` under each Engine reached by answering a lead, derived from the LIVE catalogue (never a list of
+ * outcomes here):
+ *   - the Targets = Engines holding a path asking Message sent alone (`firstEmailPaths`' rule), the owner (`recorded_by`)
+ *     = the one that path states;
+ *   - the acts = catalogue steps about no person (`subjectKind: object`) that work toward a step of the person's ladder
+ *     (`towardStep` whose `lifecycleRung` is a rung), whose Engine holds an active MAKER (a script that is not a path:
+ *     not a single ask stating `askRecordedBy`, the first cold email / public path shape);
+ *   - a Target already holding a script asking that act alone gets none (Threads under Signup).
+ * Each refuses an occurrence run (a public act answers nobody who wrote). It states no `askRecordedBy`, so the opt-in
+ * « Starts with a cold email to a new person » never gates it; which campaigns keep it is features-service's opt-in
+ * script tactic per act (« Works through an X post »…), judged on the brief: the tactics field `asks` names the act.
+ */
+export const THROUGH_PREFIX = "dy_through_";
+export interface CatalogueStep {
+  key: string;
+  name: string;
+  subjectKind: string | null;
+  lifecycleRung: string | null;
+  towardStep: string | null;
+}
+
+export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<string, unknown> | null }>, steps: CatalogueStep[]): PathSpec[] {
+  const asksOf = (t: Record<string, unknown> | null): string[] => (Array.isArray(t?.asks) ? (t!.asks as unknown[]).map(String) : []);
+  const isPath = (t: Record<string, unknown> | null): boolean => asksOf(t).length === 1 && typeof t?.askRecordedBy === "string";
+  const byOutcome = new Map<string, Array<Record<string, unknown> | null>>();
+  for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r.tactics]);
+  const step = new Map(steps.map((x) => [x.key, x]));
+  const onLadder = (key: string | null): boolean => {
+    const rung = key ? step.get(key)?.lifecycleRung : null;
+    return typeof rung === "string" && rung !== "" && rung !== "none";
+  };
+  const acts = steps
+    .filter((x) => x.subjectKind === "object" && onLadder(x.towardStep) && (byOutcome.get(x.key) ?? []).some((t) => !isPath(t)))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const out: PathSpec[] = [];
+  for (const [outcome, list] of [...byOutcome.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const answering = list.filter((t) => asksOf(t).length === 1 && asksOf(t)[0] === "message_sent");
+    if (answering.length === 0) continue;
+    const owners = [...new Set(answering.map((t) => (typeof t?.recorded_by === "string" ? t.recorded_by : "")).filter(Boolean))];
+    if (owners.length !== 1) throw new Error(`public act path for ${outcome}: its answering scripts state ${owners.length === 0 ? "no" : "several"} owner (recorded_by: ${owners.join(", ")}): which service observes the outcome cannot be read`);
+    const target = step.get(outcome)?.name ?? outcome.replace(/_/g, " ");
+    for (const act of acts) {
+      if (list.some((t) => asksOf(t).length === 1 && asksOf(t)[0] === act.key)) continue;
+      out.push({
+        outcome,
+        dynasty: THROUGH_PREFIX + act.key,
+        name: `Through ${act.name}`.slice(0, 40),
+        asks: act.key,
+        tactics: { asks: [act.key], recorded_by: owners[0]! },
+        description: `Works toward ${target.toLowerCase()}: makes one ${act.name.toLowerCase()} of the brand in public, the act that brings people there; answers nobody who wrote or acted.`,
+        answersNobody: true,
+      });
+    }
+  }
+  return out;
+}
+
 // ── 2. Drafts ─────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ScriptSpec {

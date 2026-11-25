@@ -11,6 +11,7 @@ import {
   ANSWERS_NOBODY_REFUSAL,
   buildPathSource,
   firstEmailPaths,
+  publicActPaths,
   FIRST_EMAIL_DYNASTY,
   buildPhoneRevealSource,
   buildReplySource,
@@ -320,5 +321,55 @@ describe("a first cold email path toward every Engine reached by answering a lea
   it("the answerer paths keep answering an occurrence (their code is unchanged)", () => {
     const signup = PATHS.find((x) => x.outcome === "signup" && !x.answersNobody)!;
     expect(buildPathSource(signup.asks, { answersNobody: signup.answersNobody === true })).toBe(buildPathSource(signup.asks));
+  });
+});
+
+// PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1: a path through a public act under every Engine reached by answering a lead.
+describe("publicActPaths", () => {
+  const STEPS = [
+    { key: "signup", name: "Signup", subjectKind: "person", lifecycleRung: "signup_or_form", towardStep: null },
+    { key: "paid_client", name: "Paid client", subjectKind: "person", lifecycleRung: "paid_client", towardStep: null },
+    { key: "website_visit", name: "Website visit", subjectKind: "person", lifecycleRung: "engaged", towardStep: "lead_visited" },
+    { key: "x_post_published", name: "X post published", subjectKind: "object", lifecycleRung: "none", towardStep: "paid_client" },
+    { key: "threads_post_published", name: "Threads post published", subjectKind: "object", lifecycleRung: "none", towardStep: "paid_client" },
+    { key: "post_viewed", name: "Post viewed", subjectKind: "object", lifecycleRung: "none", towardStep: "website_visit" },
+    { key: "newsletter_email_sent", name: "Newsletter email sent", subjectKind: "object", lifecycleRung: "contacted", towardStep: "website_visit" },
+    { key: "instagram_reel_published", name: "Instagram reel published", subjectKind: "object", lifecycleRung: null, towardStep: "post_viewed" },
+    { key: "email_sent", name: "Email sent", subjectKind: null, lifecycleRung: "contacted", towardStep: "conversation" },
+  ];
+  const ROWS = [
+    ...LIVE,
+    { outcome: "x_post_published", tactics: { asks: ["industry_news_found", "llm_completion"], recorded_by: "social" } },
+    { outcome: "threads_post_published", tactics: { asks: ["llm_completion"], recorded_by: "meta" } },
+    { outcome: "post_viewed", tactics: { asks: ["x_post_published"], askRecordedBy: "social", recorded_by: "social" } },
+    { outcome: "instagram_reel_published", tactics: { asks: ["hook_added"], recorded_by: "social" } },
+  ];
+  it("one path per (Target reached by answering, act that makes a public Unit toward the person's ladder), none already held", () => {
+    const got = publicActPaths(ROWS, STEPS).map((p) => `${p.outcome}/${p.dynasty}`);
+    expect(got).toEqual([
+      "conversation/dy_through_threads_post_published",
+      "conversation/dy_through_x_post_published",
+      "meeting_attended/dy_through_threads_post_published",
+      "meeting_attended/dy_through_x_post_published",
+      "meeting_booked/dy_through_threads_post_published",
+      "meeting_booked/dy_through_x_post_published",
+      "paid_client/dy_through_threads_post_published",
+      "paid_client/dy_through_x_post_published",
+      // Signup already holds a script asking Threads alone.
+      "signup/dy_through_x_post_published",
+    ]);
+  });
+  it("asks its act alone, states the Target's owner and no askRecordedBy (the cold email opt-in never gates it), refuses an occurrence", async () => {
+    const p = publicActPaths(ROWS, STEPS).find((x) => x.outcome === "signup")!;
+    expect(p.tactics).toEqual({ asks: ["x_post_published"], recorded_by: "lead" });
+    expect(p.name).toBe("Through X post published");
+    expect(p.answersNobody).toBe(true);
+    const code = buildPathSource(p.asks, { answersNobody: true });
+    const v = await validateSource(code);
+    expect(v.materials).toEqual(["x_post_published"]);
+    expect(code).toContain(ANSWERS_NOBODY_REFUSAL);
+  });
+  it("a Target whose answering paths state several owners is refused, never guessed", () => {
+    expect(() => publicActPaths([...ROWS, { outcome: "signup", tactics: { asks: ["message_sent"], recorded_by: "crm" } }], STEPS)).toThrow(/several owner/);
   });
 });
