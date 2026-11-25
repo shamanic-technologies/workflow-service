@@ -2871,13 +2871,13 @@ export const WriterProofCombinationSchema = z
     llm: z.string().nullable().describe("The LLM its tactics state, or the one of the completion script it is paired with."),
     completion: z.string().nullable().describe("ONE-WRITER-N-MODELS-1116-ANSWERER: the LLM completion script (`llm_completion/<dynasty>`) this writer, which asks its model, is proven with; null = a version proven alone."),
     live: z.boolean().describe("Version and dynasty active (the Rating may draw it, when its proof allows)."),
-    state: z.string().describe("Its latest proof: passed | failed | running | error | no_cases | abandoned, or unproven."),
+    state: z.string().describe("Its latest proof: passed | failed | running | error | no_cases | abandoned | waiting (the monthly proof budget is spent, or the Claude Code runner stopped answering: neither passed nor failed, not drawn), or unproven."),
     usable: z.number().int(),
     sample: z.number().int(),
     spendAtMostUsd: z.number().nullable().describe("Upper bound of the proof's LLM spend (Opus list prices); the real spend is on its runs-service run."),
     provedAt: z.string().nullable(),
     failures: z.array(z.string()).describe("Why the cases it failed are not usable."),
-    red: z.boolean().describe("A live combination that failed its proof."),
+    red: z.boolean().describe("A live combination that failed its proof, or one of an enforced Engine held out (unproven, or waiting on the budget) while the month's proof budget is spent."),
   })
   .openapi("WriterProofCombination");
 
@@ -2885,6 +2885,13 @@ export const WriterProofsSchema = z
   .object({
     engines: z.array(z.object({ outcome: z.string(), enforced: z.boolean().describe("Its Rating draws only proven writers."), cases: z.number().int().describe("Recorded production cases kept.") })),
     combinations: z.array(WriterProofCombinationSchema),
+    budget: z
+      .object({
+        spentUsd: z.number().describe("Upper bound of what every proof of this UTC month spent (an answer served by Claude Code counts 0)."),
+        ceilingUsd: z.number().describe("The most every proof of one month spends together."),
+        blocked: z.boolean().describe("The budget is spent AND a live combination of an enforced Engine is held out by it (red)."),
+      })
+      .describe("WRITER-PROOF-CAP-1125: the monthly proof budget."),
   })
   .openapi("WriterProofs");
 
@@ -2907,7 +2914,7 @@ registry.registerPath({
   path: "/internal/scripts/writer-proofs",
   summary: "Prove one writer combination on its Engine's recorded cases (service key only)",
   description:
-    "PROVEN-BEFORE-PEOPLE-1116. Runs the dynasty's active version (else its latest, a retired dynasty included) on up to 5 recorded production cases: its LLM live with its own tactics (platform run, support product_feature), every other call from the record, nothing sent. Usable = its script reads the answer and Jev judges every field a person would read usable. Spend bound: $4 at Opus list prices.",
+    "PROVEN-BEFORE-PEOPLE-1116. Runs the dynasty's active version (else its latest, a retired dynasty included) on up to 5 recorded production cases: its LLM live with its own tactics (platform run, support product_feature), every other call from the record, nothing sent. Usable = its script reads the answer and Jev judges every field a person would read usable. Spend bound: $4 at Opus list prices; every proof of a UTC month together: $5 (spent = the proof is stored `waiting`). Replayed on Claude Code at $0 through a connected Mac runner when there is one.",
   tags: ["Scripts"],
   security: [{ apiKey: [] }],
   request: { body: { required: true, content: { "application/json": { schema: WriterProofRequestSchema } } } },

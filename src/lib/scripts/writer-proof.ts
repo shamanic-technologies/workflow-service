@@ -12,8 +12,11 @@
  *    tactics and every vendor call with its request and answer, as production saw them. Real personal data: never in git.
  *
  * 2. A PROOF of one version: the script runs in its own sandbox on up to `PROOF_SAMPLE` cases its code can be fed (its
- *    materials held, the cases its own code recorded first). Its LLM calls go LIVE with ITS tactics (platform-billed on
- *    one platform run, support `product_feature`, `brandTools: false`: a proof never acts through a brand's tools);
+ *    materials held, the cases its own code recorded first). Its LLM calls go LIVE: on Claude Code at $0 through the
+ *    Mac runner of an org that declared its LLM local, when one is connected (WRITER-PROOF-CAP-1125, owner 2026-11-25
+ *    « C is better if you can »: the proof then judges Claude's writing, not the version's own model), else with ITS
+ *    tactics, platform-billed (one platform run, support `product_feature`); `brandTools: false` either way: a proof
+ *    never acts through a brand's tools;
  *    every other call is answered from the record and NOTHING is sent, booked or written: before its first LLM call a
  *    call the record does not hold is refused (the case does not fit this code: it is skipped, never counted), after it
  *    an unrecorded act is acknowledged. A case is USABLE when the script read the answer without failing AND every field
@@ -23,13 +26,17 @@
  *    The first unusable case ends the proof `failed` (no more spend on it); `PROOF_SAMPLE` written usable cases =
  *    `passed`; the spend is bounded from the tokens chat-service answers, priced at the
  *    priciest list rates we buy (`PRICE_BOUND_*`, so the bound is never below the real spend), and the proof stops
- *    `error` at `PROOF_CEILING_CENTS`. Fewer fitting cases = `no_cases` (nothing proven, nothing refused).
+ *    `error` at `PROOF_CEILING_CENTS`. Fewer fitting cases = `no_cases` (nothing proven, nothing refused). Every proof
+ *    of a UTC month together is bounded at `PROOF_MONTHLY_CEILING_CENTS` (a local answer counts $0, Jev judgments
+ *    count): spent = no proof starts and a running one stops `waiting` (so does one whose Claude Code runner stopped
+ *    answering), neither passed nor failed.
  *
  * 3. THE GATE, per Engine (`writer_proof_engines.enforced`, a staff switch, so an Engine is enforced only once its
  *    combinations were proven, never leaving its campaigns with no script): the Rating draws a writer version of an
  *    enforced Engine only when its latest proof passed (or it cannot be proven: fewer than `PROOF_SAMPLE` fitting
  *    cases). An unproven version is proven ONCE in the background, started when it is STORED (`proveOnStore`), else the first time the Rating meets it (`auto`); a failed
- *    one stays out until staff re-prove it; an interrupted one is retried at most `AUTO_ATTEMPTS` times. Never a
+ *    one stays out until staff re-prove it; an interrupted one is retried at most `AUTO_ATTEMPTS` times; a `waiting`
+ *    one stays out and is proven once the budget (or the runner) is back, never counted as an attempt. Never a
  *    validator, retry or rewrite on a live send: the proof happens before.
  *
  * 4. A WRITER THAT ASKS ITS MODEL (ONE-WRITER-N-MODELS-1116-ANSWERER): a script that names no model asks the LLM
@@ -43,7 +50,7 @@
  *    writer combination: it is never gated, its writer's pairs are.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { scripts, writerCases, writerProofEngines, writerProofs, type ScriptRow, type WriterProofRow } from "../../db/schema.js";
 import { asksOf, runScript, type Bridge } from "./sandbox.js";
 import { providerTag } from "./provider-index.js";
@@ -63,6 +70,21 @@ export const PROOF_MAX_TRIES = 15;
  * each case (a 5-case proof of the lead answerer bounds at about $2; its real spend on a cheaper LLM is a fraction).
  */
 export const PROOF_CEILING_CENTS = 400;
+/**
+ * WRITER-PROOF-CAP-1125 (owner 2026-11-25: « Cap at $5/month », after proofs spent $9 in 4 days): the most EVERY proof
+ * of one UTC calendar month spends together, fleet-wide, in US cents, measured by the same upper bound as one proof
+ * (Jev judgments included; an answer served by Claude Code on a Mac runner counts 0). Spent = no new proof starts and
+ * a running one stops `waiting`; it is proven once the month turns. Never raised to get a proof through.
+ */
+export const PROOF_MONTHLY_CEILING_CENTS = 500;
+/** How a proof stopped by the monthly ceiling states its reason (`writer_proofs.error` of a `waiting` row). */
+export const BUDGET_WAIT_PREFIX = "waiting for the monthly proof budget: ";
+/** A `waiting` proof is tried again this long after it stopped at the earliest (and only once the budget is back). */
+export const WAITING_RETRY_MS = 30 * 60_000;
+/** chat-service's mark on an answer its caller's org Mac runner wrote with Claude Code: it cost us nothing. */
+export const SERVED_BY_CLAUDE_CODE = "local-claude-code";
+/** chat-service's refusals that say the Mac runner is gone (or the org no longer declares one): never the writer's failure. */
+const RUNNER_LOST_PATTERN = /local_runner_(waiting|timeout|failed)|local_llm_not_declared/;
 /**
  * The priciest list rates of a writer LLM we buy, US dollars per million tokens (Claude Opus class): the proof's spend
  * bound prices every token at these, so the real spend (chat-service declares it on the proof's run) is never above it.
@@ -206,7 +228,21 @@ export interface ProofDeps {
   vendors: VendorDeps;
   openRun(taskName: string, reason: string): Promise<string>;
   closeRun(runId: string, status: "completed" | "failed"): Promise<void>;
+  /**
+   * WRITER-PROOF-CAP-1125: the org whose connected Mac runner answers chat-service `/complete` with Claude Code at $0
+   * (and the user who declared it), else null. Absent = every completion of a proof is platform-billed.
+   */
+  claudeCodeRunner?(): Promise<{ orgId: string; userId: string } | null>;
 }
+
+/** What every proof created since the UTC month's start spent at most, running ones included, in US cents. */
+export async function monthProofSpendCents(db: AnyPgDb, now: Date = new Date()): Promise<number> {
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const [r] = await db.select({ cents: sql<string>`coalesce(sum(coalesce(${writerProofs.spendCents}, 0)), 0)` }).from(writerProofs).where(gte(writerProofs.createdAt, monthStart));
+  return Number(r?.cents ?? 0);
+}
+
+const budgetWait = (spentCents: number) => `${BUDGET_WAIT_PREFIX}$${(spentCents / 100).toFixed(2)} spent of $${(PROOF_MONTHLY_CEILING_CENTS / 100).toFixed(2)} this month`;
 
 /** The spend bound of some tokens, in US cents. */
 export const tokensBoundCents = (input: number, output: number) => ((input * PRICE_BOUND_INPUT_PER_MTOK + output * PRICE_BOUND_OUTPUT_PER_MTOK) / 1_000_000) * 100;
@@ -230,6 +266,8 @@ export interface CaseVerdict {
   /** Why it is not usable (the script's failure, the LLM's refusal, or the fields Jev judged unusable). */
   reasons: string[];
   fields: Array<{ door: string; path: string; value: string; probability: number }>;
+  /** Who wrote in this replay: Claude Code on a Mac runner (at least one completion served there), else the version's own model. */
+  replayedOn: "claude-code" | "own-model";
 }
 
 interface LiveReplay {
@@ -238,9 +276,15 @@ interface LiveReplay {
   failure: string | null;
   completionErrors: string[];
   sent: SentField[];
-  /** The spend bound of its LLM calls, US cents. */
+  /** The spend bound of its LLM calls, US cents (an answer served by Claude Code counts 0). */
   boundCents: number;
+  /** At least one completion was served by Claude Code on the Mac runner. */
+  servedLocally: boolean;
+  /** The Mac runner stopped answering during this case (chat-service's words): the case proves nothing. */
+  runnerLost: string | null;
 }
+
+type ClaudeCodeRunner = { orgId: string; userId: string };
 
 /** Every value at a dotted path (`*` = each item of a list). */
 export function valuesAt(value: unknown, path: string): unknown[] {
@@ -274,7 +318,7 @@ export function personFields(door: string, args: unknown): SentField[] {
 }
 
 /** Run one version on one case: its LLM live (its own tactics), everything else from the record, nothing sent. */
-async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps: ProofDeps, completion: ScriptRow | null = null): Promise<LiveReplay> {
+async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps: ProofDeps, completion: ScriptRow | null = null, runner: ClaudeCodeRunner | null = null): Promise<LiveReplay> {
   const caseTactics = Object.fromEntries(Object.entries(c.tactics ?? {}).filter(([k]) => !COMBINATION_TACTICS.includes(k)));
   const tactics = { ...row.tactics, ...caseTactics };
   const used = new Set<number>();
@@ -286,11 +330,37 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
   const completionErrors: string[] = [];
   const sent: SentField[] = [];
   let boundCents = 0;
+  let servedLocally = false;
+  let runnerLost: string | null = null;
   const count = (x: { raw: Record<string, unknown> }) => {
+    if (x.raw.servedBy === SERVED_BY_CLAUDE_CODE) {
+      // Written by Claude Code on the org's Mac runner: it cost us nothing.
+      servedLocally = true;
+      return;
+    }
     const i = Number(x.raw.tokensInput);
     const o = Number(x.raw.tokensOutput);
     // A completion that states no tokens is bounded at a whole context window, never at zero.
     boundCents += Number.isFinite(i) && Number.isFinite(o) ? tokensBoundCents(i, o) : tokensBoundCents(200_000, 32_000);
+  };
+
+  /** One live completion: on the Mac runner's org (Claude Code, $0) when one is connected and the call carries no image, else platform-billed. */
+  const completeNow = async (name: string, callArgs: Record<string, unknown> | null, callTactics: Record<string, unknown>, outcome: string): Promise<VendorAnswer> => {
+    const local = runner !== null && (callArgs?.imageUrl === undefined || callArgs.imageUrl === null);
+    const answer = await callVendor(
+      name,
+      { ...(callArgs ?? {}), brandTools: false },
+      local
+        ? { headers: { "x-run-id": runId, "x-org-id": runner.orgId, "x-user-id": runner.userId }, tactics: callTactics, billing: "org", outcome, onCompletion: count }
+        : { headers: { "x-run-id": runId }, tactics: callTactics, billing: "platform", outcome, onCompletion: count },
+      deps.vendors,
+    );
+    if (!answer.ok) {
+      const why = String(answer.data.error ?? "refused").slice(0, 300);
+      if (local && RUNNER_LOST_PATTERN.test(why)) runnerLost = why;
+      else completionErrors.push(why);
+    }
+    return answer;
   };
 
   const fromRecord = (name: string, args: unknown): VendorAnswer | null => {
@@ -360,10 +430,8 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       const callArgs = (args[1] ?? null) as Record<string, unknown> | null;
       if (COMPLETIONS.has(name)) {
         reachedWriter = true;
-        // Live, with the combination's own tactics, on the proof's platform run; never through a brand's tools.
-        const answer = await callVendor(name, { ...(callArgs ?? {}), brandTools: false }, { headers: { "x-run-id": runId }, tactics, billing: "platform", outcome: row.outcome, onCompletion: count }, deps.vendors);
-        if (!answer.ok) completionErrors.push(String(answer.data.error ?? "refused").slice(0, 300));
-        return { v: answer };
+        // Live, on the proof's run; never through a brand's tools.
+        return { v: await completeNow(name, callArgs, tactics, row.outcome) };
       }
       if (name === LLM_PICK || name === TEMPLATE_PICK) {
         return { v: await callVendor(name, callArgs, { headers: { "x-run-id": runId }, tactics, billing: "platform", outcome: row.outcome }, deps.vendors) };
@@ -402,9 +470,7 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       const name = String(a[0]);
       if (!COMPLETIONS.has(name)) return { v: { ok: false, data: { error: `${name} is not served to a completion in a proof` } } };
       const callArgs = (a[1] ?? null) as Record<string, unknown> | null;
-      const answer = await callVendor(name, { ...(callArgs ?? {}), brandTools: false }, { headers: { "x-run-id": runId }, tactics: c2.tactics as Record<string, unknown>, billing: "platform", outcome: c2.outcome, onCompletion: count }, deps.vendors);
-      if (!answer.ok) completionErrors.push(String(answer.data.error ?? "refused").slice(0, 300));
-      return { v: answer };
+      return { v: await completeNow(name, callArgs, c2.tactics as Record<string, unknown>, c2.outcome) };
     };
     const request = ask.request && typeof ask.request === "object" ? (ask.request as Record<string, unknown>) : null;
     const done = await runScript(c2.code, { subject: null, brand: c.brand ?? "", day: c.day ?? 0, tactics: c2.tactics as Record<string, unknown>, request }, inner);
@@ -427,7 +493,7 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       }
     }
   }
-  return { reachedWriter, failure, completionErrors, sent, boundCents };
+  return { reachedWriter, failure, completionErrors, sent, boundCents, servedLocally, runnerLost };
 }
 
 /** Jev judges every field a person would read; one judgment call per case. */
@@ -466,7 +532,7 @@ function verdictOf(caseId: string, recordedFrom: string, live: LiveReplay, judge
   if (live.failure) reasons.push(`its script could not use the answer: ${live.failure.slice(0, 300)}`);
   for (const f of judged) if (f.probability < USABLE_PROBABILITY) reasons.push(`${f.door} ${f.path} is not usable (P=${f.probability.toFixed(2)}): ${JSON.stringify(f.value.slice(0, 120))}`);
   const exercised = reasons.length > 0 || live.sent.length > 0;
-  return { caseId, recordedFrom, exercised, usable: reasons.length === 0, reasons, fields: judged.map((f) => ({ door: f.door, path: f.path, value: f.value.slice(0, 300), probability: f.probability })) };
+  return { caseId, recordedFrom, exercised, usable: reasons.length === 0, reasons, fields: judged.map((f) => ({ door: f.door, path: f.path, value: f.value.slice(0, 300), probability: f.probability })), replayedOn: live.servedLocally ? "claude-code" : "own-model" };
 }
 
 /** The version a proof is about: the dynasty's active one, else (a retired dynasty) its latest. */
@@ -528,20 +594,40 @@ async function runProof(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "
     const candidates = await sampleCases(db, row);
     const available = await fedCaseCount(db, row);
     if (candidates.length < PROOF_SAMPLE) return await finish({ state: "no_cases", casesAvailable: available });
+    // WRITER-PROOF-CAP-1125: the month's budget is spent = this proof waits (visible on its row), nothing is asked.
+    const spentBefore = await monthProofSpendCents(db);
+    if (spentBefore >= PROOF_MONTHLY_CEILING_CENTS) return await finish({ state: "waiting", error: budgetWait(spentBefore), casesAvailable: available });
+    const runner = deps.claudeCodeRunner ? await deps.claudeCodeRunner() : null;
     runId = await deps.openRun(`script-proof:${row.outcome}/${row.dynasty}`, `writer proof of ${name} on recorded cases (PROVEN-BEFORE-PEOPLE-1116)`);
     await db.update(writerProofs).set({ runId }).where(eq(writerProofs.id, proof!.id));
     const verdicts: CaseVerdict[] = [];
     let spend = 0;
-    let state: "passed" | "failed" | "no_cases" | "error" = "no_cases";
+    let state: "passed" | "failed" | "no_cases" | "error" | "waiting" = "no_cases";
     let error: string | null = null;
     for (const c of candidates.slice(0, PROOF_MAX_TRIES)) {
-      const live = await replayLive(row, c.body, runId, deps, completion);
+      // Every proof of the month together (this one's spend so far is on its row): spent = it stops here, waiting.
+      const spentThisMonth = await monthProofSpendCents(db);
+      if (spentThisMonth >= PROOF_MONTHLY_CEILING_CENTS) {
+        state = "waiting";
+        error = budgetWait(spentThisMonth);
+        break;
+      }
+      const live = await replayLive(row, c.body, runId, deps, completion, runner);
       spend += live.boundCents;
+      if (live.runnerLost) {
+        // The Mac runner is gone, not the writer's doing: this case proves nothing and the proof waits.
+        await db.update(writerProofs).set({ spendCents: spend.toFixed(4) }).where(eq(writerProofs.id, proof!.id));
+        state = "waiting";
+        error = `the Claude Code runner stopped answering: ${live.runnerLost}`;
+        break;
+      }
       if (live.reachedWriter) {
         const judged = live.failure || live.completionErrors.length > 0 ? [] : await judgeFields(live.sent, row, runId, deps);
         if (live.sent.length > 0 && judged.length > 0) spend += JUDGMENT_BOUND_CENTS;
         verdicts.push(verdictOf(c.runId, c.recordedFrom, live, judged));
       }
+      // Its running spend, where every other proof of the month reads it.
+      await db.update(writerProofs).set({ spendCents: spend.toFixed(4) }).where(eq(writerProofs.id, proof!.id));
       if (verdicts.some((v) => !v.usable)) {
         state = "failed";
         break;
@@ -598,12 +684,15 @@ async function proofsOf(db: AnyPgDb, scriptId: string, completionDynasty: string
 export type GateVerdict = { draws: boolean; prove: boolean; why: string };
 
 /** PURE: the gate's decision for one version from its proofs and the cases it can be fed. */
-export function gateFor(proofs: Pick<WriterProofRow, "state" | "trigger" | "createdAt" | "casesAvailable">[], fed: number, now: number): GateVerdict {
+export function gateFor(proofs: Array<Pick<WriterProofRow, "state" | "trigger" | "createdAt" | "casesAvailable"> & { error?: string | null }>, fed: number, now: number): GateVerdict {
   const latest = proofs[0];
   if (!latest) return fed < PROOF_SAMPLE ? { draws: true, prove: false, why: "not provable yet: too few cases" } : { draws: false, prove: true, why: "unproven" };
   if (latest.state === "passed") return { draws: true, prove: false, why: "proven" };
   if (latest.state === "failed") return { draws: false, prove: false, why: "failed its proof" };
   if (latest.state === "no_cases") return { draws: true, prove: fed >= latest.casesAvailable + PROOF_SAMPLE, why: "not provable yet: too few fitting cases" };
+  // Stopped by the monthly budget or a lost Claude Code runner: neither passed nor failed, held out, tried again later
+  // (a budget wait only once the budget is back: `gateAndProve` starts nothing while it is spent). Never an attempt.
+  if (latest.state === "waiting") return { draws: false, prove: now - latest.createdAt.getTime() >= WAITING_RETRY_MS, why: `waiting: ${latest.error || "to be proven"}` };
   if (latest.state === "running" && now - latest.createdAt.getTime() < PROOF_STALE_MS) return { draws: false, prove: false, why: "being proven" };
   // Interrupted (error, abandoned, a stale running): retried at most AUTO_ATTEMPTS times in all.
   const interrupted = proofs.filter((p) => p.state === "error" || p.state === "abandoned" || p.state === "running").length;
@@ -651,7 +740,9 @@ export async function pairProofAllows(db: AnyPgDb, writer: ScriptRow, completion
 async function gateAndProve(db: AnyPgDb, row: ScriptRow, completion: ScriptRow | null): Promise<boolean> {
   const verdict = gateFor(await proofsOf(db, row.id, completion?.dynasty ?? null), await fedCaseCount(db, row), Date.now());
   const name = `${row.outcome}/${row.dynasty}/v${row.version}${completion ? ` x ${completion.dynasty}` : ""}`;
-  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.dynasty ?? null))) {
+  // WRITER-PROOF-CAP-1125: the month's proof budget spent = no auto proof starts (no row, no log); the verdict stands,
+  // so an unproven version of an enforced Engine stays out until the month turns.
+  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.dynasty ?? null)) && (await monthProofSpendCents(db)) < PROOF_MONTHLY_CEILING_CENTS) {
     const ctx = proofContext;
     console.log(`[workflow-service] writer proof of ${name} starts (${verdict.why})`);
     void proveScript(ctx.db, ctx.deps, row, "auto", completion).catch((e) => console.error(`[workflow-service] writer proof of ${name} FAILED to start: ${String(e)}`));
@@ -702,7 +793,7 @@ export interface ProofView {
   completion: string | null;
   /** Runnable now (version and dynasty active). */
   live: boolean;
-  /** passed | failed | running | error | no_cases | abandoned | unproven */
+  /** passed | failed | running | error | no_cases | abandoned | waiting (the monthly budget, or the Claude Code runner) | unproven */
   state: string;
   usable: number;
   sample: number;
@@ -710,7 +801,10 @@ export interface ProofView {
   spendAtMostUsd: number | null;
   provedAt: string | null;
   failures: string[];
-  /** A live combination that failed its proof (what Monitoring shows red). */
+  /**
+   * What Monitoring shows red: a live combination that failed its proof, or one of an enforced Engine held out
+   * (unproven, or waiting on the budget) while the month's proof budget is spent.
+   */
   red: boolean;
 }
 
@@ -721,7 +815,12 @@ function llmName(tactics: Record<string, unknown>): string | null {
 }
 
 /** Monitoring: every Engine's cases and enforcement, and every writer combination's latest proof. */
-export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ outcome: string; enforced: boolean; cases: number }>; combinations: ProofView[] }> {
+export async function readWriterProofs(db: AnyPgDb): Promise<{
+  engines: Array<{ outcome: string; enforced: boolean; cases: number }>;
+  combinations: ProofView[];
+  /** WRITER-PROOF-CAP-1125: the month's proof spend (upper bound) against its ceiling; blocked = spent AND a live combination of an enforced Engine waits on it. */
+  budget: { spentUsd: number; ceilingUsd: number; blocked: boolean };
+}> {
   const caseCounts = await db.select({ outcome: writerCases.outcome, n: sql<number>`count(*)::int` }).from(writerCases).groupBy(writerCases.outcome);
   const enforcedRows = await db.select().from(writerProofEngines);
   const enforced = new Map(enforcedRows.map((r) => [r.outcome, r.enforced]));
@@ -745,12 +844,12 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
     const cur = byDynasty.get(key);
     if (!cur || (r.status === "active" && cur.status !== "active") || (r.status === cur.status && r.version > cur.version)) byDynasty.set(key, r);
   }
-  const combinations: ProofView[] = [...byDynasty.values()]
-    .map((r): ProofView => {
+  const entries: ViewEntry[] = [...byDynasty.values()]
+    .map((r): ViewEntry => {
       const p = latestByScript.get(r.id);
       const live = r.status === "active" && r.dynastyStatus === "active";
       const state = p?.state ?? "unproven";
-      return {
+      return { row: r, proof: p, view: {
         outcome: r.outcome,
         dynasty: r.dynasty,
         version: r.version,
@@ -764,27 +863,52 @@ export async function readWriterProofs(db: AnyPgDb): Promise<{ engines: Array<{ 
         provedAt: p?.finishedAt?.toISOString() ?? null,
         failures: ((p?.cases ?? []) as CaseVerdict[]).filter((v) => !v.usable).flatMap((v) => v.reasons).slice(0, 5),
         red: live && state === "failed",
-      };
+      } };
     })
-    .concat(await pairViews(db, active, latestByPair))
+    .concat(pairViews(active, latestByPair));
+  // WRITER-PROOF-CAP-1125: the budget is spent AND a live combination of an enforced Engine is held out by it (waiting
+  // on it, or unproven with enough cases to be proven): those are red, the budget reads blocked.
+  const spentCents = await monthProofSpendCents(db);
+  let blocked = false;
+  if (spentCents >= PROOF_MONTHLY_CEILING_CENTS) {
+    const fed = new Map<string, number>();
+    for (const e of entries) {
+      if (!e.view.live || enforced.get(e.view.outcome) !== true) continue;
+      let held = e.view.state === "waiting" && (e.proof?.error ?? "").startsWith(BUDGET_WAIT_PREFIX);
+      if (!held && e.view.state === "unproven") {
+        if (!fed.has(e.row.id)) fed.set(e.row.id, await fedCaseCount(db, e.row));
+        held = fed.get(e.row.id)! >= PROOF_SAMPLE;
+      }
+      if (held) {
+        e.view.red = true;
+        blocked = true;
+      }
+    }
+  }
+  const combinations = entries
+    .map((e) => e.view)
     .sort((a, b) => Number(b.red) - Number(a.red) || a.outcome.localeCompare(b.outcome) || a.dynasty.localeCompare(b.dynasty) || String(a.completion).localeCompare(String(b.completion)));
   const outcomes = new Set([...caseCounts.map((c) => c.outcome), ...enforcedRows.map((r) => r.outcome)]);
   return {
+    budget: { spentUsd: spentCents / 100, ceilingUsd: PROOF_MONTHLY_CEILING_CENTS / 100, blocked },
     engines: [...outcomes].sort().map((o) => ({ outcome: o, enforced: enforced.get(o) === true, cases: Number(caseCounts.find((c) => c.outcome === o)?.n ?? 0) })),
     combinations,
   };
 }
 
+/** One Monitoring line with the version and proof it was read from. */
+type ViewEntry = { view: ProofView; row: ScriptRow; proof: WriterProofRow | undefined };
+
 /** One line per live (writer that asks its model) x live completion script, with that pair's latest proof. */
-async function pairViews(db: AnyPgDb, active: ScriptRow[], latest: Map<string, WriterProofRow>): Promise<ProofView[]> {
+function pairViews(active: ScriptRow[], latest: Map<string, WriterProofRow>): ViewEntry[] {
   const writers = active.filter((r) => r.dynastyStatus === "active" && isPairWriter(r));
   const completions = active.filter((r) => r.dynastyStatus === "active" && r.outcome === LLM_COMPLETION_OUTCOME);
-  const out: ProofView[] = [];
+  const out: ViewEntry[] = [];
   for (const w of writers) {
     for (const c of completions) {
       const p = latest.get(pairKey(w.id, c.dynasty));
       const state = p?.state ?? "unproven";
-      out.push({
+      out.push({ row: w, proof: p, view: {
         outcome: w.outcome,
         dynasty: w.dynasty,
         version: w.version,
@@ -798,13 +922,13 @@ async function pairViews(db: AnyPgDb, active: ScriptRow[], latest: Map<string, W
         provedAt: p?.finishedAt?.toISOString() ?? null,
         failures: ((p?.cases ?? []) as CaseVerdict[]).filter((v) => !v.usable).flatMap((v) => v.reasons).slice(0, 5),
         red: state === "failed",
-      });
+      } });
     }
   }
   return out;
 }
 
-/** The production deps: chat-service vendors + one runs-service platform run per proof. */
+/** The production deps: chat-service vendors + one runs-service platform run per proof + the connected Claude Code runner. */
 export function productionProofDeps(vendors: VendorDeps): ProofDeps {
   const base = (process.env.RUNS_SERVICE_URL ?? "").replace(/\/$/, "");
   const key = process.env.RUNS_SERVICE_API_KEY ?? "";
@@ -813,6 +937,20 @@ export function productionProofDeps(vendors: VendorDeps): ProofDeps {
   };
   return {
     vendors,
+    async claudeCodeRunner() {
+      const chat = (process.env.CHAT_SERVICE_URL ?? "").replace(/\/$/, "");
+      const chatKey = process.env.CHAT_SERVICE_API_KEY ?? "";
+      if (!chat || !chatKey) throw new Error("CHAT_SERVICE_URL and CHAT_SERVICE_API_KEY must be set to prove a writer");
+      const res = await fetch(`${chat}/internal/local-llm/orgs`, { headers: { "x-api-key": chatKey }, signal: AbortSignal.timeout(600_000) });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`chat-service GET /internal/local-llm/orgs -> ${res.status}: ${text.slice(0, 300)}`);
+      const orgs = (JSON.parse(text) as { orgs: Array<{ orgId: string; declaredByUserId: string | null; runner: { connected: boolean; lastSeenAt: string | null } | null }> }).orgs;
+      // The org whose Mac runner was seen last, among those connected now and declared by a known user.
+      const connected = orgs
+        .filter((o) => o.runner?.connected === true && typeof o.declaredByUserId === "string" && o.declaredByUserId !== "")
+        .sort((a, b) => String(b.runner!.lastSeenAt ?? "").localeCompare(String(a.runner!.lastSeenAt ?? "")));
+      return connected[0] ? { orgId: connected[0].orgId, userId: connected[0].declaredByUserId! } : null;
+    },
     async openRun(taskName, reason) {
       need();
       const res = await fetch(`${base}/v1/platform-runs`, {

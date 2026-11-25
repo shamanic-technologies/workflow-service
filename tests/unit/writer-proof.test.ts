@@ -9,9 +9,14 @@ import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-r
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { candidatesOf } from "../../src/lib/scripts/engine.js";
 import {
+  BUDGET_WAIT_PREFIX,
+  JUDGMENT_BOUND_CENTS,
+  PROOF_MONTHLY_CEILING_CENTS,
   PROOF_SAMPLE,
+  WAITING_RETRY_MS,
   abandonRunningProofs,
   gateFor,
+  monthProofSpendCents,
   personFields,
   proveScript,
   readWriterProofs,
@@ -19,6 +24,7 @@ import {
   setProofContext,
   type ProofDeps,
 } from "../../src/lib/scripts/writer-proof.js";
+import { eq } from "drizzle-orm";
 import { writerCases, writerProofs } from "../../src/db/schema.js";
 
 // PROVEN-BEFORE-PEOPLE-1116 on a real Postgres (PGlite, the service's own migrations). Fictional data only: real
@@ -320,6 +326,138 @@ describe("the gate: an enforced Engine's Rating draws only proven writers", () =
     expect(gateFor([p("failed")], 10, t.getTime())).toEqual({ draws: false, prove: false, why: "failed its proof" });
     expect(gateFor([], 2, t.getTime())).toMatchObject({ draws: true, prove: false });
     expect(gateFor([{ ...p("no_cases"), casesAvailable: 3 }], 8, t.getTime())).toMatchObject({ draws: true, prove: true });
+  });
+});
+
+describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Code at $0 when a runner is connected", () => {
+  const GOOD = { decision: "write", message: "<p>Tuesday 10am works.</p>" };
+  const RUNNER = { orgId: "org-mac", userId: "user-mac" };
+  /** A proof some other version already paid for, created on `at`. */
+  const spent = (cents: number, at: Date = new Date()) =>
+    db.insert(writerProofs).values({ scriptId: "00000000-0000-4000-8000-000000000001", outcome: "email_sent", dynasty: "dy_other", version: 1, state: "passed", trigger: "auto", ceilingCents: "400", spendCents: String(cents), createdAt: at });
+  const lastMonth = () => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15));
+  };
+  /** Proof deps whose org `/complete` is a Mac runner: it answers `local(n)` for its n-th call, and records the headers. */
+  function runnerDeps(local: (n: number) => Record<string, unknown>) {
+    const p = proofDeps(GOOD);
+    const localCalls: Array<Record<string, string>> = [];
+    p.deps.vendors.complete = async (_body, headers) => {
+      localCalls.push(headers);
+      return local(localCalls.length);
+    };
+    p.deps.claudeCodeRunner = async () => RUNNER;
+    return { ...p, localCalls };
+  }
+  const claude = () => ({ content: JSON.stringify(GOOD), json: GOOD, model: "claude-code", servedBy: "local-claude-code" });
+
+  it("the month's budget spent: a proof waits and asks nothing; the same spend last month does not count", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    await spent(PROOF_MONTHLY_CEILING_CENTS + 20, lastMonth());
+    expect(await monthProofSpendCents(db)).toBe(0);
+    const before = proofDeps(GOOD);
+    expect((await proveScript(db, before.deps, row, "staff")).state).toBe("passed");
+
+    await spent(PROOF_MONTHLY_CEILING_CENTS);
+    const p = proofDeps(GOOD);
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("waiting");
+    expect(proof.error!.startsWith(BUDGET_WAIT_PREFIX)).toBe(true);
+    expect(proof.error).toContain("of $5.00");
+    expect([p.llmCalls, p.judged, p.closed]).toEqual([[], [], []]); // nothing asked, no run opened
+  });
+
+  it("a running proof that crosses the monthly ceiling stops waiting: neither failed nor drawn", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    await spent(PROOF_MONTHLY_CEILING_CENTS - 50);
+    // 30k in + 2k out at the bound = 60 cents a case: the first case crosses the month's ceiling, not the proof's own.
+    const p = proofDeps(GOOD, { tokensInput: 30_000, tokensOutput: 2_000 });
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("waiting");
+    expect(proof.error!.startsWith(BUDGET_WAIT_PREFIX)).toBe(true);
+    expect(p.llmCalls).toHaveLength(1);
+    expect([proof.sample, proof.usable]).toEqual([1, 1]); // what it gathered is kept
+    expect(Number(proof.spendCents)).toBeCloseTo(60 + JUDGMENT_BOUND_CENTS, 4);
+    expect(p.closed).toEqual(["proof-run-1:completed"]);
+    expect(gateFor([proof], PROOF_SAMPLE, Date.now()).draws).toBe(false);
+  });
+
+  it("an auto proof does not start while the budget is spent: no row, the unproven version stays out; Monitoring reads blocked and red", async () => {
+    await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    await setEngineEnforced(db, "message_sent", true, "staff@example.com");
+    const p = proofDeps(GOOD);
+    setProofContext({ db, deps: p.deps });
+
+    await spent(PROOF_MONTHLY_CEILING_CENTS - 100);
+    const under = await readWriterProofs(db);
+    expect(under.budget).toEqual({ spentUsd: 4, ceilingUsd: 5, blocked: false });
+    expect(under.combinations.find((c) => c.dynasty === "dy_answer")).toMatchObject({ state: "unproven", red: false });
+
+    await spent(100);
+    expect(await candidatesOf(db, { outcome: "message_sent", servable: [], channel: null })).toEqual([]);
+    expect(await db.select().from(writerProofs).where(eq(writerProofs.outcome, "message_sent"))).toEqual([]);
+    expect(p.llmCalls).toEqual([]);
+    const view = await readWriterProofs(db);
+    expect(view.budget).toEqual({ spentUsd: 5, ceilingUsd: 5, blocked: true });
+    expect(view.combinations.find((c) => c.dynasty === "dy_answer")).toMatchObject({ state: "unproven", live: true, red: true });
+  });
+
+  it("with a connected runner the writer's completions go to its org on Claude Code: nothing platform-billed but Jev, spend = Jev's bound", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    const p = runnerDeps(claude);
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect([proof.state, proof.sample]).toEqual(["passed", PROOF_SAMPLE]);
+    expect(p.llmCalls).toEqual([]); // no platform completion
+    expect(p.localCalls).toHaveLength(PROOF_SAMPLE);
+    expect(p.localCalls[0]).toEqual({ "x-run-id": "proof-run-1", "x-org-id": "org-mac", "x-user-id": "user-mac" });
+    expect(p.judged).toHaveLength(PROOF_SAMPLE); // the same Jev, platform-billed
+    expect(Number(proof.spendCents)).toBe(PROOF_SAMPLE * JUDGMENT_BOUND_CENTS);
+    expect((proof.cases as Array<{ replayedOn: string }>).map((c) => c.replayedOn)).toEqual(Array(PROOF_SAMPLE).fill("claude-code"));
+  });
+
+  it("without a runner the verdicts say the version's own model wrote", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    const p = proofDeps(GOOD);
+    p.deps.claudeCodeRunner = async () => null;
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("passed");
+    expect(p.llmCalls).toHaveLength(PROOF_SAMPLE);
+    expect((proof.cases as Array<{ replayedOn: string }>).every((c) => c.replayedOn === "own-model")).toBe(true);
+  });
+
+  it("a runner that stops answering makes the proof wait, never fail", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    const p = runnerDeps((n) => {
+      if (n === 2) throw new Error('chat-service POST /complete -> 504: {"error":"the runner did not answer","code":"local_runner_timeout"}');
+      return claude();
+    });
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("waiting");
+    expect(proof.error).toMatch(/^the Claude Code runner stopped answering: .*local_runner_timeout/);
+    expect([proof.sample, proof.usable]).toEqual([1, 1]); // the lost case is no verdict
+    expect(p.closed).toEqual(["proof-run-1:completed"]);
+    // Held out, not red (the budget is not spent), tried again later.
+    await setEngineEnforced(db, "message_sent", true, "staff@example.com");
+    const view = await readWriterProofs(db);
+    expect(view.budget.blocked).toBe(false);
+    expect(view.combinations.find((c) => c.dynasty === "dy_answer")).toMatchObject({ state: "waiting", red: false });
+  });
+
+  it("a waiting proof holds its version out, is tried again only after a while, and never counts as an attempt", () => {
+    const t = new Date();
+    const waiting = { state: "waiting", trigger: "auto", createdAt: t, casesAvailable: 5, error: `${BUDGET_WAIT_PREFIX}$5.10 spent of $5.00 this month` };
+    expect(gateFor([waiting], 10, t.getTime() + WAITING_RETRY_MS - 1)).toEqual({ draws: false, prove: false, why: `waiting: ${waiting.error}` });
+    expect(gateFor([waiting], 10, t.getTime() + WAITING_RETRY_MS)).toMatchObject({ draws: false, prove: true });
+    expect(gateFor([{ ...waiting, error: null }], 10, t.getTime()).why).toBe("waiting: to be proven");
+    const error = { state: "error", trigger: "auto", createdAt: t, casesAvailable: 0 };
+    expect(gateFor([error, waiting, waiting, waiting, error], 10, t.getTime()).prove).toBe(true); // 2 interrupted, not 5
   });
 });
 
