@@ -81,6 +81,12 @@ for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
       // Already stored: the generator's code is the next version unless it is already the active one.
       const active = (await activeOf(b.outcome, b.dynasty)).find((s) => s.dynasty === b.dynasty);
       const current = active ? (await call("GET", `/scripts/${active.id}`)).json : null;
+      // TEAM-PAST-EMPLOYERS-1125: a generator's new name renames the whole dynasty (every version keeps one name).
+      if (current && b.name && current.name !== b.name) {
+        const n = await call("PUT", `/scripts/dynasty/${b.outcome}/${b.dynasty}/name`, { name: b.name });
+        console.log(`  rename ${b.outcome}/${b.dynasty} "${current.name}" -> "${b.name}": ${n.status}${n.status === 200 ? "" : " " + JSON.stringify(n.json).slice(0, 300)}`);
+        if (n.status !== 200) failed++;
+      }
       if (current && current.dynasty === b.dynasty && current.code === b.code && sameJson(current.tactics, b.tactics) && current.description === b.description) {
         console.log(`  ${b.outcome}/${b.dynasty}: the active version is the generator's, skipped`);
         continue;
