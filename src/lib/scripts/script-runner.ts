@@ -14,6 +14,7 @@
  * bridge, which answers for the caller's org and identity alone: the materials the step was handed, its Engine's
  * storage for THIS org, and the vendors with this run's identity. No env, no DB handle, no other org.
  */
+import { MOST_UNITS_REACHED, paceHold } from "./most-units.js";
 import { and, eq, sql } from "drizzle-orm";
 import { scriptRuns, scriptStorage, scripts, type ScriptRow } from "../../db/schema.js";
 import { asksOf, runScript, type Bridge, type ScriptResult } from "./sandbox.js";
@@ -514,6 +515,10 @@ async function provide(
   }
   // PLAN-RECURSIVE-PER-ENGINE-1124: an Engine already asked above is never asked again: an answer, never a loop.
   if (parent.chain.includes(outcome)) return { v: { id: `${parent.runId}:${outcome}:${ASK_CYCLE}`, outcome, subject: "", ageDays: 0, content: null, unmade: `${ASK_CYCLE}: ${outcome} is already asked above this run (${parent.chain.join(" > ")})`, run: null } };
+  // MOST-UNITS-PACE-1125: an asked Engine whose campaign already made the most Units its brief allows in the period
+  // answers that, decided idle (an expected hold, never a stop): the asker forwards it.
+  const held = await paceHold({ campaignId: parent.headers["x-campaign-id"] ?? null, orgId: parent.headers["x-org-id"] ?? null, outcome });
+  if (held) return { v: { id: `${parent.runId}:${outcome}:${MOST_UNITS_REACHED}`, outcome, subject: "", ageDays: 0, content: null, unmade: held, decided: "idle", run: null } };
   const pick = await pickScript(db, { outcome, servable: Object.keys(units), handed: Object.keys(units), channel: parent.headers["x-feature-slug"] ?? null, campaignId: parent.headers["x-campaign-id"] ?? null, orgId: parent.headers["x-org-id"] ?? null, askedBy: parent.askedBy, needs: needsOfAsk(request), chain: parent.chain });
   // No script of that Engine this campaign may run (none live, or its strategy keeps none): an ANSWER the asking script
   // reads (`unmade: "no_script: ..."`, no content, no child run), never a fallback script and never a stop: the asker
