@@ -14,3 +14,5 @@ process.env.EMAIL_GATEWAY_SERVICE_API_KEY = "test-email-gw-key";
 process.env.NODE_ENV = "test";
 // Picks with no campaign read features-service's no-campaign strategy in production; a test that wants it swaps the reader.
 process.env.SCRIPT_STRATEGY_WITHOUT_CAMPAIGN = "off";
+// A campaign's pace (most Units per period) reads features-service + runs-service in production; a test that wants it swaps the readers.
+process.env.MOST_UNITS_PACE = "off";
