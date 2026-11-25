@@ -3839,11 +3839,35 @@
             "items": {
               "$ref": "#/components/schemas/WriterProofCombination"
             }
+          },
+          "budget": {
+            "type": "object",
+            "properties": {
+              "spentUsd": {
+                "type": "number",
+                "description": "Upper bound of what every proof of this UTC month spent (an answer served by Claude Code counts 0)."
+              },
+              "ceilingUsd": {
+                "type": "number",
+                "description": "The most every proof of one month spends together."
+              },
+              "blocked": {
+                "type": "boolean",
+                "description": "The budget is spent AND a live combination of an enforced Engine is held out by it (red)."
+              }
+            },
+            "required": [
+              "spentUsd",
+              "ceilingUsd",
+              "blocked"
+            ],
+            "description": "WRITER-PROOF-CAP-1125: the monthly proof budget."
           }
         },
         "required": [
           "engines",
-          "combinations"
+          "combinations",
+          "budget"
         ]
       },
       "WriterProofCombination": {
@@ -3874,7 +3898,7 @@
           },
           "state": {
             "type": "string",
-            "description": "Its latest proof: passed | failed | running | error | no_cases | abandoned, or unproven."
+            "description": "Its latest proof: passed | failed | running | error | no_cases | abandoned | waiting (the monthly proof budget is spent, or the Claude Code runner stopped answering: neither passed nor failed, not drawn), or unproven."
           },
           "usable": {
             "type": "integer"
@@ -3900,7 +3924,7 @@
           },
           "red": {
             "type": "boolean",
-            "description": "A live combination that failed its proof."
+            "description": "A live combination that failed its proof, or one of an enforced Engine held out (unproven, or waiting on the budget) while the month's proof budget is spent."
           }
         },
         "required": [
@@ -11654,7 +11678,7 @@
     "/internal/scripts/writer-proofs": {
       "post": {
         "summary": "Prove one writer combination on its Engine's recorded cases (service key only)",
-        "description": "PROVEN-BEFORE-PEOPLE-1116. Runs the dynasty's active version (else its latest, a retired dynasty included) on up to 5 recorded production cases: its LLM live with its own tactics (platform run, support product_feature), every other call from the record, nothing sent. Usable = its script reads the answer and Jev judges every field a person would read usable. Spend bound: $4 at Opus list prices.",
+        "description": "PROVEN-BEFORE-PEOPLE-1116. Runs the dynasty's active version (else its latest, a retired dynasty included) on up to 5 recorded production cases: its LLM live with its own tactics (platform run, support product_feature), every other call from the record, nothing sent. Usable = its script reads the answer and Jev judges every field a person would read usable. Spend bound: $4 at Opus list prices; every proof of a UTC month together: $5 (spent = the proof is stored `waiting`). Replayed on Claude Code at $0 through a connected Mac runner when there is one.",
         "tags": [
           "Scripts"
         ],
