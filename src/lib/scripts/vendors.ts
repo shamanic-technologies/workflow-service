@@ -12,6 +12,7 @@ import type { VendorAnswer } from "./replay.js";
 import { longRequest } from "./long-request.js";
 import { PERSON_THREAD_DEFAULT_QUERY } from "../person-thread-query.js";
 import { productionProviderReads, providerTag, type ProviderReads } from "./provider-index.js";
+import { AnswerPendingError, PENDING_ANSWER_JOB_HEADER, pendingOf, pendingRefusal } from "./pending-answer.js";
 
 export interface VendorDeps {
   /** chat-service `POST /complete` on the run (its own key + the given headers). */
@@ -76,7 +77,9 @@ function platformHeaders(headers: Record<string, string>): Record<string, string
   const runId = headers["x-run-id"];
   // PLATFORM-CALLER-RUN-1024: a platform call always states whose work it is; here, always the script's own run.
   if (!runId) throw new Error("a platform-billed vendor call needs the script's run (x-run-id)");
-  return { "x-run-id": runId };
+  // SOLO-PLAN-1125: a resumed call names the job holding its answer, on the platform door too.
+  const job = headers[PENDING_ANSWER_JOB_HEADER];
+  return job ? { "x-run-id": runId, [PENDING_ANSWER_JOB_HEADER]: job } : { "x-run-id": runId };
 }
 
 /** An LLM completion, answered with chat-service's whole answer `{content, json, model, tokensInput, tokensOutput}`. */
@@ -435,6 +438,7 @@ async function complete(name: string, args: Record<string, unknown>, ctx: Vendor
   try {
     answer = ctx.billing === "platform" ? await deps.platformComplete(built.body, platformHeaders(ctx.headers)) : await deps.complete(built.body, ctx.headers);
   } catch (e) {
+    if (e instanceof AnswerPendingError) return pendingRefusal(e);
     return refuse(e instanceof Error ? e.message : String(e));
   }
   ctx.onCompletion?.({ sent: built.body, raw: answer });
@@ -472,6 +476,7 @@ async function jevNoul(args: Record<string, unknown>, ctx: VendorCallContext, de
     const body = { ...(args.state !== undefined ? { state: args.state } : {}), questions: wire };
     out = ctx.billing === "platform" ? await deps.platformJudge(body, platformHeaders(ctx.headers)) : await deps.judge(body, ctx.headers);
   } catch (e) {
+    if (e instanceof AnswerPendingError) return pendingRefusal(e);
     return refuse(e instanceof Error ? e.message : String(e));
   }
   const answers = (out.answers ?? {}) as Record<string, Record<string, unknown>>;
@@ -498,6 +503,7 @@ async function jevChoice(args: Record<string, unknown>, ctx: VendorCallContext, 
     const body = { ...(args.state !== undefined ? { state: args.state } : {}), questions };
     out = ctx.billing === "platform" ? await deps.platformJudge(body, platformHeaders(ctx.headers)) : await deps.judge(body, ctx.headers);
   } catch (e) {
+    if (e instanceof AnswerPendingError) return pendingRefusal(e);
     return refuse(e instanceof Error ? e.message : String(e));
   }
   const answers = (out.answers ?? {}) as Record<string, Record<string, unknown>>;
@@ -523,6 +529,7 @@ async function bookingSlots(args: Record<string, unknown>, deps: VendorDeps): Pr
   try {
     return { ok: true, data: await deps.readBookingSlots(url, tz) };
   } catch (e) {
+    if (e instanceof AnswerPendingError) return pendingRefusal(e);
     return refuse(e instanceof Error ? e.message : String(e));
   }
 }
@@ -586,6 +593,7 @@ async function serviceDoor(name: string, args: Record<string, unknown>, ctx: Ven
     if (door.okFrom) return { ok: out.body[door.okFrom] === true, data: {} };
     return { ok: true, data: out.body };
   } catch (e) {
+    if (e instanceof AnswerPendingError) return pendingRefusal(e);
     return refuse(e instanceof Error ? e.message : String(e));
   }
 }
@@ -680,8 +688,11 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
     }
     if (out.status >= 200 && out.status < 300) return { ok: true, data: out.body };
     const code = typeof out.body.code === "string" ? out.body.code : plainRecord(out.body.details) && typeof out.body.details.code === "string" ? out.body.details.code : null;
-    return { ok: false, data: { error: String(out.body.error ?? `${door.service}-service answered ${out.status}`), status: out.status, code, body: out.body } };
+    // SOLO-PLAN-1125: a door whose answer is still to come names its job (read as a pending answer by the run).
+    const pending = pendingOf(out.status, out.body);
+    return { ok: false, data: { error: String(out.body.error ?? `${door.service}-service answered ${out.status}`), status: out.status, code, body: out.body, ...(pending ? { pending } : {}) } };
   } catch (e) {
+    if (e instanceof AnswerPendingError) return pendingRefusal(e);
     return refuse(e instanceof Error ? e.message : String(e));
   }
 }
@@ -789,6 +800,21 @@ export async function callVendor(name: string, args: Record<string, unknown> | n
   return refuse(`no vendor named ${name} (scripts may call: ${SCRIPT_VENDORS.join(", ")})`);
 }
 
+/**
+ * SOLO-PLAN-1125: an LLM door whose answer is still to come (a named pending state + its job) throws the typed error
+ * the vendor reads as a pending answer; anything else goes on as before.
+ */
+function throwIfPending(what: string, status: number, text: string): void {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return;
+  }
+  const signal = pendingOf(status, body);
+  if (signal) throw new AnswerPendingError(signal, `${what} -> ${status}: the answer is not there yet (${signal.code}, job ${signal.jobId})`);
+}
+
 /** The production doors (chat-service with its own key). */
 export function productionVendorDeps(): VendorDeps {
   const base = (process.env.CHAT_SERVICE_URL ?? "").replace(/\/$/, "");
@@ -806,6 +832,7 @@ export function productionVendorDeps(): VendorDeps {
         signal: AbortSignal.timeout(600_000),
       });
       const text = await res.text();
+      throwIfPending(`chat-service POST /complete`, res.status, text);
       if (!res.ok) throw new Error(`chat-service POST /complete -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
@@ -818,6 +845,7 @@ export function productionVendorDeps(): VendorDeps {
         signal: AbortSignal.timeout(600_000),
       });
       const text = await res.text();
+      throwIfPending(`chat-service POST /orgs/judgments`, res.status, text);
       if (!res.ok) throw new Error(`chat-service POST /orgs/judgments -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
@@ -830,6 +858,7 @@ export function productionVendorDeps(): VendorDeps {
         signal: AbortSignal.timeout(600_000),
       });
       const text = await res.text();
+      throwIfPending(`chat-service POST /internal/platform-complete`, res.status, text);
       if (!res.ok) throw new Error(`chat-service POST /internal/platform-complete -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
@@ -842,6 +871,7 @@ export function productionVendorDeps(): VendorDeps {
         signal: AbortSignal.timeout(600_000),
       });
       const text = await res.text();
+      throwIfPending(`chat-service POST /internal/platform-judgments`, res.status, text);
       if (!res.ok) throw new Error(`chat-service POST /internal/platform-judgments -> ${res.status}: ${text.slice(0, 300)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
