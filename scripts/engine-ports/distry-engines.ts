@@ -370,7 +370,11 @@ export function occurrenceActPaths(
       if (engine === outcome) continue;
       if (list.some((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === engine && !r.code.includes(ANSWERS_NOBODY_REFUSAL))) continue;
       const name = step.get(engine)?.name ?? engine.replace(/_/g, " ");
-      const told = whatTheyDo((byOutcome.get(engine) ?? []).filter((r) => !isPath(r.tactics) && readsFields(r.code).includes("trigger")));
+      // What the path is told it hands to: the asked Engine's scripts that answer FROM the occurrence alone (read it,
+      // ask no other Engine: the pushed email, the hot lead proposal), else every script there that reads it.
+      const answering = (byOutcome.get(engine) ?? []).filter((r) => !isPath(r.tactics) && readsFields(r.code).includes("trigger"));
+      const alone = answering.filter((r) => asksOf(r.tactics).length === 0);
+      const told = whatTheyDo(alone.length > 0 ? alone : answering);
       out.push({
         outcome,
         dynasty: ANSWER_THROUGH_PREFIX + engine,

@@ -390,7 +390,8 @@ describe("occurrenceActPaths", () => {
     { outcome: "paid_client", tactics: { asks: ["email_sent"], askRecordedBy: "instantly", recorded_by: "lead" }, code: first },
     { outcome: "signup", tactics: { asks: ["message_sent"], recorded_by: "lead" }, code: "x" },
     { outcome: "signup", tactics: { relationships: "current_client" }, code: "const R = ctx.request; R.trigger" },
-    { outcome: "email_sent", tactics: { recorded_by: "email-gateway" }, code: "const t = ctx.request.trigger" },
+    { outcome: "email_sent", tactics: { recorded_by: "email-gateway" }, code: "const t = ctx.request.trigger", description: "Sends the email a client pushed, exactly as written." },
+    { outcome: "email_sent", tactics: { asks: ["message_written", "lead_found"] }, code: "R.trigger", description: "Serves one person and writes a cold email." },
     { outcome: "copilot_message_sent", tactics: { recorded_by: "chat", relationships: "pure_prospect" }, code: "R.trigger", description: "Asks the Copilot to tell the team. Leads only." },
     { outcome: "x_post_published", tactics: { asks: ["llm_completion"] }, code: "no occurrence read" },
     { outcome: "post_viewed", tactics: { asks: ["email_sent"], askRecordedBy: "social" }, code: "R.trigger" },
@@ -414,6 +415,8 @@ describe("occurrenceActPaths", () => {
     // What is TRUE of every asked script: the copilot one states pure_prospect, the email one states none.
     const c = occurrenceActPaths(ROWS, STEPS, reads).find((x) => x.dynasty === "dy_answer_through_copilot_message_sent" && x.outcome === "paid_client")!;
     expect(c.tactics.relationships).toBe("pure_prospect");
+    // The cold sender also reads the occurrence but asks other Engines: the email path is told only what the pushed email does.
+    expect(p.description).toBe("Works toward paid client: hands the run (and the person a fact names) to Email sent, whose script sends the email a client pushed, exactly as written.");
     expect(c.description).toBe("Works toward paid client: hands the run (and the person a fact names) to Copilot message sent, whose script asks the Copilot to tell the team.");
   });
 });
