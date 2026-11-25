@@ -19,6 +19,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { scriptRuns, scriptStorage, scripts, type ScriptRow } from "../../db/schema.js";
 import { asksOf, runScript, type Bridge, type ScriptResult } from "./sandbox.js";
 import { callVendor, readProvider, type VendorDeps } from "./vendors.js";
+import { PENDING_ANSWER_JOB_HEADER, mayStillWait, pendingInAnswer, recheckDays, type PendingAnswer } from "./pending-answer.js";
 import { providerTag } from "./provider-index.js";
 import { ScriptCatalogueError, activeVersion, caseCount, dynastyVersions, type AnyPgDb } from "./script-catalogue.js";
 import { needsOfAsk, pickScript } from "./engine.js";
@@ -80,7 +81,20 @@ export interface RunScriptInput {
    * A Unit this run reads without holding it is asked of its Engine, never one already in the chain (nor this one).
    */
   askChain?: string[];
+  /**
+   * SOLO-PLAN-1125: the LLM calls of this run tree still waiting on their answer (from the wait it resumes): a call at
+   * the same place names its job so the producer answers THAT job. Absent = none.
+   */
+  pendingAnswers?: PendingAnswer[];
+  /** SOLO-PLAN-1125: this run's place in its run tree (`<outcome>@<n>>` per ask above it; "" = the top run). */
+  answerPath?: string;
 }
+
+/**
+ * The hook that records a run's ONE wait (an Engine run's): `days` until it looks again, and, when the wait is on LLM
+ * answers still to come (SOLO-PLAN-1125), the calls holding them.
+ */
+export type WaitHook = (days: number, pending?: { answers: PendingAnswer[] }) => Promise<void>;
 
 export interface RunIdentity {
   orgId: string;
@@ -152,7 +166,7 @@ export const scriptTaskName = (outcome: string, dynasty: string) => `script:${ou
  */
 export interface OwnedRun {
   runId: string;
-  onWait(days: number): Promise<void>;
+  onWait: WaitHook;
 }
 
 const WAIT_STOP = "__wait__:";
@@ -203,7 +217,7 @@ export async function runStoredScript(
    * ask). An asked script may then wait: the hook records the ONE wait, this run ends `waiting`, and so does every asker
    * above it. Absent on a run nothing can resume (a step, a direct make): its wait is refused as before.
    */
-  waiter?: (days: number) => Promise<void>,
+  waiter?: WaitHook,
 ): Promise<ScriptRunResult> {
   const waitHook = owned?.onWait ?? waiter;
   const row = await resolveVersion(db, input);
@@ -250,10 +264,16 @@ export async function runStoredScript(
   const asks = asksOf({ tactics, code: row.code });
   // PLAN-RECURSIVE-PER-ENGINE-1124: the Engines asked down to this run (this one last): never asked again below it.
   const chain = [...(input.askChain ?? []), row.outcome];
+  // SOLO-PLAN-1125: where each call sits in the run tree, so a resumed call finds the job holding its answer.
+  const answerPath = input.answerPath ?? "";
+  const pendingByKey = new Map((input.pendingAnswers ?? []).map((p) => [p.key, p]));
+  const callsByName = new Map<string, number>();
+  let asksMade = 0;
 
   /** Order ONE new Unit of an outcome from its Engine (the Rating's pick, a child run), consumed by this run. */
   const order = async (outcome: string, request: Record<string, unknown>) => {
-    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, chain, billing: input.billing, ...(waitHook ? { waiter: waitHook } : {}), ...(input.trace ? { trace } : {}) }, deps);
+    const answerPathOfChild = `${answerPath}${outcome}@${asksMade++}>`;
+    const provided = await provide(db, outcome, request, { orgId: who.orgId, userId: who.userId, runId, subject: input.subject ?? null, headers: who.headers, askedBy: `${row.outcome}/${row.dynasty}`, chain, billing: input.billing, ...(waitHook ? { waiter: waitHook } : {}), ...(input.trace ? { trace } : {}), answerPath: answerPathOfChild, ...(input.pendingAnswers ? { pendingAnswers: input.pendingAnswers } : {}) }, deps);
     if ("v" in provided) {
       askedUnits[outcome] = provided.v;
       // ONE-WRITER-N-MODELS-1116: the Unit an asked child made is consumed by the asking run (a completion by its
@@ -316,10 +336,14 @@ export async function runStoredScript(
       const name = String(args[0]);
       const t = Date.now();
       let exchange: { sent: Record<string, unknown>; raw: Record<string, unknown> } | null = null;
+      const nth = callsByName.get(name) ?? 0;
+      callsByName.set(name, nth + 1);
+      const callKey = `${answerPath}${name}#${nth}`;
+      const attached = pendingByKey.get(callKey);
       const answer = await callVendor(
         name,
         (args[1] ?? null) as Record<string, unknown> | null,
-        { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome, asks, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
+        { headers: attached ? { ...vendorHeaders, [PENDING_ANSWER_JOB_HEADER]: attached.jobId } : vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome, asks, ...(input.trace ? { onCompletion: (x) => (exchange = x) } : {}) },
         deps.vendors,
       );
       // BRAND-TOOLS-EVERY-SCRIPT-1109: how many brand tool calls a completion made, on the run's record (any vendor that serves it).
@@ -327,6 +351,15 @@ export async function runStoredScript(
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }), ...(brandToolCalls !== undefined ? { brandToolCalls } : {}) });
       recorded.push({ name, args: args[1] ?? null, answer });
       if (input.trace) trace.push({ name, args: args[1] ?? null, answer, ...(exchange ? (exchange as { sent: Record<string, unknown>; raw: Record<string, unknown> }) : {}) });
+      // SOLO-PLAN-1125: an answer still to come (a founder's own Claude picks the work up hourly) makes a run that can
+      // be resumed WAIT, no worker held: its wait keeps the job at this call's place, and the resumed run's same call
+      // names it. A run nothing resumes, or a call waiting past the bound, reads the refusal as before.
+      const pending = pendingInAnswer(answer);
+      if (pending && waitHook && mayStillWait(attached?.since, new Date())) {
+        const days = recheckDays(pending);
+        await waitHook(days, { answers: [{ key: callKey, jobId: pending.jobId, since: attached?.since ?? new Date().toISOString() }] });
+        return { stop: `${WAIT_STOP}${days}` };
+      }
       return { v: answer };
     }
     if (op === "storage.get" || op === "storage.set" || op === "storage.delete" || op === "storage.count" || op === "storage.claim") {
@@ -499,7 +532,10 @@ async function provide(
      */
     trace?: NonNullable<ScriptRunResult["trace"]>;
     /** The asking run's wait hook (its Engine run's, handed down): the child may wait through it. */
-    waiter?: (days: number) => Promise<void>;
+    waiter?: WaitHook;
+    /** SOLO-PLAN-1125: the child's place in the run tree, and the run tree's calls still waiting on their answer. */
+    answerPath: string;
+    pendingAnswers?: PendingAnswer[];
   },
   deps: { ledger: LedgerDeps; vendors: VendorDeps },
 ): Promise<{ v: unknown } | { stop: string }> {
@@ -549,6 +585,8 @@ async function provide(
         ...(request.trace === true || parent.trace ? { trace: true } : {}),
         consumesHanded: true,
         askChain: parent.chain,
+        answerPath: parent.answerPath,
+        ...(parent.pendingAnswers ? { pendingAnswers: parent.pendingAnswers } : {}),
         // A child bills as its asker does (a platform-billed run's asked completion is platform-billed too).
         ...(parent.billing ? { billing: parent.billing } : {}),
       },

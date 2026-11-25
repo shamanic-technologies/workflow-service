@@ -7,6 +7,7 @@
  *   POST /internal/engines/{outcome}/off        switch it off for one org, or every org
  *   POST /internal/engines/{outcome}/pick       the Rating's pick among kept dynasties, outside a run (a preview)
  *   POST /internal/engines/{outcome}/make       an Engine's ASK outside a campaign: the Rating's pick, RUN for a caller waiting on its Unit
+ *   GET  /internal/engines/{outcome}/required-keys  the keys a campaign's Plan needs, and which the org holds (SOLO-PLAN-1125)
  *   GET  /internal/engines                      every Engine of the live catalogue: callable now or why not (Distry, dashboard)
  *
  * Mounted before the identity gate: the execute route checks its own headers (and never needs `x-workflow-slug`).
@@ -20,6 +21,7 @@ import { zodErrorDetails } from "../lib/zod-error-details.js";
 import { extractDownstreamHeaders } from "../lib/downstream-headers.js";
 import { EngineExecuteRequestSchema, EngineSwitchRequestSchema, EngineOffRequestSchema, EnginePickRequestSchema, EngineMakeRequestSchema, EngineReasonRequestSchema } from "../schemas.js";
 import { listEngines } from "../lib/scripts/engine-calls.js";
+import { productionRequiredKeysDeps, requiredKeys } from "../lib/scripts/required-keys.js";
 import { attachRunsServiceRun, markExecutionDispatchFailed, reserveCampaignExecution, resolveExecutionConflictPolicy } from "../lib/execution-admission.js";
 import { SLUG_RE as ScriptSlugPattern } from "../lib/scripts/script-catalogue.js";
 import { engineState, pickScript, servesChannel, switchEngine, switchEngineOff } from "../lib/scripts/engine.js";
@@ -150,6 +152,25 @@ router.post("/internal/engines/:outcome/off", requireApiKey, async (req, res) =>
 
 // PREVIEW-RATING-PICK-1111: the Rating's pick with no campaign and no run (content-generation's email preview). The SAME
 // `pickScript` a run calls, among the dynasties the caller's strategy keeps: reads only, nothing spent or written.
+// SOLO-PLAN-1125: the keys a campaign's Plan needs (provider + what for), and which the org already holds.
+router.get("/internal/engines/:outcome/required-keys", requireApiKey, async (req, res) => {
+  const outcome = outcomeOf(req, res);
+  if (!outcome) return;
+  const orgId = header(req, "x-org-id");
+  const userId = header(req, "x-user-id");
+  if (!orgId || !userId) {
+    res.status(400).json({ error: "x-org-id and x-user-id are required: the org's own keys are read as that org" });
+    return;
+  }
+  const campaignId = typeof req.query.campaignId === "string" && req.query.campaignId.trim() ? req.query.campaignId.trim() : null;
+  try {
+    res.json(await requiredKeys(db, { outcome, orgId, userId, campaignId }, productionRequiredKeysDeps()));
+  } catch (err) {
+    console.error("[workflow-service] required keys:", err);
+    res.status(502).json({ code: "required_keys_unreadable", error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 router.post("/internal/engines/:outcome/pick", requireApiKey, async (req, res) => {
   const outcome = outcomeOf(req, res);
   if (!outcome) return;

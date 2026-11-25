@@ -374,6 +374,16 @@ export function setNoCampaignStrategyReader(r: NoCampaignStrategyReader | null):
 }
 
 let scriptStrategy: ScriptStrategyReader = productionScriptStrategy;
+
+/**
+ * The dynasties an Engine keeps for a campaign (its strategy), else with no campaign (features-service's no-campaign
+ * strategy); null = nothing narrows. Unreadable throws, as for a pick (SOLO-PLAN-1125: the keys a Plan needs).
+ */
+export async function keptDynastiesFor(outcome: string, campaignId: string | null): Promise<Set<string> | null> {
+  if (campaignId) return new Set(await scriptStrategy(campaignId, outcome));
+  const kept = await noCampaignStrategy(outcome);
+  return kept ? new Set(kept) : null;
+}
 /** Tests swap the reader. */
 export function setScriptStrategyReader(r: ScriptStrategyReader | null): void {
   scriptStrategy = r ?? productionScriptStrategy;
