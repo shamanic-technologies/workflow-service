@@ -78,17 +78,31 @@ export interface PathSpec {
   asks: string;
   tactics: Record<string, unknown>;
   description: string;
+  /** The asked Engine acts on no pushed person: the path refuses an occurrence (`buildPathSource`). */
+  answersNobody?: boolean;
 }
 
-/** A path asks ONE Engine, named literally in its code (the catalogue reads a script's materials off its code). */
-export function buildPathSource(asked: string): string {
+/**
+ * The refusal a path that acts on NOBODY pushed (a first email to a newly found person, a post, a backlink) states on a
+ * run answering an occurrence (PLAN-RECURSIVE-PER-ENGINE-1124-WF2): someone wrote or acted, and this script answers
+ * nobody, so the occurrence goes to the next script of the draw (a refusal about WHO, LEAD-EVENT-ONE-CAMPAIGN-1121),
+ * never a cold email to a stranger instead of an answer.
+ */
+export const ANSWERS_NOBODY_REFUSAL = "person_not_admitted: this script starts with someone new and answers nobody who wrote or acted";
+
+/**
+ * A path asks ONE Engine, named literally in its code (the catalogue reads a script's materials off its code).
+ * `answersNobody`: the asked Engine acts on no pushed person (public paths): an occurrence run is refused, by WHO.
+ */
+export function buildPathSource(asked: string, opts: { answersNobody?: boolean } = {}): string {
   if (!/^[a-z_]+$/.test(asked)) throw new Error(`path: ${JSON.stringify(asked)} is not an outcome key`);
   return [
     HEAD,
     `/** A path toward its Engine's outcome: asks ${asked} with this script's goal; the outcome is observed by its owning service (DISTRY-ENGINES-1119). */`,
     `
 export default function run(ctx: ScriptContext): ScriptResult {
-  const R: any = ctx.request ?? {};
+  const R: any = ctx.request ?? {};${opts.answersNobody ? `
+  if (R.trigger && typeof R.trigger === "object") return { unmade: ${JSON.stringify(ANSWERS_NOBODY_REFUSAL)} };` : ""}
   const t: any = ctx.tactics ?? {};
   const goal = typeof t.goal === "string" ? t.goal.trim() : "";
   const by = typeof t.askRecordedBy === "string" ? t.askRecordedBy.trim() : "";
@@ -121,6 +135,7 @@ const publicPath = (outcome: string, dynasty: string, name: string, asks: string
   asks,
   tactics: { asks: [asks], askRecordedBy, recorded_by: recordedBy },
   description,
+  answersNobody: true,
 });
 
 export const PATHS: PathSpec[] = [
@@ -187,6 +202,46 @@ export const PATHS: PathSpec[] = [
   publicPath("post_engaged", "dy_post_engagement_linkedin", "LinkedIn post toward engagement", "linkedin_post_published", "social", "social", "Works toward post engagement: publishes one LinkedIn post of the brand, whose reactions and comments the brand's LinkedIn account reports."),
   publicPath("google_search_click", "dy_search_clicks_backlinks", "Backlinks toward search clicks", "backlink_earned", "scraping", "google", "Works toward Google search clicks: earns or confirms a backlink to the brand's site, which lifts it in search; the clicks are what Google Search Console reports."),
 ];
+
+/**
+ * PLAN-RECURSIVE-PER-ENGINE-1124-WF2 (owner 2026-11-24: « À chaque Engine en partant de la fin (Target), on demande à
+ * Jev de filtrer les scripts possibles et puis le Rating nous donne le meilleur »): every Engine a campaign reaches by
+ * ANSWERING a lead (it holds a path asking Message sent alone) is also reached by STARTING with a new one: one first cold
+ * email to a newly found person (it asks Email sent, whose senders take their person from Lead found). One code, one
+ * dynasty under each such Engine, derived from the LIVE catalogue (never a list of outcomes here): `rows` = the active
+ * scripts as `{outcome, tactics}`. The Unit's owner (`recorded_by`) is the one the Engine's own answering path states.
+ * An Engine already holding a script that asks Email sent alone (Positive reply's first email path) gets none.
+ * Which campaigns keep it is features-service's opt-in script tactic « Starts with a cold email to a new person »,
+ * judged on the brief (a brief that does not ask for cold email never keeps it); it gates scripts stating
+ * `askRecordedBy`, so that tactic must stay on these scripts.
+ */
+export const FIRST_EMAIL_DYNASTY = "dy_first_email_path";
+export const FIRST_EMAIL_NAME = "Cold email to a new lead";
+
+export function firstEmailPaths(rows: Array<{ outcome: string; tactics: Record<string, unknown> | null }>): PathSpec[] {
+  const asksOf = (t: Record<string, unknown> | null): string[] => (Array.isArray(t?.asks) ? (t!.asks as unknown[]).map(String) : []);
+  const byOutcome = new Map<string, Array<Record<string, unknown> | null>>();
+  for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r.tactics]);
+  const out: PathSpec[] = [];
+  for (const [outcome, list] of [...byOutcome.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    // An answering path asks Message sent ALONE (a script asking it among others, e.g. the intro path, is another way).
+    const answering = list.filter((t) => asksOf(t).length === 1 && asksOf(t)[0] === "message_sent");
+    if (answering.length === 0) continue;
+    if (list.some((t) => asksOf(t).length === 1 && asksOf(t)[0] === "email_sent")) continue;
+    const owners = [...new Set(answering.map((t) => (typeof t?.recorded_by === "string" ? t.recorded_by : "")).filter(Boolean))];
+    if (owners.length !== 1) throw new Error(`first email path for ${outcome}: its answering scripts state ${owners.length === 0 ? "no" : "several"} owner (recorded_by: ${owners.join(", ")}): which service observes the outcome cannot be read`);
+    out.push({
+      outcome,
+      dynasty: FIRST_EMAIL_DYNASTY,
+      name: FIRST_EMAIL_NAME,
+      asks: "email_sent",
+      tactics: { asks: ["email_sent"], askRecordedBy: "instantly", recorded_by: owners[0]! },
+      description: `Works toward ${outcome.replace(/_/g, " ")}: sends one first cold email to a newly found person of the brand's targets, the start of the conversation that leads there; answers nobody who wrote or acted.`,
+      answersNobody: true,
+    });
+  }
+  return out;
+}
 
 // ── 2. Drafts ─────────────────────────────────────────────────────────────────────────────────────────────
 
