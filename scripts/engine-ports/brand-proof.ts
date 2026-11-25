@@ -4,7 +4,9 @@
  * proof a brand shows on its site, as two Engines of their own, each one outcome, run for ANY brand.
  *
  *   Client past employer found (`client_past_employer_found`)  dy_client_past_employers: the companies where the
- *        brand's PAYING clients have worked (past or current). lead-service answers them with the clients, roles and
+ *        people behind the brand worked (past or current): its PAYING clients and its own TEAM (founder, members:
+ *        TEAM-PAST-EMPLOYERS-1125, owner 2026-11-25 « J'ai Bain, EY, et autres à mon actif. TU ne les as pas ça???? »;
+ *        who is team is lead-service's, the same for every brand). lead-service answers them with the people, roles and
  *        dates that justify each (it reads the work history it holds, and reads a missing one on its cheapest path,
  *        on this run); brand-service judges each company's notoriety once (cross-org, persisted), finds its logo and
  *        traffic, keeps each company new for the brand with its trace and declares one Unit each on this run
@@ -33,13 +35,13 @@ export const PRESS_STORE_DOOR = "brand.proof.press.store";
 export const CLIENT_PAST_EMPLOYERS = {
   outcome: "client_past_employer_found",
   dynasty: "dy_client_past_employers",
-  name: "Paying clients' past employers",
+  name: "Team and clients' past employers",
   tactics: {
     recorded_by: "brand",
-    source: "the work history of the brand's paying clients",
+    source: "the work history of the brand's team and paying clients",
   },
   description:
-    "Finds every company where one of the brand's paying clients has worked, past or current, and keeps each one with the clients and roles behind it, its logo and how well known it is.",
+    "Finds every company where someone from the brand's team or one of its paying clients has worked, past or current, and keeps each one with the people and roles behind it, its logo and how well known it is.",
 } as const;
 
 export const PRESS_MAILBOX = {
@@ -126,7 +128,7 @@ function articleView(text, words) {
 export function buildClientPastEmployersSource(): string {
   return [
     `import type { ScriptContext, ScriptResult } from "@gtm-factory/core";`,
-    `/** Client past employer found: the companies where the brand's paying clients worked, kept by brand-service with their trace (BRAND-PROOF-LOGOS-1121). */`,
+    `/** Client past employer found: the companies where the brand's team and paying clients worked, kept by brand-service with their trace (BRAND-PROOF-LOGOS-1121). */`,
     PORT_HEAD,
     `
 export default function run(ctx: ScriptContext): ScriptResult {
@@ -144,7 +146,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
     if (!read.lookups || !(read.lookups.remaining > 0)) break;
   }
   const companies: any[] = (Array.isArray(read.companies) ? read.companies : []).filter((c: any) => c && (c.domain || c.name));
-  if (!companies.length) return { unmade: "no_employer: " + String(read.reason ?? "no company named by the brand's paying clients' work history") + " (" + String(read.payingClients ?? 0) + " paying clients, " + String(read.clientsWithHistory ?? 0) + " with a history)" };
+  if (!companies.length) return { unmade: "no_employer: " + String(read.reason ?? "no company named by the work history of the brand's team and paying clients") + " (" + String(read.payingClients ?? 0) + " paying clients, " + String(read.clientsWithHistory ?? 0) + " with a history)" };
 
   // brand-service keys a company on its domain, else its LinkedIn page: a name alone never identifies it.
   const employers = companies
@@ -172,7 +174,7 @@ export default function run(ctx: ScriptContext): ScriptResult {
       kept.push({ unitId: u.unitId, companyId: u.companyId, domain: e.company?.domain ?? null, name: e.company?.name ?? null, clients: e.trace?.length ?? 0, notoriety: u.notoriety?.score ?? null });
     }
   }
-  if (!kept.length) return { unmade: "no_new_employer: the " + employers.length + " companies of the brand's paying clients are already kept" + (pendingNotoriety ? " (" + pendingNotoriety + " still waiting for a notoriety judgment)" : "") };
+  if (!kept.length) return { unmade: "no_new_employer: the " + employers.length + " companies of the brand's team and paying clients are already kept" + (pendingNotoriety ? " (" + pendingNotoriety + " still waiting for a notoriety judgment)" : "") };
   return { content: { companies: companies.length, unidentified: unnamed, pendingNotoriety, kept } };
 }
 `,
