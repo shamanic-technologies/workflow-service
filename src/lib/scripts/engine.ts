@@ -356,6 +356,35 @@ export const productionScriptStrategy: ScriptStrategyReader = async (campaignId,
   return kept.map(String);
 };
 
+/**
+ * The script dynasties kept for one Engine when NO campaign stands behind the ask (a direct ask, `/make`): features-
+ * service's own no-campaign strategy, which keeps out a script carrying a tactic that runs only where a brief asks for
+ * it (REELS-1124: a direct ask drew a « validated by a human » fork). `null` = nothing narrows (tests, the switch off).
+ */
+export type NoCampaignStrategyReader = (outcome: string) => Promise<string[] | null>;
+
+export const productionNoCampaignStrategy: NoCampaignStrategyReader = async (outcome) => {
+  if (process.env.SCRIPT_STRATEGY_WITHOUT_CAMPAIGN === "off") return null;
+  const base = (process.env.FEATURES_SERVICE_URL ?? "").replace(/\/$/, "");
+  const key = process.env.FEATURES_SERVICE_API_KEY ?? "";
+  if (!base || !key) throw new Error("FEATURES_SERVICE_URL and FEATURES_SERVICE_API_KEY must be set to read the scripts kept with no campaign");
+  const res = await fetch(`${base}/internal/script-strategy?outcome=${encodeURIComponent(outcome)}`, {
+    headers: { "x-api-key": key },
+    signal: AbortSignal.timeout(600_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`the scripts kept for ${outcome} with no campaign could not be read (features-service ${res.status}): ${text.slice(0, 300)}`);
+  const kept = (JSON.parse(text) as { keptDynasties?: unknown }).keptDynasties;
+  if (!Array.isArray(kept)) throw new Error(`features-service answered no keptDynasties for ${outcome} with no campaign`);
+  return kept.map(String);
+};
+
+let noCampaignStrategy: NoCampaignStrategyReader = productionNoCampaignStrategy;
+/** Tests swap the reader. */
+export function setNoCampaignStrategyReader(r: NoCampaignStrategyReader | null): void {
+  noCampaignStrategy = r ?? productionNoCampaignStrategy;
+}
+
 let scriptStrategy: ScriptStrategyReader = productionScriptStrategy;
 /** Tests swap the reader. */
 export function setScriptStrategyReader(r: ScriptStrategyReader | null): void {
@@ -419,9 +448,11 @@ export async function candidatesOf(db: AnyPgDb, input: PickInput): Promise<Scrip
   // Read only when there is something to narrow; unreadable throws (never "any script").
   const kept = input.keptDynasties
     ? new Set(input.keptDynasties)
-    : input.campaignId && rows.length > 0
-      ? new Set(await scriptStrategy(input.campaignId, input.outcome))
-      : null;
+    : rows.length === 0
+      ? null
+      : input.campaignId
+        ? new Set(await scriptStrategy(input.campaignId, input.outcome))
+        : await noCampaignStrategy(input.outcome).then((k) => (k ? new Set(k) : null));
   // ONE-WRITER-N-MODELS-1116-ANSWERER: the writer asking for its model; a pair (writer, model) of an enforced Engine
   // is drawn only once proven. Read once per pick.
   let asker: ScriptRow | null | undefined;
