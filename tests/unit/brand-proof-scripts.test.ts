@@ -16,7 +16,7 @@ const ok = (data: Record<string, unknown>) => ({ ok: true, data });
 const fail = (status: number, body: Record<string, unknown>) => ({ ok: false, data: { status, error: JSON.stringify(body), body } });
 const request = { now: "2026-11-21T09:00:00.000Z", brandIds: ["brand-1"] };
 
-describe("Client past employer found: the paying clients' past employers script", () => {
+describe("Client past employer found: the team and paying clients' past employers script", () => {
   const src = buildClientPastEmployersSource();
   const company = (domain: string | null, leadId: string, extra: Record<string, unknown> = {}) => ({
     companyKey: domain ? `domain:${domain}` : "name:x",
@@ -36,6 +36,10 @@ describe("Client past employer found: the paying clients' past employers script"
     expect(writesToPerson(src)).toBe(false);
     expect(src).not.toMatch(/"client_past_employer_found"/);
     expect(CLIENT_PAST_EMPLOYERS.tactics.recorded_by).toBe("brand");
+    // TEAM-PAST-EMPLOYERS-1125: the brand's own team counts beside its paying clients, said to the people who read it.
+    expect(CLIENT_PAST_EMPLOYERS.name).toBe("Team and clients' past employers");
+    expect(CLIENT_PAST_EMPLOYERS.description).toMatch(/team/);
+    expect(CLIENT_PAST_EMPLOYERS.tactics.source).toMatch(/team and paying clients/);
     expect(SERVICE_DOOR_VENDORS["lead.client_past_employers"]).toMatchObject({ service: "lead", method: "POST", path: "/internal/brands/{brandId}/client-past-employers", asRun: true });
     expect(SERVICE_DOOR_VENDORS["brand.proof.employers.store"]).toMatchObject({ service: "brand", method: "PUT", path: "/orgs/brands/{brandId}/proof/employers", asRun: true, outcomeInBody: "outcomeKey" });
   });
@@ -99,7 +103,7 @@ describe("Client past employer found: the paying clients' past employers script"
       request,
       tactics: CLIENT_PAST_EMPLOYERS.tactics,
       calls: calls(fail(502, { error: "notoriety_unavailable" })),
-      expect: { fails: "no_new_employer: the 1 companies of the brand's paying clients are already kept (1 still waiting for a notoriety judgment)" },
+      expect: { fails: "no_new_employer: the 1 companies of the brand's team and paying clients are already kept (1 still waiting for a notoriety judgment)" },
     };
     expect((await replayCase(src, pending)).diffs).toEqual([]);
     const refused: ReplayCase = { ...pending, id: "refused", calls: calls(fail(403, { error: "Brand does not belong to the caller's org" })), expect: { fails: 'brand.proof.employers.store failed (403): {"error":"Brand does not belong to the caller\'s org"}' } };
