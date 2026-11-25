@@ -21,6 +21,7 @@
  * due resumes it. Nothing holds a worker. Every callback names the run as `x-run-id` and the Engine as
  * `x-engine-outcome`; no `x-workflow-slug` leaves this file.
  */
+import { MOST_UNITS_REACHED, paceHold } from "./most-units.js";
 import { and, asc, eq, lte, or, sql } from "drizzle-orm";
 import { engineWaits, scripts, workflowRuns, type EngineWaitRow, type ScriptRow } from "../../db/schema.js";
 import type { AnyPgDb } from "./script-catalogue.js";
@@ -54,7 +55,8 @@ export interface EngineDispatch {
 export type EnginePlan =
   | { kind: "resume"; wait: EngineWaitRow; script: ScriptRow }
   | { kind: "pick"; script: ScriptRow; draws: Array<Record<string, unknown>>; fallbacks?: ScriptRow[] }
-  | { kind: "none" };
+  /** `held`: the campaign already made the most Units its brief allows on this Engine in the period (MOST-UNITS-PACE-1125). */
+  | { kind: "none"; held?: string };
 
 export interface CampaignCallbacks {
   call(path: "/gate-check" | "/start-run" | "/end-run", headers: Record<string, string>, body: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -110,6 +112,10 @@ export async function claimDueWait(db: AnyPgDb, d: EngineDispatch, now = new Dat
 
 /** Decide what the run executes: a due wait first, else the Rating's pick, else nothing. */
 export async function planEngineRun(db: AnyPgDb, d: EngineDispatch): Promise<EnginePlan> {
+  // MOST-UNITS-PACE-1125: the pace the brief states holds the run before anything is claimed or picked (a due wait
+  // stays due for the next period: it would make a Unit too).
+  const held = await paceHold({ campaignId: d.campaignId, orgId: d.orgId, outcome: d.outcome });
+  if (held) return { kind: "none", held };
   const wait = await claimDueWait(db, d);
   if (wait) {
     const [script] = await db.select().from(scripts).where(eq(scripts.id, wait.scriptId));
@@ -356,11 +362,11 @@ export async function executeEngineRun(db: AnyPgDb, rowId: string, runId: string
       db,
       rowId,
       ok ? "completed" : "failed",
-      { script: result ? result.scriptSlug : null, status: result?.status ?? "no_script", endRun: endBody, ...(tried.length > 1 ? { tried: tried.map((t) => ({ script: t.scriptSlug, runId: t.runId, status: t.status, error: t.error })) } : {}) },
+      { script: result ? result.scriptSlug : null, status: result?.status ?? (plan.kind === "none" && plan.held ? MOST_UNITS_REACHED : "no_script"), ...(plan.kind === "none" && plan.held ? { reason: plan.held } : {}), endRun: endBody, ...(tried.length > 1 ? { tried: tried.map((t) => ({ script: t.scriptSlug, runId: t.runId, status: t.status, error: t.error })) } : {}) },
       result?.error ?? null,
     );
     console.log(
-      `[workflow-service] engine ${d.outcome} run=${runId} campaign=${d.campaignId} ${tried.length > 1 ? `tried ${tried.slice(0, -1).map((t) => `${t.scriptSlug} ${t.status}`).join(", ")}, then ` : ""}${result ? `${result.scriptSlug} ${result.status}` : "no script it can run: idle"}` +
+      `[workflow-service] engine ${d.outcome} run=${runId} campaign=${d.campaignId} ${tried.length > 1 ? `tried ${tried.slice(0, -1).map((t) => `${t.scriptSlug} ${t.status}`).join(", ")}, then ` : ""}${result ? `${result.scriptSlug} ${result.status}` : plan.kind === "none" && plan.held ? `held, ${plan.held}` : "no script it can run: idle"}` +
         `${result?.error ? `: ${result.error}` : ""}`,
     );
   } catch (e) {

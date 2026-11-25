@@ -19,6 +19,7 @@
  *    their runs' chains reached per dollar; its order is the run's fall-through order. Unreadable = throws: the run
  *    makes nothing and is retried, never a default script. No rating rule lives here.
  */
+import { readStrategyAnswer } from "./most-units.js";
 import { asksOf } from "./sandbox.js";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { scriptSwitches, scripts, type ScriptRow } from "../../db/schema.js";
@@ -341,20 +342,7 @@ export function readersOfHanded<T extends { materials: string[] | null }>(candid
 export type ScriptStrategyReader = (campaignId: string, outcome: string) => Promise<string[]>;
 
 /** features-service `GET /internal/script-strategy`: unreadable = throws, the run runs nothing and is retried. */
-export const productionScriptStrategy: ScriptStrategyReader = async (campaignId, outcome) => {
-  const base = (process.env.FEATURES_SERVICE_URL ?? "").replace(/\/$/, "");
-  const key = process.env.FEATURES_SERVICE_API_KEY ?? "";
-  if (!base || !key) throw new Error("FEATURES_SERVICE_URL and FEATURES_SERVICE_API_KEY must be set to read a campaign's strategy");
-  const res = await fetch(`${base}/internal/script-strategy?campaignId=${encodeURIComponent(campaignId)}&outcome=${encodeURIComponent(outcome)}`, {
-    headers: { "x-api-key": key },
-    signal: AbortSignal.timeout(600_000),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`the scripts campaign ${campaignId}'s strategy keeps for ${outcome} could not be read (features-service ${res.status}): ${text.slice(0, 300)}`);
-  const kept = (JSON.parse(text) as { keptDynasties?: unknown }).keptDynasties;
-  if (!Array.isArray(kept)) throw new Error(`features-service answered no keptDynasties for campaign ${campaignId} x ${outcome}`);
-  return kept.map(String);
-};
+export const productionScriptStrategy: ScriptStrategyReader = async (campaignId, outcome) => (await readStrategyAnswer(campaignId, outcome)).keptDynasties;
 
 /**
  * The script dynasties kept for one Engine when NO campaign stands behind the ask (a direct ask, `/make`): features-
