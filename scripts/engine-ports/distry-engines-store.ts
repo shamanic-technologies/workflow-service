@@ -17,6 +17,8 @@ import { readRequestFields } from "../../src/lib/scripts/request-fields.js";
 
 const out = (o: unknown) => console.log(JSON.stringify(o));
 // `--only <engine,engine>`: the paths asking those Engines only (a group restored once its opt-in tactic exists).
+// `--upgrade-only`: the create ops alone (an existing dynasty is UPGRADED, a retired one stays retired), no status op.
+const upgradeOnly = process.argv.includes("--upgrade-only");
 const only = process.argv.includes("--only") ? new Set(String(process.argv[process.argv.indexOf("--only") + 1] ?? "").split(",").filter(Boolean)) : null;
 const pathOp = (p: (typeof PATHS)[number]) => ({ op: "create", body: { outcome: p.outcome, dynasty: p.dynasty, name: p.name, code: buildPathSource(p.asks, { answersNobody: p.answersNobody === true }), description: p.description, tactics: p.tactics } });
 if (process.argv.includes("--first-email-paths")) {
@@ -30,11 +32,12 @@ if (process.argv.includes("--first-email-paths")) {
   const i = process.argv.indexOf("--public-act-paths");
   const [file, stepsFile] = [process.argv[i + 1], process.argv[i + 2]];
   if (!file || !stepsFile) throw new Error("--public-act-paths <active scripts jsonl> <catalogue steps json>");
-  const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null });
+  const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null; description?: string | null });
   const steps = (JSON.parse(readFileSync(stepsFile, "utf8")) as { rows: CatalogueStep[] }).rows;
   const status = process.argv.includes("--restore") ? "active" : "deprecated";
   for (const p of publicActPaths(rows, steps).filter((x) => only === null || only.has(x.asks))) {
     if (status === "deprecated") out(pathOp(p));
+    if (upgradeOnly) continue;
     out({ op: "status", outcome: p.outcome, dynasty: p.dynasty, status, reason: status === "deprecated" ? "Stored retired until features-service states the opt-in tactic of the act it works through (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1)" : "Restored: the opt-in tactic of its act is live (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1)" });
   }
 } else if (process.argv.includes("--answer-through-paths")) {
@@ -43,11 +46,12 @@ if (process.argv.includes("--first-email-paths")) {
   const i = process.argv.indexOf("--answer-through-paths");
   const [file, stepsFile] = [process.argv[i + 1], process.argv[i + 2]];
   if (!file || !stepsFile) throw new Error("--answer-through-paths <active scripts jsonl with code> <catalogue steps json>");
-  const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null; code: string });
+  const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { outcome: string; tactics: Record<string, unknown> | null; code: string; description?: string | null });
   const steps = (JSON.parse(readFileSync(stepsFile, "utf8")) as { rows: CatalogueStep[] }).rows;
   const status = process.argv.includes("--restore") ? "active" : "deprecated";
   for (const p of occurrenceActPaths(rows, steps, readRequestFields).filter((x) => only === null || only.has(x.asks))) {
     if (status === "deprecated") out(pathOp(p));
+    if (upgradeOnly) continue;
     out({ op: "status", outcome: p.outcome, dynasty: p.dynasty, status, reason: status === "deprecated" ? "Stored retired until features-service states the opt-in tactic of the Engine it answers through (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4)" : "Restored: the opt-in tactic of the Engine it answers through is live (PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4)" });
   }
 } else if (process.argv.includes("--reasons")) {

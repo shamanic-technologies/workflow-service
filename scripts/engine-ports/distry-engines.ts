@@ -260,6 +260,24 @@ export function firstEmailPaths(rows: Array<{ outcome: string; tactics: Record<s
  * « Starts with a cold email to a new person » never gates it; which campaigns keep it is features-service's opt-in
  * script tactic per act (« Works through an X post »…), judged on the brief: the tactics field `asks` names the act.
  */
+/**
+ * WF3 (lisbon-v3 2026-11-25): what a path states is what is TRUE of the scripts it hands to, read off them (data):
+ * `does` = their own descriptions (first sentence each, distinct, in order) so features-service's judge reads what the
+ * asked Engine DOES; `relationships` = the one every such script states, else none.
+ */
+function firstSentence(text: string): string {
+  const t = text.trim();
+  const m = /^(.+?[.!?])(\s|$)/.exec(t);
+  const first = (m ? m[1]! : t).trim();
+  return first ? first.charAt(0).toLowerCase() + first.slice(1) : first;
+}
+export function whatTheyDo(makers: Array<{ description?: string | null; tactics: Record<string, unknown> | null }>): { does: string; relationships: string | null } {
+  const lines = [...new Set(makers.map((m) => (typeof m.description === "string" ? firstSentence(m.description) : "")).filter(Boolean))];
+  const rels = makers.map((m) => (typeof m.tactics?.relationships === "string" ? (m.tactics.relationships as string) : null));
+  const relationships = rels.length > 0 && rels.every((r) => r !== null && r === rels[0]) ? rels[0]! : null;
+  return { does: lines.join(" Or: ").slice(0, 900), relationships };
+}
+
 export const THROUGH_PREFIX = "dy_through_";
 export interface CatalogueStep {
   key: string;
@@ -269,11 +287,12 @@ export interface CatalogueStep {
   towardStep: string | null;
 }
 
-export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<string, unknown> | null }>, steps: CatalogueStep[]): PathSpec[] {
+export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<string, unknown> | null; description?: string | null }>, steps: CatalogueStep[]): PathSpec[] {
   const asksOf = (t: Record<string, unknown> | null): string[] => (Array.isArray(t?.asks) ? (t!.asks as unknown[]).map(String) : []);
   const isPath = (t: Record<string, unknown> | null): boolean => asksOf(t).length === 1 && typeof t?.askRecordedBy === "string";
   const byOutcome = new Map<string, Array<Record<string, unknown> | null>>();
   for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r.tactics]);
+  const makersOf = (outcome: string) => rows.filter((r) => r.outcome === outcome && !isPath(r.tactics));
   const step = new Map(steps.map((x) => [x.key, x]));
   const onLadder = (key: string | null): boolean => {
     const rung = key ? step.get(key)?.lifecycleRung : null;
@@ -291,6 +310,7 @@ export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<st
     const target = step.get(outcome)?.name ?? outcome.replace(/_/g, " ");
     for (const act of acts) {
       if (list.some((t) => asksOf(t).length === 1 && asksOf(t)[0] === act.key)) continue;
+      const told = whatTheyDo(makersOf(act.key));
       out.push({
         outcome,
         dynasty: THROUGH_PREFIX + act.key,
@@ -298,8 +318,8 @@ export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<st
         asks: act.key,
         // `goal`: what the act works toward, handed with the ask (features-service's opt-in « Works through … » tactics
         // gate only Engines where a runnable script states a goal: never the publishing scripts on their own Engine).
-        tactics: { asks: [act.key], recorded_by: owners[0]!, goal: `This ${act.name.toLowerCase()} works toward ${target.toLowerCase()}.` },
-        description: `Works toward ${target.toLowerCase()}: makes one ${act.name.toLowerCase()} of the brand in public, the act that brings people there; answers nobody who wrote or acted.`,
+        tactics: { asks: [act.key], recorded_by: owners[0]!, goal: `This ${act.name.toLowerCase()} works toward ${target.toLowerCase()}.`, ...(told.relationships ? { relationships: told.relationships } : {}) },
+        description: `Works toward ${target.toLowerCase()}: hands the run to ${act.name}, whose script ${told.does || "makes it"} Answers nobody who wrote or acted.`,
         answersNobody: true,
       });
     }
@@ -325,7 +345,7 @@ export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<st
 export const ANSWER_THROUGH_PREFIX = "dy_answer_through_";
 
 export function occurrenceActPaths(
-  rows: Array<{ outcome: string; tactics: Record<string, unknown> | null; code: string }>,
+  rows: Array<{ outcome: string; tactics: Record<string, unknown> | null; code: string; description?: string | null }>,
   steps: CatalogueStep[],
   readsFields: (code: string) => string[],
 ): PathSpec[] {
@@ -350,13 +370,14 @@ export function occurrenceActPaths(
       if (engine === outcome) continue;
       if (list.some((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === engine && !r.code.includes(ANSWERS_NOBODY_REFUSAL))) continue;
       const name = step.get(engine)?.name ?? engine.replace(/_/g, " ");
+      const told = whatTheyDo((byOutcome.get(engine) ?? []).filter((r) => !isPath(r.tactics) && readsFields(r.code).includes("trigger")));
       out.push({
         outcome,
         dynasty: ANSWER_THROUGH_PREFIX + engine,
         name: `Answer through ${name}`.slice(0, 40),
         asks: engine,
-        tactics: { asks: [engine], recorded_by: owners[0]!, goal: `This run works toward ${target.toLowerCase()}.` },
-        description: `Works toward ${target.toLowerCase()}: hands the person a fact names (or the run itself) to ${name.toLowerCase()}, whose script answers them its own way.`,
+        tactics: { asks: [engine], recorded_by: owners[0]!, goal: `This run works toward ${target.toLowerCase()}.`, ...(told.relationships ? { relationships: told.relationships } : {}) },
+        description: `Works toward ${target.toLowerCase()}: hands the run (and the person a fact names) to ${name}, whose script ${told.does || "answers them its own way."}`,
       });
     }
   }

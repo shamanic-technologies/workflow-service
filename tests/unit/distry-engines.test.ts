@@ -340,7 +340,7 @@ describe("publicActPaths", () => {
   ];
   const ROWS = [
     ...LIVE,
-    { outcome: "x_post_published", tactics: { asks: ["industry_news_found", "llm_completion"], recorded_by: "social" } },
+    { outcome: "x_post_published", tactics: { asks: ["industry_news_found", "llm_completion"], recorded_by: "social" }, description: "Publishes one X post per run. More words." },
     { outcome: "threads_post_published", tactics: { asks: ["llm_completion"], recorded_by: "meta" } },
     { outcome: "post_viewed", tactics: { asks: ["x_post_published"], askRecordedBy: "social", recorded_by: "social" } },
     { outcome: "instagram_reel_published", tactics: { asks: ["hook_added"], recorded_by: "social" } },
@@ -364,6 +364,7 @@ describe("publicActPaths", () => {
     const p = publicActPaths(ROWS, STEPS).find((x) => x.outcome === "signup")!;
     expect(p.tactics).toEqual({ asks: ["x_post_published"], recorded_by: "lead", goal: "This x post published works toward signup." });
     expect(p.name).toBe("Through X post published");
+    expect(p.description).toBe("Works toward signup: hands the run to X post published, whose script publishes one X post per run. Answers nobody who wrote or acted.");
     expect(p.answersNobody).toBe(true);
     const code = buildPathSource(p.asks, { answersNobody: true });
     const v = await validateSource(code);
@@ -390,7 +391,7 @@ describe("occurrenceActPaths", () => {
     { outcome: "signup", tactics: { asks: ["message_sent"], recorded_by: "lead" }, code: "x" },
     { outcome: "signup", tactics: { relationships: "current_client" }, code: "const R = ctx.request; R.trigger" },
     { outcome: "email_sent", tactics: { recorded_by: "email-gateway" }, code: "const t = ctx.request.trigger" },
-    { outcome: "copilot_message_sent", tactics: { recorded_by: "chat" }, code: "R.trigger" },
+    { outcome: "copilot_message_sent", tactics: { recorded_by: "chat", relationships: "pure_prospect" }, code: "R.trigger", description: "Asks the Copilot to tell the team. Leads only." },
     { outcome: "x_post_published", tactics: { asks: ["llm_completion"] }, code: "no occurrence read" },
     { outcome: "post_viewed", tactics: { asks: ["email_sent"], askRecordedBy: "social" }, code: "R.trigger" },
   ];
@@ -410,5 +411,9 @@ describe("occurrenceActPaths", () => {
     expect(p.answersNobody).toBeUndefined();
     expect(buildPathSource(p.asks)).not.toContain(ANSWERS_NOBODY_REFUSAL);
     expect(p.name).toBe("Answer through Email sent");
+    // What is TRUE of every asked script: the copilot one states pure_prospect, the email one states none.
+    const c = occurrenceActPaths(ROWS, STEPS, reads).find((x) => x.dynasty === "dy_answer_through_copilot_message_sent" && x.outcome === "paid_client")!;
+    expect(c.tactics.relationships).toBe("pure_prospect");
+    expect(c.description).toBe("Works toward paid client: hands the run (and the person a fact names) to Copilot message sent, whose script asks the Copilot to tell the team.");
   });
 });
