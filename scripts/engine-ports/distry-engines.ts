@@ -243,6 +243,147 @@ export function firstEmailPaths(rows: Array<{ outcome: string; tactics: Record<s
   return out;
 }
 
+/**
+ * PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B1 (owner 2026-11-24: « À chaque Engine en partant de la fin (Target) … récursivement »):
+ * a campaign aimed at a person's outcome (Signup, Paid client…) whose brief works through a PUBLIC act (an X post, a
+ * LinkedIn post, a Threads post, a reply under someone's post) reaches that act's Engine from its Target, the way
+ * `signup/dy_signup_threads_post` reached Threads. One code (`buildPathSource`, the act asked), one dynasty
+ * `dy_through_<act>` under each Engine reached by answering a lead, derived from the LIVE catalogue (never a list of
+ * outcomes here):
+ *   - the Targets = Engines holding a path asking Message sent alone (`firstEmailPaths`' rule), the owner (`recorded_by`)
+ *     = the one that path states;
+ *   - the acts = catalogue steps about no person (`subjectKind: object`) that work toward a step of the person's ladder
+ *     (`towardStep` whose `lifecycleRung` is a rung), whose Engine holds an active MAKER (a script that is not a path:
+ *     not a single ask stating `askRecordedBy`, the first cold email / public path shape);
+ *   - a Target already holding a script asking that act alone gets none (Threads under Signup).
+ * Each refuses an occurrence run (a public act answers nobody who wrote). It states no `askRecordedBy`, so the opt-in
+ * « Starts with a cold email to a new person » never gates it; which campaigns keep it is features-service's opt-in
+ * script tactic per act (« Works through an X post »…), judged on the brief: the tactics field `asks` names the act.
+ */
+/**
+ * WF3 (lisbon-v3 2026-11-25): what a path states is what is TRUE of the scripts it hands to, read off them (data):
+ * `does` = their own descriptions (first sentence each, distinct, in order) so features-service's judge reads what the
+ * asked Engine DOES; `relationships` = the one every such script states, else none.
+ */
+function firstSentence(text: string): string {
+  const t = text.trim();
+  const m = /^(.+?[.!?])(\s|$)/.exec(t);
+  const first = (m ? m[1]! : t).trim();
+  return first ? first.charAt(0).toLowerCase() + first.slice(1) : first;
+}
+export function whatTheyDo(makers: Array<{ description?: string | null; tactics: Record<string, unknown> | null }>): { does: string; relationships: string | null } {
+  const lines = [...new Set(makers.map((m) => (typeof m.description === "string" ? firstSentence(m.description) : "")).filter(Boolean))];
+  const rels = makers.map((m) => (typeof m.tactics?.relationships === "string" ? (m.tactics.relationships as string) : null));
+  const relationships = rels.length > 0 && rels.every((r) => r !== null && r === rels[0]) ? rels[0]! : null;
+  return { does: lines.join(" Or: ").slice(0, 900), relationships };
+}
+
+export const THROUGH_PREFIX = "dy_through_";
+export interface CatalogueStep {
+  key: string;
+  name: string;
+  subjectKind: string | null;
+  lifecycleRung: string | null;
+  towardStep: string | null;
+}
+
+export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<string, unknown> | null; description?: string | null }>, steps: CatalogueStep[]): PathSpec[] {
+  const asksOf = (t: Record<string, unknown> | null): string[] => (Array.isArray(t?.asks) ? (t!.asks as unknown[]).map(String) : []);
+  const isPath = (t: Record<string, unknown> | null): boolean => asksOf(t).length === 1 && typeof t?.askRecordedBy === "string";
+  const byOutcome = new Map<string, Array<Record<string, unknown> | null>>();
+  for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r.tactics]);
+  const makersOf = (outcome: string) => rows.filter((r) => r.outcome === outcome && !isPath(r.tactics));
+  const step = new Map(steps.map((x) => [x.key, x]));
+  const onLadder = (key: string | null): boolean => {
+    const rung = key ? step.get(key)?.lifecycleRung : null;
+    return typeof rung === "string" && rung !== "" && rung !== "none";
+  };
+  const acts = steps
+    .filter((x) => x.subjectKind === "object" && onLadder(x.towardStep) && (byOutcome.get(x.key) ?? []).some((t) => !isPath(t)))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const out: PathSpec[] = [];
+  for (const [outcome, list] of [...byOutcome.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const answering = list.filter((t) => asksOf(t).length === 1 && asksOf(t)[0] === "message_sent");
+    if (answering.length === 0) continue;
+    const owners = [...new Set(answering.map((t) => (typeof t?.recorded_by === "string" ? t.recorded_by : "")).filter(Boolean))];
+    if (owners.length !== 1) throw new Error(`public act path for ${outcome}: its answering scripts state ${owners.length === 0 ? "no" : "several"} owner (recorded_by: ${owners.join(", ")}): which service observes the outcome cannot be read`);
+    const target = step.get(outcome)?.name ?? outcome.replace(/_/g, " ");
+    for (const act of acts) {
+      if (list.some((t) => asksOf(t).length === 1 && asksOf(t)[0] === act.key)) continue;
+      const told = whatTheyDo(makersOf(act.key));
+      out.push({
+        outcome,
+        dynasty: THROUGH_PREFIX + act.key,
+        name: `Through ${act.name}`.slice(0, 40),
+        asks: act.key,
+        // `goal`: what the act works toward, handed with the ask (features-service's opt-in « Works through … » tactics
+        // gate only Engines where a runnable script states a goal: never the publishing scripts on their own Engine).
+        tactics: { asks: [act.key], recorded_by: owners[0]!, goal: `This ${act.name.toLowerCase()} works toward ${target.toLowerCase()}.`, ...(told.relationships ? { relationships: told.relationships } : {}) },
+        description: `Works toward ${target.toLowerCase()}: hands the run to ${act.name}, whose script ${told.does || "makes it"} Answers nobody who wrote or acted.`,
+        answersNobody: true,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * PLAN-RECURSIVE-PER-ENGINE-1124-WF3 B2-B4: a campaign aimed at a person's outcome whose brief answers an OCCURRENCE
+ * through another Engine (sends the email the client pushed, an AI proposal on a hot lead, a follow-up of a lead the
+ * brand already wrote to) reaches that Engine from its Target. One code (`buildPathSource`, the occurrence passed as
+ * stated, never refused), one dynasty `dy_answer_through_<engine>` under each Engine reached by answering a lead, derived
+ * from the LIVE scripts' CODE (never a list of outcomes here):
+ *   - the Targets and their owner = `firstEmailPaths`' rule;
+ *   - the Engines = those holding a maker (not a single ask stating `askRecordedBy`) whose code reads the Request's
+ *     `trigger` (`readRequestFields`): it answers an occurrence; never an Engine that is itself a Target (reached by
+ *     answering a lead: it is reached directly);
+ *   - a Target already holding a script asking that Engine alone that does not refuse an occurrence gets none (the
+ *     answering path through Message sent).
+ * On a proactive tick the asked Engine's own script decides (nobody named = its own serve, or idle). Which campaigns keep
+ * one is features-service's opt-in script tactic per Engine, judged on the brief; stored RETIRED until it exists.
+ */
+export const ANSWER_THROUGH_PREFIX = "dy_answer_through_";
+
+export function occurrenceActPaths(
+  rows: Array<{ outcome: string; tactics: Record<string, unknown> | null; code: string; description?: string | null }>,
+  steps: CatalogueStep[],
+  readsFields: (code: string) => string[],
+): PathSpec[] {
+  const asksOf = (t: Record<string, unknown> | null): string[] => (Array.isArray(t?.asks) ? (t!.asks as unknown[]).map(String) : []);
+  const isPath = (t: Record<string, unknown> | null): boolean => asksOf(t).length === 1 && typeof t?.askRecordedBy === "string";
+  const byOutcome = new Map<string, typeof rows>();
+  for (const r of rows) byOutcome.set(r.outcome, [...(byOutcome.get(r.outcome) ?? []), r]);
+  const step = new Map(steps.map((x) => [x.key, x]));
+  const isTarget = (list: typeof rows) => list.some((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === "message_sent");
+  const engines = [...byOutcome.entries()]
+    .filter(([, list]) => !isTarget(list) && list.some((r) => !isPath(r.tactics) && readsFields(r.code).includes("trigger")))
+    .map(([outcome]) => outcome)
+    .sort();
+  const out: PathSpec[] = [];
+  for (const [outcome, list] of [...byOutcome.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const answering = list.filter((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === "message_sent");
+    if (answering.length === 0) continue;
+    const owners = [...new Set(answering.map((r) => (typeof r.tactics?.recorded_by === "string" ? r.tactics.recorded_by : "")).filter(Boolean))];
+    if (owners.length !== 1) throw new Error(`answer-through path for ${outcome}: its answering scripts state ${owners.length === 0 ? "no" : "several"} owner (recorded_by: ${owners.join(", ")}): which service observes the outcome cannot be read`);
+    const target = step.get(outcome)?.name ?? outcome.replace(/_/g, " ");
+    for (const engine of engines) {
+      if (engine === outcome) continue;
+      if (list.some((r) => asksOf(r.tactics).length === 1 && asksOf(r.tactics)[0] === engine && !r.code.includes(ANSWERS_NOBODY_REFUSAL))) continue;
+      const name = step.get(engine)?.name ?? engine.replace(/_/g, " ");
+      const told = whatTheyDo((byOutcome.get(engine) ?? []).filter((r) => !isPath(r.tactics) && readsFields(r.code).includes("trigger")));
+      out.push({
+        outcome,
+        dynasty: ANSWER_THROUGH_PREFIX + engine,
+        name: `Answer through ${name}`.slice(0, 40),
+        asks: engine,
+        tactics: { asks: [engine], recorded_by: owners[0]!, goal: `This run works toward ${target.toLowerCase()}.`, ...(told.relationships ? { relationships: told.relationships } : {}) },
+        description: `Works toward ${target.toLowerCase()}: hands the run (and the person a fact names) to ${name}, whose script ${told.does || "answers them its own way."}`,
+      });
+    }
+  }
+  return out;
+}
+
 // ── 2. Drafts ─────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ScriptSpec {
