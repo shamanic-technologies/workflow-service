@@ -296,7 +296,9 @@ export function publicActPaths(rows: Array<{ outcome: string; tactics: Record<st
         dynasty: THROUGH_PREFIX + act.key,
         name: `Through ${act.name}`.slice(0, 40),
         asks: act.key,
-        tactics: { asks: [act.key], recorded_by: owners[0]! },
+        // `goal`: what the act works toward, handed with the ask (features-service's opt-in « Works through … » tactics
+        // gate only Engines where a runnable script states a goal: never the publishing scripts on their own Engine).
+        tactics: { asks: [act.key], recorded_by: owners[0]!, goal: `This ${act.name.toLowerCase()} works toward ${target.toLowerCase()}.` },
         description: `Works toward ${target.toLowerCase()}: makes one ${act.name.toLowerCase()} of the brand in public, the act that brings people there; answers nobody who wrote or acted.`,
         answersNobody: true,
       });
@@ -353,7 +355,7 @@ export function occurrenceActPaths(
         dynasty: ANSWER_THROUGH_PREFIX + engine,
         name: `Answer through ${name}`.slice(0, 40),
         asks: engine,
-        tactics: { asks: [engine], recorded_by: owners[0]! },
+        tactics: { asks: [engine], recorded_by: owners[0]!, goal: `This run works toward ${target.toLowerCase()}.` },
         description: `Works toward ${target.toLowerCase()}: hands the person a fact names (or the run itself) to ${name.toLowerCase()}, whose script answers them its own way.`,
       });
     }

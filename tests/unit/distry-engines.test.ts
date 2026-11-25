@@ -362,7 +362,7 @@ describe("publicActPaths", () => {
   });
   it("asks its act alone, states the Target's owner and no askRecordedBy (the cold email opt-in never gates it), refuses an occurrence", async () => {
     const p = publicActPaths(ROWS, STEPS).find((x) => x.outcome === "signup")!;
-    expect(p.tactics).toEqual({ asks: ["x_post_published"], recorded_by: "lead" });
+    expect(p.tactics).toEqual({ asks: ["x_post_published"], recorded_by: "lead", goal: "This x post published works toward signup." });
     expect(p.name).toBe("Through X post published");
     expect(p.answersNobody).toBe(true);
     const code = buildPathSource(p.asks, { answersNobody: true });
@@ -406,7 +406,7 @@ describe("occurrenceActPaths", () => {
   });
   it("passes the occurrence on (no refusal), states its Engine alone and the Target's owner", () => {
     const p = occurrenceActPaths(ROWS, STEPS, reads).find((x) => x.dynasty === "dy_answer_through_email_sent" && x.outcome === "paid_client")!;
-    expect(p.tactics).toEqual({ asks: ["email_sent"], recorded_by: "lead" });
+    expect(p.tactics).toEqual({ asks: ["email_sent"], recorded_by: "lead", goal: "This run works toward paid client." });
     expect(p.answersNobody).toBeUndefined();
     expect(buildPathSource(p.asks)).not.toContain(ANSWERS_NOBODY_REFUSAL);
     expect(p.name).toBe("Answer through Email sent");
