@@ -274,6 +274,9 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
     checkCases(replacement.cases);
   }
   const replay = await requireProven(db, outcome, dynasty, input.code, input.tactics ?? (current.tactics as Record<string, unknown>) ?? {}, replacement?.cases);
+  // WRITERS-NO-MODEL-1126: the active version is not always the highest (a staff restore puts an earlier one back live
+  // and parks the later one): the new version is numbered past every version of the dynasty, never active + 1.
+  const next = Math.max(...(await dynastyVersions(db, outcome, dynasty)).map((v) => v.version)) + 1;
   const stored = await db.transaction(async (tx) => {
     if (replacement) {
       await tx.delete(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
@@ -281,14 +284,14 @@ export async function upgradeScript(db: AnyPgDb, outcome: string, dynasty: strin
     }
     await tx
       .update(scripts)
-      .set({ status: "deprecated", deprecationReason: `Upgraded: replaced by version ${current.version + 1}`, updatedAt: new Date() })
+      .set({ status: "deprecated", deprecationReason: `Upgraded: replaced by version ${next}`, updatedAt: new Date() })
       .where(eq(scripts.id, current.id));
     const [row] = await tx
       .insert(scripts)
       .values({
         outcome,
         dynasty,
-        version: current.version + 1,
+        version: next,
         code: input.code,
         materials: read.materials,
         vendors: read.vendors,
@@ -378,6 +381,32 @@ export async function setDynastyStatus(db: AnyPgDb, outcome: string, dynasty: st
   });
   const after = await dynastyVersions(db, outcome, dynasty);
   if (status === "active" && after[0]) proveOnStore(db, after[0]);
+  return after;
+}
+
+/**
+ * WRITERS-NO-MODEL-1126: put an EARLIER version of an active dynasty back live, in one transaction: the active version is
+ * parked (deprecated, with the reason) and the given one re-activated with its own proofs, cases and runs. For a
+ * version that cannot run now (a writer whose pairs cannot be proven before the month turns: every model held out, the
+ * lead answerer wrote nobody), never a code change: an upgrade from it is numbered past every version.
+ */
+export async function restoreScriptVersion(db: AnyPgDb, outcome: string, dynasty: string, version: number, reason: string): Promise<ScriptRow[]> {
+  const versions = await dynastyVersions(db, outcome, dynasty);
+  if (versions.length === 0) throw new ScriptCatalogueError(404, "not_found", `no script ${outcome}/${dynasty}`);
+  const target = versions.find((v) => v.version === version);
+  if (!target) throw new ScriptCatalogueError(404, "not_found", `no version ${version} of ${outcome}/${dynasty}`);
+  if (target.dynastyStatus !== "active") throw new ScriptCatalogueError(409, "dynasty_retired", `${outcome}/${dynasty} is retired: restore the dynasty first`);
+  if (target.status === "active") throw new ScriptCatalogueError(409, "already_active", `${outcome}/${dynasty} v${version} is already the active version`);
+  await db.transaction(async (tx) => {
+    await tx
+      .update(scripts)
+      .set({ status: "deprecated", deprecationReason: `Parked: version ${version} restored (${reason})`, updatedAt: new Date() })
+      .where(and(eq(scripts.outcome, outcome), eq(scripts.dynasty, dynasty), eq(scripts.status, "active")));
+    await tx.update(scripts).set({ status: "active", deprecationReason: null, updatedAt: new Date() }).where(eq(scripts.id, target.id));
+  });
+  const after = await dynastyVersions(db, outcome, dynasty);
+  const live = after.find((v) => v.id === target.id);
+  if (live) proveOnStore(db, live);
   return after;
 }
 
