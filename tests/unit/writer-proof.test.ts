@@ -20,6 +20,8 @@ import {
   PROOF_BUDGET_SINCE,
   personFields,
   proveScript,
+  recordWriterCase,
+  CASES_KEPT_PER_ENGINE,
   proofTarget,
   readWriterProofs,
   setEngineEnforced,
@@ -177,6 +179,19 @@ describe("PROOF-ON-RUNNER-1126: the version a proof targets", () => {
     const parked = (await proofTarget(db, "message_sent", "dy_answer", 2))!;
     expect([parked.version, parked.status]).toEqual([2, "deprecated"]);
     expect(await proofTarget(db, "message_sent", "dy_answer", 9)).toBeNull();
+  });
+});
+
+describe("WRITER-CASES-PER-DYNASTY-1126: a busy writer never prunes a quieter writer's cases", () => {
+  it("keeps the newest cases per dynasty of the Engine", async () => {
+    const quiet = await seedWriter();
+    const busy = await forkScript(db, "message_sent", "dy_answer", { dynasty: "dy_busy", description: "Busy writer." }, author, catalogueDeps);
+    const body = { units: {}, request: null, tactics: {}, subject: null, brand: "", day: 0, calls: [{ name: "llm.complete", args: {}, answer: { ok: true, data: {} } }, { name: "email.send", args: {}, answer: { ok: true, data: {} } }], asked: {} };
+    await recordWriterCase(db, quiet, { runId: "quiet-1", orgId: "o", body: body as never });
+    for (let i = 0; i < CASES_KEPT_PER_ENGINE + 3; i++) await recordWriterCase(db, busy, { runId: `busy-${i}`, orgId: "o", body: body as never });
+    const rows = await db.select().from(writerCases);
+    expect(rows.filter((r) => r.recordedFrom.includes("/dy_answer/")).length).toBe(1);
+    expect(rows.filter((r) => r.recordedFrom.includes("/dy_busy/")).length).toBe(CASES_KEPT_PER_ENGINE);
   });
 });
 

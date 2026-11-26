@@ -8,7 +8,7 @@
  * One mechanism for every Engine, never a branch on a model, a script, a channel or a client:
  *
  * 1. CASES. Every production run of a writer script that reached an LLM (`llm.complete` / `chat.complete`) is kept as a
- *    case of its Engine (`writer_cases`, newest `CASES_KEPT_PER_ENGINE` per Engine): the Request, the materials, the run's
+ *    case of its Engine (`writer_cases`, newest `CASES_KEPT_PER_ENGINE` per dynasty of the Engine): the Request, the materials, the run's
  *    tactics and every vendor call with its request and answer, as production saw them. Real personal data: never in git.
  *
  * 2. A PROOF of one version: the script runs in its own sandbox on up to `PROOF_SAMPLE` cases its code can be fed (its
@@ -195,11 +195,12 @@ export async function recordWriterCase(db: AnyPgDb, row: ScriptRow, input: { run
     .onConflictDoNothing()
     .returning({ id: writerCases.id });
   if (inserted.length === 0) return false;
-  // Newest kept per Engine, written and unwritten cases apart: a burst of runs that sent nothing never prunes the
-  // cases where a person was written to, the only ones that exercise a writer.
+  // Newest kept per DYNASTY of the Engine, written and unwritten cases apart: a burst of runs that sent nothing never
+  // prunes the cases where a person was written to, and a high-volume writer never prunes a quieter one's (WRITER-
+  // CASES-PER-DYNASTY-1126: the cold writers' runs left the follow-up writer 4 cases, its new version unprovable).
   await db.execute(sql`
-    DELETE FROM writer_cases WHERE outcome = ${row.outcome} AND wrote = ${wrote} AND id NOT IN (
-      SELECT id FROM writer_cases WHERE outcome = ${row.outcome} AND wrote = ${wrote} ORDER BY created_at DESC LIMIT ${CASES_KEPT_PER_ENGINE}
+    DELETE FROM writer_cases WHERE outcome = ${row.outcome} AND wrote = ${wrote} AND split_part(recorded_from, '/', 2) = ${row.dynasty} AND id NOT IN (
+      SELECT id FROM writer_cases WHERE outcome = ${row.outcome} AND wrote = ${wrote} AND split_part(recorded_from, '/', 2) = ${row.dynasty} ORDER BY created_at DESC LIMIT ${CASES_KEPT_PER_ENGINE}
     )`);
   return true;
 }
