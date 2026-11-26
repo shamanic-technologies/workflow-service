@@ -66,3 +66,29 @@ export function restateCaseForColdNoResend<C extends { calls: CaseCall[]; units?
   copy.expect = { end: endOf(ALREADY_WRITTEN_CODE, copy) };
   return { case: copy, changed: true };
 }
+
+/**
+ * COLD-COPY-RESEND-1126, the clean half (content-generation v0.36.68, `alreadyEmailed`): a person whose thread already
+ * holds our email gets a NEWLY written next message. The sender's generation body (handed to its writer, which passes
+ * it to content-generation's materials AND /generate) states `alreadyEmailed: true` and an `idempotencyKey` per sender
+ * run (a retry of the same send gets the same new email, never a second one): content-generation then never answers the
+ * lead's stored email and stores the new one as its own row. The writer already reads their whole thread
+ * (`leadRelationship` in its variables). The guard above stays: `existing` for such a person is still never sent. A
+ * person we never emailed: byte for byte. Anchored edit of the STORED code carrying the guard.
+ */
+const NEXT_MARK = "COLD-COPY-RESEND-1126 next email";
+const BODY_ANCHOR = "    brief: req.brief ?? undefined,\n    variables,\n  };\n";
+const NEXT_BODY = `  // ${NEXT_MARK}: their thread holds our email = content-generation writes a NEW one (never the lead's stored email),
+  // keyed on this run so a retry of the same send gets the same new email.
+  if (emailedBefore) {
+    genBody.alreadyEmailed = true;
+    genBody.idempotencyKey = "cold-next-email:" + String(req.runId ?? lead.leadId + ":" + String(req.now ?? ""));
+  }
+`;
+
+export function addColdNextEmail(code: string): string {
+  if (code.includes(NEXT_MARK)) throw new Error("cold next email: already in the code");
+  if (!code.includes(MARK)) throw new Error("cold next email: this version does not carry the no-resend guard");
+  if (code.split(BODY_ANCHOR).length !== 2) throw new Error("cold next email: the anchor is not found exactly once");
+  return code.replace(BODY_ANCHOR, BODY_ANCHOR + NEXT_BODY);
+}
