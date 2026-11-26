@@ -17,13 +17,15 @@ import { validateSource } from "../dist/lib/scripts/sandbox.js";
 import { replayAll } from "../dist/lib/scripts/replay.js";
 import { endRunBodyOf } from "../dist/lib/scripts/engine-runner.js";
 import { COLD_SENDER_THREAD_SENDERS } from "../dist/lib/scripts/cold-sender-thread.js";
-import { addColdNoResend, restateCaseForColdNoResend } from "../dist/lib/scripts/cold-no-resend.js";
+import { addColdNoResend, restateCaseForColdNoResend, addColdNextEmail } from "../dist/lib/scripts/cold-no-resend.js";
 
 const ops = process.argv.includes("--ops");
 const i = process.argv.indexOf("--only");
 const only = i >= 0 ? process.argv[i + 1] : null;
 const log = (...a) => (ops ? console.error(...a) : console.log(...a));
-const MARK = "COLD-COPY-RESEND-1126";
+// `--next`: the second edit (content-generation writes a NEW email for a person who holds ours), on the ACTIVE version.
+const nextEdit = process.argv.includes("--next");
+const MARK = nextEdit ? "COLD-COPY-RESEND-1126 next email" : "COLD-COPY-RESEND-1126";
 const endOf = (unmade, c) => {
   const occurrence = !!(c.request && c.request.trigger && typeof c.request.trigger.leadId === "string");
   return endRunBodyOf({ status: "unmade", error: unmade, again: false }, occurrence);
@@ -34,19 +36,19 @@ for (const { outcome, dynasty } of COLD_SENDER_THREAD_SENDERS) {
   if (only && only !== dynasty) continue;
   const versions = await db.select().from(scripts).where(and(eq(scripts.outcome, outcome), eq(scripts.dynasty, dynasty))).orderBy(desc(scripts.version));
   const active = versions.find((v) => v.status === "active");
-  const base = versions[0];
+  const base = nextEdit ? active : versions[0];
   if (!active || !base) throw new Error(`no active ${outcome}/${dynasty}`);
   if (base.code.includes(MARK)) {
     log(`${outcome}/${dynasty}/v${base.version} already carries the rule: nothing to do`);
     continue;
   }
-  const next = addColdNoResend(base.code);
+  const next = nextEdit ? addColdNextEmail(base.code) : addColdNoResend(base.code);
   await validateSource(next);
   const tactics = base.tactics ?? {};
   const rows = await db.select().from(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
   let changed = 0;
   const restated = rows.map((row) => {
-    const r = restateCaseForColdNoResend({ ...row.body, id: row.body.id ?? row.caseId }, endOf);
+    const r = nextEdit ? { case: { ...row.body, id: row.body.id ?? row.caseId }, changed: false } : restateCaseForColdNoResend({ ...row.body, id: row.body.id ?? row.caseId }, endOf);
     if (r.changed) changed++;
     return r.case;
   });
