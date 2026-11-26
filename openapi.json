@@ -3290,6 +3290,20 @@
           "name"
         ]
       },
+      "ScriptVersionRestoreRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Why the earlier version is put back live (kept on the parked version)."
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
       "ReplayScriptResponse": {
         "type": "object",
         "properties": {
@@ -11187,6 +11201,111 @@
           },
           "409": {
             "description": "Another script of the outcome holds the name (`name_taken`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scripts/dynasty/{outcome}/{dynasty}/versions/{version}/restore": {
+      "put": {
+        "summary": "Put an earlier version of a script dynasty back live (staff); the active version is parked with the reason",
+        "tags": [
+          "Scripts"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "outcome",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,62}$"
+            },
+            "required": true,
+            "name": "dynasty",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "required": true,
+            "name": "version",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScriptVersionRestoreRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Versions after the restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "versions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Script"
+                      }
+                    }
+                  },
+                  "required": [
+                    "versions"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No version number or no reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown dynasty or version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already the active version (`already_active`) or the dynasty is retired (`dynasty_retired`)",
             "content": {
               "application/json": {
                 "schema": {
