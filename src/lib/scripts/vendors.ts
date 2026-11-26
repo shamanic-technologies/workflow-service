@@ -486,7 +486,7 @@ async function jevNoul(args: Record<string, unknown>, ctx: VendorCallContext, de
     if (typeof p !== "number" || !Number.isFinite(p) || p < 0 || p > 1) return refuse(`jev.noul: judgment ${k} answered without a readable probability`);
     probabilities[k] = p;
   }
-  return { ok: true, data: { probabilities, model: out.model ?? null } };
+  return { ok: true, data: { probabilities, model: out.model ?? null, ...(out.servedBy ? { servedBy: out.servedBy } : {}) } };
 }
 
 async function jevChoice(args: Record<string, unknown>, ctx: VendorCallContext, deps: VendorDeps): Promise<VendorAnswer> {
