@@ -93,7 +93,10 @@ export const WAITING_RETRY_MS = 30 * 60_000;
 /** chat-service's mark on an answer its caller's org Mac runner wrote with Claude Code: it cost us nothing. */
 export const SERVED_BY_CLAUDE_CODE = "local-claude-code";
 /** chat-service's refusals that say the Mac runner is gone (or the org no longer declares one): never the writer's failure. */
-const RUNNER_LOST_PATTERN = /local_runner_(waiting|timeout|failed)|local_llm_not_declared/;
+// PROOF-ON-RUNNER-1126: the Mac's own Claude Code failing (too old for the model asked, not logged in, not found, no
+// answer in time: the app's words) is the runner's state, never the writer's: 2026-11-26 a stale 2.1.80 CLI answered
+// "does not support this model" and a pair proof read it as an unusable message (failed, held out).
+const RUNNER_LOST_PATTERN = /local_runner_(waiting|timeout|failed)|local_llm_not_declared|Claude Code (reported|could not start|exited|not found|did not answer)/;
 /**
  * The priciest list rates of a writer LLM we buy, US dollars per million tokens (Claude Opus class): the proof's spend
  * bound prices every token at these, so the real spend (chat-service declares it on the proof's run) is never above it.
