@@ -2921,6 +2921,12 @@ export const WriterProofRequestSchema = z
   .object({
     outcome: z.string().min(1),
     dynasty: z.string().min(1),
+    version: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("PROOF-ON-RUNNER-1126: prove THIS version (a parked one included, before it is restored live); absent = the active version, else the latest."),
     completionDynasty: z
       .string()
       .min(1)
