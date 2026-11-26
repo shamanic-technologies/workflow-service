@@ -49,3 +49,20 @@ describe("a cold sender never sends an already-written email to a person who hol
     }
   });
 });
+
+import { addColdNextEmail } from "../../src/lib/scripts/cold-no-resend.js";
+const STORED_V15 = readFileSync(join(__dirname, "../fixtures/stored-scripts/cold-no-resend/email_sent__dy_cold_email_signed_sender_client_brand.v15.ts.txt"), "utf8");
+
+describe("a person who holds our email gets a newly written next message (content-generation alreadyEmailed)", () => {
+  it("states alreadyEmailed + a key per run on the generation body, only when their thread holds our email; keeps the guard", async () => {
+    const next = addColdNextEmail(STORED_V15);
+    const at = next.indexOf("if (emailedBefore) {\n    genBody.alreadyEmailed = true;");
+    expect(at).toBeGreaterThan(next.indexOf("const genBody: Record<string, unknown> = {"));
+    expect(at).toBeLessThan(next.indexOf('ctx.ask({ units: { generation_request'));
+    expect(next).toContain('genBody.idempotencyKey = "cold-next-email:" + String(req.runId');
+    expect(next).toContain("if (existing && emailedBefore)");
+    await validateSource(next);
+    expect(() => addColdNextEmail(next)).toThrow(/already/);
+    expect(() => addColdNextEmail(STORED)).toThrow(/guard/);
+  });
+});
