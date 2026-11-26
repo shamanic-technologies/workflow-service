@@ -349,7 +349,14 @@ describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Cod
       return local(localCalls.length);
     };
     p.deps.claudeCodeRunner = async () => RUNNER;
-    return { ...p, localCalls };
+    // PROOF-ON-RUNNER-1126: Jev is answered on the runner's org too, by Claude Code.
+    const localJudged: Array<Record<string, string>> = [];
+    p.deps.vendors.judge = async (body, headers) => {
+      localJudged.push(headers);
+      const answer = await p.deps.vendors.platformJudge(body, headers);
+      return { ...answer, servedBy: "local-claude-code" };
+    };
+    return { ...p, localCalls, localJudged };
   }
   const claude = () => ({ content: JSON.stringify(GOOD), json: GOOD, model: "claude-code", servedBy: "local-claude-code" });
 
@@ -416,7 +423,7 @@ describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Cod
     expect(view.combinations.find((c) => c.dynasty === "dy_answer")).toMatchObject({ state: "unproven", live: true, red: true });
   });
 
-  it("with a connected runner the writer's completions go to its org on Claude Code: nothing platform-billed but Jev, spend = Jev's bound", async () => {
+  it("PROOF-ON-RUNNER-1126: with a connected runner the completions AND Jev go to its org on Claude Code: nothing billed, spend 0", async () => {
     const row = await seedWriter();
     await recordProductionRuns(PROOF_SAMPLE);
     const p = runnerDeps(claude);
@@ -425,9 +432,34 @@ describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Cod
     expect(p.llmCalls).toEqual([]); // no platform completion
     expect(p.localCalls).toHaveLength(PROOF_SAMPLE);
     expect(p.localCalls[0]).toEqual({ "x-run-id": "proof-run-1", "x-org-id": "org-mac", "x-user-id": "user-mac" });
-    expect(p.judged).toHaveLength(PROOF_SAMPLE); // the same Jev, platform-billed
-    expect(Number(proof.spendCents)).toBe(PROOF_SAMPLE * JUDGMENT_BOUND_CENTS);
+    expect(p.judged).toHaveLength(PROOF_SAMPLE); // the same Jev questions...
+    expect(p.localJudged).toHaveLength(PROOF_SAMPLE); // ...answered on the runner's org
+    expect(p.localJudged[0]).toMatchObject({ "x-org-id": "org-mac", "x-user-id": "user-mac" });
+    expect(Number(proof.spendCents)).toBe(0);
     expect((proof.cases as Array<{ replayedOn: string }>).map((c) => c.replayedOn)).toEqual(Array(PROOF_SAMPLE).fill("claude-code"));
+  });
+
+  it("PROOF-ON-RUNNER-1126: with a runner the proof runs whatever the month's budget; without one it waits", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    await spent(PROOF_MONTHLY_CEILING_CENTS + 500);
+    const p = runnerDeps(claude);
+    expect((await proveScript(db, p.deps, row, "staff")).state).toBe("passed");
+    expect(p.llmCalls).toEqual([]);
+    const q = proofDeps(GOOD);
+    q.deps.claudeCodeRunner = async () => null;
+    expect((await proveScript(db, q.deps, row, "staff")).state).toBe("waiting");
+    expect(q.llmCalls).toEqual([]);
+  });
+
+  it("PROOF-ON-RUNNER-1126: an answer the runner did not write stops the proof waiting (never paid on)", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    const p = runnerDeps(() => ({ content: JSON.stringify(GOOD), json: GOOD, model: "sonnet", tokensInput: 3000, tokensOutput: 300 }));
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("waiting");
+    expect(proof.error).toContain("answered off the Mac runner");
+    expect(p.localCalls).toHaveLength(1);
   });
 
   it("without a runner the verdicts say the version's own model wrote", async () => {

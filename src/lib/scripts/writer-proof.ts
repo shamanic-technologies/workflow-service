@@ -347,6 +347,8 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       servedLocally = true;
       return;
     }
+    // PROOF-ON-RUNNER-1126: on the runner, an answer it did not write was paid: the proof stops there and waits.
+    if (runner !== null) runnerLost = runnerLost ?? "a completion was answered off the Mac runner";
     const i = Number(x.raw.tokensInput);
     const o = Number(x.raw.tokensOutput);
     // A completion that states no tokens is bounded at a whole context window, never at zero.
@@ -356,6 +358,11 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
   /** One live completion: on the Mac runner's org (Claude Code, $0) when one is connected and the call carries no image, else platform-billed. */
   const completeNow = async (name: string, callArgs: Record<string, unknown> | null, callTactics: Record<string, unknown>, outcome: string): Promise<VendorAnswer> => {
     const local = runner !== null && (callArgs?.imageUrl === undefined || callArgs.imageUrl === null);
+    // PROOF-ON-RUNNER-1126: a proof on the runner spends nothing: a call it cannot carry (an image) is never sent paid.
+    if (runner !== null && !local) {
+      runnerLost = `${name} with an image does not run on the Mac runner`;
+      return { ok: false, data: { error: runnerLost } };
+    }
     const answer = await callVendor(
       name,
       { ...(callArgs ?? {}), brandTools: false },
@@ -506,8 +513,14 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
 }
 
 /** Jev judges every field a person would read; one judgment call per case. */
-async function judgeFields(fields: SentField[], row: ScriptRow, runId: string, deps: ProofDeps): Promise<Array<SentField & { probability: number }>> {
-  if (fields.length === 0) return [];
+async function judgeFields(
+  fields: SentField[],
+  row: ScriptRow,
+  runId: string,
+  deps: ProofDeps,
+  runner: ClaudeCodeRunner | null = null,
+): Promise<{ judged: Array<SentField & { probability: number }>; local: boolean }> {
+  if (fields.length === 0) return { judged: [], local: false };
   const questions: Record<string, { instructions: string }> = {};
   // ONE-WRITER-N-MODELS-1116: each field is judged inside the WHOLE message it belongs to (the fields of one send, or
   // of one written Unit). Judged alone, a short subject line read as "a subject line where a message body goes" and
@@ -529,10 +542,18 @@ async function judgeFields(fields: SentField[], row: ScriptRow, runId: string, d
         `subject goes), or cut off.`,
     };
   });
-  const answer = await callVendor(JEV_NOUL, { state: state.join("\n\n"), questions }, { headers: { "x-run-id": runId }, tactics: {}, billing: "platform", outcome: row.outcome }, deps.vendors);
+  // PROOF-ON-RUNNER-1126: on the Mac runner's org, Jev too is answered by Claude Code at $0.
+  const answer = await callVendor(
+    JEV_NOUL,
+    { state: state.join("\n\n"), questions },
+    runner
+      ? { headers: { "x-run-id": runId, "x-org-id": runner.orgId, "x-user-id": runner.userId }, tactics: {}, billing: "org", outcome: row.outcome }
+      : { headers: { "x-run-id": runId }, tactics: {}, billing: "platform", outcome: row.outcome },
+    deps.vendors,
+  );
   if (!answer.ok) throw new Error(`the usable-field judgment could not be read: ${String(answer.data.error ?? "")}`);
   const probabilities = answer.data.probabilities as Record<string, number>;
-  return fields.map((f, i) => ({ ...f, probability: probabilities[`f${i}`]! }));
+  return { judged: fields.map((f, i) => ({ ...f, probability: probabilities[`f${i}`]! })), local: answer.data.servedBy === SERVED_BY_CLAUDE_CODE };
 }
 
 function verdictOf(caseId: string, recordedFrom: string, live: LiveReplay, judged: Array<SentField & { probability: number }>): CaseVerdict {
@@ -603,10 +624,12 @@ async function runProof(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "
     const candidates = await sampleCases(db, row);
     const available = await fedCaseCount(db, row);
     if (candidates.length < PROOF_SAMPLE) return await finish({ state: "no_cases", casesAvailable: available });
+    // PROOF-ON-RUNNER-1126: with a Mac runner connected the proof costs nothing (every completion AND judgment answered by
+    // Claude Code on it), so the monthly budget never holds it; without one, the month's budget spent = it waits.
+    const runner = deps.claudeCodeRunner ? await deps.claudeCodeRunner() : null;
     // WRITER-PROOF-CAP-1125: the month's budget is spent = this proof waits (visible on its row), nothing is asked.
     const spentBefore = await monthProofSpendCents(db);
-    if (spentBefore >= PROOF_MONTHLY_CEILING_CENTS) return await finish({ state: "waiting", error: budgetWait(spentBefore), casesAvailable: available });
-    const runner = deps.claudeCodeRunner ? await deps.claudeCodeRunner() : null;
+    if (!runner && spentBefore >= PROOF_MONTHLY_CEILING_CENTS) return await finish({ state: "waiting", error: budgetWait(spentBefore), casesAvailable: available });
     runId = await deps.openRun(`script-proof:${row.outcome}/${row.dynasty}`, `writer proof of ${name} on recorded cases (PROVEN-BEFORE-PEOPLE-1116)`);
     await db.update(writerProofs).set({ runId }).where(eq(writerProofs.id, proof!.id));
     const verdicts: CaseVerdict[] = [];
@@ -616,7 +639,7 @@ async function runProof(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "
     for (const c of candidates.slice(0, PROOF_MAX_TRIES)) {
       // Every proof of the month together (this one's spend so far is on its row): spent = it stops here, waiting.
       const spentThisMonth = await monthProofSpendCents(db);
-      if (spentThisMonth >= PROOF_MONTHLY_CEILING_CENTS) {
+      if (!runner && spentThisMonth >= PROOF_MONTHLY_CEILING_CENTS) {
         state = "waiting";
         error = budgetWait(spentThisMonth);
         break;
@@ -631,8 +654,9 @@ async function runProof(db: AnyPgDb, deps: ProofDeps, row: ScriptRow, trigger: "
         break;
       }
       if (live.reachedWriter) {
-        const judged = live.failure || live.completionErrors.length > 0 ? [] : await judgeFields(live.sent, row, runId, deps);
-        if (live.sent.length > 0 && judged.length > 0) spend += JUDGMENT_BOUND_CENTS;
+        const judgment = live.failure || live.completionErrors.length > 0 ? { judged: [], local: false } : await judgeFields(live.sent, row, runId, deps, runner);
+        const judged = judgment.judged;
+        if (live.sent.length > 0 && judged.length > 0 && !judgment.local) spend += JUDGMENT_BOUND_CENTS;
         verdicts.push(verdictOf(c.runId, c.recordedFrom, live, judged));
       }
       // Its running spend, where every other proof of the month reads it.
@@ -709,6 +733,17 @@ export function gateFor(proofs: Array<Pick<WriterProofRow, "state" | "trigger" |
 }
 
 let proofContext: { db: AnyPgDb; deps: ProofDeps } | null = null;
+
+/** PROOF-ON-RUNNER-1126: whether a Mac runner can answer a proof now (a proof on it costs nothing, whatever the budget). */
+async function runnerConnected(deps: ProofDeps): Promise<boolean> {
+  if (!deps.claudeCodeRunner) return false;
+  try {
+    return (await deps.claudeCodeRunner()) !== null;
+  } catch (e) {
+    console.error(`[workflow-service] the Mac runner could not be read for a writer proof: ${String(e)}`);
+    return false;
+  }
+}
 /** Production wires the deps at boot; tests set their own (null = no auto proof). */
 export function setProofContext(c: { db: AnyPgDb; deps: ProofDeps } | null): void {
   proofContext = c;
@@ -751,7 +786,7 @@ async function gateAndProve(db: AnyPgDb, row: ScriptRow, completion: ScriptRow |
   const name = `${row.outcome}/${row.dynasty}/v${row.version}${completion ? ` x ${completion.dynasty}` : ""}`;
   // WRITER-PROOF-CAP-1125: the month's proof budget spent = no auto proof starts (no row, no log); the verdict stands,
   // so an unproven version of an enforced Engine stays out until the month turns.
-  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.dynasty ?? null)) && (await monthProofSpendCents(db)) < PROOF_MONTHLY_CEILING_CENTS) {
+  if (verdict.prove && proofContext && !inFlight.has(pairKey(row.id, completion?.dynasty ?? null)) && ((await monthProofSpendCents(db)) < PROOF_MONTHLY_CEILING_CENTS || (await runnerConnected(proofContext.deps)))) {
     const ctx = proofContext;
     console.log(`[workflow-service] writer proof of ${name} starts (${verdict.why})`);
     void proveScript(ctx.db, ctx.deps, row, "auto", completion).catch((e) => console.error(`[workflow-service] writer proof of ${name} FAILED to start: ${String(e)}`));
