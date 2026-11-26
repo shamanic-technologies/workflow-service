@@ -516,6 +516,28 @@ describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Cod
     expect(proof.error).toContain("does not support this model");
   });
 
+  it("PROOF-WAITS-RUNNER-1126: a runner answer still to come is asked again by its job, then the proof passes", async () => {
+    const { AnswerPendingError } = await import("../../src/lib/scripts/pending-answer.js");
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    const seenJobs: Array<string | undefined> = [];
+    const p = runnerDeps(() => claude());
+    let first = true;
+    const answerLocal = p.deps.vendors.complete;
+    p.deps.vendors.complete = async (body, headers) => {
+      seenJobs.push(headers["x-llm-job-id"]);
+      if (first) {
+        first = false;
+        throw new AnswerPendingError({ jobId: "job-1", code: "local_runner_waiting", retryAfterSeconds: 5 }, "the answer is not there yet");
+      }
+      return answerLocal(body, headers);
+    };
+    p.deps.sleep = async () => {};
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("passed");
+    expect(seenJobs.slice(0, 2)).toEqual([undefined, "job-1"]);
+  });
+
   it("a waiting proof holds its version out, is tried again only after a while, and never counts as an attempt", () => {
     const t = new Date();
     const waiting = { state: "waiting", trigger: "auto", createdAt: t, casesAvailable: 5, error: `${BUDGET_WAIT_PREFIX}$5.10 spent of $5.00 this month` };
