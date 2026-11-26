@@ -77,6 +77,15 @@ export const PROOF_CEILING_CENTS = 400;
  * a running one stops `waiting`; it is proven once the month turns. Never raised to get a proof through.
  */
 export const PROOF_MONTHLY_CEILING_CENTS = 500;
+/**
+ * WRITERS-NO-MODEL-1126: the instant the monthly ceiling took effect (WRITER-PROOF-CAP-1125 shipped 2026-11-25 11:09
+ * UTC). Proofs run before it were never under the cap: counting them (their spend bound: $537.94 in November) held the
+ * budget spent for the rest of the month, so no proof of a writer stored after it could start, every (writer, model)
+ * pair of an enforced Engine stayed unproven and the LLM completion pick drew no model: the lead answerer and the
+ * follow-up writer wrote nobody from 10:23 UTC on 2026-11-26. The month's budget counts proofs from the later of the
+ * month's start and this instant.
+ */
+export const PROOF_BUDGET_SINCE = new Date("2026-11-25T11:09:52Z");
 /** How a proof stopped by the monthly ceiling states its reason (`writer_proofs.error` of a `waiting` row). */
 export const BUDGET_WAIT_PREFIX = "waiting for the monthly proof budget: ";
 /** A `waiting` proof is tried again this long after it stopped at the earliest (and only once the budget is back). */
@@ -235,9 +244,9 @@ export interface ProofDeps {
   claudeCodeRunner?(): Promise<{ orgId: string; userId: string } | null>;
 }
 
-/** What every proof created since the UTC month's start spent at most, running ones included, in US cents. */
+/** What every proof created since the UTC month's start (never before `PROOF_BUDGET_SINCE`) spent at most, running ones included, in US cents. */
 export async function monthProofSpendCents(db: AnyPgDb, now: Date = new Date()): Promise<number> {
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthStart = new Date(Math.max(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1), PROOF_BUDGET_SINCE.getTime()));
   const [r] = await db.select({ cents: sql<string>`coalesce(sum(coalesce(${writerProofs.spendCents}, 0)), 0)` }).from(writerProofs).where(gte(writerProofs.createdAt, monthStart));
   return Number(r?.cents ?? 0);
 }
