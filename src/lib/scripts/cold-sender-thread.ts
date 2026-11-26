@@ -68,3 +68,48 @@ export function restateCaseForColdSenderThread<C extends { calls: CaseCall[] }>(
   send.args = args as Record<string, unknown>;
   return { case: copy, changed: true };
 }
+
+/**
+ * PERSON-ALREADY-EMAILED-1125, the envelope the cold writer reads (owner 2026-11-26 « B is great »: a follow-up whose
+ * thread mailbox no longer sends still goes, as a new email from another mailbox). When the person's thread holds an
+ * email WE sent them, the relationship lines handed to the writer (`leadRelationship.lines`) end on ONE fact line: the
+ * email continues that thread while its mailbox sends, else arrives as a new email from someone of our team. Which one
+ * is instantly-service's at send, unknown before writing: the writer is told both, never a guess. No email of ours in
+ * the thread = byte for byte.
+ */
+const ENVELOPE_MARK = "PERSON-ALREADY-EMAILED-1125 envelope";
+const NO_MESSAGE_ANCHOR = '  if (threadState === "read" && !talked) lines.push("No message was ever exchanged with them on record.");';
+export const ENVELOPE_LINE =
+  "Our team already emailed this person. This email continues that thread when the mailbox of that thread still sends; otherwise it arrives as a new email from someone of our team they have not heard from yet. Write it so it reads right either way: our team following up on our earlier notes, never one person's own promise or memory, never a re-introduction of us, never \"Re:\" typed in the subject.";
+
+export function addColdSenderEnvelope(code: string): string {
+  if (code.includes(ENVELOPE_MARK)) throw new Error("cold sender envelope: already in the code");
+  if (code.split(NO_MESSAGE_ANCHOR).length !== 2) throw new Error("cold sender envelope: the anchor is not found exactly once");
+  return code.replace(
+    NO_MESSAGE_ANCHOR,
+    NO_MESSAGE_ANCHOR +
+      `\n  // ${ENVELOPE_MARK}: an email of ours in their thread = the writer is told the envelope it writes in.` +
+      `\n  if (messages.some((i: any) => i.channel === "email" && i.direction === "outbound")) lines.push(${JSON.stringify(ENVELOPE_LINE)});`,
+  );
+}
+
+/** A recorded case restated under the envelope line: every asked `leadRelationship` whose thread holds our email gains the line. */
+export function restateCaseForColdSenderEnvelope<C extends { calls: CaseCall[]; asks?: unknown }>(c: C): { case: C; changed: boolean } {
+  const copy = JSON.parse(JSON.stringify(c)) as C;
+  const thread = copy.calls.find((x) => x.name === "crm.person.thread");
+  if (!threadHoldsOurEmail(thread?.answer) || copy.asks === undefined) return { case: copy, changed: false };
+  let changed = false;
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (!v || typeof v !== "object") return;
+    const o = v as Record<string, unknown>;
+    const rel = o.leadRelationship as { lines?: unknown } | undefined;
+    if (rel && typeof rel === "object" && Array.isArray(rel.lines)) {
+      rel.lines.push(ENVELOPE_LINE);
+      changed = true;
+    }
+    Object.values(o).forEach(walk);
+  };
+  walk(copy.asks);
+  return { case: copy, changed };
+}

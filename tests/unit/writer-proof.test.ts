@@ -17,6 +17,7 @@ import {
   abandonRunningProofs,
   gateFor,
   monthProofSpendCents,
+  PROOF_BUDGET_SINCE,
   personFields,
   proveScript,
   readWriterProofs,
@@ -367,6 +368,15 @@ describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Cod
     expect(proof.error!.startsWith(BUDGET_WAIT_PREFIX)).toBe(true);
     expect(proof.error).toContain("of $5.00");
     expect([p.llmCalls, p.judged, p.closed]).toEqual([[], [], []]); // nothing asked, no run opened
+  });
+
+  it("WRITERS-NO-MODEL-1126: proofs run before the cap took effect never count against it", async () => {
+    const before = new Date(PROOF_BUDGET_SINCE.getTime() - 60_000);
+    const now = new Date(PROOF_BUDGET_SINCE.getTime() + 24 * 3600_000);
+    await spent(53_794, before);
+    expect(await monthProofSpendCents(db, now)).toBe(0);
+    await spent(120, new Date(PROOF_BUDGET_SINCE.getTime() + 60_000));
+    expect(await monthProofSpendCents(db, now)).toBe(120);
   });
 
   it("a running proof that crosses the monthly ceiling stops waiting: neither failed nor drawn", async () => {
