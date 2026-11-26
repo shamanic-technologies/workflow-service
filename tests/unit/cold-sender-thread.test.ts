@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runScript, validateSource, type Bridge } from "../../src/lib/scripts/sandbox.js";
-import { addColdSenderThread, restateCaseForColdSenderThread } from "../../src/lib/scripts/cold-sender-thread.js";
+import { addColdSenderThread, addColdSenderEnvelope, ENVELOPE_LINE, restateCaseForColdSenderThread } from "../../src/lib/scripts/cold-sender-thread.js";
 
 // PERSON-ALREADY-EMAILED-1125: the four live cold email senders, byte for byte as production stores them, send a
 // person the brand already emailed as a follow-up in their thread (`followUp: true`), and a new person as before.
@@ -156,3 +156,24 @@ describe("restateCaseForColdSenderThread", () => {
     }
   });
 });
+
+for (const [dynasty, file] of Object.entries(SENDERS)) {
+  const THREADED = addColdSenderThread(readFileSync(join(DIR, file), "utf8"));
+  const NEXT = addColdSenderEnvelope(THREADED);
+  describe(`${dynasty}: the writer is told the envelope it writes in`, () => {
+    it("Christine (our emails in her thread): her relationship lines end on the envelope line, nothing else moves", async () => {
+      const [before, after] = [await run(THREADED, dynasty, DUE_THREAD), await run(NEXT, dynasty, DUE_THREAD)];
+      const rel = (h: any) => h.asks.find((a: any) => a.outcome === "message_written").request.units.generation_request.content.body.variables.leadRelationship;
+      expect(rel(after.h).lines).toEqual([...rel(before.h).lines, ENVELOPE_LINE]);
+      expect(after.h.calls).toEqual(before.h.calls);
+      expect(() => addColdSenderEnvelope(NEXT)).toThrow(/already/);
+    });
+    for (const [who, thread] of [["a new person", null], ["a person who only wrote to us", INBOUND_ONLY]] as const) {
+      it(`${who}: byte for byte`, async () => {
+        const [before, after] = [await run(THREADED, dynasty, thread), await run(NEXT, dynasty, thread)];
+        expect(after.h.asks).toEqual(before.h.asks);
+        expect(after.h.calls).toEqual(before.h.calls);
+      });
+    }
+  });
+}
