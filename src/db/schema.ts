@@ -1,3 +1,4 @@
+import "./well-formed-jsonb.js";
 import {
   pgTable,
   uuid,

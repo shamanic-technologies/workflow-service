@@ -89,6 +89,7 @@ import {
   forkWorkflowRow,
 } from "../lib/workflow-lineage.js";
 import { zodErrorDetails } from "../lib/zod-error-details.js";
+import { wellFormedJson } from "../db/well-formed-jsonb.js";
 
 const router = Router();
 
@@ -1376,7 +1377,7 @@ router.get("/workflows", requireApiKey, async (req, res) => {
       conditions.push(eq(workflows.workflowDynastySlug, workflowDynastySlug));
     }
     if (tag && typeof tag === "string") {
-      conditions.push(sql`${workflows.tags} @> ${JSON.stringify([tag])}::jsonb`);
+      conditions.push(sql`${workflows.tags} @> ${wellFormedJson([tag])}::jsonb`);
     }
 
     const results = conditions.length > 0
