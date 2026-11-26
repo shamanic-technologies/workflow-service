@@ -135,8 +135,23 @@ export type ServiceDoor =
    * value). crm's person thread leaves out the `api` source (UNIBOX-API-LOGS-1117): the logs of calls an org makes to
    * our API and MCP are not messages, and an org that calls us a lot has a thread past the sandbox's 64 MB (Kevin's
    * own: 28,952 call logs of 34,655 items, 26 MB, every brand-team run crashed reading it).
+   * `notYet` (THREAD-OF-EMAILED-PERSON-1126): a refusal whose body states, at `field`, that the producer does not know
+   * the answer YET (crm-service's 404 `thread.status: "not_known_yet"`: an email of the brand to that address exists that
+   * its index has not joined, or a check was unreadable) is asked again after the producer's `retryAfterField` seconds
+   * (1-60 s), at most `NOT_YET_MAX_SECONDS` in all, then refused like an unsettled thread: no answer, so the script
+   * reads the thread as unreadable, writes nothing and is served again later. Never read as "nobody": that is the
+   * positive `none` (or a 404 stating nothing, as recorded before the field existed), passed on as it came.
    */
-  | { service: string; method: "GET" | "POST" | "PUT"; path: string; asRun: true; runIdInBody?: string; outcomeInBody?: string; defaultQuery?: Record<string, string> };
+  | {
+      service: string;
+      method: "GET" | "POST" | "PUT";
+      path: string;
+      asRun: true;
+      runIdInBody?: string;
+      outcomeInBody?: string;
+      defaultQuery?: Record<string, string>;
+      notYet?: { field: string; equals: string; retryAfterField?: string };
+    };
 
 export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // email_found (apollo-service): one verifier call -> {verificationId, verifier, verdict, error}; BounceVerify asked now.
@@ -165,7 +180,14 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   },
   // Answering a lead (MIGRATE-1105 S1): what the old answering steps called, each the producer's own org route.
   // The person's whole thread, their state, the brand's facts and booking, then one act: reply, WhatsApp, book, call.
-  "crm.person.thread": { service: "crm", method: "GET", path: "/orgs/people/timeline", asRun: true, defaultQuery: { ...PERSON_THREAD_DEFAULT_QUERY } },
+  "crm.person.thread": {
+    service: "crm",
+    method: "GET",
+    path: "/orgs/people/timeline",
+    asRun: true,
+    defaultQuery: { ...PERSON_THREAD_DEFAULT_QUERY },
+    notYet: { field: "thread.status", equals: "not_known_yet", retryAfterField: "thread.retryAfterSeconds" },
+  },
   "crm.whatsapp.reach": { service: "crm", method: "POST", path: "/orgs/whatsapp/reach", asRun: true },
   "crm.whatsapp.sent": { service: "crm", method: "GET", path: "/orgs/whatsapp/messages", asRun: true },
   "crm.whatsapp.send": { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", asRun: true },
@@ -602,6 +624,8 @@ async function serviceDoor(name: string, args: Record<string, unknown>, ctx: Ven
 const KEPT_HEADERS = new Set(["x-org-id", "x-run-id", "x-api-key"]);
 /** A run door's bounded poll: at most this long (the run's wall is 10 min). */
 const POLL_MAX_SECONDS = 300;
+/** THREAD-OF-EMAILED-PERSON-1126: the longest a door asks again while its producer says it does not know YET. */
+export const NOT_YET_MAX_SECONDS = 180;
 
 function plainRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -685,6 +709,22 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
       }
       if (timedOut && poll.throwWhenTimedOut === true) return refuse(`${name}: still ${String(poll.field)} = ${JSON.stringify(poll.equals)} after the wait`);
       if (timedOut) out = { status: out.status, body: { ...out.body, pollTimedOut: true } };
+    }
+    if (door.notYet) {
+      const notYet = door.notYet;
+      const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      let waited = 0;
+      const stillNotYet = () => (out.status < 200 || out.status >= 300) && readDotted(out.body, notYet.field) === notYet.equals;
+      while (stillNotYet()) {
+        const stated = notYet.retryAfterField ? Number(readDotted(out.body, notYet.retryAfterField)) : NaN;
+        const wait = Math.max(1, Math.min(60, Number.isFinite(stated) ? stated : 10)) * 1000;
+        if (waited + wait > NOT_YET_MAX_SECONDS * 1000) {
+          return refuse(`${name}: ${notYet.equals}: ${door.service}-service does not know it yet after ${NOT_YET_MAX_SECONDS} s (${String(out.body.error ?? out.body.reason ?? "").slice(0, 200)}); nothing is written on it now`);
+        }
+        await sleep(wait);
+        waited += wait;
+        out = await ask();
+      }
     }
     if (out.status >= 200 && out.status < 300) return { ok: true, data: out.body };
     const code = typeof out.body.code === "string" ? out.body.code : plainRecord(out.body.details) && typeof out.body.details.code === "string" ? out.body.details.code : null;
