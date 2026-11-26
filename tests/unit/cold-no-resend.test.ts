@@ -66,3 +66,19 @@ describe("a person who holds our email gets a newly written next message (conten
     expect(() => addColdNextEmail(STORED)).toThrow(/guard/);
   });
 });
+
+import { restateCaseForColdNextEmail } from "../../src/lib/scripts/cold-no-resend.js";
+describe("cases restated for the next-email edit", () => {
+  const ours = { name: "crm.person.thread", answer: { ok: true, data: { items: [{ kind: "message", channel: "email", direction: "outbound" }] } } };
+  const ask = () => [{ units: { generation_request: { content: { body: { leadId: "L1", variables: {} } } } } }];
+  it("a person who holds our email: the ask states alreadyEmailed + the run key; others as recorded", () => {
+    const c = { id: "a", calls: [ours], request: { runId: "R1" }, asks: ask() };
+    const r = restateCaseForColdNextEmail(c);
+    expect(r.changed).toBe(true);
+    expect((r.case.asks as any)[0].units.generation_request.content.body).toEqual({ leadId: "L1", variables: {}, alreadyEmailed: true, idempotencyKey: "cold-next-email:R1" });
+    const clock = restateCaseForColdNextEmail({ id: "b", calls: [ours], request: { now: "2026-11-26T15:00:00Z" }, asks: ask() });
+    expect((clock.case.asks as any)[0].units.generation_request.content.body.idempotencyKey).toBe("cold-next-email:L1:2026-11-26T15:00:00Z");
+    const never = { id: "c", calls: [{ name: "crm.person.thread", answer: { ok: false, data: { status: 404 } } }], request: {}, asks: ask() };
+    expect(restateCaseForColdNextEmail(never)).toEqual({ case: never, changed: false });
+  });
+});

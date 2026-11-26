@@ -17,7 +17,7 @@ import { validateSource } from "../dist/lib/scripts/sandbox.js";
 import { replayAll } from "../dist/lib/scripts/replay.js";
 import { endRunBodyOf } from "../dist/lib/scripts/engine-runner.js";
 import { COLD_SENDER_THREAD_SENDERS } from "../dist/lib/scripts/cold-sender-thread.js";
-import { addColdNoResend, restateCaseForColdNoResend, addColdNextEmail } from "../dist/lib/scripts/cold-no-resend.js";
+import { addColdNoResend, restateCaseForColdNoResend, addColdNextEmail, restateCaseForColdNextEmail } from "../dist/lib/scripts/cold-no-resend.js";
 
 const ops = process.argv.includes("--ops");
 const i = process.argv.indexOf("--only");
@@ -48,7 +48,7 @@ for (const { outcome, dynasty } of COLD_SENDER_THREAD_SENDERS) {
   const rows = await db.select().from(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
   let changed = 0;
   const restated = rows.map((row) => {
-    const r = nextEdit ? { case: { ...row.body, id: row.body.id ?? row.caseId }, changed: false } : restateCaseForColdNoResend({ ...row.body, id: row.body.id ?? row.caseId }, endOf);
+    const r = nextEdit ? restateCaseForColdNextEmail({ ...row.body, id: row.body.id ?? row.caseId }) : restateCaseForColdNoResend({ ...row.body, id: row.body.id ?? row.caseId }, endOf);
     if (r.changed) changed++;
     return r.case;
   });
@@ -63,7 +63,7 @@ for (const { outcome, dynasty } of COLD_SENDER_THREAD_SENDERS) {
   console.log(
     JSON.stringify(
       changed > 0
-        ? { op: "upgradeWithCases", outcome, dynasty, code: next, tactics, source: `${MARK}: v${base.version}'s cases restated (an already-written email to a person whose thread holds our email: nothing sent; ${changed} of ${rows.length})`, cases: restated, excluded: {} }
+        ? { op: "upgradeWithCases", outcome, dynasty, code: next, tactics, source: `${MARK}: v${base.version}'s cases restated (${nextEdit ? "a person whose thread holds our email: the writer is asked for a NEW email, alreadyEmailed" : "an already-written email to a person whose thread holds our email: nothing sent"}; ${changed} of ${rows.length})`, cases: restated, excluded: {} }
         : { op: "upgrade", outcome, dynasty, fromVersion: active.version, code: next, tactics, skipIfIncludes: MARK },
     ),
   );
