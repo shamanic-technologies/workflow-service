@@ -3810,6 +3810,12 @@
             "type": "string",
             "minLength": 1
           },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "PROOF-ON-RUNNER-1126: prove THIS version (a parked one included, before it is restored live); absent = the active version, else the latest."
+          },
           "completionDynasty": {
             "type": "string",
             "minLength": 1,
