@@ -56,6 +56,7 @@ import { asksOf, runScript, type Bridge } from "./sandbox.js";
 import { providerTag } from "./provider-index.js";
 import { CHAT_COMPLETE, JEV_NOUL, LLM_COMPLETE, LLM_PICK, TEMPLATE_PICK, TO_PERSON_DOORS, callVendor, writesToPerson, type VendorDeps } from "./vendors.js";
 import { sameJson, type VendorAnswer } from "./replay.js";
+import { PENDING_ANSWER_JOB_HEADER, pendingInAnswer } from "./pending-answer.js";
 import type { AnyPgDb } from "./script-catalogue.js";
 
 /** Cases one proof answers (owner: « maîtriser les dépenses »: a fixed, small sample). */
@@ -236,6 +237,33 @@ async function sampleCases(db: AnyPgDb, row: ScriptRow): Promise<Array<{ id: str
 }
 
 /** Everything a proof needs from the outside: the vendors (platform-billed), and its one platform run. */
+/**
+ * PROOF-WAITS-RUNNER-1126: chat-service releases a caller fast when the Mac runner has not answered yet
+ * (`local_runner_waiting` / `local_runner_timeout` + the job, kept queued). A proof asks for THAT job again
+ * (`x-llm-job-id`) until it is answered, at most this long, never a new call and never a paid one.
+ */
+export const PROOF_RUNNER_WAIT_MS = 25 * 60_000;
+/** Between two asks for the same job when chat-service states no `retryAfterSeconds`. */
+export const PROOF_RUNNER_POLL_MS = 15_000;
+
+/** Call a runner-answered vendor; while its answer is still to come, ask for the same job again (bounded). */
+async function askUntilAnswered(
+  call: (headers: Record<string, string>) => Promise<VendorAnswer>,
+  headers: Record<string, string>,
+  sleep: (ms: number) => Promise<void>,
+): Promise<VendorAnswer> {
+  let answer = await call(headers);
+  let waited = 0;
+  for (let p = pendingInAnswer(answer); p; p = pendingInAnswer(answer)) {
+    const wait = Math.min(120_000, Math.max(2_000, p.retryAfterSeconds ? p.retryAfterSeconds * 1000 : PROOF_RUNNER_POLL_MS));
+    if (waited + wait > PROOF_RUNNER_WAIT_MS) return answer;
+    await sleep(wait);
+    waited += wait;
+    answer = await call({ ...headers, [PENDING_ANSWER_JOB_HEADER]: p.jobId });
+  }
+  return answer;
+}
+
 export interface ProofDeps {
   vendors: VendorDeps;
   openRun(taskName: string, reason: string): Promise<string>;
@@ -245,6 +273,8 @@ export interface ProofDeps {
    * (and the user who declared it), else null. Absent = every completion of a proof is platform-billed.
    */
   claudeCodeRunner?(): Promise<{ orgId: string; userId: string } | null>;
+  /** Waits between two asks for a runner job still to come (tests pass an instant one). */
+  sleep?(ms: number): Promise<void>;
 }
 
 /** What every proof created since the UTC month's start (never before `PROOF_BUDGET_SINCE`) spent at most, running ones included, in US cents. */
@@ -366,14 +396,14 @@ async function replayLive(row: ScriptRow, c: WriterCaseBody, runId: string, deps
       runnerLost = `${name} with an image does not run on the Mac runner`;
       return { ok: false, data: { error: runnerLost } };
     }
-    const answer = await callVendor(
-      name,
-      { ...(callArgs ?? {}), brandTools: false },
-      local
-        ? { headers: { "x-run-id": runId, "x-org-id": runner.orgId, "x-user-id": runner.userId }, tactics: callTactics, billing: "org", outcome, onCompletion: count }
-        : { headers: { "x-run-id": runId }, tactics: callTactics, billing: "platform", outcome, onCompletion: count },
-      deps.vendors,
-    );
+    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const answer = local
+      ? await askUntilAnswered(
+          (headers) => callVendor(name, { ...(callArgs ?? {}), brandTools: false }, { headers, tactics: callTactics, billing: "org", outcome, onCompletion: count }, deps.vendors),
+          { "x-run-id": runId, "x-org-id": runner.orgId, "x-user-id": runner.userId },
+          sleep,
+        )
+      : await callVendor(name, { ...(callArgs ?? {}), brandTools: false }, { headers: { "x-run-id": runId }, tactics: callTactics, billing: "platform", outcome, onCompletion: count }, deps.vendors);
     if (!answer.ok) {
       const why = String(answer.data.error ?? "refused").slice(0, 300);
       if (local && RUNNER_LOST_PATTERN.test(why)) runnerLost = why;
@@ -546,14 +576,11 @@ async function judgeFields(
     };
   });
   // PROOF-ON-RUNNER-1126: on the Mac runner's org, Jev too is answered by Claude Code at $0.
-  const answer = await callVendor(
-    JEV_NOUL,
-    { state: state.join("\n\n"), questions },
-    runner
-      ? { headers: { "x-run-id": runId, "x-org-id": runner.orgId, "x-user-id": runner.userId }, tactics: {}, billing: "org", outcome: row.outcome }
-      : { headers: { "x-run-id": runId }, tactics: {}, billing: "platform", outcome: row.outcome },
-    deps.vendors,
-  );
+  const judge = (headers: Record<string, string>) =>
+    callVendor(JEV_NOUL, { state: state.join("\n\n"), questions }, { headers, tactics: {}, billing: runner ? "org" : "platform", outcome: row.outcome }, deps.vendors);
+  const answer = runner
+    ? await askUntilAnswered(judge, { "x-run-id": runId, "x-org-id": runner.orgId, "x-user-id": runner.userId }, deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))
+    : await judge({ "x-run-id": runId });
   if (!answer.ok) throw new Error(`the usable-field judgment could not be read: ${String(answer.data.error ?? "")}`);
   const probabilities = answer.data.probabilities as Record<string, number>;
   return { judged: fields.map((f, i) => ({ ...f, probability: probabilities[`f${i}`]! })), local: answer.data.servedBy === SERVED_BY_CLAUDE_CODE };
