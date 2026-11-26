@@ -492,6 +492,17 @@ describe("WRITER-PROOF-CAP-1125: $5 a month for every proof together, Claude Cod
     expect(view.combinations.find((c) => c.dynasty === "dy_answer")).toMatchObject({ state: "waiting", red: false });
   });
 
+  it("PROOF-ON-RUNNER-1126: the Mac's Claude Code too old for the model makes the proof wait, never fail the writer", async () => {
+    const row = await seedWriter();
+    await recordProductionRuns(PROOF_SAMPLE);
+    const p = runnerDeps(() => {
+      throw new Error('chat-service POST /complete -> 502: {"error":"Claude Code reported: API Error: 400 Claude Code 2.1.80 does not support this model; version 2.1.280 or newer is required"}');
+    });
+    const proof = await proveScript(db, p.deps, row, "staff");
+    expect(proof.state).toBe("waiting");
+    expect(proof.error).toContain("does not support this model");
+  });
+
   it("a waiting proof holds its version out, is tried again only after a while, and never counts as an attempt", () => {
     const t = new Date();
     const waiting = { state: "waiting", trigger: "auto", createdAt: t, casesAvailable: 5, error: `${BUDGET_WAIT_PREFIX}$5.10 spent of $5.00 this month` };
