@@ -7,7 +7,8 @@
  * restated (`restateCaseForColdSenderThread`: a case whose recorded thread holds an email we sent them = its recorded
  * send states `followUp: true`; every other call as recorded), then the upgrade replays ALL its cases (`replayAll`).
  * One case that does not replay = exit 1. `--ops` prints one line per sender for `post-catalogue-ops.mjs`:
- * `upgradeWithCases` when a case moved, else `upgrade`. `--only <dynasty>` = one sender.
+ * `upgradeWithCases` when a case moved, else `upgrade`. `--only <dynasty>` = one sender. `--envelope` = the second edit
+ * (addColdSenderEnvelope: the writer told the envelope it writes in) on versions already carrying the first.
  *
  *   docker exec <container> node scripts/prove-cold-sender-thread.mjs [--only dy_cold_email] [--ops]
  */
@@ -16,13 +17,17 @@ import { db } from "../dist/db/index.js";
 import { scriptCases, scripts } from "../dist/db/schema.js";
 import { validateSource } from "../dist/lib/scripts/sandbox.js";
 import { replayAll } from "../dist/lib/scripts/replay.js";
-import { COLD_SENDER_THREAD_SENDERS, addColdSenderThread, restateCaseForColdSenderThread } from "../dist/lib/scripts/cold-sender-thread.js";
+import { COLD_SENDER_THREAD_SENDERS, addColdSenderThread, restateCaseForColdSenderThread, addColdSenderEnvelope, restateCaseForColdSenderEnvelope } from "../dist/lib/scripts/cold-sender-thread.js";
 
 const ops = process.argv.includes("--ops");
 const i = process.argv.indexOf("--only");
 const only = i >= 0 ? process.argv[i + 1] : null;
 const log = (...a) => (ops ? console.error(...a) : console.log(...a));
-const MARK = "PERSON-ALREADY-EMAILED-1125";
+// `--envelope`: the second edit (the writer is told the envelope it writes in), on versions already carrying the first.
+const envelope = process.argv.includes("--envelope");
+const MARK = envelope ? "PERSON-ALREADY-EMAILED-1125 envelope" : "PERSON-ALREADY-EMAILED-1125";
+const edit = envelope ? addColdSenderEnvelope : addColdSenderThread;
+const restate = envelope ? restateCaseForColdSenderEnvelope : restateCaseForColdSenderThread;
 
 let failed = 0;
 for (const { outcome, dynasty } of COLD_SENDER_THREAD_SENDERS) {
@@ -33,13 +38,13 @@ for (const { outcome, dynasty } of COLD_SENDER_THREAD_SENDERS) {
     log(`${outcome}/${dynasty}/v${active.version} already sends in their thread: nothing to do`);
     continue;
   }
-  const next = addColdSenderThread(active.code);
+  const next = edit(active.code);
   await validateSource(next);
   const tactics = active.tactics ?? {};
   const rows = await db.select().from(scriptCases).where(and(eq(scriptCases.outcome, outcome), eq(scriptCases.dynasty, dynasty)));
   let changed = 0;
   const restated = rows.map((row) => {
-    const r = restateCaseForColdSenderThread({ ...row.body, id: row.body.id ?? row.caseId });
+    const r = restate({ ...row.body, id: row.body.id ?? row.caseId });
     if (r.changed) changed++;
     return r.case;
   });
