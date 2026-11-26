@@ -148,10 +148,24 @@ export type ServiceDoor =
       path: string;
       asRun: true;
       runIdInBody?: string;
+      /**
+       * `tacticInBody`: body fields the door fills from the SCRIPT's own tactics (`{<tactic>: <body field>}`), when the
+       * script states that tactic and its call does not state the field (VERDICT-WINDOW-BY-CALLER-1126: the oldest
+       * address verdict a Script accepts is its tactic `verdictMaxAgeDays`, stated on every email door it reaches). A
+       * script stating no such tactic sends its body byte for byte.
+       */
+      tacticInBody?: Record<string, string>;
       outcomeInBody?: string;
       defaultQuery?: Record<string, string>;
       notYet?: { field: string; equals: string; retryAfterField?: string };
     };
+
+/**
+ * VERDICT-WINDOW-BY-CALLER-1126 (ENGINE-GET-ASK-1123, owner 2026-11-23: a rule a Script cannot see or set is hidden in a
+ * service): the oldest address verdict a Script accepts is ITS tactic `verdictMaxAgeDays`, stated as email-gateway's
+ * `maxVerdictAgeDays` on every email door. No tactic = nothing stated, the producer's own figure applies.
+ */
+const VERDICT_WINDOW_IN_BODY: Record<string, string> = { verdictMaxAgeDays: "maxVerdictAgeDays" };
 
 export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   // email_found (apollo-service): one verifier call -> {verificationId, verifier, verdict, error}; BounceVerify asked now.
@@ -215,10 +229,10 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "instantly.conversation": { service: "instantly", method: "GET", path: "/orgs/conversations", asRun: true },
   "instantly.reply.send": { service: "instantly", method: "POST", path: "/orgs/replies", asRun: true },
   "instantly.reply.escalate": { service: "instantly", method: "POST", path: "/orgs/replies/escalate", asRun: true },
-  "email.send": { service: "email-gateway", method: "POST", path: "/orgs/send", asRun: true },
+  "email.send": { service: "email-gateway", method: "POST", path: "/orgs/send", asRun: true, tacticInBody: VERDICT_WINDOW_IN_BODY },
   // SEND-CHECK-BEFORE-WRITE-1120: the send's refusals on the person (opt-out, not a prospect, stated not to the brand,
   // an address our verifier judged invalid), on the route the send would take, asked before a writer is paid. Sends nothing.
-  "email.send_check": { service: "email-gateway", method: "POST", path: "/orgs/send-checks", asRun: true },
+  "email.send_check": { service: "email-gateway", method: "POST", path: "/orgs/send-checks", asRun: true, tacticInBody: VERDICT_WINDOW_IN_BODY },
   "chat.judgment": { service: "chat", method: "POST", path: "/orgs/judgments", asRun: true },
   "chat.copilot.lead_turn": { service: "chat", method: "POST", path: "/internal/copilot/lead-turns", asRun: true },
   "apollo.phone.reveal": { service: "apollo", method: "POST", path: "/people/{apolloPersonId}/phone-reveal", asRun: true },
@@ -674,6 +688,12 @@ async function runDoor(name: string, door: Extract<ServiceDoor, { asRun: true }>
         if (stated !== undefined && stated !== ctx.headers["x-run-id"]) return refuse(`${name}: ${door.runIdInBody} is the script's run, filled by the door`);
         body = { ...body, [outer]: { ...(held as Record<string, unknown>), [inner]: ctx.headers["x-run-id"] } };
       }
+    }
+  }
+  if (door.tacticInBody && body) {
+    for (const [tactic, field] of Object.entries(door.tacticInBody)) {
+      const stated = ctx.tactics?.[tactic];
+      if (stated !== undefined && stated !== null && body[field] === undefined) body = { ...body, [field]: stated };
     }
   }
   if (door.outcomeInBody && body && ctx.outcome) {
