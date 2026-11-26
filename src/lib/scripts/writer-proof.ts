@@ -566,8 +566,10 @@ function verdictOf(caseId: string, recordedFrom: string, live: LiveReplay, judge
 }
 
 /** The version a proof is about: the dynasty's active one, else (a retired dynasty) its latest. */
-export async function proofTarget(db: AnyPgDb, outcome: string, dynasty: string): Promise<ScriptRow | null> {
+export async function proofTarget(db: AnyPgDb, outcome: string, dynasty: string, version?: number): Promise<ScriptRow | null> {
   const rows = await db.select().from(scripts).where(and(eq(scripts.outcome, outcome), eq(scripts.dynasty, dynasty))).orderBy(desc(scripts.version));
+  // PROOF-ON-RUNNER-1126: a stated version is proven as it is, a parked one included (proven before it is restored live).
+  if (version !== undefined) return rows.find((r) => r.version === version) ?? null;
   return rows.find((r) => r.status === "active") ?? rows[0] ?? null;
 }
 

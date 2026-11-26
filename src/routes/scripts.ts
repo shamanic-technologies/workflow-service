@@ -578,9 +578,9 @@ internalScriptsRouter.post("/internal/scripts/writer-proofs", requireApiKey, asy
     return;
   }
   try {
-    const row = await proofTarget(db, parsed.data.outcome, parsed.data.dynasty);
+    const row = await proofTarget(db, parsed.data.outcome, parsed.data.dynasty, parsed.data.version);
     if (!row) {
-      res.status(404).json({ error: `no ${parsed.data.outcome}/${parsed.data.dynasty}` });
+      res.status(404).json({ error: `no ${parsed.data.outcome}/${parsed.data.dynasty}${parsed.data.version === undefined ? "" : ` v${parsed.data.version}`}` });
       return;
     }
     let completion = null;

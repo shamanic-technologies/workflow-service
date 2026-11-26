@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { testNamer } from "../helpers/script-names.js";
 import { drizzle } from "drizzle-orm/pglite";
-import { createScript, forkScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
+import { createScript, forkScript, restoreScriptVersion, upgradeScript, type AnyPgDb } from "../../src/lib/scripts/script-catalogue.js";
 import { runStoredScript, type LedgerDeps } from "../../src/lib/scripts/script-runner.js";
 import type { VendorDeps } from "../../src/lib/scripts/vendors.js";
 import { candidatesOf } from "../../src/lib/scripts/engine.js";
@@ -20,6 +20,7 @@ import {
   PROOF_BUDGET_SINCE,
   personFields,
   proveScript,
+  proofTarget,
   readWriterProofs,
   setEngineEnforced,
   setProofContext,
@@ -166,6 +167,18 @@ async function recordProductionRuns(n: number) {
     await runStoredScript(db, { outcome: "message_sent", dynasty: "dy_answer", units: {}, request: { email: `p${i}@example.test`, now: "2026-11-15T10:00:00Z" } }, who, { ledger: ledger(), vendors: productionVendors() });
   }
 }
+
+describe("PROOF-ON-RUNNER-1126: the version a proof targets", () => {
+  it("a stated version, a parked one included; else the active one", async () => {
+    await seedWriter();
+    await upgradeScript(db, "message_sent", "dy_answer", { code: ANSWERER + "\n// v2" }, author);
+    await restoreScriptVersion(db, "message_sent", "dy_answer", 1, "v2 cannot be proven yet");
+    expect((await proofTarget(db, "message_sent", "dy_answer"))!.version).toBe(1);
+    const parked = (await proofTarget(db, "message_sent", "dy_answer", 2))!;
+    expect([parked.version, parked.status]).toEqual([2, "deprecated"]);
+    expect(await proofTarget(db, "message_sent", "dy_answer", 9)).toBeNull();
+  });
+});
 
 describe("cases: what production runs of a writer saw", () => {
   it("keeps every run of a script that writes to a person and reached its LLM, with each call's request and answer", async () => {
