@@ -1,0 +1,367 @@
+{
+ "dy_cold_email": {
+  "asks": [
+   "message_written",
+   "llm_completion",
+   "lead_found"
+  ],
+  "intro": "none",
+  "pitches": "offer",
+  "brandFields": [
+   {
+    "key": "companyOverview",
+    "description": "A comprehensive overview of the company"
+   },
+   {
+    "key": "valueProposition",
+    "description": "The company's core value proposition"
+   },
+   {
+    "key": "keyFeatures",
+    "description": "Key features of the company's product or service"
+   },
+   {
+    "key": "targetAudience",
+    "description": "The company's target audience"
+   },
+   {
+    "key": "customerPainPoints",
+    "description": "Pain points the company solves for customers"
+   },
+   {
+    "key": "competitors",
+    "description": "The company's main competitors"
+   },
+   {
+    "key": "productDifferentiators",
+    "description": "What differentiates the product from competitors"
+   },
+   {
+    "key": "socialProof",
+    "description": "Social proof such as testimonials, case studies, or notable clients"
+   },
+   {
+    "key": "callToAction",
+    "description": "The company's primary call to action"
+   },
+   {
+    "key": "urgency",
+    "description": "Any urgency or time-sensitive elements"
+   },
+   {
+    "key": "scarcity",
+    "description": "Any scarcity or limited availability elements"
+   },
+   {
+    "key": "riskReversal",
+    "description": "Guarantees or risk reversal offers"
+   },
+   {
+    "key": "valueStacking",
+    "description": "Value stacking or bundling strategies"
+   },
+   {
+    "key": "priceAnchoring",
+    "description": "Price anchoring or pricing strategies"
+   },
+   {
+    "key": "leadership",
+    "description": "Company leadership and key team members"
+   },
+   {
+    "key": "funding",
+    "description": "Funding information and investors"
+   },
+   {
+    "key": "revenueMilestones",
+    "description": "Revenue milestones and growth metrics"
+   },
+   {
+    "key": "awardsAndRecognition",
+    "description": "Awards, recognition, and press mentions"
+   },
+   {
+    "key": "additionalContext",
+    "description": "Any additional relevant context about the company"
+   }
+  ],
+  "recorded_by": "instantly",
+  "verdictMaxAgeDays": 30
+ },
+ "dy_cold_email_site": {
+  "asks": [
+   "message_written",
+   "llm_completion",
+   "lead_found"
+  ],
+  "intro": "none",
+  "pitches": "offer",
+  "brandFields": [
+   {
+    "key": "companyOverview",
+    "description": "A comprehensive overview of the company"
+   },
+   {
+    "key": "valueProposition",
+    "description": "The company's core value proposition"
+   },
+   {
+    "key": "keyFeatures",
+    "description": "Key features of the company's product or service"
+   },
+   {
+    "key": "targetAudience",
+    "description": "The company's target audience"
+   },
+   {
+    "key": "customerPainPoints",
+    "description": "Pain points the company solves for customers"
+   },
+   {
+    "key": "competitors",
+    "description": "The company's main competitors"
+   },
+   {
+    "key": "productDifferentiators",
+    "description": "What differentiates the product from competitors"
+   },
+   {
+    "key": "socialProof",
+    "description": "Social proof such as testimonials, case studies, or notable clients"
+   },
+   {
+    "key": "callToAction",
+    "description": "The company's primary call to action"
+   },
+   {
+    "key": "urgency",
+    "description": "Any urgency or time-sensitive elements"
+   },
+   {
+    "key": "scarcity",
+    "description": "Any scarcity or limited availability elements"
+   },
+   {
+    "key": "riskReversal",
+    "description": "Guarantees or risk reversal offers"
+   },
+   {
+    "key": "valueStacking",
+    "description": "Value stacking or bundling strategies"
+   },
+   {
+    "key": "priceAnchoring",
+    "description": "Price anchoring or pricing strategies"
+   },
+   {
+    "key": "leadership",
+    "description": "Company leadership and key team members"
+   },
+   {
+    "key": "funding",
+    "description": "Funding information and investors"
+   },
+   {
+    "key": "revenueMilestones",
+    "description": "Revenue milestones and growth metrics"
+   },
+   {
+    "key": "awardsAndRecognition",
+    "description": "Awards, recognition, and press mentions"
+   },
+   {
+    "key": "additionalContext",
+    "description": "Any additional relevant context about the company"
+   }
+  ],
+  "recorded_by": "instantly",
+  "brandVariables": {
+   "clientWebsite": "clickDestinationUrl"
+  },
+  "verdictMaxAgeDays": 30
+ },
+ "dy_cold_email_signed_client_person": {
+  "asks": [
+   "message_written",
+   "llm_completion",
+   "lead_found",
+   "judgment_made"
+  ],
+  "intro": "none",
+  "pitches": "offer",
+  "signedBy": "client_person_with_client_brand",
+  "brandFields": [
+   {
+    "key": "companyOverview",
+    "description": "A comprehensive overview of the company"
+   },
+   {
+    "key": "valueProposition",
+    "description": "The company's core value proposition"
+   },
+   {
+    "key": "keyFeatures",
+    "description": "Key features of the company's product or service"
+   },
+   {
+    "key": "targetAudience",
+    "description": "The company's target audience"
+   },
+   {
+    "key": "customerPainPoints",
+    "description": "Pain points the company solves for customers"
+   },
+   {
+    "key": "competitors",
+    "description": "The company's main competitors"
+   },
+   {
+    "key": "productDifferentiators",
+    "description": "What differentiates the product from competitors"
+   },
+   {
+    "key": "socialProof",
+    "description": "Social proof such as testimonials, case studies, or notable clients"
+   },
+   {
+    "key": "callToAction",
+    "description": "The company's primary call to action"
+   },
+   {
+    "key": "urgency",
+    "description": "Any urgency or time-sensitive elements"
+   },
+   {
+    "key": "scarcity",
+    "description": "Any scarcity or limited availability elements"
+   },
+   {
+    "key": "riskReversal",
+    "description": "Guarantees or risk reversal offers"
+   },
+   {
+    "key": "valueStacking",
+    "description": "Value stacking or bundling strategies"
+   },
+   {
+    "key": "priceAnchoring",
+    "description": "Price anchoring or pricing strategies"
+   },
+   {
+    "key": "leadership",
+    "description": "Company leadership and key team members"
+   },
+   {
+    "key": "funding",
+    "description": "Funding information and investors"
+   },
+   {
+    "key": "revenueMilestones",
+    "description": "Revenue milestones and growth metrics"
+   },
+   {
+    "key": "awardsAndRecognition",
+    "description": "Awards, recognition, and press mentions"
+   },
+   {
+    "key": "additionalContext",
+    "description": "Any additional relevant context about the company"
+   }
+  ],
+  "recorded_by": "instantly",
+  "copiesSigner": true,
+  "verdictMaxAgeDays": 30
+ },
+ "dy_cold_email_signed_sender_client_brand": {
+  "asks": [
+   "message_written",
+   "llm_completion",
+   "lead_found",
+   "judgment_made"
+  ],
+  "intro": "none",
+  "pitches": "offer",
+  "signedBy": "sender_with_client_brand",
+  "brandFields": [
+   {
+    "key": "companyOverview",
+    "description": "A comprehensive overview of the company"
+   },
+   {
+    "key": "valueProposition",
+    "description": "The company's core value proposition"
+   },
+   {
+    "key": "keyFeatures",
+    "description": "Key features of the company's product or service"
+   },
+   {
+    "key": "targetAudience",
+    "description": "The company's target audience"
+   },
+   {
+    "key": "customerPainPoints",
+    "description": "Pain points the company solves for customers"
+   },
+   {
+    "key": "competitors",
+    "description": "The company's main competitors"
+   },
+   {
+    "key": "productDifferentiators",
+    "description": "What differentiates the product from competitors"
+   },
+   {
+    "key": "socialProof",
+    "description": "Social proof such as testimonials, case studies, or notable clients"
+   },
+   {
+    "key": "callToAction",
+    "description": "The company's primary call to action"
+   },
+   {
+    "key": "urgency",
+    "description": "Any urgency or time-sensitive elements"
+   },
+   {
+    "key": "scarcity",
+    "description": "Any scarcity or limited availability elements"
+   },
+   {
+    "key": "riskReversal",
+    "description": "Guarantees or risk reversal offers"
+   },
+   {
+    "key": "valueStacking",
+    "description": "Value stacking or bundling strategies"
+   },
+   {
+    "key": "priceAnchoring",
+    "description": "Price anchoring or pricing strategies"
+   },
+   {
+    "key": "leadership",
+    "description": "Company leadership and key team members"
+   },
+   {
+    "key": "funding",
+    "description": "Funding information and investors"
+   },
+   {
+    "key": "revenueMilestones",
+    "description": "Revenue milestones and growth metrics"
+   },
+   {
+    "key": "awardsAndRecognition",
+    "description": "Awards, recognition, and press mentions"
+   },
+   {
+    "key": "additionalContext",
+    "description": "Any additional relevant context about the company"
+   }
+  ],
+  "recorded_by": "instantly",
+  "copiesSigner": true,
+  "verdictMaxAgeDays": 30
+ }
+}

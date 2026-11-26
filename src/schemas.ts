@@ -3384,12 +3384,19 @@ registry.registerPath({
   path: "/internal/engines/{outcome}/required-keys",
   summary: "The keys a campaign's Plan needs (provider + what for), and which the org already holds (service key only)",
   description:
-    "SOLO-PLAN-1125 (owner 2026-11-25): a founder launching a campaign without our paid plan brings their own keys; their AI asks for exactly these. `outcome` = the campaign's Target. From that Engine, the scripts the campaign's strategy keeps (`campaignId`; absent = before launch, the scripts kept with no campaign), runnable; the Units each reads or asks are asked of their own Engine, recursively. An LLM call needs the provider of each LLM its script states; any other call needs the providers key-service observed its endpoint requesting. `held` = key-service holds the org's own key (`GET /keys`, read as `x-org-id` + `x-user-id`). `required: false` = only some scripts of an Engine need it (one choice among several). Reads only. 502 when features-service (strategy) or key-service cannot answer.",
+    "SOLO-PLAN-1125 (owner 2026-11-25): a founder launching a campaign without our paid plan brings their own keys; their AI asks for exactly these. `outcome` = the campaign's Target. From that Engine, the scripts the campaign's strategy keeps (`campaignId` = the campaign UNIT's id, `units[].campaignId` of the sales-funnel campaign answer, any status; absent = before launch, the scripts kept with no campaign), runnable; the Units each reads or asks are asked of their own Engine, recursively. An LLM call needs the provider of each LLM its script states; any other call needs the providers key-service observed its endpoint requesting. `held` = key-service holds the org's own key (`GET /keys`, read as `x-org-id` + `x-user-id`). `required: false` = only some scripts of an Engine need it (one choice among several). Reads only. 502 when features-service (strategy) or key-service cannot answer.",
   tags: ["Engines"],
   security: [{ apiKey: [] }],
   request: {
     params: z.object({ outcome: z.string() }),
-    query: z.object({ campaignId: z.string().optional() }),
+    query: z.object({
+      campaignId: z
+        .string()
+        .optional()
+        .describe(
+          "The campaign UNIT's id: `units[].campaignId` of the sales-funnel campaign answer (the unit whose Target is `outcome`), never the sales-funnel campaign's own id. Any status, a stopped campaign just created included. Absent = before any campaign exists.",
+        ),
+    }),
     headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
   },
   responses: {
