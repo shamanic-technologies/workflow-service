@@ -367,3 +367,13 @@ export default function run(ctx: ScriptContext): ScriptResult {
 `,
   ].join("\n");
 }
+
+/**
+ * MON-XPOST-SCRIPT-1126-WF: the watch's v3 = its stored code with the post text cut on a WHOLE character. v2 cut at
+ * 2000 UTF-16 units, which kept half an emoji at index 1999 (a lone surrogate): no row could store that Unit and every
+ * quote run stopped. One anchored edit of the stored code, applied by UPGRADE (`replace`, exact dynasty).
+ */
+export const INDUSTRY_NEWS_WHOLE_CHARS_EDIT = {
+  from: `text: String(i.text ?? "").slice(0, 2000),`,
+  to: `text: ((t: string) => { const c = t.charCodeAt(t.length - 1); return c >= 0xd800 && c <= 0xdbff ? t.slice(0, -1) : t; })(String(i.text ?? "").slice(0, 2000)),`,
+} as const;
