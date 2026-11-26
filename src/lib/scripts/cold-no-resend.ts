@@ -92,3 +92,24 @@ export function addColdNextEmail(code: string): string {
   if (code.split(BODY_ANCHOR).length !== 2) throw new Error("cold next email: the anchor is not found exactly once");
   return code.replace(BODY_ANCHOR, BODY_ANCHOR + NEXT_BODY);
 }
+
+/**
+ * A recorded case restated under the next-email edit: a person whose recorded thread holds our email = the writer's ask
+ * (`asks[*].units.generation_request.content.body`) states `alreadyEmailed: true` and the key the code builds from the
+ * case's Request (`runId`, else lead + clock). Every other case, and every recorded answer, as recorded.
+ */
+export function restateCaseForColdNextEmail<C extends { calls: CaseCall[]; request?: Record<string, any> | null; asks?: unknown }>(c: C): { case: C; changed: boolean } {
+  const copy = JSON.parse(JSON.stringify(c)) as C;
+  const thread = copy.calls.find((x) => x.name === "crm.person.thread");
+  if (!threadHoldsOurEmail(thread?.answer) || !Array.isArray(copy.asks)) return { case: copy, changed: false };
+  let changed = false;
+  for (const ask of copy.asks as any[]) {
+    const body = ask?.units?.generation_request?.content?.body;
+    if (!body || typeof body !== "object") continue;
+    const req = (copy.request ?? {}) as Record<string, any>;
+    body.alreadyEmailed = true;
+    body.idempotencyKey = "cold-next-email:" + String(req.runId ?? body.leadId + ":" + String(req.now ?? ""));
+    changed = true;
+  }
+  return { case: copy, changed };
+}
