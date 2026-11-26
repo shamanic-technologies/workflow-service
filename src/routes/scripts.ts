@@ -15,6 +15,7 @@ import {
   ReplayScriptRequestSchema,
   RunScriptRequestSchema,
   ScriptDynastyStatusRequestSchema,
+  ScriptVersionRestoreRequestSchema,
   ScriptDynastyNameRequestSchema,
   UpgradeScriptRequestSchema,
 } from "../schemas.js";
@@ -32,6 +33,7 @@ import {
   reproveActive,
   serveScript,
   setDynastyStatus,
+  restoreScriptVersion,
   summarizeScript,
   upgradeScript,
   type Author,
@@ -208,6 +210,24 @@ router.put("/scripts/dynasty/:outcome/:dynasty/status", requireApiKey, async (re
     res.json({ versions: await served(versions) });
   } catch (err) {
     fail(res, err, "set script dynasty status");
+  }
+});
+
+// WRITERS-NO-MODEL-1126: put an earlier version of a dynasty back live (the active one is parked with the reason).
+router.put("/scripts/dynasty/:outcome/:dynasty/versions/:version/restore", requireApiKey, async (req, res) => {
+  const version = Number(req.params.version);
+  const parsed = ScriptVersionRestoreRequestSchema.safeParse(req.body);
+  if (!Number.isInteger(version) || version < 1 || !parsed.success) {
+    res.status(400).json({ error: "Validation error", details: parsed.success ? "a whole version number in the path" : zodErrorDetails(parsed.error) });
+    return;
+  }
+  const reason = parsed.data.reason.trim();
+  try {
+    const versions = await restoreScriptVersion(db, req.params.outcome, req.params.dynasty, version, reason);
+    console.log(`[workflow-service] script ${req.params.outcome}/${req.params.dynasty} v${version} restored (${reason})`);
+    res.json({ versions: await served(versions) });
+  } catch (err) {
+    fail(res, err, "restore a script version");
   }
 });
 

@@ -2483,6 +2483,10 @@ export const ScriptDynastyStatusRequestSchema = z
   .object({ status: z.enum(["active", "deprecated"]), reason: z.string().min(1).max(500) })
   .openapi("ScriptDynastyStatusRequest");
 
+export const ScriptVersionRestoreRequestSchema = z
+  .object({ reason: z.string().min(1).max(500).describe("Why the earlier version is put back live (kept on the parked version).") })
+  .openapi("ScriptVersionRestoreRequest");
+
 export const ScriptDynastyNameRequestSchema = z
   .object({ name: z.string().min(2).max(40).describe("The new client-readable name of every version of the dynasty.") })
   .openapi("ScriptDynastyNameRequest");
@@ -2699,6 +2703,24 @@ registry.registerPath({
     400: { description: "Name refused (`invalid_name`)", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: { description: "Unknown", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: { description: "Another script of the outcome holds the name (`name_taken`)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/scripts/dynasty/{outcome}/{dynasty}/versions/{version}/restore",
+  summary: "Put an earlier version of a script dynasty back live (staff); the active version is parked with the reason",
+  tags: ["Scripts"],
+  security: [{ apiKey: [] }],
+  request: {
+    params: scriptDynastyParams.extend({ version: z.string().regex(/^\d+$/) }),
+    body: { required: true, content: { "application/json": { schema: ScriptVersionRestoreRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Versions after the restore", content: { "application/json": { schema: z.object({ versions: z.array(ScriptSchema) }) } } },
+    400: { description: "No version number or no reason", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Unknown dynasty or version", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "Already the active version (`already_active`) or the dynasty is retired (`dynasty_retired`)", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
