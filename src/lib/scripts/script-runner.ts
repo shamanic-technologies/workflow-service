@@ -19,6 +19,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { scriptRuns, scriptStorage, scripts, type ScriptRow } from "../../db/schema.js";
 import { asksOf, runScript, type Bridge, type ScriptResult } from "./sandbox.js";
 import { callVendor, readProvider, type VendorDeps } from "./vendors.js";
+import { newServedHold, noteDoorAnswer, releaseStatement } from "./failed-run-release.js";
 import { PENDING_ANSWER_JOB_HEADER, mayStillWait, pendingInAnswer, recheckDays, type PendingAnswer } from "./pending-answer.js";
 import { providerTag } from "./provider-index.js";
 import { ScriptCatalogueError, activeVersion, caseCount, dynastyVersions, type AnyPgDb } from "./script-catalogue.js";
@@ -249,6 +250,8 @@ export async function runStoredScript(
   // they are declared here even when its own Unit is declared by the owning service (`recordedBy`).
   const usedConsumed: OccurrenceInput[] = [];
   const vendorCalls: ScriptRunResult["vendorCalls"] = [];
+  // FAILED-RUN-RELEASE-1126: the person a serve handed this run, and whether the run already left them a date.
+  const servedHold = newServedHold();
   const trace: NonNullable<ScriptRunResult["trace"]> = [];
 
   // The Request this run hands the next piece it orders (`ctx.ask`), consumed by that `ctx.get`.
@@ -299,6 +302,7 @@ export async function runStoredScript(
       const answer = read.answer;
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }) });
       recorded.push({ name, args: args[1] ?? null, answer });
+      noteDoorAnswer(servedHold, name, answer);
       if (input.trace) trace.push({ name, args: args[1] ?? null, answer });
       return { v: answer };
     }
@@ -350,6 +354,7 @@ export async function runStoredScript(
       const brandToolCalls = answer.ok && typeof answer.data.brandToolCalls === "number" ? answer.data.brandToolCalls : undefined;
       vendorCalls.push({ name, ok: answer.ok, ms: Date.now() - t, ...(answer.ok ? {} : { error: String(answer.data.error ?? "").slice(0, 300) }), ...(brandToolCalls !== undefined ? { brandToolCalls } : {}) });
       recorded.push({ name, args: args[1] ?? null, answer });
+      noteDoorAnswer(servedHold, name, answer);
       if (input.trace) trace.push({ name, args: args[1] ?? null, answer, ...(exchange ? (exchange as { sent: Record<string, unknown>; raw: Record<string, unknown> }) : {}) });
       // SOLO-PLAN-1125: an answer still to come (a founder's own Claude picks the work up hourly) makes a run that can
       // be resumed WAIT, no worker held: its wait keeps the job at this call's place, and the resumed run's same call
@@ -443,6 +448,13 @@ export async function runStoredScript(
     }
   }
   const finalStatus: ScriptRunResult["status"] = declaredOk ? status : "failed";
+  // FAILED-RUN-RELEASE-1126: a run that took a due follow-up and failed before sending or stating a date gives the
+  // person back within the hour (lead-service held them 7 days for this run). Loud, never fails the run's own record.
+  const release = releaseStatement(servedHold, finalStatus, error, new Date());
+  if (release) {
+    const released = await callVendor("lead.followup_date.set", release, { headers: vendorHeaders, tactics, billing: input.billing ?? "org", callerRunId: who.parentRunId, outcome: row.outcome, asks }, deps.vendors);
+    if (!released.ok) console.error(`[workflow-service] ${scriptSlug} run ${runId}: the failed run could NOT give its follow-up back (lead row ${release.params.id}): ${String((released.data as { error?: unknown })?.error ?? "")}`);
+  }
   const result: ScriptRunResult = {
     scriptId: row.id,
     scriptSlug,
