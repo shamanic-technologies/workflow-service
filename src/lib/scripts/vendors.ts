@@ -205,6 +205,10 @@ export const SERVICE_DOOR_VENDORS: Record<string, ServiceDoor> = {
   "crm.whatsapp.reach": { service: "crm", method: "POST", path: "/orgs/whatsapp/reach", asRun: true },
   "crm.whatsapp.sent": { service: "crm", method: "GET", path: "/orgs/whatsapp/messages", asRun: true },
   "crm.whatsapp.send": { service: "crm", method: "POST", path: "/orgs/whatsapp/messages", asRun: true },
+  // LEAD-REPLY-CHANNEL-1127: answer a person in their OWN conversation, any bridged app (crm-service decides whether
+  // automation may write there and from which account; never another account or app).
+  "crm.conversation.reach": { service: "crm", method: "POST", path: "/orgs/conversations/reach", asRun: true },
+  "crm.conversation.send": { service: "crm", method: "POST", path: "/orgs/conversations/messages", asRun: true },
   "crm.team.membership": { service: "crm", method: "POST", path: "/orgs/people/team-membership", asRun: true },
   "crm.meeting.book": { service: "crm", method: "POST", path: "/orgs/gohighlevel/bookings", asRun: true },
   "lead.detail": { service: "lead", method: "GET", path: "/orgs/leads/{id}", asRun: true },
@@ -344,6 +348,7 @@ export const TO_PERSON_DOORS: Record<string, string[]> = {
   "instantly.reply.escalate": ["body.handoff_text"],
   "email.send": ["body.subject", "body.sequence.*.bodyHtml"],
   "crm.whatsapp.send": ["body.text", "body.messages.*"],
+  "crm.conversation.send": ["body.text", "body.messages.*"],
 };
 
 /** Whether a script's code calls a door that sends to a person (read from the code, like its materials). */
