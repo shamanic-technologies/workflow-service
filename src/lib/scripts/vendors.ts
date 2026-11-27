@@ -964,8 +964,12 @@ export function productionVendorDeps(): VendorDeps {
     async readBookingSlots(bookingUrl, timezone) {
       // The same reader the old answering step ran (a public page, free, no credential), loaded once as a module.
       const { readBookingSlotsCode } = await import("../booking-slots.js");
-      const mod = (await import(`data:text/javascript,${encodeURIComponent(readBookingSlotsCode())}`)) as { main: (u: string, t: string) => Promise<Record<string, unknown>> };
-      return mod.main(bookingUrl, timezone);
+      const { guardedFetch } = await import("../safe-fetch.js");
+      const mod = (await import(`data:text/javascript,${encodeURIComponent(readBookingSlotsCode())}`)) as {
+        main: (u: string, t: string, f: (input: string | URL, init?: RequestInit) => Promise<Response>) => Promise<Record<string, unknown>>;
+      };
+      // The booking link is the customer's: every fetch of it (and of each redirect) is public-only (SSRF-1127).
+      return mod.main(bookingUrl, timezone, guardedFetch());
     },
     async readSkill(slug) {
       need();
