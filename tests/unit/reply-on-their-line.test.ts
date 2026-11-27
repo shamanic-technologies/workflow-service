@@ -81,7 +81,7 @@ describe.each(Object.keys(SENDERS))("addReplyOnTheirLine on %s", (name) => {
     const edited = [A.planMain, A.planCall, A.sendWhatsapp].map((l) => l.trimEnd());
     const lines = new Set(next.split("\n"));
     for (const l of stored.split("\n")) {
-      if (edited.some((e) => l.startsWith(e)) || l.includes("THE CHANNEL is WhatsApp: the message continues")) continue;
+      if (edited.some((e) => l.startsWith(e)) || l.includes("THE CHANNEL is WhatsApp: the message continues") || l === A.copilotMedium.trimEnd()) continue;
       expect(lines.has(l), l).toBe(true);
     }
   });
@@ -125,7 +125,7 @@ describe.each(Object.keys(SENDERS))("addReplyOnTheirLine on %s", (name) => {
     const t = { items: [msg("2026-11-20T10:00:00Z", "outbound", "telegram", { ref: tg }), msg("2026-11-21T10:00:00Z", "inbound", "telegram", { ref: tg })] };
     const conv = { reachable: true, conversation: { conversationId: "c-telegram", channel: "telegram", phone: null }, fromAccount: { account: "+33600000009", accountType: "pro_ai", persona: { name: "Sophie", role: "AI assistant", instructions: null } } };
     const c = s.step_channel_plan(person, plan, reachable, t, conv);
-    expect(c).toMatchObject({ channel: "whatsapp", skipModel: false, conversationId: "c-telegram", fromAccount: "+33600000009", app: "Telegram", persona: { name: "Sophie" } });
+    expect(c).toMatchObject({ channel: "whatsapp", skipModel: false, conversationId: "c-telegram", fromAccount: "+33600000009", app: "Telegram", conversationApp: "telegram", persona: { name: "Sophie" } });
     const body = s.conversationSendBody({ brandId: "b1", messages: ["Hi", "Sure"], idempotencyKey: "k1", fromAccount: "+33600000002", phone: "+1", email: "x@y.z", replyToEventId: "$e" }, c);
     expect(body).toEqual({ brandId: "b1", conversationId: "c-telegram", idempotencyKey: "k1", messages: ["Hi", "Sure"], replyToEventId: "$e" });
   });
@@ -136,6 +136,7 @@ describe.each(Object.keys(SENDERS))("addReplyOnTheirLine on %s", (name) => {
     const c = s.step_channel_plan(person, plan, reachable, t, conv);
     expect(c).toMatchObject({ channel: "whatsapp", conversationId: "c-whatsapp", fromAccount: "+33600000002", phone: "+16475550100" });
     expect(c.app).toBeUndefined();
+    expect(c.conversationApp).toBeUndefined();
   });
 
   it("AC2 on WhatsApp: a message to a personal or human line = nothing from the AI line", () => {
@@ -194,6 +195,16 @@ describe.each(Object.keys(WRITERS))("addChatAppToWriter on %s", (name) => {
     expect(line(next, {})).toBe(line(stored, {}));
     expect(line(next, { app: "Telegram" })).toBe("THE CHANNEL is Telegram: the message continues our Telegram conversation with them, from the same account, in the language");
     expect(() => addChatAppToWriter(next)).toThrow();
+  });
+  it("hands the Copilot crm-service's app as its medium; WhatsApp and email as before", () => {
+    const A = REPLY_ON_THEIR_LINE_ANCHORS;
+    if (!stored.includes(A.copilotMedium)) return;
+    const a = next.indexOf("  const medium = ");
+    const line = next.slice(a, next.indexOf("\n", a));
+    const medium = (channel: Record<string, unknown>) => new Function("channel", line.replace("const medium =", "return"))(channel);
+    expect(medium({ channel: "whatsapp", conversationApp: "telegram" })).toBe("telegram");
+    expect(medium({ channel: "whatsapp" })).toBe("whatsapp");
+    expect(medium({ channel: "email" })).toBe("email");
   });
 });
 

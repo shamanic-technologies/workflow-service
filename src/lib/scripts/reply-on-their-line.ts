@@ -68,6 +68,7 @@ export const REPLY_ON_THEIR_LINE_ANCHORS = {
   noChannel: "  if (channel?.noChannel === true) {\n",
   emailPlan: '      channel: "email",\n',
   chatLine: '"THE CHANNEL is WhatsApp: the message continues our WhatsApp conversation with them, from the same number, ',
+  copilotMedium: '  const medium = channel?.channel === "whatsapp" ? "whatsapp" : channel?.channel === "email" ? "email" : null;\n',
 };
 
 /** Top-level helpers, placed before the channel plan step (every step closure and the flow see them). */
@@ -148,7 +149,8 @@ function planBlock(emails: boolean): string {
         fromAccount: acct.account ?? null,
         persona: senderPersona({ persona: acct.persona }),
         conversationId: conversation.conversation?.conversationId ?? conversationOf(waiting),
-        ...(label ? { app: label } : {}),
+        // The app for the writer's channel line (label) and the Copilot's medium (crm-service's own word, as is).
+        ...(label ? { app: label, conversationApp: app } : {}),
         why: "Their " + (label ?? "WhatsApp") + " message of " + at + " waits on us: the answer continues that conversation, from the account they wrote to" + (acct.account ? " (" + acct.account + ")" : "") + ".",
       };
     }
@@ -206,11 +208,16 @@ export function plansEmail(code: string): boolean {
   return code.slice(a, b).includes(REPLY_ON_THEIR_LINE_ANCHORS.emailPlan);
 }
 
-/** The app named in a chat writer's channel line (a sender that writes itself, or a writer half). Absent = left alone. */
+/** The app named in a chat writer's channel line and the Copilot's medium (a sender that writes itself, or a writer half). Absent = left alone. */
 function withChatApp(code: string): string {
-  return code.includes(REPLY_ON_THEIR_LINE_ANCHORS.chatLine)
-    ? replaceOnce(code, REPLY_ON_THEIR_LINE_ANCHORS.chatLine, "chat channel line", CHAT_LINE_TO)
-    : code;
+  const A = REPLY_ON_THEIR_LINE_ANCHORS;
+  let next = code;
+  if (next.includes(A.chatLine)) next = replaceOnce(next, A.chatLine, "chat channel line", CHAT_LINE_TO);
+  if (next.includes(A.copilotMedium)) {
+    // chat-service's lead turn takes crm-service's conversation channel as its medium (LEAD-REPLY-CHANNEL-1127-CHAT).
+    next = replaceOnce(next, A.copilotMedium, "Copilot medium", A.copilotMedium.replace('? "whatsapp" :', '? (channel.conversationApp || "whatsapp") :'));
+  }
+  return next;
 }
 
 /** The sender's stored code answering a waiting message in its own conversation. Throws when an anchor moved or it is already in. */
@@ -238,6 +245,7 @@ export function addReplyOnTheirLine(code: string): string {
 
 /** A writer half: its chat channel line names the app the conversation is on (WhatsApp when the plan names none). */
 export function addChatAppToWriter(code: string): string {
-  if (!code.includes(REPLY_ON_THEIR_LINE_ANCHORS.chatLine)) throw new Error("reply-on-their-line: the writer holds no chat channel line (or already names the app)");
+  const A = REPLY_ON_THEIR_LINE_ANCHORS;
+  if (!code.includes(A.chatLine) && !code.includes(A.copilotMedium)) throw new Error("reply-on-their-line: the writer holds no chat channel line nor Copilot medium (or already names the app)");
   return withChatApp(code);
 }
