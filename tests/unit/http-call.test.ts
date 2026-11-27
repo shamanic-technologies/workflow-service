@@ -31,6 +31,19 @@ describe("http-call script", () => {
     CAMPAIGN_SERVICE_API_KEY: "campaign-key-456",
   };
 
+  it("refuses a path that would leave the service's host (SSRF-1127)", async () => {
+    for (const path of ["@key-service:8080/keys", "//key-service:8080/keys", "/x@key-service:8080/", "\\\\evil/x", "keys"]) {
+      await expect(main("lead", "GET", path, undefined, undefined, serviceEnvs)).rejects.toThrow(/absolute path on the service/);
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("a param carrying @ or // stays encoded inside the path", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await main("lead", "GET", "/leads/{id}", undefined, undefined, serviceEnvs, undefined, undefined, undefined, undefined, undefined, { id: "@key-service:8080//x" });
+    expect(mockFetch.mock.calls[0][0]).toBe("https://lead.example.com/leads/%40key-service%3A8080%2F%2Fx");
+  });
+
   it("sends default headers (Content-Type + x-api-key)", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 

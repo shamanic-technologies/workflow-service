@@ -66,7 +66,10 @@ export const SLOT_CANDIDATES = 60;
  * not read: no brand in the fleet uses one.
  */
 export const READ_BOOKING_SLOTS_TEMPLATE = `
-export async function main(bookingUrl, timezone) {
+export async function main(bookingUrl, timezone, fetch) {
+  // fetch = the caller's GUARDED fetch (safe-fetch.ts guardedFetch, SSRF-1127): the booking link is the customer's,
+  // so every hop is checked public and pinned. Never fall back to the global fetch.
+  if (typeof fetch !== "function") throw new Error("booking-slots: a guarded fetch must be handed in (SSRF-1127)");
   const tz = typeof timezone === "string" && timezone.trim() ? timezone.trim() : "UTC";
   const days = LOOKAHEAD_DAYS;
   const perDay = SLOTS_PER_DAY;
@@ -124,7 +127,8 @@ export async function main(bookingUrl, timezone) {
   const startDate = new Date();
   const endDate = new Date(startDate.getTime() + days * 86400000);
   const ymd = (d) => d.toISOString().split("T")[0];
-  const errText = (err) => (err instanceof Error ? err.message : String(err));
+  // A refused address is named on its own, never with what answered (no status oracle on our network).
+  const errText = (err) => (err && err.name === "PublicUrlRefusedError" ? "booking_url_not_public" : err instanceof Error ? err.message : String(err));
 
   /**
    * Google answers raw epoch seconds with no timezone, so this is where the
@@ -370,6 +374,7 @@ export async function main(bookingUrl, timezone) {
   } catch {
     return degraded("booking_url_unparseable");
   }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return degraded("booking_url_not_public");
   const host = parsed.hostname.toLowerCase();
 
   try {

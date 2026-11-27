@@ -122,6 +122,12 @@ export async function main(
     }
   }
 
+  // The path is appended to OUR service's base URL, so it must stay on that host (SSRF-1127): a path that does not
+  // open on one "/" ("@other-host/...", "//other-host/...") would make the URL name another host.
+  if (!resolvedPath.startsWith("/") || resolvedPath.startsWith("//") || /[\\@]/.test(resolvedPath.split("?")[0])) {
+    throw new Error(`[http-call] ${method} ${service}: path ${JSON.stringify(path)} must be an absolute path on the service (SSRF-1127)`);
+  }
+
   // Build URL with query params
   let url = `${baseUrl}${resolvedPath}`;
   if (query && Object.keys(query).length > 0) {
