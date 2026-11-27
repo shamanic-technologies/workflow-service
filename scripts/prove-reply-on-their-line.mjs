@@ -24,7 +24,7 @@ import { scriptCases, scripts } from "../dist/db/schema.js";
 import { runScript } from "../dist/lib/scripts/sandbox.js";
 import { replayCase } from "../dist/lib/scripts/replay.js";
 import { endRunBodyOf } from "../dist/lib/scripts/engine-runner.js";
-import { CHAT_LINE_TO, REPLY_ON_THEIR_LINE_ANCHORS, REPLY_ON_THEIR_LINE_MARK, REPLY_ON_THEIR_LINE_SENDERS, REPLY_ON_THEIR_LINE_WRITERS, addReplyOnTheirLine } from "../dist/lib/scripts/reply-on-their-line.js";
+import { REPLY_ON_THEIR_LINE_MARK, REPLY_ON_THEIR_LINE_SENDERS, REPLY_ON_THEIR_LINE_WRITERS, addChatAppToWriter, addReplyOnTheirLine } from "../dist/lib/scripts/reply-on-their-line.js";
 
 const ops = process.argv.includes("--ops");
 const i = process.argv.indexOf("--only");
@@ -35,11 +35,14 @@ const SOURCE = (v) => `LEAD-REPLY-CHANNEL-1127: v${v}'s cases restated (a messag
 const json = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 
 let failed = 0;
-// The writer halves first: their chat line names the conversation's app (none named = the line as before). Stored with
-// the catalogue's own replace (its upgrade replays the writer's cases server-side).
+// The writer halves first: their chat line names the conversation's app, the Copilot's medium is crm-service's app
+// (none named = byte for byte). One `upgrade` op each, generated from the ACTIVE version (another active = refused).
 if (ops && !only) {
   for (const { outcome, dynasty } of REPLY_ON_THEIR_LINE_WRITERS) {
-    console.log(JSON.stringify({ op: "replace", outcome, dynastyPrefix: dynasty, dynasty, from: REPLY_ON_THEIR_LINE_ANCHORS.chatLine, to: CHAT_LINE_TO, skipIfIncludes: "channel.app" }));
+    const w = (await db.select().from(scripts).where(and(eq(scripts.outcome, outcome), eq(scripts.dynasty, dynasty), eq(scripts.status, "active"))))[0];
+    if (!w) throw new Error(`no active ${outcome}/${dynasty}`);
+    if (w.code.includes("channel.app")) { log(`${outcome}/${dynasty}/v${w.version} already names the app`); continue; }
+    console.log(JSON.stringify({ op: "upgrade", outcome, dynasty, fromVersion: w.version, code: addChatAppToWriter(w.code), tactics: w.tactics ?? {}, skipIfIncludes: "channel.app" }));
   }
 }
 for (const { outcome, dynasty } of REPLY_ON_THEIR_LINE_SENDERS) {
